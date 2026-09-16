@@ -7,6 +7,7 @@ import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/fact
 import { searchDocumentPages } from '@/lib/documents/read/search'
 import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/arkiv-propose-fact'
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
+import { askDocument } from '@/lib/arkiv/ask'
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -581,6 +582,91 @@ export function createArkivTools(deps: Deps): McpTool[] {
         if (predicate && !PREDICATES[predicate]) throw new Error(`unknown predicate ${predicate}`)
         const facts = await factHistory(supabase, companyId, subject, predicate)
         return { subject_ref: String(args.subject_ref), facts: facts.map(factView) }
+      },
+    },
+    {
+      name: 'gnubok_ask_document',
+      keywords: ['arkiv', 'fråga dokument', 'vad står det', 'villkor', 'avtal', 'läs'],
+      title: 'Ask Document',
+      description:
+        'Ask one document one question and get the answer from its own text, with the page and the exact quote, or an honest not_found. Nothing is pre-extracted for this: use it for any clause or detail the record does not carry.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          record_ref: { type: 'string', description: 'document:<uuid>.' },
+          question: {
+            type: 'string',
+            minLength: 3,
+            maxLength: 500,
+            description: 'One question, in Swedish or English.',
+          },
+          pages: {
+            type: 'array',
+            items: { type: 'integer', minimum: 1 },
+            minItems: 1,
+            maxItems: 40,
+            description: 'Page numbers to read instead of the automatic pick. After a not_found, compare pages_read with page_count and ask again for the pages left out.',
+          },
+        },
+        required: ['record_ref', 'question'],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          record_ref: { type: 'string' },
+          question: { type: 'string' },
+          answer: { type: ['string', 'null'] },
+          not_found: { type: 'boolean' },
+          page: { type: ['integer', 'null'] },
+          quote: { type: ['string', 'null'] },
+          quote_verified: {
+            type: 'boolean',
+            description: 'True when the quote appears verbatim on that page.',
+          },
+          confidence: { type: 'number' },
+          pages_read: { type: 'array', items: { type: 'integer' } },
+          page_count: { type: 'integer' },
+        },
+        required: ['record_ref', 'question', 'answer', 'not_found', 'page', 'quote', 'quote_verified', 'confidence', 'pages_read', 'page_count'],
+      },
+      annotations: deps.readOnly,
+      async execute(args, companyId, _userId, supabase) {
+        assertEnabled(companyId)
+        const ref = parseRecordRef(String(args.record_ref ?? ''))
+        if (!ref || ref.kind !== 'document') throw new Error('record_ref must be document:<uuid>')
+        const question = String(args.question ?? '').trim()
+        if (question.length < 3) throw new Error('question is required')
+        const pages = Array.isArray(args.pages) ? [...new Set(args.pages.map((n) => Number(n)).filter((n) => Number.isInteger(n) && n >= 1))] : undefined
+        if (pages && pages.length === 0) throw new Error('pages must hold page numbers from 1 upwards')
+        const { data: company, error: companyError } = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
+        if (companyError) throw dbError(companyError)
+        const out = await askDocument(supabase, {
+          companyId,
+          documentId: ref.id,
+          question,
+          ...(pages ? { pages } : {}),
+          company: { name: (company as { name: string } | null)?.name ?? '' },
+          askedBy: { agentName: 'mcp.ask', agentVersion: '1' },
+        })
+        if (out.status === 'skipped') {
+          if (out.reason === 'not_found') throw new Error('No such document in this company')
+          throw new Error(out.reason === 'ai_unconfigured' ? 'The reader is not configured on this installation' : 'The document has no readable text')
+        }
+        if (out.status === 'error') throw new Error(`The reader failed: ${out.reason}`)
+        return {
+          record_ref: recordRef('document', ref.id),
+          question,
+          answer: out.answer,
+          not_found: out.not_found,
+          page: out.page,
+          quote: out.quote,
+          quote_verified: out.quote_verified,
+          confidence: out.confidence,
+          pages_read: out.pages_read,
+          page_count: out.page_count,
+        }
       },
     },
     {

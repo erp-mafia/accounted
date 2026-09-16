@@ -533,7 +533,10 @@ describe('tools/list payload size guard', () => {
     //     (the record behind a document, agreement, party or verifikat). The
     //     four other Arkiv tools are catalogVisibility: 'search', reachable
     //     through gnubok_call_tool. Measured 62 674 on the rebased branch.
-    expect(approxTokens).toBeLessThan(62_800)
+    //   * Arkiv phase 8 (schema on read): gnubok_ask_document joins the default
+    //     catalog, the one write-free way for an agent to read a clause the
+    //     record does not carry. Measured 63 090 on the rebased branch.
+    expect(approxTokens).toBeLessThan(63_200)
   })
 
   /**

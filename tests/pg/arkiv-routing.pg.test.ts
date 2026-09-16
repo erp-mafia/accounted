@@ -56,3 +56,23 @@ describe('invoice_inbox_items routing columns', () => {
     expect(seen).toEqual([{ routed_doc_type: 'agreement.loan', routed: true }])
   })
 })
+
+describe('activities after phase 8', () => {
+  it('records a question asked of a document as its own kind of activity', async () => {
+    const { userId, companyId } = await seedCompany()
+    const doc = await insertDocument(userId, companyId)
+    const agent = await getPool().query(`INSERT INTO public.agents (kind, name, version) VALUES ('software', 'mcp.ask', $1) RETURNING id`, [`test-${randomUUID()}`])
+    const { rows } = await getPool().query(
+      `INSERT INTO public.activities (company_id, document_id, agent_id, kind, started_at, ended_at, outcome, detail)
+       VALUES ($1, $2, $3, 'ask', now(), now(), 'settled', '{"question": "Vad är uppsägningstiden?", "answered": true}') RETURNING kind`,
+      [companyId, doc, agent.rows[0].id],
+    )
+    expect(rows).toEqual([{ kind: 'ask' }])
+    await expect(
+      getPool().query(
+        `INSERT INTO public.activities (company_id, document_id, agent_id, kind, started_at, ended_at, outcome) VALUES ($1, $2, $3, 'guess', now(), now(), 'settled')`,
+        [companyId, doc, agent.rows[0].id],
+      ),
+    ).rejects.toThrow(/activities_kind_check/)
+  })
+})
