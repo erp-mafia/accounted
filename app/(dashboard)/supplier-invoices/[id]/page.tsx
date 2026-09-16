@@ -191,19 +191,25 @@ type PaymentRow = SupplierInvoicePayment & {
  * whose entry is source_type 'expense_claim' (outside PAYMENT_SOURCE_TYPES)
  * but whose payable is genuinely settled.
  *
- * The embed being ABSENT (payload from before the embed existed, or an entry
- * the caller cannot read) still fails CLOSED. But the embed being present with
- * a NULL source_type is a legitimate legacy value: older SIE imports wrote
- * journal_entries without stamping one. The RPC accepts those rows because
- * NULL = ANY(booked_payment_types) is not TRUE, so the UI must not be stricter
- * than the RPC or the exact #2673 dead end returns for imported vouchers.
+ * Fails CLOSED on the EMBED being absent, which is the case we genuinely
+ * cannot read: a payload from before the embed existed, or an entry the caller
+ * cannot see. Tested on the embed itself rather than on source_type, because
+ * those are different questions and only this one means "we do not know".
+ *
+ * A present embed always carries a source_type: journal_entries.source_type is
+ * `text not null` with a CHECK over a closed set (migration 20240101000002),
+ * and every writer stamps one, SIE import included ('import' /
+ * 'opening_balance'). It is typed nullable here only because this is an
+ * untrusted JSON payload; should one ever arrive empty, isPaymentSourceType
+ * reads it as "not a booked payment" and the row stays unlinkable, which is
+ * what the RPC concludes too (NULL = ANY(booked_payment_types) is NULL, not
+ * TRUE). One branch, both sides agreeing, no unreachable special case.
  */
 function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string | null): boolean {
   if (!payment.journal_entry_id) return false
   if (payment.journal_entry_id === paymentJournalEntryId) return false
   if (!payment.journal_entry) return false
-  const sourceType = payment.journal_entry.source_type
-  return !sourceType || !isPaymentSourceType(sourceType)
+  return !isPaymentSourceType(payment.journal_entry.source_type)
 }
 
 export default function SupplierInvoiceDetailPage() {
