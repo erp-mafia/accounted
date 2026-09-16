@@ -6,15 +6,18 @@ import type { JournalEntry } from '@/types'
 
 const log = createLogger('payment-sync')
 
-// Re-exported from the shared module so existing importers keep working; the
-// list itself lives in lib/bookkeeping/payment-source-types.ts because the
-// unlink control in the supplier-invoice page needs it client-side and must
-// not pull this file's Supabase server imports along.
-// Imported, not just re-exported: a bare `export ... from` does not bind the
-// name in this module's scope, and syncInvoiceStatusFromPaymentEntry calls it.
-import { PAYMENT_SOURCE_TYPES, isPaymentSourceType } from './payment-source-types'
+// The list itself lives in lib/bookkeeping/payment-source-types.ts, because the
+// unlink control in the supplier-invoice page needs it client-side and must not
+// pull this file's Supabase server imports along.
+//
+// isPaymentSourceType is imported rather than re-exported with a bare
+// `export ... from`, which would not bind the name in this module's scope:
+// syncInvoiceStatusFromPaymentEntry below calls it. The re-export is for
+// engine.ts, which has always taken it from here. PAYMENT_SOURCE_TYPES itself
+// is NOT re-exported: every consumer of the array reads the owning module.
+import { isPaymentSourceType } from './payment-source-types'
 
-export { PAYMENT_SOURCE_TYPES, isPaymentSourceType }
+export { isPaymentSourceType }
 
 /**
  * Revert the business-level paid status on the invoice or supplier invoice

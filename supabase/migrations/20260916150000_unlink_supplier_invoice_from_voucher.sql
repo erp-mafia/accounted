@@ -208,8 +208,13 @@ BEGIN
   -- rate), so it cannot be found and reversed from here, and reversing a posted
   -- verifikat is storno's job in any case. Refuse instead of half-undoing.
   --
-  -- payment_exchange_rate is the signal, and the only one: the fallback stamps
-  -- it on exactly the rows whose link committed a residual. Refusing every
+  -- payment_exchange_rate is the signal, and the only one it needs to be. The
+  -- column is not exclusive to the residual fallback (match_batch_allocate
+  -- stamps it too, 20260824120000), but on THIS path it is: a
+  -- match_batch_allocate row was already refused twice over by the guards
+  -- above, on its 'supplier_invoice_paid' source_type and on the
+  -- payment_journal_entry_id it sets. What reaches here carrying a rate is a
+  -- link whose settlement committed a residual verifikat. Refusing every
   -- non-SEK invoice instead (an earlier revision did) would refuse the ordinary
   -- foreign case too, where the voucher's matched lines carry
   -- amount_in_currency, no residual is booked and the row is as undoable as any

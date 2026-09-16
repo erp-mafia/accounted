@@ -14,6 +14,8 @@ import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool, withUserContext } from './setup'
 import { PAYMENT_SOURCE_TYPES } from '@/lib/bookkeeping/payment-source-types'
+import { auditRowToEvent } from '@/lib/reports/behandlingshistorik'
+import type { AuditLogEntry } from '@/types'
 import {
   insertAuthUser,
   insertCompanyMember,
@@ -258,7 +260,7 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     expect(result.ok).toBe(true)
 
     const { rows } = await getPool().query(
-      `SELECT user_id, actor_id, company_id, old_state, new_state
+      `SELECT *, created_at::text AS created_at
          FROM public.audit_log
         WHERE action = 'SUBLEDGER_LINK_REMOVED' AND record_id = $1`,
       [linked.payment_id],
@@ -267,9 +269,23 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     expect(rows[0].user_id).toBe(actorId)
     expect(rows[0].actor_id).toBe(actorId)
     expect(rows[0].company_id).toBe(companyId)
-    expect(rows[0].old_state.journal_entry_id).toBe(entryId)
-    expect(Number(rows[0].old_state.amount)).toBe(859)
-    expect(rows[0].new_state.invoice_status).toBe('approved')
+    expect(rows[0].table_name).toBe('supplier_invoice_payments')
+
+    // The jsonb keys are a contract between this PL/pgSQL and the TypeScript
+    // that renders behandlingshistorik, and they cross the language boundary as
+    // untyped strings. Reading the REAL row through the REAL reader is what
+    // binds them: rename a key on either side and this fails, instead of the
+    // statutory line silently losing its amount with every test still green.
+    const event = auditRowToEvent(rows[0] as AuditLogEntry, {
+      rattelseMetadataAt: new Map(),
+      entryById: new Map(),
+    })
+    expect(event).not.toBeNull()
+    expect(event!.code).toBe('supplier_invoice.voucher_link_removed')
+    expect(event!.details[0]).toContain('859,00 SEK')
+    expect(event!.details[1]).toContain('approved')
+    expect(event!.details[1]).toContain('3')
+    expect(event!.details[2]).toContain('Ingen bokföring ändrades')
   })
 
   it('attributes the audit row to the JWT sub, not to a passed-in user id', async () => {
