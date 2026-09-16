@@ -431,9 +431,14 @@ export async function generateINK2Declaration(
   // so the worksheet remains internally consistent.
   const nonDeductibleExpenses = Math.trunc(taxAdjustments.nonDeductibleExpenses)
   const nonTaxableIncome = Math.trunc(taxAdjustments.nonTaxableIncome)
+  // 4.14 a: prior years' unused deficit, saved in the year-end flow. Deducted
+  // in full (IL 40 kap. 2 §); whatever the result cannot absorb becomes this
+  // year's underskott on 4.16 and rolls forward again.
+  const deficitCarryforward = Math.trunc(taxAdjustments.deficitCarryforward ?? 0)
   const taxableResult =
     aretsResultat + taxAmount
     + nonDeductibleExpenses - nonTaxableIncome
+    - deficitCarryforward
 
   const ink2: INK2Rutor = {
     '7011': fyStart,
@@ -451,6 +456,7 @@ export async function generateINK2Declaration(
     '7651': taxAmount, // Skatt (ej avdragsgill)
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
+    '7763': deficitCarryforward,
     '8020': taxableResult >= 0 ? taxableResult : 0,
     '8021': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }

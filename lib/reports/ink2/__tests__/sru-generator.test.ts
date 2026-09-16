@@ -51,6 +51,7 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7651': 0,
       '7653': 0,
       '7754': 0,
+      '7763': 0,
       '8020': 302000,
       '8021': 0,
     },
@@ -264,6 +265,21 @@ describe('INK2 SRU Generator', () => {
 
       expect(ink2sBlock).toContain('#UPPGIFT 7653 5244')
       expect(ink2sBlock).toContain('#UPPGIFT 7754 1000')
+    })
+
+    it('files the prior-year deficit on 7763 (INK2S 4.14 a) and omits it at zero', () => {
+      const base = makeDeclaration()
+      expect(extractBlock(generateSRUSubmission(base).blanketterSru, 'INK2S')).not.toContain('#UPPGIFT 7763')
+
+      const submission = generateSRUSubmission(makeDeclaration({
+        ink2: { ...base.ink2, '7104': 202000 },
+        ink2s: { ...base.ink2s, '7763': 100000, '8020': 202000 },
+      }))
+      const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
+      expect(ink2sBlock).toContain('#UPPGIFT 7763 100000')
+      expect(ink2sBlock).toContain('#UPPGIFT 8020 202000')
+      // Field order follows the form: 4.14 a before 4.15.
+      expect(ink2sBlock.indexOf('#UPPGIFT 7763')).toBeLessThan(ink2sBlock.indexOf('#UPPGIFT 8020'))
     })
 
     it('INK2 block includes överskott', () => {

@@ -8,11 +8,12 @@ import {
   ArcimDocumentImportRequestError,
   arcimDocumentImportReducer,
   documentOAuthProblemFromReason,
-  parseArcimDocumentOAuthResume,
+  parseArcimDocumentResumeMarker,
   mergeArcimDocumentImportResults,
   requestArcimDocumentImport,
   resolveArcimDocumentFollowUpProvider,
   runArcimDocumentImportToCompletion,
+  serializeArcimDocumentResumeMarker,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
 } from '../arcim-document-import-flow'
@@ -253,10 +254,24 @@ describe('document import endpoint request', () => {
 describe('document scope OAuth recovery', () => {
   it('round-trips the full-page redirect resume action and rejects malformed state', () => {
     expect(ARCIM_DOCUMENT_OAUTH_RESUME_KEY).toBe('arcim-document-oauth-resume')
-    expect(parseArcimDocumentOAuthResume('import')).toEqual({
+    expect(parseArcimDocumentResumeMarker('import')).toEqual({
       action: 'import',
+      standalone: false,
     })
-    expect(parseArcimDocumentOAuthResume('unknown')).toBeNull()
+    expect(parseArcimDocumentResumeMarker('unknown')).toBeNull()
+    expect(parseArcimDocumentResumeMarker(null)).toBeNull()
+  })
+
+  it('carries the standalone flag through the resume value so an underlag run from the connections list comes back without a migration verdict', () => {
+    for (const action of ['discover', 'import'] as const) {
+      for (const standalone of [true, false]) {
+        const stored = serializeArcimDocumentResumeMarker({ action, standalone })
+        expect(parseArcimDocumentResumeMarker(stored)).toEqual({ action, standalone })
+      }
+    }
+    expect(serializeArcimDocumentResumeMarker({ action: 'discover', standalone: false })).toBe('discover')
+    expect(parseArcimDocumentResumeMarker('unknown:standalone')).toBeNull()
+    expect(parseArcimDocumentResumeMarker(':standalone')).toBeNull()
   })
 
   it('only treats scope and consent failures as reconnectable', () => {

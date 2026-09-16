@@ -460,6 +460,25 @@ function NewRecurringScheduleForm({
                 </Select>
               )}
             />
+            {/* Same confirmation block as the one-off invoice editor: a
+                schedule runs unattended for months, so the address, org
+                number and email must be visible at the moment of choosing,
+                or two customers with the same name are indistinguishable. */}
+            {selectedCustomer && (
+              <div className="mt-2 text-[13px] leading-5 text-muted-foreground" data-ph-mask="">
+                {[
+                  [selectedCustomer.address_line1, selectedCustomer.postal_code, selectedCustomer.city]
+                    .filter(Boolean)
+                    .join(', '),
+                  selectedCustomer.org_number ? `Org.nr ${selectedCustomer.org_number}` : '',
+                  selectedCustomer.email ?? '',
+                ]
+                  .filter(Boolean)
+                  .map((line) => (
+                    <div key={line}>{line}</div>
+                  ))}
+              </div>
+            )}
             {errors.customer_id && (
               <p className="text-sm text-destructive mt-1">{errors.customer_id.message}</p>
             )}

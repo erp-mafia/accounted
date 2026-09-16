@@ -206,6 +206,22 @@ function compactDims(dims: Record<string, string>): string {
     .join(' · ')
 }
 
+type SendNowString =
+  | 'send_now_dialog_title'
+  | 'send_now_dialog_description'
+  | 'doc_sent_title'
+  | 'doc_sent_description'
+  | 'send_doc_failed_title'
+
+// Invoice strings predate the other document types and keep their names.
+const INVOICE_SEND_NOW_KEYS: Record<SendNowString, string> = {
+  send_now_dialog_title: 'send_now_dialog_title',
+  send_now_dialog_description: 'send_now_dialog_description',
+  doc_sent_title: 'invoice_sent_title',
+  doc_sent_description: 'invoice_sent_description',
+  send_doc_failed_title: 'send_invoice_failed_title',
+}
+
 export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'create' }) {
   // Edit mode pre-fills the form from an existing draft and saves via PATCH.
   const isEditMode = props.mode === 'edit'
@@ -1720,6 +1736,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     return t('doc_label_invoice')
   }
 
+  // The send-now dialog and its toasts name the document: an offert used to
+  // ask "Skicka fakturan nu?" because these strings had no per-type variant
+  // (reported via support). Invoice keeps the original keys; the other
+  // types read `<base>_<type>` from the same namespace.
+  function sendNowKey(base: SendNowString): string {
+    const type = watchDocumentType
+    if (type === 'proforma' || type === 'quote' || type === 'delivery_note') {
+      return `${base}_${type}`
+    }
+    return INVOICE_SEND_NOW_KEYS[base]
+  }
+
   function handleLogoPromptClose() {
     setShowLogoPrompt(false)
     // Resume the post-create flow that was deferred by the logo prompt.
@@ -1982,12 +2010,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       }
 
       toast({
-        title: t('invoice_sent_title'),
-        description: t('invoice_sent_description', { email: selectedCustomer?.email ?? '' }),
+        title: t(sendNowKey('doc_sent_title')),
+        description: t(sendNowKey('doc_sent_description'), { email: selectedCustomer?.email ?? '' }),
       })
     } catch (error) {
       toast({
-        title: t('send_invoice_failed_title'),
+        title: t(sendNowKey('send_doc_failed_title')),
         description: getErrorMessage(error, { context: 'invoice' }),
         variant: 'destructive',
       })
@@ -3790,10 +3818,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t('send_now_dialog_title')}</DialogTitle>
+            <DialogTitle>{t(sendNowKey('send_now_dialog_title'))}</DialogTitle>
             {/* data-ph-mask: the customer email is user data */}
             <DialogDescription data-ph-mask="">
-              {t('send_now_dialog_description', { email: selectedCustomer?.email ?? '' })}
+              {t(sendNowKey('send_now_dialog_description'), { email: selectedCustomer?.email ?? '' })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="flex gap-2 sm:gap-0">
