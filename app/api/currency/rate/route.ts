@@ -3,9 +3,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { fetchExchangeRate, readCachedRate } from '@/lib/currency/riksbanken'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { guardSandbox } from '@/lib/sandbox/guard'
-import type { Currency } from '@/types'
+import { FOREIGN_CURRENCIES, type Currency } from '@/types'
 
-const VALID_CURRENCIES: Currency[] = ['EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const VALID_CURRENCIES: readonly Currency[] = FOREIGN_CURRENCIES
 
 // Riksbanken's open API is IP rate-limited: the sandbox guard keeps demo
 // traffic from eating that budget (withRouteContext already refuses

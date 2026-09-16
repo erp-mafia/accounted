@@ -70,7 +70,7 @@ describe('GET /api/currency/rate', () => {
   })
 
   it('returns 400 for an invalid currency', async () => {
-    const res = await GET(makeReq('?currency=CHF'), noParams)
+    const res = await GET(makeReq('?currency=JPY'), noParams)
     const { status, body } = await parseJsonResponse<{ error: string }>(res)
 
     expect(status).toBe(400)

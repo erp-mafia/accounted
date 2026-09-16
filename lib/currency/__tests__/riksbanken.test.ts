@@ -35,6 +35,17 @@ describe('fetchExchangeRate', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('fetches CHF from the SEKCHFPMI series', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValueOnce(
+      new Response(JSON.stringify([{ value: '11.88', date: '2025-01-15' }]), { status: 200 })
+    )
+
+    const result = await fetchExchangeRate('CHF', new Date('2025-01-15'))
+
+    expect(result).toEqual({ currency: 'CHF', rate: 11.88, date: '2025-01-15' })
+    expect(String(fetchSpy.mock.calls[0][0])).toContain('SEKCHFPMI')
+  })
+
   it('parses EUR rate from API response', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValueOnce(
       new Response(JSON.stringify([{ value: '11.42', date: '2025-01-15' }]), { status: 200 })

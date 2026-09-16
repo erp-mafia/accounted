@@ -37,7 +37,7 @@ import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { AttnLine } from '@/components/ui/attn-line'
-import type { BookingTemplateLibrary, CashAccount, InboxChannelContext, InvoiceExtractionResult } from '@/types'
+import { FOREIGN_CURRENCIES, type BookingTemplateLibrary, type CashAccount, type InboxChannelContext, type InvoiceExtractionResult } from '@/types'
 
 interface InboxItem {
   id: string
@@ -304,7 +304,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   useEffect(() => {
     if (!open) return
     setFxRate(null)
-    if (targetCurrency === 'SEK' || !['EUR', 'USD', 'GBP', 'NOK', 'DKK'].includes(targetCurrency)) {
+    if (targetCurrency === 'SEK' || !(FOREIGN_CURRENCIES as readonly string[]).includes(targetCurrency)) {
       return
     }
     let cancelled = false

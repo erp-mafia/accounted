@@ -46,7 +46,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { BookingTemplateLibrary } from '@/types'
+import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
 
 interface ExpenseClaim {
   id: string
@@ -130,7 +130,6 @@ const isExpenseLibraryTemplate = (tpl: BookingTemplateWithUsage) => {
   return true
 }
 
-const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] as const
 const UPLOAD_ACCEPT = '.pdf,.jpg,.jpeg,.png,.webp,.heic'
 /** Deferred inbox extraction usually lands within ~20 s; stop polling after this. */
 const EXTRACTION_POLL_LIMIT_MS = 90_000

@@ -1,19 +1,13 @@
-import type {
-  CompanySettings,
-  Currency,
-  Invoice,
-  InvoicePaymentAccount,
+import {
+  CURRENCIES,
+  type CompanySettings,
+  type Currency,
+  type Invoice,
+  type InvoicePaymentAccount,
 } from '@/types'
 import { formatIbanGroups } from '@/lib/company/connection-iban'
 
-export const INVOICE_PAYMENT_ACCOUNT_CURRENCIES: readonly Currency[] = [
-  'SEK',
-  'EUR',
-  'USD',
-  'GBP',
-  'NOK',
-  'DKK',
-]
+export const INVOICE_PAYMENT_ACCOUNT_CURRENCIES: readonly Currency[] = CURRENCIES
 
 const PAYMENT_FIELDS: readonly (keyof InvoicePaymentAccount)[] = [
   'bank_name',

@@ -77,7 +77,7 @@ describe('/api/cash-accounts/payee-defaults', () => {
   })
 
   it('PUT returns 400 on an unknown currency or a malformed id', async () => {
-    expect((await PUT(putReq({ currency: 'CHF', cash_account_id: CA_1 }), createMockRouteParams({}))).status).toBe(400)
+    expect((await PUT(putReq({ currency: 'JPY', cash_account_id: CA_1 }), createMockRouteParams({}))).status).toBe(400)
     expect((await PUT(putReq({ currency: 'SEK', cash_account_id: 'nope' }), createMockRouteParams({}))).status).toBe(400)
     expect(findCalls('invoice_payee_defaults', 'upsert')).toHaveLength(0)
   })

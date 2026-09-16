@@ -12,7 +12,7 @@ import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
-import type { Currency, CustomerType, ExchangeRate, SupplierType, VatTreatment } from '@/types'
+import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
 import type {
   AmountType,
   CustomerDto,
@@ -409,7 +409,7 @@ function resolveInvoiceVat(
  * lib/currency/riksbanken.ts). A document in any other currency has no rate
  * source at all, so it is reported rather than written with a silent null.
  */
-const CONVERTIBLE_CURRENCIES: readonly Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const CONVERTIBLE_CURRENCIES: readonly Currency[] = CURRENCIES
 
 /** Riksbanken fan-out bound, mirroring ingest.ts: a wide historical backfill
  *  used to fire every pair at once and get the whole batch rate-limited. */

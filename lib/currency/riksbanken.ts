@@ -12,6 +12,7 @@ const SERIES_IDS: Record<Currency, string> = {
   GBP: 'SEKGBPPMI',
   NOK: 'SEKNOKPMI',
   DKK: 'SEKDKKPMI',
+  CHF: 'SEKCHFPMI',
 }
 
 const RIKSBANKEN_HEADERS = { Accept: 'application/json' }
@@ -221,6 +222,7 @@ function getFallbackRate(currency: Currency): ExchangeRate {
     GBP: 13.5, // ~13.5 SEK per GBP
     NOK: 1.0, // ~1 SEK per NOK
     DKK: 1.55, // ~1.55 SEK per DKK
+    CHF: 11.9, // ~11.9 SEK per CHF
   }
 
   return {
@@ -254,6 +256,7 @@ export function formatCurrencyAmount(
     GBP: '£',
     NOK: 'kr',
     DKK: 'kr',
+    CHF: 'CHF',
   }
 
   const formatted = new Intl.NumberFormat('sv-SE', {

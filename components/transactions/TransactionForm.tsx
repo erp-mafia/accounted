@@ -13,14 +13,14 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Loader2 } from 'lucide-react'
-import type { CreateTransactionInput, Currency } from '@/types'
+import { CURRENCIES, type CreateTransactionInput, type Currency } from '@/types'
 
 interface TransactionFormProps {
   onSubmit: (data: CreateTransactionInput) => Promise<void>
   isLoading: boolean
 }
 
-const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const currencies: readonly Currency[] = CURRENCIES
 
 export default function TransactionForm({ onSubmit, isLoading }: TransactionFormProps) {
   const t = useTranslations('tx_form')
@@ -37,7 +37,7 @@ export default function TransactionForm({ onSubmit, isLoading }: TransactionForm
           .refine((s) => !s || isSaneDateString(s), t('date_invalid')),
         description: z.string().min(1, t('description_required')),
         amount: z.number().refine((n) => n !== 0, t('amount_required')),
-        currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+        currency: z.enum(CURRENCIES),
         notes: z.string().optional(),
       }),
     [t]
