@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { documentTitle } from '@/lib/arkiv/documents/title'
+import type { FieldReviewDocument, ReviewDocument } from '@/lib/arkiv/questions'
 import type { Payload } from '@/lib/documents/extract/fields'
+import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -10,32 +12,10 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * The review queues of Arkiv for the active company: documents held at the
  * door ("rör det här bolaget?"), admitted documents whose type the model
  * could not settle, and records with fields a person must confirm (phase 3:
- * the two readings disagreed or a check failed). 404 outside the rollout.
+ * the two readings disagreed or a check failed), each with the readings to
+ * choose between so a page can ask in one line. 404 outside the rollout.
  */
-export interface ReviewDocument {
-  document_id: string
-  file_name: string
-  created_at: string
-  page_count: number | null
-  doc_type: string | null
-  confidence: number | null
-  relevance: string | null
-  relevance_reason: string | null
-  addressed_to: string | null
-  summary: string | null
-  suggested_type: string | null
-}
-
-export interface FieldReviewDocument {
-  document_id: string
-  file_name: string
-  title: string
-  created_at: string
-  page_count: number | null
-  doc_type: string | null
-  schema_type: string
-  review_fields: string[]
-}
+export type { ReviewDocument, FieldReviewDocument, FieldQuestion, ReviewData } from '@/lib/arkiv/questions'
 
 export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
   if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -79,14 +59,14 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
   }
   const { data: pending, error: pendingError } = await ctx.supabase
     .from('document_extractions')
-    .select('document_id, schema_type, review_fields, payload')
+    .select('document_id, schema_type, review_fields, payload, validation')
     .eq('company_id', ctx.companyId)
     .eq('is_current', true)
     .not('review_fields', 'eq', '{}')
     .limit(200)
   if (pendingError) return NextResponse.json({ error: getErrorMessage(pendingError) }, { status: 500 })
   let fieldRows: FieldReviewDocument[] = []
-  const pendingList = (pending ?? []) as Array<{ document_id: string; schema_type: string; review_fields: string[]; payload: Payload }>
+  const pendingList = (pending ?? []) as Array<{ document_id: string; schema_type: string; review_fields: string[]; payload: Payload; validation: CheckFailure[] | null }>
   if (pendingList.length) {
     const { data: docs, error: docsError } = await ctx.supabase
       .from('document_attachments')
@@ -108,6 +88,11 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
       doc_type: d.doc_type,
       schema_type: byId.get(d.id)?.schema_type ?? 'generic',
       review_fields: byId.get(d.id)?.review_fields ?? [],
+      questions: (byId.get(d.id)?.review_fields ?? []).map((field) => ({
+        field,
+        check: (byId.get(d.id)?.validation ?? []).find((c) => c.field === field)?.check ?? null,
+        readings: byId.get(d.id)?.payload[field]?.readings ?? [],
+      })),
     }))
   }
   return NextResponse.json({ data: { held: heldRows, unclassified: unclassifiedRows, fields: fieldRows } })
@@ -117,6 +102,7 @@ function toReview(d: Record<string, unknown>, c: Record<string, unknown> | undef
   return {
     document_id: d.id as string,
     file_name: d.file_name as string,
+    title: documentTitle({ docType: (d.doc_type as string | null) ?? null, fileName: d.file_name as string, payload: null }),
     created_at: d.created_at as string,
     page_count: (d.page_count as number | null) ?? null,
     doc_type: (c?.doc_type as string | undefined) ?? (d.doc_type as string | null) ?? null,
