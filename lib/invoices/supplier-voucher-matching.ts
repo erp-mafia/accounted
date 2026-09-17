@@ -881,18 +881,51 @@ export async function unlinkSupplierInvoiceFromVoucher(
   // after a storno (the entry is reversed) and wrong here (the entry stays
   // posted, and the bank line genuinely paid it; only the claim that it settled
   // THIS payable was false). Best-effort: the RPC has already committed.
-  const { error: releaseError } = await supabase
+  //
+  // Addressed to ONE row. transactions.journal_entry_id is not unique, so
+  // (company, invoice, entry) can match several bank rows when one payable was
+  // settled by a split payment reconciled to the same verifikat; clearing all of
+  // them would unpick bank rows whose own payment row is still there.
+  //
+  // Resolved by lookup rather than from result.transaction_id, which is always
+  // NULL on the rows this RPC can delete: the link path inserts the payment row
+  // with transaction_id NULL (20260830140000), and the paths that DO set it
+  // (match_batch_allocate, the utlägg mirror) are refused by the booked-payment
+  // guards before they ever reach here.
+  const { data: candidates } = await supabase
     .from('transactions')
-    .update({ supplier_invoice_id: null })
+    .select('id')
     .eq('company_id', companyId)
     .eq('supplier_invoice_id', result.supplier_invoice_id)
     .eq('journal_entry_id', result.journal_entry_id)
-  if (releaseError) {
-    log.error('failed to clear the supplier-invoice pointer after unlink', releaseError, {
+    .limit(2)
+
+  if ((candidates?.length ?? 0) > 1) {
+    log.warn('several bank rows point at this invoice and verifikat: pointer left alone', {
       companyId,
       paymentId,
       supplierInvoiceId: result.supplier_invoice_id,
+      journalEntryId: result.journal_entry_id,
     })
+  } else if (candidates?.length === 1) {
+    // Compare-and-set, not just an id: between the lookup and the write the row
+    // can be retagged to another payable, and an id-only update would then clear
+    // a pointer that is still true. Re-asserting both claims makes a moved row a
+    // no-op instead.
+    const { error: releaseError } = await supabase
+      .from('transactions')
+      .update({ supplier_invoice_id: null })
+      .eq('company_id', companyId)
+      .eq('id', candidates[0].id as string)
+      .eq('supplier_invoice_id', result.supplier_invoice_id)
+      .eq('journal_entry_id', result.journal_entry_id)
+    if (releaseError) {
+      log.error('failed to clear the supplier-invoice pointer after unlink', releaseError, {
+        companyId,
+        paymentId,
+        supplierInvoiceId: result.supplier_invoice_id,
+      })
+    }
   }
 
   // The audit row is NOT written here. audit_log has RLS with a SELECT policy

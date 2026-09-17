@@ -177,6 +177,7 @@ function InlineAccountCell({
 
 /** A payment row with the linked verifikat's source_type embedded by the GET route. */
 type PaymentRow = SupplierInvoicePayment & {
+  payment_exchange_rate?: number | null
   journal_entry?: { id: string; source_type: string | null } | null
 }
 
@@ -208,6 +209,11 @@ type PaymentRow = SupplierInvoicePayment & {
 function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string | null): boolean {
   if (!payment.journal_entry_id) return false
   if (payment.journal_entry_id === paymentJournalEntryId) return false
+  // The link books its own residual verifikat when it settles across currencies
+  // and stamps the effective rate here; the RPC refuses those with
+  // UNLINK_SI_PAYMENT_FX_SETTLED. Offering the action would promise an undo
+  // that cannot happen.
+  if (payment.payment_exchange_rate != null) return false
   if (!payment.journal_entry) return false
   return !isPaymentSourceType(payment.journal_entry.source_type)
 }

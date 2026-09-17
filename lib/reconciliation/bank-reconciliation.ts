@@ -1770,12 +1770,20 @@ export async function autoReconcileTransactionForLinkedVoucher(
     }
     if (Object.keys(retag).length === 0) return null
 
-    const { error: retagError } = await supabase
+    // Compare-and-set on the very fields being claimed. The link RPCs lock the
+    // invoice row, not this transaction, so two links can read the same null
+    // pointer and both write, the later silently winning while both report
+    // success. Re-asserting NULL in the predicate makes the loser write nothing,
+    // and requiring a returned row makes it say so instead of claiming the tag.
+    let retagQuery = supabase
       .from('transactions')
       .update(retag)
       .eq('id', existing.id)
       .eq('company_id', companyId)
-    if (retagError) return null
+    if ('invoice_id' in retag) retagQuery = retagQuery.is('invoice_id', null)
+    if ('supplier_invoice_id' in retag) retagQuery = retagQuery.is('supplier_invoice_id', null)
+    const { data: retagged, error: retagError } = await retagQuery.select('id')
+    if (retagError || !retagged || retagged.length === 0) return null
     return { linkedTransactionId: existing.id }
   }
 

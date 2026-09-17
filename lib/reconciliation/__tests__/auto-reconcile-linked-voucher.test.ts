@@ -119,6 +119,22 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
+  it('reports no tag when a concurrent link already claimed the pointer', async () => {
+    // The link RPCs lock the invoice row, not this transaction, so two calls can
+    // read the same null pointer. The compare-and-set makes the loser write
+    // nothing; without the returned-row check it would still claim the tag and
+    // both callers would believe they owned the bank line.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: null, supplier_invoice_id: null }] })
+    enqueue({ data: [] }) // CAS matched nothing: the other writer got there first
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { invoiceId: 'inv-1' },
+    )
+
+    expect(result).toBeNull()
+  })
+
   it('tags the bank line already on the voucher when it carries no invoice yet', async () => {
     // The state an undone link leaves behind: unlink clears
     // supplier_invoice_id and deliberately keeps journal_entry_id, because the
@@ -127,7 +143,10 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     // payable (worse traceability after the fix than before it, #2673).
     const { supabase, enqueue } = createQueueMockSupabase()
     enqueue({ data: [{ id: 'tx-existing', invoice_id: null, supplier_invoice_id: null }] })
-    enqueue({ data: null }) // the tag update
+    // The tag update is a compare-and-set that re-asserts the null pointer and
+    // selects the row back, so a concurrent link cannot win silently: it has to
+    // return the row for the tag to count as taken.
+    enqueue({ data: [{ id: 'tx-existing' }] })
 
     const result = await autoReconcileTransactionForLinkedVoucher(
       supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-9' },

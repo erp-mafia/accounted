@@ -32,8 +32,18 @@ const OK_RESULT = {
 function createStub(rpcResult: { data: unknown; error: unknown }) {
   const updates: Array<{ table: string; values: unknown; filters: Array<[string, unknown]> }> = []
   let updateError: unknown = null
+  // Candidates the (company, invoice, entry) lookup finds when the RPC returned
+  // no transaction_id. Default: exactly one, the unambiguous case.
+  let candidates: Array<{ id: string }> = [{ id: 'tx-found' }]
 
   const from = vi.fn((table: string) => ({
+    select: () => {
+      const chain = {
+        eq: () => chain,
+        limit: () => Promise.resolve({ data: candidates, error: null }),
+      }
+      return chain
+    },
     update: (values: unknown) => {
       const record = { table, values, filters: [] as Array<[string, unknown]> }
       updates.push(record)
@@ -54,6 +64,7 @@ function createStub(rpcResult: { data: unknown; error: unknown }) {
   const rpc = vi.fn().mockResolvedValue(rpcResult)
 
   return {
+    setCandidates(rows: Array<{ id: string }>) { candidates = rows },
     supabase: { from, rpc } as unknown as SupabaseClient,
     from,
     rpc,
@@ -113,11 +124,52 @@ describe('unlinkSupplierInvoiceFromVoucher', () => {
     const [update] = stub.updates
     expect(update.table).toBe('transactions')
     expect(update.values).toEqual({ supplier_invoice_id: null })
+    // Addressed to ONE row, because transactions.journal_entry_id is not
+    // unique: the old (company, invoice, entry) filter could clear several bank
+    // rows when one payable was settled by a split payment on the same
+    // verifikat. The id comes from the lookup, not from the RPC's
+    // transaction_id, which is always NULL on a row this path can delete.
+    //
+    // The invoice and entry are re-asserted on the write as a compare-and-set:
+    // a row retagged between the lookup and the update must become a no-op
+    // rather than have a still-true pointer cleared.
     expect(update.filters).toEqual([
       ['company_id', COMPANY],
+      ['id', 'tx-found'],
       ['supplier_invoice_id', INVOICE],
       ['journal_entry_id', ENTRY],
     ])
+  })
+
+  it('ignores the RPC transaction_id, which is NULL on every row it can delete', async () => {
+    // The link path inserts the payment row with transaction_id NULL; the paths
+    // that do set it are refused by the booked-payment guards. Even when a value
+    // is present the pointer is resolved by lookup, so the write is addressed to
+    // the row that actually carries the claim.
+    const stub = createStub({ data: { ...OK_RESULT, transaction_id: 'tx-stale' }, error: null })
+
+    await unlinkSupplierInvoiceFromVoucher(stub.supabase, USER, COMPANY, {
+      supplierInvoiceId: INVOICE,
+      paymentId: PAYMENT,
+    })
+
+    expect(stub.updates).toHaveLength(1)
+    expect(stub.updates[0].filters).toContainEqual(['id', 'tx-found'])
+    expect(stub.updates[0].filters).not.toContainEqual(['id', 'tx-stale'])
+  })
+
+  it('leaves the pointer alone when several bank rows match', async () => {
+    const stub = createStub({ data: OK_RESULT, error: null })
+    stub.setCandidates([{ id: 'tx-a' }, { id: 'tx-b' }])
+
+    await unlinkSupplierInvoiceFromVoucher(stub.supabase, USER, COMPANY, {
+      supplierInvoiceId: INVOICE,
+      paymentId: PAYMENT,
+    })
+
+    // Ambiguous: one of them may still have its own payment row, and clearing
+    // both would unpick a settlement this call did not remove.
+    expect(stub.updates).toHaveLength(0)
   })
 
   it('never writes audit_log itself: RLS has no INSERT policy there', async () => {
@@ -132,6 +184,19 @@ describe('unlinkSupplierInvoiceFromVoucher', () => {
     })
 
     expect(stub.from).not.toHaveBeenCalledWith('audit_log')
+  })
+
+  it('leaves the pointer alone when no bank row carries the claim', async () => {
+    const stub = createStub({ data: OK_RESULT, error: null })
+    stub.setCandidates([])
+
+    const outcome = await unlinkSupplierInvoiceFromVoucher(stub.supabase, USER, COMPANY, {
+      supplierInvoiceId: INVOICE,
+      paymentId: PAYMENT,
+    })
+
+    expect(outcome.ok).toBe(true)
+    expect(stub.updates).toHaveLength(0)
   })
 
   it('still succeeds when clearing the bank pointer fails', async () => {
