@@ -1528,7 +1528,7 @@ export async function setEnabled(
  * to be all junction-anchored while a genuinely open row sits past it,
  * letting the guard wave through an account that still has unbokförda
  * affärshändelser (BFL 5 kap). fetchAllRows pages past PostgREST's 1000-row
- * cap instead.
+ * cap instead (regression test: 60 candidates, only the 60th genuinely open).
  */
 export async function hasOpenTransactions(
   supabase: SupabaseClient,
