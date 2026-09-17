@@ -142,6 +142,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
 import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
+import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import {
@@ -1108,6 +1109,7 @@ const current = {
   rawReferenceFetch: findRawReferenceFetches(ROOT),
   clientNodeBuiltins: findClientNodeBuiltins(ROOT),
   ambiguousEmbeds: findAmbiguousEmbeds(ROOT),
+  literalLegalForm: findLiteralLegalForms(ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1121,6 +1123,7 @@ if (isUpdate) {
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
     handRolledInvariants: { count: current.handRolledInvariants },
+    literalLegalForm: { count: current.literalLegalForm.length },
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
@@ -1503,6 +1506,29 @@ if (newDialogOverflow.length) {
   )
 }
 
+// 1e. literal-legal-form: count may not increase. A legal form named as a
+// string at a call site (see literal-legal-form.mjs) sends every later form
+// down the branch it was not written for; docs/LEGAL-FORMS.md has the
+// profile reads that replace each shape.
+const literalLegalFormBaseline = baseline.literalLegalForm?.count ?? Infinity
+if (current.literalLegalForm.length > literalLegalFormBaseline) {
+  failed = true
+  console.error(
+    `\n✗ literal-legal-form: ${current.literalLegalForm.length} site(s) compare, default or tag a legal form ` +
+      `as a string literal (baseline ${literalLegalFormBaseline}, +${current.literalLegalForm.length - literalLegalFormBaseline}). ` +
+      'Sites in files changed most recently are the likely additions:',
+  )
+  const byFile = new Map()
+  for (const f of current.literalLegalForm) byFile.set(f.file, (byFile.get(f.file) ?? 0) + 1)
+  for (const [file, n] of [...byFile.entries()].sort((a, b) => a[0].localeCompare(b[0])))
+    console.error(`    ${file} (${n})`)
+  console.error(
+    '  → read a capability from lib/company/entity-type.ts instead (filesIncomeReturn, hasOwners,\n' +
+      '    resultClosingAccounts, preparesArsredovisning, ...), tag data with an array of forms, and\n' +
+      '    never default a missing form: resolveCompanyEntityType() throws instead. docs/LEGAL-FORMS.md.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -1520,9 +1546,14 @@ if (
   fixedDialogOverflow.length ||
   fixedRawRefs.length ||
   fixedProviderHosts.length ||
-  current.naiveOreRound < baseline.naiveOreRound.count
+  current.naiveOreRound < baseline.naiveOreRound.count ||
+  current.literalLegalForm.length < literalLegalFormBaseline
 ) {
   console.log('\n✓ Progress since baseline:')
+  if (current.literalLegalForm.length < literalLegalFormBaseline)
+    console.log(
+      `    literal-legal-form: -${literalLegalFormBaseline - current.literalLegalForm.length} site(s)`,
+    )
   if (fixedAuthFiles.length) console.log(`    raw-route-auth: -${fixedAuthFiles.length} file(s)`)
   if (fixedLedgerScans.length)
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
@@ -1556,5 +1587,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

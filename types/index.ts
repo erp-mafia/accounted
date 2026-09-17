@@ -1,6 +1,7 @@
-// Entity types (legal forms). Every form-dependent fact goes through
-// lib/company/entity-type.ts (byEntityType): adding a member here must
-// fail compilation there until each site has an answer for it.
+// Entity types (legal forms). Every form-dependent fact lives in one profile
+// per form under lib/company/forms/ (docs/LEGAL-FORMS.md); call sites read a
+// capability through lib/company/entity-type.ts and never compare the form to
+// a string. Adding a member here fails compilation until the profile exists.
 export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
