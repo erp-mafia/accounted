@@ -1,0 +1,369 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
+
+/**
+ * Builds the company graph from the tables that exist. Every query is listed
+ * in one fixed order (the unit test enqueues answers in that order), every
+ * read is capped, and a cap that was hit marks the graph as truncated.
+ *
+ * Aggregation is the default: documents fold into one node per group unless
+ * an agreement, a fact or a link points at them; counterparties beyond the
+ * top twenty by flow fold into one; only accounts with movement appear;
+ * upcoming items stay within ninety days.
+ */
+const MONTHS = 12
+const UPCOMING_DAYS = 90
+const TOP_PARTIES = 20
+const LINE_CAP = 20000
+const DOC_CAP = 5000
+
+const AUTHORITY_DOC_TYPES: Record<string, 'bolagsverket' | 'skatteverket'> = {
+  'registration.bolagsverket': 'bolagsverket',
+  'filing.bolagsverket': 'bolagsverket',
+  'decision.skatteverket': 'skatteverket',
+}
+const CORPORATE = new Set(['minutes.board', 'minutes.agm', 'share_subscription_list', 'annual_report'])
+const RECEIPTS = new Set(['receipt', 'supplier_invoice', 'credit_note', 'customer_invoice'])
+const STATEMENTS = new Set(['bank_statement', 'tax_account_statement'])
+const GROUP_LABELS: Record<string, string> = {
+  agreements: 'Avtal utan koppling',
+  authority: 'Myndighetsdokument',
+  corporate: 'Bolagshandlingar',
+  receipts_invoices: 'Kvitton och fakturor',
+  statements: 'Kontoutdrag',
+  other: 'Övriga dokument',
+}
+const INVOICE_SOURCE_TYPES = new Set(['invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note'])
+
+const round2 = (n: number) => Math.round(n * 100) / 100
+/** Thousands separated by a plain space, so text renderings and tests never meet a non-breaking space. */
+const kr = (n: number) => Math.round(n).toLocaleString('sv-SE').replace(/\u00a0/g, ' ')
+const group = (type: string | null): string =>
+  type?.startsWith('agreement.') ? 'agreements' : type && AUTHORITY_DOC_TYPES[type] ? 'authority' : type && CORPORATE.has(type) ? 'corporate' : type && RECEIPTS.has(type) ? 'receipts_invoices' : type && STATEMENTS.has(type) ? 'statements' : 'other'
+
+function isoMonthsBack(today: string, n: number): string {
+  const d = new Date(`${today}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - n)
+  return d.toISOString().slice(0, 10)
+}
+function isoDaysAhead(today: string, n: number): string {
+  const d = new Date(`${today}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+function monthKeys(today: string): string[] {
+  const keys: string[] = []
+  for (let i = MONTHS - 1; i >= 0; i--) keys.push(isoMonthsBack(today, i).slice(0, 7))
+  return keys
+}
+
+interface LineRow {
+  account_number: string | number
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  journal_entry_id: string
+  journal_entries: { entry_date: string; source_type: string; source_id: string | null } | Array<{ entry_date: string; source_type: string; source_id: string | null }>
+}
+
+export async function buildCompanyGraph(supabase: SupabaseClient, companyId: string, today: string): Promise<CompanyGraph> {
+  const from = isoMonthsBack(today, MONTHS)
+  const horizon = isoDaysAhead(today, UPCOMING_DAYS)
+  const NONE = '00000000-0000-0000-0000-000000000000'
+
+  // One fixed order. The test enqueues answers in exactly this sequence.
+  const company = await supabase.from('companies').select('name').eq('id', companyId).maybeSingle()
+  const accounts = await supabase.from('chart_of_accounts').select('account_number, account_name').eq('company_id', companyId).limit(3000)
+  const lines = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, debit_amount, credit_amount, journal_entry_id, journal_entries!inner(entry_date, status, source_type, source_id, company_id)')
+    .eq('journal_entries.company_id', companyId)
+    .eq('journal_entries.status', 'posted')
+    .gte('journal_entries.entry_date', from)
+    .limit(LINE_CAP)
+  const parties = await supabase.from('parties').select('id, display_name, kind').eq('company_id', companyId).limit(2000)
+  const customers = await supabase.from('customers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(2000)
+  const suppliers = await supabase.from('suppliers').select('id, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(2000)
+  const invoices = await supabase.from('invoices').select('id, customer_id').eq('company_id', companyId).not('customer_id', 'is', null).limit(DOC_CAP)
+  const supplierInvoices = await supabase
+    .from('supplier_invoices')
+    .select('id, supplier_id, registration_journal_entry_id, payment_journal_entry_id')
+    .eq('company_id', companyId)
+    .limit(DOC_CAP)
+  const agreements = await supabase
+    .from('agreements')
+    .select('id, title, kind, status, ends_on, amount, period, principal, counterparty_party_id, counterparty_name, source_document_id')
+    .eq('company_id', companyId)
+    .limit(1000)
+  const obligations = await supabase
+    .from('agreement_obligations')
+    .select('id, agreement_id, kind, due_on, amount, status, transaction_id, direction')
+    .eq('company_id', companyId)
+    .gte('due_on', from)
+    .lte('due_on', horizon)
+    .limit(3000)
+  const matchedTxIds = ((obligations.data ?? []) as Array<{ transaction_id: string | null }>).map((o) => o.transaction_id).filter((id): id is string => !!id)
+  const transactions = await supabase
+    .from('transactions')
+    .select('id, journal_entry_id')
+    .eq('company_id', companyId)
+    .in('id', matchedTxIds.length ? matchedTxIds : [NONE])
+    .limit(3000)
+  const facts = await supabase
+    .from('company_facts')
+    .select('id, predicate, value_text, valid_from, source_document_id')
+    .eq('company_id', companyId)
+    .eq('subject_kind', 'company')
+    .eq('subject_id', companyId)
+    .eq('status', 'confirmed')
+    .is('sys_to', null)
+    .neq('rank', 'deprecated')
+    .limit(200)
+  const documents = await supabase
+    .from('document_attachments')
+    .select('id, file_name, doc_type, created_at, journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('admission_state', 'admitted')
+    .order('created_at', { ascending: false })
+    .limit(DOC_CAP)
+  const documentLinks = await supabase
+    .from('document_links')
+    .select('document_id, target_kind, party_id, agreement_id, asset_id')
+    .eq('company_id', companyId)
+    .is('retired_at', null)
+    .limit(2000)
+  const employees = await supabase
+    .from('employees')
+    .select('id, first_name, last_name, employment_type, employment_end')
+    .eq('company_id', companyId)
+    .limit(500)
+  const deadlines = await supabase
+    .from('deadlines')
+    .select('id, title, due_date, deadline_type, status')
+    .eq('company_id', companyId)
+    .gte('due_date', today)
+    .lte('due_date', horizon)
+    .in('status', ['upcoming', 'action_needed', 'in_progress', 'overdue'])
+    .limit(100)
+  const expected = await supabase
+    .from('arkiv_findings')
+    .select('id, detail')
+    .eq('company_id', companyId)
+    .eq('kind', 'document_expected')
+    .eq('status', 'open')
+    .limit(50)
+
+  for (const r of [company, accounts, lines, parties, customers, suppliers, invoices, supplierInvoices, agreements, obligations, transactions, facts, documents, documentLinks, employees, deadlines, expected]) {
+    if (r.error) throw new Error(`graph read failed: ${r.error.message}`)
+  }
+
+  const nodes = new Map<string, GraphNode>()
+  const links: GraphLink[] = []
+  const linkKeys = new Set<string>()
+  let truncated = false
+  const add = (n: GraphNode) => {
+    const prev = nodes.get(n.ref)
+    if (!prev) nodes.set(n.ref, n)
+    return nodes.get(n.ref) as GraphNode
+  }
+  const link = (source: string, target: string, kind: GraphLink['kind'], evidence: Record<string, unknown>) => {
+    if (source === target || !nodes.has(source) || !nodes.has(target)) return
+    const key = `${source}|${target}|${kind}`
+    if (linkKeys.has(key)) return
+    linkKeys.add(key)
+    links.push({ source, target, kind, evidence })
+  }
+
+  // Ledger: accounts with posted movement in the period, with a monthly series.
+  const months = monthKeys(today)
+  const monthIndex = new Map(months.map((m, i) => [m, i]))
+  const accountName = new Map(((accounts.data ?? []) as Array<{ account_number: string; account_name: string }>).map((a) => [String(a.account_number), a.account_name]))
+  const lineRows = (lines.data ?? []) as unknown as LineRow[]
+  if (lineRows.length >= LINE_CAP) truncated = true
+  const series: Record<string, number[]> = {}
+  const movement = new Map<string, number>()
+  const entryAccounts = new Map<string, Map<string, number>>() // journal_entry_id -> account -> amount
+  const entrySource = new Map<string, { source_type: string; source_id: string | null }>()
+  for (const l of lineRows) {
+    const je = Array.isArray(l.journal_entries) ? l.journal_entries[0] : l.journal_entries
+    const account = String(l.account_number)
+    const amount = Number(l.debit_amount ?? 0) + Number(l.credit_amount ?? 0)
+    movement.set(account, (movement.get(account) ?? 0) + amount)
+    const ref = `account:${account}`
+    if (!series[ref]) series[ref] = new Array(MONTHS).fill(0)
+    const mi = monthIndex.get((je?.entry_date ?? '').slice(0, 7))
+    if (mi != null) series[ref][mi] = round2(series[ref][mi] + amount)
+    if (!entryAccounts.has(l.journal_entry_id)) entryAccounts.set(l.journal_entry_id, new Map())
+    const per = entryAccounts.get(l.journal_entry_id) as Map<string, number>
+    per.set(account, (per.get(account) ?? 0) + amount)
+    if (je) entrySource.set(l.journal_entry_id, { source_type: je.source_type, source_id: je.source_id })
+  }
+  for (const [account, total] of movement) {
+    add({ ref: `account:${account}`, cluster: 'ledger', kind: 'account', label: `${account} ${accountName.get(account) ?? ''}`.trim(), weight: round2(total), meta: { account, movement: round2(total) } })
+  }
+
+  // Counterparties: flow derived from what was booked against invoices and supplier invoices.
+  const partyRows = (parties.data ?? []) as Array<{ id: string; display_name: string; kind: string }>
+  const partyById = new Map(partyRows.map((p) => [p.id, p]))
+  const customerParty = new Map(((customers.data ?? []) as Array<{ id: string; party_id: string }>).map((c) => [c.id, c.party_id]))
+  const supplierParty = new Map(((suppliers.data ?? []) as Array<{ id: string; party_id: string }>).map((s) => [s.id, s.party_id]))
+  const invoiceParty = new Map(((invoices.data ?? []) as Array<{ id: string; customer_id: string }>).map((i) => [i.id, customerParty.get(i.customer_id)]).filter((x): x is [string, string] => !!x[1]))
+  const entryParty = new Map<string, string>()
+  for (const [entryId, src] of entrySource) {
+    if (INVOICE_SOURCE_TYPES.has(src.source_type) && src.source_id && invoiceParty.has(src.source_id)) entryParty.set(entryId, invoiceParty.get(src.source_id) as string)
+  }
+  for (const si of (supplierInvoices.data ?? []) as Array<{ supplier_id: string; registration_journal_entry_id: string | null; payment_journal_entry_id: string | null }>) {
+    const party = supplierParty.get(si.supplier_id)
+    if (!party) continue
+    for (const entryId of [si.registration_journal_entry_id, si.payment_journal_entry_id]) if (entryId) entryParty.set(entryId, party)
+  }
+  const partyFlow = new Map<string, number>()
+  const partyAccountFlow = new Map<string, { amount: number; count: number }>()
+  for (const [entryId, party] of entryParty) {
+    const per = entryAccounts.get(entryId)
+    if (!per) continue
+    for (const [account, amount] of per) {
+      partyFlow.set(party, (partyFlow.get(party) ?? 0) + amount)
+      const key = `${party}|${account}`
+      const cur = partyAccountFlow.get(key) ?? { amount: 0, count: 0 }
+      partyAccountFlow.set(key, { amount: cur.amount + amount, count: cur.count + 1 })
+    }
+  }
+  const agreementRows = (agreements.data ?? []) as Array<{ id: string; title: string; kind: string; status: string; ends_on: string | null; amount: number | null; period: string | null; principal: number | null; counterparty_party_id: string | null; counterparty_name: string | null; source_document_id: string | null }>
+  const referencedParties = new Set(agreementRows.map((a) => a.counterparty_party_id).filter((x): x is string => !!x))
+  const ranked = [...partyRows].sort((a, b) => (partyFlow.get(b.id) ?? 0) - (partyFlow.get(a.id) ?? 0))
+  const kept = new Set<string>()
+  for (const p of ranked) if (kept.size < TOP_PARTIES && ((partyFlow.get(p.id) ?? 0) > 0 || referencedParties.has(p.id))) kept.add(p.id)
+  for (const p of referencedParties) kept.add(p)
+  for (const id of kept) {
+    const p = partyById.get(id)
+    if (!p) continue
+    add({ ref: `party:${id}`, cluster: 'party', kind: 'party', label: p.display_name, weight: round2(partyFlow.get(id) ?? 0), meta: { party_kind: p.kind, flow: round2(partyFlow.get(id) ?? 0) } })
+  }
+  const foldedParties = partyRows.filter((p) => !kept.has(p.id))
+  if (foldedParties.length) {
+    add({ ref: 'parties:others', cluster: 'party', kind: 'parties_folded', label: `Övriga motparter, ${foldedParties.length} st`, weight: foldedParties.length, meta: { count: foldedParties.length } })
+  }
+  for (const [key, flow] of partyAccountFlow) {
+    const [party, account] = key.split('|')
+    if (!kept.has(party)) continue
+    link(`party:${party}`, `account:${account}`, 'posting', { kind: 'derived', amount: round2(flow.amount), entries: flow.count, source: 'invoices and supplier invoices booked in the period' })
+  }
+
+  // Authorities: static nodes, linked by what they said and what they take.
+  add({ ref: 'authority:skatteverket', cluster: 'authority', kind: 'authority', label: 'Skatteverket', weight: 4, meta: {} })
+  add({ ref: 'authority:bolagsverket', cluster: 'authority', kind: 'authority', label: 'Bolagsverket', weight: 3, meta: {} })
+  for (const account of movement.keys()) {
+    if (/^(26|27)\d\d$/.test(account)) link('authority:skatteverket', `account:${account}`, 'posting', { kind: 'derived', movement: round2(movement.get(account) ?? 0) })
+  }
+
+  // Agreements, their sources, their counterparties, their obligations.
+  const docRows = (documents.data ?? []) as Array<{ id: string; file_name: string; doc_type: string | null; created_at: string; journal_entry_id: string | null }>
+  if (docRows.length >= DOC_CAP) truncated = true
+  const docById = new Map(docRows.map((d) => [d.id, d]))
+  const referencedDocs = new Set<string>()
+  for (const a of agreementRows) {
+    add({ ref: `agreement:${a.id}`, cluster: 'agreement', kind: 'agreement', label: a.title, weight: Math.max(2, Math.min(12, Math.log10(Math.max(1, Number(a.principal ?? a.amount ?? 0))) * 2)), meta: { agreement_kind: a.kind, status: a.status, ends_on: a.ends_on, amount: a.amount, period: a.period, principal: a.principal } })
+    if (a.source_document_id) referencedDocs.add(a.source_document_id)
+  }
+  const factRows = (facts.data ?? []) as Array<{ id: string; predicate: string; value_text: string; valid_from: string | null; source_document_id: string | null }>
+  for (const f of factRows) if (f.source_document_id) referencedDocs.add(f.source_document_id)
+  const linkRows = (documentLinks.data ?? []) as Array<{ document_id: string; target_kind: string; party_id: string | null; agreement_id: string | null; asset_id: string | null }>
+  for (const l of linkRows) referencedDocs.add(l.document_id)
+  const groupCounts = new Map<string, { count: number; sample: string[]; entries: string[] }>()
+  for (const d of docRows) {
+    if (referencedDocs.has(d.id) || (d.doc_type && AUTHORITY_DOC_TYPES[d.doc_type])) {
+      add({ ref: `document:${d.id}`, cluster: 'document', kind: 'document', label: d.file_name, weight: 2, meta: { doc_type: d.doc_type, created_at: d.created_at } })
+      continue
+    }
+    const g = group(d.doc_type)
+    const cur = groupCounts.get(g) ?? { count: 0, sample: [], entries: [] }
+    cur.count++
+    if (cur.sample.length < 3) cur.sample.push(d.file_name)
+    if (d.journal_entry_id) cur.entries.push(d.journal_entry_id)
+    groupCounts.set(g, cur)
+  }
+  for (const [g, cur] of groupCounts) {
+    add({ ref: `documents:${g}`, cluster: 'document', kind: 'documents_folded', label: `${GROUP_LABELS[g] ?? g}, ${cur.count} st`, weight: Math.max(2, Math.log10(cur.count + 1) * 4), meta: { group: g, count: cur.count, sample: cur.sample } })
+    // What the folded documents book against: the accounts of their vouchers.
+    const perAccount = new Map<string, number>()
+    for (const entryId of cur.entries) for (const [account, amount] of entryAccounts.get(entryId) ?? []) perAccount.set(account, (perAccount.get(account) ?? 0) + amount)
+    const top = [...perAccount.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+    for (const [account, amount] of top) link(`documents:${g}`, `account:${account}`, 'posting', { kind: 'aggregate', amount: round2(amount), documents: cur.entries.length })
+  }
+  for (const a of agreementRows) {
+    if (a.counterparty_party_id) link(`agreement:${a.id}`, `party:${a.counterparty_party_id}`, 'party', { kind: 'fk' })
+    if (a.source_document_id) link(`agreement:${a.id}`, `document:${a.source_document_id}`, 'source', { kind: 'fk' })
+  }
+  for (const f of factRows) {
+    add({ ref: `fact:${f.id}`, cluster: 'fact', kind: 'fact', label: `${f.predicate}: ${f.value_text.slice(0, 60)}`, weight: 2, meta: { predicate: f.predicate, value: f.value_text.slice(0, 200), valid_from: f.valid_from } })
+    if (f.source_document_id) {
+      link(`fact:${f.id}`, `document:${f.source_document_id}`, 'source', { kind: 'fk' })
+      const authority = AUTHORITY_DOC_TYPES[docById.get(f.source_document_id)?.doc_type ?? '']
+      if (authority) link(`authority:${authority}`, `fact:${f.id}`, 'authority', { kind: 'derived', via: 'source document type' })
+    }
+  }
+  for (const d of docRows) {
+    const authority = d.doc_type ? AUTHORITY_DOC_TYPES[d.doc_type] : undefined
+    if (authority) link(`authority:${authority}`, `document:${d.id}`, 'authority', { kind: 'derived', via: 'document type' })
+  }
+  for (const l of linkRows) {
+    if (l.target_kind === 'party' && l.party_id) link(`document:${l.document_id}`, `party:${l.party_id}`, 'link', { kind: 'fk' })
+    if (l.target_kind === 'agreement' && l.agreement_id) link(`document:${l.document_id}`, `agreement:${l.agreement_id}`, 'link', { kind: 'fk' })
+  }
+
+  // Obligations: matched ones tie an agreement to the accounts that paid; expected ones within ninety days are upcoming.
+  const txEntry = new Map(((transactions.data ?? []) as Array<{ id: string; journal_entry_id: string | null }>).map((t) => [t.id, t.journal_entry_id]))
+  const obligationRows = (obligations.data ?? []) as Array<{ id: string; agreement_id: string; kind: string; due_on: string; amount: number; status: string; transaction_id: string | null; direction: string | null }>
+  const matchedByAgreementAccount = new Map<string, { amount: number; count: number }>()
+  for (const o of obligationRows) {
+    if (o.status === 'matched' && o.transaction_id) {
+      const entryId = txEntry.get(o.transaction_id)
+      const per = entryId ? entryAccounts.get(entryId) : undefined
+      if (per) for (const [account, amount] of per) {
+        const key = `${o.agreement_id}|${account}`
+        const cur = matchedByAgreementAccount.get(key) ?? { amount: 0, count: 0 }
+        matchedByAgreementAccount.set(key, { amount: cur.amount + amount, count: cur.count + 1 })
+      }
+    }
+    if (o.status === 'expected' && o.due_on >= today) {
+      add({ ref: `obligation:${o.id}`, cluster: 'upcoming', kind: 'obligation', label: `${o.kind} ${o.due_on}, ${kr(Number(o.amount))} kr`, weight: 2, meta: { due_on: o.due_on, amount: Number(o.amount), obligation_kind: o.kind, direction: o.direction } })
+      link(`agreement:${o.agreement_id}`, `obligation:${o.id}`, 'upcoming', { kind: 'fk' })
+    }
+  }
+  for (const [key, m] of matchedByAgreementAccount) {
+    const [agreementId, account] = key.split('|')
+    link(`agreement:${agreementId}`, `account:${account}`, 'matched', { kind: 'match', amount: round2(m.amount), payments: m.count })
+  }
+
+  // People: the payroll, with owners and board marked; the salary account is what ties them to the books.
+  const employeeRows = ((employees.data ?? []) as Array<{ id: string; first_name: string; last_name: string; employment_type: string; employment_end: string | null }>).filter((e) => !e.employment_end || e.employment_end >= today)
+  for (const e of employeeRows) {
+    add({ ref: `person:${e.id}`, cluster: 'person', kind: 'person', label: `${e.first_name} ${e.last_name}`.trim(), weight: 2, meta: { role: e.employment_type } })
+    if (movement.has('7010') && e.employment_type === 'employee') link(`person:${e.id}`, 'account:7010', 'role', { kind: 'derived', via: 'salary account has movement' })
+  }
+
+  // Deadlines and what the books say is missing.
+  for (const d of (deadlines.data ?? []) as Array<{ id: string; title: string; due_date: string; deadline_type: string; status: string }>) {
+    add({ ref: `deadline:${d.id}`, cluster: 'upcoming', kind: 'deadline', label: `${d.title}, ${d.due_date}`, weight: 2, meta: { due_date: d.due_date, deadline_type: d.deadline_type, status: d.status } })
+    link(/bolagsverket|annual|arsredovisning/i.test(d.deadline_type) ? 'authority:bolagsverket' : 'authority:skatteverket', `deadline:${d.id}`, 'authority', { kind: 'derived', via: 'deadline type' })
+  }
+  for (const x of (expected.data ?? []) as Array<{ id: string; detail: Record<string, unknown> }>) {
+    const rule = String(x.detail.rule ?? 'document')
+    add({ ref: `expected:${x.id}`, cluster: 'agreement', kind: 'expected', label: `Saknas: ${String(x.detail.expected_type ?? rule)}`, weight: 3, meta: { rule, expected_type: x.detail.expected_type ?? null, evidence: x.detail.evidence ?? null, missing: true } })
+    for (const account of ((x.detail.evidence as { accounts?: string[] } | undefined)?.accounts ?? [])) link(`expected:${x.id}`, `account:${account}`, 'expected', { kind: 'derived', via: 'the evidence behind the request' })
+  }
+
+  const all = [...nodes.values()]
+  const clusters = (Object.keys(CLUSTER_LABELS) as ClusterId[]).map((id) => ({ id, label: CLUSTER_LABELS[id], count: all.filter((n) => n.cluster === id).length }))
+  return {
+    company: { ref: `company:${companyId}`, name: (company.data as { name: string } | null)?.name ?? '' },
+    computed_at: new Date().toISOString(),
+    period: { from, to: today },
+    months,
+    series,
+    clusters,
+    nodes: all,
+    links,
+    truncated,
+  }
+}

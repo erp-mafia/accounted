@@ -540,6 +540,10 @@ describe('tools/list payload size guard', () => {
     //     default catalog so an agent can close what it gathered; a direct
     //     write, so the staging bridge cannot reach it. Measured 63 381 on
     //     the rebased branch.
+    //   * Arkiv phase 9b (the graph): gnubok_get_neighbourhood is search-only,
+    //     reachable through gnubok_call_tool and named by the briefing, so the
+    //     graph walk costs the default catalog nothing. Measured 63 381 on
+    //     the rebased branch. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(63_500)
   })
 

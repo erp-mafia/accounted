@@ -1288,6 +1288,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   document_jobs: 'pipeline queue state (read, classify and extract jobs); no bookkeeping content',
   arkiv_findings: 'nightly lint findings, recomputed from the archive and the settings; no bookkeeping content',
   arkiv_autonomy: 'audit tallies per document type, recomputed nightly from activities',
+  arkiv_graph_snapshots: 'the last build of the company graph, recomputed from the ledger, the agreements, the documents and the facts; no content of its own',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their
