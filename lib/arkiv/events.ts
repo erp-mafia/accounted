@@ -6,7 +6,7 @@ import { getPostHogServer } from '@/lib/analytics/posthog-server'
  * the archive. Never throws, never blocks: without a PostHog token it is a
  * no-op, and a capture failure is swallowed.
  */
-export type ArkivEvent = 'arkiv_document_landed' | 'arkiv_question_answered' | 'arkiv_document_asked' | 'arkiv_missing_resolved'
+export type ArkivEvent = 'arkiv_document_landed' | 'arkiv_question_answered' | 'arkiv_document_asked' | 'arkiv_missing_resolved' | 'arkiv_searched'
 
 export function captureArkivEvent(event: ArkivEvent, input: { companyId: string; userId?: string | null } & Record<string, unknown>): void {
   try {
