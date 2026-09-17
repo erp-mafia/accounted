@@ -1110,7 +1110,7 @@ describe('upsertFromPsd2', () => {
 interface ManualStub {
   lookup: { data: { id: string; currency?: string } | null; error?: { message: string } | null }
   insert?: { data: { id: string } | null; error?: { message: string; code?: string } | null }
-  reread?: { data: { id: string } | null; error?: { message: string } | null }
+  reread?: { data: { id: string; currency?: string } | null; error?: { message: string } | null }
   inserted: Array<Record<string, unknown>>
   lookupCount: number
 }
@@ -1197,6 +1197,19 @@ describe('ensureManualCashAccount', () => {
     }
     const id = await ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK')
     expect(id).toBe('ca-winner')
+  })
+
+  it('applies the currency check to the winner of a 23505 race too', async () => {
+    const stub: ManualStub = {
+      lookup: { data: null },
+      insert: { data: null, error: { message: 'duplicate key', code: '23505' } },
+      reread: { data: { id: 'ca-winner', currency: 'EUR' } },
+      inserted: [],
+      lookupCount: 0,
+    }
+    await expect(
+      ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
+    ).rejects.toThrow('denominated in EUR, not SEK')
   })
 
   it('throws on a non-race insert failure', async () => {

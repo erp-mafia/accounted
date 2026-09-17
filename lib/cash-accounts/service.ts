@@ -1441,18 +1441,21 @@ export async function ensureManualCashAccount(
   if (existing.error) {
     throw new Error(`ensureManualCashAccount lookup failed: ${existing.error.message}`)
   }
-  if (existing.data) {
-    const row = existing.data as { id: string; currency: string | null }
-    // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
-    // currency. A different-currency transaction pointing at the same ledger is
-    // a real conflict (e.g. a SEK row landing on a ledger already claimed for
-    // USD): fail loudly instead of binding it to the wrong-currency account.
+  // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
+  // currency. A different-currency transaction pointing at the same ledger is
+  // a real conflict (e.g. a SEK row landing on a ledger already claimed for
+  // USD): fail loudly instead of binding it to the wrong-currency account.
+  // Applied to the row found up front and to the winner of a 23505 race alike.
+  const idIfSameCurrency = (row: { id: string; currency: string | null }): string => {
     if (row.currency && row.currency.toUpperCase() !== currency.toUpperCase()) {
       throw new Error(
         `Cash account ${ledgerAccount} is denominated in ${row.currency}, not ${currency.toUpperCase()}`,
       )
     }
     return row.id
+  }
+  if (existing.data) {
+    return idIfSameCurrency(existing.data as { id: string; currency: string | null })
   }
 
   const insert = await supabase
@@ -1474,11 +1477,13 @@ export async function ensureManualCashAccount(
     if (insert.error.code === '23505') {
       const reread = await supabase
         .from('cash_accounts')
-        .select('id')
+        .select('id, currency')
         .eq('company_id', companyId)
         .eq('ledger_account', ledgerAccount)
         .maybeSingle()
-      if (reread.data) return (reread.data as { id: string }).id
+      if (reread.data) {
+        return idIfSameCurrency(reread.data as { id: string; currency: string | null })
+      }
     }
     log.error('ensureManualCashAccount insert failed', {
       companyId,
