@@ -9,6 +9,8 @@ import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/a
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
 import { askDocument } from '@/lib/arkiv/ask'
 import { captureArkivEvent } from '@/lib/arkiv/events'
+import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
+import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -670,6 +672,49 @@ export function createArkivTools(deps: Deps): McpTool[] {
           pages_read: out.pages_read,
           page_count: out.page_count,
         }
+      },
+    },
+    {
+      name: 'gnubok_get_neighbourhood',
+      keywords: ['arkiv', 'graf', 'kopplingar', 'hänger ihop', 'motpart', 'avtal', 'konto'],
+      title: 'Get Neighbourhood',
+      annotations: deps.readOnly,
+      description:
+        'The subgraph around one node of the company graph (Accounted://arkiv/graph): every node within depth hops and the links between them, with evidence, as JSON and as a plain adjacency list. Refs: agreement:<id>, party:<id>, account:<number>, document:<id>, fact:<id>.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ref: { type: 'string', minLength: 3, maxLength: 120, description: 'A node ref from the graph, e.g. agreement:<uuid> or account:5010.' },
+          depth: { type: 'integer', minimum: 1, maximum: 3, description: 'Hops to walk. Default 1.' },
+        },
+        required: ['ref'],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          center: { type: 'string' },
+          depth: { type: 'integer' },
+          node_count: { type: 'integer' },
+          link_count: { type: 'integer' },
+          capped: { type: 'boolean' },
+          computed_at: { type: 'string' },
+          text: { type: 'string' },
+          nodes: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          links: { type: 'array', items: { type: 'object', additionalProperties: true } },
+        },
+        required: ['center', 'depth', 'node_count', 'link_count', 'capped', 'computed_at', 'text', 'nodes', 'links'],
+      },
+      async execute(args, companyId, _userId, supabase) {
+        assertEnabled(companyId)
+        const ref = String(args.ref ?? '').trim()
+        if (!/^[a-z_]+:[A-Za-z0-9_-]+$/.test(ref)) throw new Error('ref must look like kind:id, as in the graph')
+        const depth = Math.max(1, Math.min(3, Number(args.depth ?? 1) || 1))
+        const graph = await getCompanyGraph(supabase, companyId)
+        const n = neighbourhoodOf(graph, ref, depth)
+        if (!n) throw new Error(`No node ${ref} in the company graph; read Accounted://arkiv/graph for the refs that exist`)
+        return { center: n.center, depth: n.depth, node_count: n.nodes.length, link_count: n.links.length, capped: n.capped, computed_at: graph.computed_at, text: n.text, nodes: n.nodes, links: n.links }
       },
     },
     {

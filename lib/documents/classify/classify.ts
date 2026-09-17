@@ -6,6 +6,7 @@ import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { DOC_TYPES, DOC_TYPE_DESCRIPTIONS, type DocType } from './taxonomy'
 import { captureArkivEvent } from '@/lib/arkiv/events'
+import { markCompanyGraphStale } from '@/lib/arkiv/graph/snapshot'
 
 const log = createLogger('documents/classify')
 
@@ -261,6 +262,7 @@ async function persistClassification(
     type: 'document.classified',
     payload: { document: { id: doc.id, file_name: doc.file_name }, companyId: doc.company_id, userId: meta.userId ?? doc.user_id ?? '', docType: c.doc_type, admission, decidedBy: meta.decidedBy },
   })
+  await markCompanyGraphStale(supabase, doc.company_id)
   captureArkivEvent('arkiv_document_landed', { companyId: doc.company_id, userId: meta.userId ?? doc.user_id ?? null, doc_type: c.doc_type, admission, decided_by: meta.decidedBy })
   return { status: 'classified', classification: c, admission }
 }

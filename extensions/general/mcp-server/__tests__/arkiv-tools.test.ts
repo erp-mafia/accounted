@@ -210,3 +210,33 @@ describe('gnubok_resolve_missing', () => {
     await expect(tool('gnubok_resolve_missing').execute({ finding_id: 'nope', resolution: 'not_exists' }, CO, 'user-1', supabase)).rejects.toThrow(/uuid/)
   })
 })
+
+describe('gnubok_get_neighbourhood', () => {
+  const graph = {
+    company: { ref: `company:${CO}`, name: 'X' }, computed_at: '2026-10-01T04:00:00Z', period: { from: '', to: '' }, months: [], series: {}, clusters: [], truncated: false,
+    nodes: [
+      { ref: `agreement:${AGR}`, cluster: 'agreement', kind: 'agreement', label: 'Låneavtal Almi', weight: 5, meta: {} },
+      { ref: 'account:2350', cluster: 'ledger', kind: 'account', label: '2350 Banklån', weight: 4, meta: {} },
+      { ref: 'account:1930', cluster: 'ledger', kind: 'account', label: '1930 Företagskonto', weight: 4, meta: {} },
+    ],
+    links: [
+      { source: `agreement:${AGR}`, target: 'account:2350', kind: 'matched', evidence: { kind: 'match', amount: 31251, payments: 3 } },
+      { source: 'account:2350', target: 'account:1930', kind: 'posting', evidence: { kind: 'derived' } },
+    ],
+  }
+
+  it('walks the graph snapshot around one ref and renders the adjacency as text', async () => {
+    enqueue({ data: { graph, computed_at: new Date().toISOString(), stale: false } })
+    const out = (await tool('gnubok_get_neighbourhood').execute({ ref: `agreement:${AGR}`, depth: 1 }, CO, 'user-1', supabase)) as { node_count: number; link_count: number; text: string; computed_at: string }
+    expect(out).toMatchObject({ node_count: 2, link_count: 1, computed_at: '2026-10-01T04:00:00Z' })
+    expect(out.text).toContain('was paid through 2350 Banklån (account:2350) [31 251 kr, 3 payments, match]')
+    enqueue({ data: { graph, computed_at: new Date().toISOString(), stale: false } })
+    expect(((await tool('gnubok_get_neighbourhood').execute({ ref: `agreement:${AGR}`, depth: 2 }, CO, 'user-1', supabase)) as { node_count: number }).node_count).toBe(3)
+  })
+
+  it('refuses a ref that is not in the graph, and a malformed one', async () => {
+    enqueue({ data: { graph, computed_at: new Date().toISOString(), stale: false } })
+    await expect(tool('gnubok_get_neighbourhood').execute({ ref: 'party:nope' }, CO, 'user-1', supabase)).rejects.toThrow(/No node party:nope/)
+    await expect(tool('gnubok_get_neighbourhood').execute({ ref: 'what?' }, CO, 'user-1', supabase)).rejects.toThrow(/kind:id/)
+  })
+})
