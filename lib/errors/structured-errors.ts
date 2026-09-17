@@ -2065,6 +2065,17 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsperioden kunde inte hittas.',
     message_en: 'Fiscal period not found.',
   },
+  // Bokslutsdispositioner (periodiseringsfond, överavskrivningar, bolagsskatt,
+  // särskild löneskatt) exist only for a form whose profile says so
+  // (supportsCorporateTaxDispositions: today the aktiebolag). The wizard never
+  // offers them to another form; this code closes the hand-made request path.
+  YEAR_END_DISPOSITIONS_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv:
+      'Bokslutsdispositioner (periodiseringsfond, överavskrivningar, bolagsskatt och särskild löneskatt) stöds inte för företagets företagsform.',
+    message_en:
+      'Year-end tax dispositions (periodiseringsfond, excess depreciation, corporate tax and special payroll tax) are not supported for this company\'s legal form.',
+  },
   PERIOD_LOCK_FAILED: {
     httpStatus: 400,
     message_sv: 'Perioden kunde inte låsas.',

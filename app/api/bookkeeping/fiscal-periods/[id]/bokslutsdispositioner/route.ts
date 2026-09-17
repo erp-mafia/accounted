@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
+import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 import {
@@ -55,6 +56,30 @@ const DISPOSITION_ORDER: Record<string, number> = {
   bolagsskatt: 4,
 }
 
+/**
+ * Legal-form gate for every write on this route. The year-end wizard shows
+ * no dispositions to a form whose profile lacks them, but a hand-made
+ * request with {items:[{kind:'bolagsskatt'}]} would still compute and POST
+ * corporate tax on an enskild firma or an ideell förening (only
+ * överavskrivningar gated itself). Every kind is refused together, including
+ * sarskild_loneskatt: whether SLP applies to a förening employer is a domain
+ * question we have not settled, so it is gated with the rest for now. The
+ * form comes from companies.entity_type, never a default.
+ */
+async function dispositionsGate(
+  supabase: Parameters<typeof resolveCompanyEntityType>[0],
+  companyId: string,
+  opLog: Parameters<typeof errorResponseFromCode>[1],
+  requestId: string | undefined,
+): Promise<NextResponse | null> {
+  const form = await resolveCompanyEntityType(supabase, companyId)
+  if (supportsCorporateTaxDispositions(form)) return null
+  return errorResponseFromCode('YEAR_END_DISPOSITIONS_WRONG_LEGAL_FORM', opLog, {
+    requestId,
+    details: { entity_type: form },
+  })
+}
+
 // ============================================================
 // GET: return proposal snapshot with defaults
 // ============================================================
@@ -103,6 +128,9 @@ export const PUT = withRouteContext(
     if (!validation.success) return validation.response
 
     try {
+      const refused = await dispositionsGate(supabase, companyId, opLog, requestId)
+      if (refused) return refused
+
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
         .select('id, is_closed, locked_at, closing_entry_id')
@@ -189,6 +217,9 @@ export const POST = withRouteContext(
     if (!validation.success) return validation.response
 
     try {
+      const refused = await dispositionsGate(supabase, companyId, opLog, requestId)
+      if (refused) return refused
+
       const { data: period, error: periodError } = await supabase
         .from('fiscal_periods')
         .select('id, name, period_start, period_end, opening_balance_entry_id, is_closed, locked_at, closing_entry_id')
