@@ -74,6 +74,15 @@ function findBestMatch(
   if (existingOverride) {
     return {
       ...existingOverride,
+      // The override remembers which TARGET was chosen, not what the account
+      // was called the last time it was imported. The name belongs to the file
+      // being imported now: a source system does rename an account between
+      // fiscal years, and Spiris swapped the names of 3541 and 3542 between
+      // 2022 and 2023 to match BAS. Keeping the stored name shows "Fakturerings-
+      // avgifter, export" beside this year's EU momskod, which makes a correct
+      // suggestion look wrong, and enrichAccountMappingsWithVat would read the
+      // stale label for any renamed account the source chart has no code for.
+      sourceName: source.name || existingOverride.sourceName,
       isOverride: true,
     }
   }

@@ -16,6 +16,7 @@ import {
   DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactions/is-booked'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
 import {
@@ -266,7 +267,15 @@ function BankHistoryRow({
   // dead end.
   const { canWrite } = useCanWrite()
   const isIncome = transaction.amount > 0
-  const isBooked = !!transaction.journal_entry_id
+  // The pointer alone misses a row split over several verifikat (#1553): its
+  // journal_entry_id is NULL and the anchors sit in transaction_voucher_links,
+  // so it rendered "Ej bokförd" with a Bokför button (crm#48).
+  const linkedEntryIds = getLinkedJournalEntryIds(transaction)
+  const isBooked = linkedEntryIds.length > 0
+  const primaryEntryId = linkedEntryIds[0] ?? null
+  const voucherLinks = (transaction.transaction_voucher_links ?? []).filter(
+    (link) => (link.role ?? 'bank_line') === 'bank_line',
+  )
   // Only user-created rows are deletable; imported (bank sync / CSV) rows are
   // ignore-only. Mirrors the server guard in DELETE /api/transactions/[id].
   const canDelete = !isBooked && !isImportedTransaction(transaction)
@@ -276,9 +285,7 @@ function BankHistoryRow({
 
   // Underlag status: see computeJeUnderlagStatus. Unknown/not-yet-loaded JE
   // renders neither badge (no false "saknas" flash while the enrichment loads).
-  const jeStatus = transaction.journal_entry_id
-    ? jeUnderlagStatus?.[transaction.journal_entry_id]
-    : undefined
+  const jeStatus = primaryEntryId ? jeUnderlagStatus?.[primaryEntryId] : undefined
   const hasJeDoc = jeStatus === 'has'
   const missingUnderlag = isBooked && !transaction.document_id && jeStatus === 'missing'
   const showAttachItem = canWrite && !!onOpenAttachDocument
@@ -325,7 +332,7 @@ function BankHistoryRow({
           <span className="truncate">{transaction.description}</span>
           <TransactionAttachmentIndicator
             documentId={transaction.document_id}
-            journalEntryId={transaction.journal_entry_id}
+            journalEntryId={primaryEntryId}
             hasJeDoc={hasJeDoc}
             missing={missingUnderlag}
             onAttach={
@@ -375,12 +382,23 @@ function BankHistoryRow({
               <span className="text-muted-foreground">
                 {isPrivate ? t('private_badge') : t('posted')}
               </span>
-              <Link
-                href={`/bookkeeping/${transaction.journal_entry_id}`}
-                className={QUIET_LINK_CLASS}
-              >
-                {t('view_voucher_short')}
-              </Link>
+              {/* One link per verifikat the row is anchored to (pointer first,
+                  then each bank_line junction row, deduplicated): a split row
+                  reads V200, V201 when the fetch embedded the voucher, else
+                  the generic label. */}
+              {linkedEntryIds.map((entryId, index) => {
+                const link = voucherLinks.find((l) => l.journal_entry_id === entryId)
+                return (
+                  <Link
+                    key={entryId}
+                    href={`/bookkeeping/${entryId}`}
+                    className={QUIET_LINK_CLASS}
+                  >
+                    {(link ? embeddedVoucherLabel(link) : null) ??
+                      (index === 0 ? t('view_voucher_short') : `+${index}`)}
+                  </Link>
+                )
+              })}
             </>
           ) : isPrivate ? (
             <span className="text-muted-foreground">{t('private_badge')}</span>
@@ -442,8 +460,8 @@ function BankHistoryRow({
                     {tDetach('menu_item')}
                   </DropdownMenuItem>
                 )}
-                {isBooked && canWrite && transaction.journal_entry_id && (
-                  <CorrectionAffordance journalEntryId={transaction.journal_entry_id}>
+                {isBooked && canWrite && primaryEntryId && (
+                  <CorrectionAffordance journalEntryId={primaryEntryId}>
                     {({ open, isLoading }) => (
                       <DropdownMenuItem onSelect={() => open()} disabled={isLoading}>
                         {isLoading ? t('fetching') : t('create_correction')}

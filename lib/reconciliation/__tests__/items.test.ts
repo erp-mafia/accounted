@@ -10,7 +10,7 @@ vi.mock('../skattekonto-reconciliation', () => ({
 }))
 vi.mock('../bank-reconciliation', () => ({
   fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
-  fetchJunctionLinkedTxIds: (...args: unknown[]) => junctionMock(...args),
+  fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
   scopeTransactionsToAccount: (q: unknown) => q,
 }))
 const coveringSetsMock = vi.fn()
@@ -33,7 +33,7 @@ describe('listAccountItems', () => {
     skvStatusMock.mockReset()
     fetchUnlinkedMock.mockReset()
     junctionMock.mockReset()
-    junctionMock.mockResolvedValue(new Set())
+    junctionMock.mockResolvedValue(new Map())
     coveringSetsMock.mockReset()
     coveringSetsMock.mockResolvedValue(new Map())
   })
@@ -83,7 +83,7 @@ describe('listAccountItems', () => {
         { id: 't-junc', date: '2026-07-31', description: 'Samlingsverifikat', merchant_name: null, amount: -500, currency: 'SEK', journal_entry_id: null, potential_journal_entry_id: null, potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: null },
       ],
     })
-    junctionMock.mockResolvedValue(new Set(['t-junc']))
+    junctionMock.mockResolvedValue(new Map([['t-junc', ['e-junc-a', 'e-junc-b']]]))
     fetchUnlinkedMock.mockResolvedValue([
       { line_id: 'l1', journal_entry_id: 'e-3', debit_amount: 0, credit_amount: 600, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Elgiganten', source_type: 'manual' },
       { line_id: 'l2', journal_entry_id: 'e-3', debit_amount: 0, credit_amount: 400, line_description: null, entry_date: '2026-08-18', voucher_number: 231, voucher_series: 'A', entry_description: 'Elgiganten', source_type: 'manual' },
@@ -96,7 +96,8 @@ describe('listAccountItems', () => {
     expect(byId['t-open']).toMatchObject({ bucket: 'unmatched_external', actions: ['book', 'match', 'ignore'] })
     expect(byId['t-link']).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-1', actions: ['unmatch'] })
     expect(byId['t-ign']).toMatchObject({ bucket: 'ignored', actions: ['unignore'] })
-    expect(byId['t-junc']).toMatchObject({ bucket: 'matched', actions: ['unmatch'] })
+    // A split row reports the first bank_line verifikat, not null (crm#48).
+    expect(byId['t-junc']).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-junc-a', actions: ['unmatch'] })
     expect(byId['e-3']).toMatchObject({ bucket: 'unmatched_ledger', side: 'ledger', amount: -1000, voucher_number: 231 })
     // Work order: proposed, unmatched external, unmatched ledger, ignored, upcoming, matched
     expect(result?.items.map((i) => i.bucket)).toEqual(['proposed', 'unmatched_external', 'unmatched_ledger', 'ignored', 'matched', 'matched'])

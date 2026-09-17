@@ -8,6 +8,39 @@ import {
 import type { AccountMapping } from './types'
 
 /**
+ * Treatments whose box does not fix the sats, independently of account class.
+ *
+ * Momspliktiga uttag and an import basis both exist at 25, 12 and 6 %: ruta 06
+ * and ruta 50 are one box each, and the rate rides on the account label or a
+ * source chart code. Ruta 05 solved the same problem the other way, with three
+ * treatments, which is why standard_25/reduced_12/reduced_6 are not here.
+ */
+const RATE_NOT_FIXED_BY_BOX: ReadonlySet<AccountVatTreatment> = new Set([
+  'own_use',
+  'import_goods',
+])
+
+/**
+ * Whether the suggested rate is read off the account label rather than fixed by
+ * the treatment.
+ *
+ * True for a reverse charge on a purchase account, where the acquisition rate
+ * is a real number the treatment does not determine, and for the treatments
+ * above, where the box covers three rates. Everywhere else
+ * defaultRateForVatTreatment is authoritative, including where it deliberately
+ * answers null: vmb has no single sats and oss carries a destination country's
+ * rate that never drives ruta 05 arithmetic. Exported so a caller holding a
+ * better source than the label knows exactly where it is allowed to win.
+ */
+export function vatRateComesFromLabel(
+  treatment: AccountVatTreatment,
+  accountClass: number,
+): boolean {
+  if (RATE_NOT_FIXED_BY_BOX.has(treatment)) return true
+  return accountClass >= 4 && treatment.startsWith('reverse_charge')
+}
+
+/**
  * The momssats to suggest next to a provider-translated treatment. A
  * reverse-charge code names the ruta the basis feeds, never the acquisition
  * rate, and the label is the only place the 12%/6% purchase accounts say so
@@ -19,7 +52,7 @@ function providerSuggestedRate(
   accountClass: number,
   sourceName: string,
 ): number | null {
-  if (accountClass >= 4 && treatment.startsWith('reverse_charge')) {
+  if (vatRateComesFromLabel(treatment, accountClass)) {
     return vatRateFromLabel(sourceName) ?? defaultRateForVatTreatment(treatment, accountClass)
   }
   return defaultRateForVatTreatment(treatment, accountClass)
@@ -45,6 +78,25 @@ function providerSuggestedRate(
  * Only class 3-6 identity mappings are touched, the same rows the label
  * suggestion covers: a remapped account gets the target's treatment, and
  * classes 1-2 and 7-8 carry no treatment.
+ *
+ * Two kinds of already-answered row, and they are not the same:
+ *
+ *   The USER answered it in this step. Never touched. applyVatTreatmentReview
+ *   leaves requiresVatTreatmentReview as it found it, so reviewed AND required
+ *   is the signature of a human answer.
+ *
+ *   The COMPANY CHART answered it, which enrichAccountMappingsWithVat records
+ *   by clearing requiresVatTreatmentReview. Here the file is the newer
+ *   statement about the same account and may update it, because a source
+ *   system does move a code between fiscal years: Spiris swapped the names AND
+ *   the codes of 3541 and 3542 between 2022 and 2023, so last year's treatment
+ *   on this year's account would file EU sales as export. Such a row is left
+ *   as it is while the file agrees, and re-opened for review only when it does
+ *   not, so a multi-year migration does not re-confirm dozens of unchanged
+ *   rows every year.
+ *
+ * Every row it does not touch is returned BY REFERENCE, which is what lets a
+ * caller tell what this file changed from what an earlier one did.
  */
 export function applySourceVatCodes(
   mappings: AccountMapping[],
@@ -55,6 +107,7 @@ export function applySourceVatCodes(
     if (!mapping.targetAccount || mapping.sourceAccount !== mapping.targetAccount) return mapping
     const accountClass = Number(mapping.sourceAccount.charAt(0))
     if (accountClass < 3 || accountClass > 6) return mapping
+    if (mapping.vatTreatmentReviewed && mapping.requiresVatTreatmentReview) return mapping
 
     const code = codesByAccount.get(mapping.sourceAccount)?.trim()
     if (!code) return mapping
@@ -62,6 +115,9 @@ export function applySourceVatCodes(
     const treatment = translate(code, mapping.sourceAccount)
     const withFacts = { ...mapping, providerVatCode: code, providerVatTreatment: treatment }
     if (!treatment) return withFacts
+    // The file agrees with the treatment the account already carries: record
+    // that it spoke, and leave the row settled rather than asking again.
+    if (mapping.vatTreatmentReviewed && mapping.defaultVatTreatment === treatment) return withFacts
 
     return {
       ...withFacts,
@@ -141,6 +197,18 @@ export function enrichAccountMappingsWithVat(
   })
 }
 
+/**
+ * The user's own answer for one row.
+ *
+ * Sets requiresVatTreatmentReview as well as clearing the suggestion, so the
+ * pair applySourceVatCodes reads as "a human answered this" is established
+ * here rather than inherited from whatever the row happened to carry. It used
+ * to be inherited, which held only while every row reaching a review had the
+ * flag up already; a row the company chart settled does not, and its answer
+ * was then overwritable by the next chart file. The counter and the filter
+ * both ask for required AND NOT reviewed, so a row answered here still leaves
+ * the review list.
+ */
 export function applyVatTreatmentReview(
   mappings: AccountMapping[],
   sourceAccount: string,
@@ -155,6 +223,7 @@ export function applyVatTreatmentReview(
           defaultVatRate: rate,
           vatTreatmentSuggested: false,
           vatTreatmentReviewed: true,
+          requiresVatTreatmentReview: true,
         }
       : mapping
   )

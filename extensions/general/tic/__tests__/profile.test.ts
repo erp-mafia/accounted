@@ -66,8 +66,8 @@ const mockDoc: TICCompanyDocument = {
   companyId: 42,
   registrationNumber: '5560360793',
   names: [
-    { nameOrIdentifier: 'Registered Name', companyNamingType: 'registeredName' },
-    { nameOrIdentifier: 'Test AB', companyNamingType: 'name' },
+    { nameOrIdentifier: 'Brand Name', companyNamingType: 'particularName' },
+    { nameOrIdentifier: 'Test AB', companyNamingType: 'legalName' },
   ],
   legalEntityType: 'AB',
   // 2000-01-01 in Unix seconds (TIC's native unit; the route converts to ms)

@@ -682,3 +682,24 @@ describe('getErrorMessage: Swedish route messages without a keyword pass through
     expect(failing).toEqual([])
   })
 })
+
+describe('SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', () => {
+  it('names the accounts from the details in Swedish and points at 2999 for class 9', () => {
+    const body = {
+      error: {
+        code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS',
+        message: 'Konton med belopp måste mappas till konton 1000-8999 före import.',
+        details: { account_numbers: ['9999'] },
+      },
+    }
+    const sv = getErrorMessage(body)
+    expect(sv).toContain('Konto 9999 har belopp')
+    expect(sv).toContain('2999 OBS-konto')
+    expect(getErrorMessage({ error: { ...body.error, details: { account_numbers: ['9998', '9999'] } } })).toContain('Kontona 9998, 9999 har belopp')
+  })
+
+  it('falls back to the registry sentence without details', () => {
+    expect(getErrorMessage({ error: { code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', message: 'Konton med belopp måste mappas till konton 1000-8999 före import.' } }))
+      .toContain('1000-8999')
+  })
+})

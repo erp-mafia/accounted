@@ -106,3 +106,49 @@ export function hasBankLineJunctionRow(
   if (!Array.isArray(rows)) return false
   return rows.some((row) => (row.role ?? 'bank_line') === 'bank_line')
 }
+
+/**
+ * A transaction_voucher_links row as PostgREST embeds it on a transactions
+ * select (`transaction_voucher_links(journal_entry_id, role, ...)`): no
+ * transaction_id, because the parent row is the transaction. The optional
+ * `journal_entry` is the nested voucher label when the reader asked for it.
+ */
+export interface EmbeddedVoucherLink {
+  journal_entry_id: string
+  role?: string | null
+  journal_entry?: { voucher_series: string | null; voucher_number: number | null } | null
+}
+
+interface TxWithEmbeddedLinks {
+  journal_entry_id: string | null
+  transaction_voucher_links?: EmbeddedVoucherLink[] | null
+}
+
+/**
+ * Every verifikat a row is anchored to, for a row read WITH the junction
+ * embedded: the 1:1 pointer first, then each bank_line junction row (a row
+ * split over several verifikat, #1553, or bulk-booked into a
+ * samlingsverifikat), deduplicated. Empty means unbooked. Readers that only
+ * check `journal_entry_id` show a split row as "Ej bokförd" (crm#48).
+ *
+ * Supplementary roles ('other', 'clearing') do not count here: they are
+ * residual anchors, not the booking of the bank line itself (see
+ * hasBankLineJunctionRow).
+ */
+export function getLinkedJournalEntryIds(tx: TxWithEmbeddedLinks): string[] {
+  const out: string[] = []
+  if (tx.journal_entry_id != null) out.push(tx.journal_entry_id)
+  for (const link of tx.transaction_voucher_links ?? []) {
+    if ((link.role ?? 'bank_line') !== 'bank_line') continue
+    if (!out.includes(link.journal_entry_id)) out.push(link.journal_entry_id)
+  }
+  return out
+}
+
+/** Display label for an embedded link's verifikat ("V200"), null when the
+ *  reader did not embed journal_entry or the voucher is unnumbered. */
+export function embeddedVoucherLabel(link: EmbeddedVoucherLink): string | null {
+  const je = link.journal_entry
+  if (!je || je.voucher_number == null) return null
+  return `${je.voucher_series ?? ''}${je.voucher_number}`
+}

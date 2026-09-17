@@ -31,7 +31,7 @@ export interface SIEJobInput {
 }
 
 export class SIEJobValidationError extends Error {
-  constructor(message: string, readonly code: string = 'VALIDATION_ERROR') { super(message) }
+  constructor(message: string, readonly code: string = 'VALIDATION_ERROR', readonly details?: Record<string, unknown>) { super(message) }
 }
 
 /** Accounted's financial reports classify targets by BAS classes 1-8. */
@@ -42,6 +42,7 @@ export function assertSIEReportingAccounts(accounts: Iterable<string>): void {
       `Målkonton ${unsupported.slice(0, 5).join(', ')} stöds inte i balans- och resultatrapporterna. ` +
       'Mappa konton med belopp till konton 1000-8999 innan importen startas. Oanvända kontodefinitioner kan behållas.',
       'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS',
+      { account_numbers: unsupported },
     )
   }
 }

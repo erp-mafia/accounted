@@ -97,6 +97,9 @@ describe('DELETE /api/invoices/[id]', () => {
     expect(status).toBe(200)
     expect(body.data.cancelled).toBe(true)
     expect(body.data.invoice_number).toBe('F-2026001')
+    // A webshop order that produced the draft is released by the DB trigger
+    // inside the cancel statement (crm#56): no second write from here.
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
   })
 
   it('hard deletes an un-numbered draft (saved via "Spara som utkast") and emits an audit event', async () => {
@@ -117,6 +120,8 @@ describe('DELETE /api/invoices/[id]', () => {
 
     expect(status).toBe(200)
     expect(body.data.deleted).toBe(true)
+    // The FK is ON DELETE SET NULL (crm#56): no application unlink here.
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
     // The hard delete leaves no journal trace, so an audit event must record it.
     expect(emitSpy).toHaveBeenCalledWith({
       type: 'invoice.draft_deleted',

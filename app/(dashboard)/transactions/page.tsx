@@ -126,6 +126,13 @@ import { getInvoiceReferencesForJournalEntries } from '@/lib/core/bookkeeping/jo
 import { isWithinBounds, resolvePeriodBounds } from '@/lib/transactions/period-filter'
 import type { FiscalPeriod } from '@/types'
 
+// Every list fetch embeds the junction so a row split over several verifikat
+// (journal_entry_id NULL, #1553) renders as booked with its verifikat instead
+// of "Ej bokförd" (crm#48). The nested journal_entry gives the row a label per
+// link (V200, V201); see getLinkedJournalEntryIds.
+const TRANSACTION_LIST_SELECT =
+  '*, transaction_voucher_links(journal_entry_id, role, journal_entry:journal_entries(voucher_series, voucher_number))'
+
 function InlineDialogContentLoading() {
   return (
     <div className="space-y-4 py-4" role="status">
@@ -1230,7 +1237,7 @@ export default function TransactionsPage() {
       // period client-side and the footer surfaces what falls outside it.
       let windowQuery = supabase
         .from('transactions')
-        .select('*')
+        .select(TRANSACTION_LIST_SELECT)
         .eq('company_id', companyId)
       if (periodBounds) {
         windowQuery = windowQuery.gte('date', periodBounds.start).lte('date', periodBounds.end)
@@ -1260,7 +1267,7 @@ export default function TransactionsPage() {
         fetchAllRows<TransactionWithInvoice>(({ from, to }) =>
           supabase
             .from('transactions')
-            .select('*')
+            .select(TRANSACTION_LIST_SELECT)
             .eq('company_id', companyId)
             .is('is_business', null)
             .eq('is_ignored', false)
@@ -1362,7 +1369,7 @@ export default function TransactionsPage() {
     const offset = pagedCountRef.current
     let pageQuery = supabase
       .from('transactions')
-      .select('*')
+      .select(TRANSACTION_LIST_SELECT)
       .eq('company_id', companyId)
     // Same period scope as the initial window fetch: mixed-scope pages would
     // corrupt the offset bookkeeping.

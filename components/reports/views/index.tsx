@@ -2060,11 +2060,50 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   </h3>
                   <Table>
                     <TableBody>
-                      {data.rutor.ruta05 > 0 && (
+                      {data.rutor.ruta05 !== 0 && (
                         <VatRutaRow
                           ruta="05"
                           label="Momspliktig försäljning"
                           amount={data.rutor.ruta05}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {/* The other three bases in section A of SKV 4700. Shown
+                          only when used, like ruta 05: most companies have
+                          none, and an always-visible row of zeroes is noise.
+                          Rutor 07 and 08 have no entry in ACCOUNT_RUTA at all,
+                          so they can only arrive through the vmb and
+                          rental_voluntary treatments. */}
+                      {data.rutor.ruta06 !== 0 && (
+                        <VatRutaRow
+                          ruta="06"
+                          label="Momspliktiga uttag"
+                          amount={data.rutor.ruta06}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {data.rutor.ruta07 !== 0 && (
+                        <VatRutaRow
+                          ruta="07"
+                          label="Vinstmarginalbeskattning"
+                          amount={data.rutor.ruta07}
+                          baseAmount={0}
+                          periodType={periodType}
+                          year={year}
+                          period={period}
+                        />
+                      )}
+                      {data.rutor.ruta08 !== 0 && (
+                        <VatRutaRow
+                          ruta="08"
+                          label="Hyresinkomster (frivillig skattskyldighet)"
+                          amount={data.rutor.ruta08}
                           baseAmount={0}
                           periodType={periodType}
                           year={year}
@@ -2098,26 +2137,6 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                         year={year}
                         period={period}
                       />
-                      <VatRutaRow
-                        ruta="39"
-                        label="Tjänster EU (omvänd skattskyldighet)"
-                        amount={0}
-                        baseAmount={data.rutor.ruta39}
-                        noVat
-                        periodType={periodType}
-                        year={year}
-                        period={period}
-                      />
-                      <VatRutaRow
-                        ruta="40"
-                        label="Export utanför EU"
-                        amount={0}
-                        baseAmount={data.rutor.ruta40}
-                        noVat
-                        periodType={periodType}
-                        year={year}
-                        period={period}
-                      />
                     </TableBody>
                     <tfoot>
                       <tr className="border-t font-medium">
@@ -2134,8 +2153,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   </Table>
 
                   {/* Omvänd skattskyldighet (inköp) */}
-                  {(data.rutor.ruta20 > 0 || data.rutor.ruta21 > 0 || data.rutor.ruta22 > 0 || data.rutor.ruta23 > 0 || data.rutor.ruta24 > 0 ||
-                    data.rutor.ruta30 > 0 || data.rutor.ruta31 > 0 || data.rutor.ruta32 > 0) && (
+                  {/* Non-zero, not positive, and the same test in all three
+                      sections below: VatRutaRow hides itself only at exactly
+                      zero, and a box legitimately goes negative in a period
+                      dominated by credit notes. A section testing > 0 would
+                      swallow the row the box most needs to show. */}
+                  {(data.rutor.ruta20 !== 0 || data.rutor.ruta21 !== 0 || data.rutor.ruta22 !== 0 || data.rutor.ruta23 !== 0 || data.rutor.ruta24 !== 0 ||
+                    data.rutor.ruta30 !== 0 || data.rutor.ruta31 !== 0 || data.rutor.ruta32 !== 0) && (
                     <>
                       <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Omvänd skattskyldighet (inköp)
@@ -2155,8 +2179,40 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                     </>
                   )}
 
+                  {/* Försäljning undantagen från moms: section E of SKV 4700.
+                      Eight boxes that carry a base and no VAT, and until now
+                      the report drew two of them. Ruta 35 was the expensive
+                      omission: EU goods sales are ordinary business, they were
+                      computed correctly and filed correctly in the PDF and the
+                      eSKD file, and the screen simply did not say so. Rutor 37
+                      and 38 became reachable with triangulation_eu_goods and
+                      would have landed in the same silence. */}
+                  {(data.rutor.ruta35 !== 0 || data.rutor.ruta36 !== 0 || data.rutor.ruta37 !== 0 ||
+                    data.rutor.ruta38 !== 0 || data.rutor.ruta39 !== 0 || data.rutor.ruta40 !== 0 ||
+                    data.rutor.ruta41 !== 0 || data.rutor.ruta42 !== 0) && (
+                    <>
+                      <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Försäljning undantagen från moms
+                      </h3>
+                      <Table>
+                        <TableBody>
+                          <VatRutaRow ruta="35" label="Varuförsäljning till annat EU-land" amount={0} baseAmount={data.rutor.ruta35} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="36" label="Varuförsäljning utanför EU (export)" amount={0} baseAmount={data.rutor.ruta36} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="37" label="Mellanmans inköp vid trepartshandel" amount={0} baseAmount={data.rutor.ruta37} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="38" label="Mellanmans försäljning vid trepartshandel" amount={0} baseAmount={data.rutor.ruta38} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="39" label="Tjänster EU (omvänd skattskyldighet)" amount={0} baseAmount={data.rutor.ruta39} noVat periodType={periodType} year={year} period={period} />
+                          {/* Not "Export utanför EU": that is ruta 36 one row
+                              up, and this box is services, not goods. */}
+                          <VatRutaRow ruta="40" label="Övrig försäljning av tjänster utomlands" amount={0} baseAmount={data.rutor.ruta40} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="41" label="Försäljning med omvänd skattskyldighet i Sverige" amount={0} baseAmount={data.rutor.ruta41} noVat periodType={periodType} year={year} period={period} />
+                          <VatRutaRow ruta="42" label="Övrig momsfri försäljning m.m." amount={0} baseAmount={data.rutor.ruta42} noVat periodType={periodType} year={year} period={period} />
+                        </TableBody>
+                      </Table>
+                    </>
+                  )}
+
                   {/* Moms vid import */}
-                  {(data.rutor.ruta50 > 0 || data.rutor.ruta60 > 0 || data.rutor.ruta61 > 0 || data.rutor.ruta62 > 0) && (
+                  {(data.rutor.ruta50 !== 0 || data.rutor.ruta60 !== 0 || data.rutor.ruta61 !== 0 || data.rutor.ruta62 !== 0) && (
                     <>
                       <h3 className="mb-3 mt-6 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                         Moms vid import

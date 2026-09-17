@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -32,6 +32,10 @@ import {
 } from 'lucide-react'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
+import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
+import type { SourceChartSummary } from '@/lib/import/source-chart/apply-source-chart'
+import { ImportNotices } from '@/components/import/ImportNotices'
+import type { ImportNotice } from '@/lib/import/notices'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import type { BASAccount } from '@/types'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
@@ -59,6 +63,15 @@ interface AccountMappingStepProps {
   ) => void
   /** Accept the suggested VAT treatment for every unreviewed row at once. */
   onConfirmAllVatTreatments: () => void
+  /**
+   * Hand the picked chart export up as a File. The parent owns `mappings`, so
+   * it owns reading and applying the file too; this step only collects it, the
+   * same division the bulk confirm already uses. Passing the File rather than
+   * its text keeps the read where the state that must report a failed one is.
+   */
+  onSourceChartSelected?: (file: File) => void
+  /** What the last accepted file did, for the line above the table. */
+  sourceChart?: { summary: SourceChartSummary; notices: ImportNotice[] } | null
   onContinue: () => void
   onBack: () => void
 }
@@ -67,12 +80,47 @@ type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confi
 
 const PAGE_SIZE = 50
 
+/**
+ * How many account numbers the untranslated-code line names before it stops
+ * counting them out. Six four-digit numbers fit the line; the realistic case is
+ * one or two, since the untranslatable rutor are 06 and 50.
+ */
+const UNTRANSLATED_ACCOUNTS_LISTED = 6
+
+/**
+ * The momsdeklaration box the built-in BAS mapping already routes this account
+ * to, or undefined when it has none. Kept in sync with ACCOUNT_RUTA by the
+ * drift test in lib/vat/__tests__/moms-box-mapping.test.ts.
+ */
+function basBoxFor(mapping: AccountMapping): string | undefined {
+  return ACCOUNT_TO_BOX[mapping.targetAccount ?? mapping.sourceAccount]
+}
+
+/**
+ * The account numbers, capped: "3401, 3402" or "3401, 3402, ... och 4 till".
+ * The tail is its own key rather than a hard-coded "och", which is a different
+ * word in the other locale.
+ */
+function untranslatedAccountList(
+  accounts: string[],
+  t: ReturnType<typeof useTranslations<'chart_of_accounts'>>,
+): string {
+  const shown = accounts.slice(0, UNTRANSLATED_ACCOUNTS_LISTED).join(', ')
+  if (accounts.length <= UNTRANSLATED_ACCOUNTS_LISTED) return shown
+  return t('source_chart_untranslated_more', {
+    accounts: shown,
+    rest: accounts.length - UNTRANSLATED_ACCOUNTS_LISTED,
+  })
+}
+
 export default function AccountMappingStep({
   mappings,
   basAccounts,
   onMappingChange,
   onVatTreatmentChange,
   onConfirmAllVatTreatments,
+  onSourceChartSelected,
+  sourceChart,
   onContinue,
   onBack,
 }: AccountMappingStepProps) {
@@ -85,6 +133,7 @@ export default function AccountMappingStep({
     return hasUnmapped ? 'unmapped' : hasVatReview ? 'vat_review' : 'all'
   })
   const [currentPage, setCurrentPage] = useState(1)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Targets the dropdown can name: the caller's list (the company chart, or
   // chart + BAS). A mapped target outside it is an account the import will
@@ -257,6 +306,91 @@ export default function AccountMappingStep({
               {t('unmapped_out_of_range_help', { accounts: unmappedAccounts.join(', ') })}
             </p>
           )}
+
+          {/* The source system's own momskoder, if the user has them.
+              A quiet line rather than a drop zone: this step is already dense,
+              and convention 6 puts attention in one sentence, not a banner.
+              Optional throughout, the step works exactly as before without it. */}
+          {onSourceChartSelected && (
+            <div className="flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+              <span>
+                {sourceChart?.summary.formatLabel
+                  ? t('source_chart_applied', {
+                      count: sourceChart.summary.treatmentsApplied,
+                      // Named back so a wrong detection is visible: the format
+                      // is read from the header, never picked by the user.
+                      format: sourceChart.summary.formatLabel,
+                    })
+                  : t('source_chart_prompt')}
+              </span>
+              {/* A real button that opens a hidden input, the same shape
+                  every other file picker in this repo uses (LogoUpload,
+                  BookingTemplatesPanel, UnderlagImportWizard). A <label>
+                  wrapping a display:none input takes the control out of the
+                  tab order entirely: the label is not focusable and neither
+                  is the input, so the feature would exist only for a mouse. */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  // Reset first: picking the same file twice must fire again,
+                  // which it does not if the value is left in place.
+                  event.target.value = ''
+                  if (file) onSourceChartSelected(file)
+                }}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {/* Keyed to the same thing as the line beside it: a file
+                    whose format was not recognised leaves nothing to
+                    replace, so offering "Byt fil" next to the invitation
+                    would have the two controls describe opposite states. */}
+                {sourceChart?.summary.formatLabel
+                  ? t('source_chart_replace')
+                  : t('source_chart_action')}
+              </Button>
+              {/* Three paragraphs rather than one: the year rule is the one
+                  that silently produces a wrong answer, so it gets its own,
+                  and the menu path is what saves a trip back to the old
+                  system. Wider than the 280px default to keep them readable. */}
+              <InfoTooltip
+                maxWidth="340px"
+                content={
+                  <span className="block space-y-2">
+                    <span className="block">{t('source_chart_help')}</span>
+                    <span className="block">{t('source_chart_help_year')}</span>
+                    <span className="block">{t('source_chart_help_where')}</span>
+                  </span>
+                }
+              />
+            </div>
+          )}
+          {/* The other half of what the file did, on screen next to the first
+              half. Not a notice: notices are problems with the file, and
+              ImportNotices folds all but one away.
+
+              Named, not just counted: the rows are scattered across paginated
+              pages, so a bare number sends the user hunting for rows it will
+              not identify. */}
+          {sourceChart && sourceChart.summary.accountsWithoutTreatment.length > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('source_chart_untranslated', {
+                count: sourceChart.summary.accountsWithoutTreatment.length,
+                accounts: untranslatedAccountList(sourceChart.summary.accountsWithoutTreatment, t),
+              })}
+            </p>
+          )}
+          {/* The import's own notice system for what went wrong with the file,
+              not a second one beside it. Renders nothing when there was
+              nothing wrong, so it costs no space in the common case. */}
+          {sourceChart && <ImportNotices notices={sourceChart.notices} />}
 
           {/* Search and filter */}
           <div className="flex gap-4">
@@ -438,9 +572,50 @@ export default function AccountMappingStep({
                             </SelectContent>
                           </Select>
                         </div>
+                        {/* Four things the code line can mean, and saying the
+                            wrong one costs trust every time.
+
+                            Translated: print it. Untranslated on an account the
+                            BAS map already routes (4545 import to ruta 50):
+                            nothing is missing, so claiming the code could not
+                            be used would send the user hunting for a problem
+                            that is not there. Untranslated with no BAS mapping
+                            but a treatment on the row: it really does rest on
+                            the account name, and printing the code alone would
+                            read as confirmation of a box the source never
+                            named.
+
+                            And the one that used to borrow the third sentence
+                            and be wrong: nothing translated the code, no BAS
+                            number routes the account, and the label matched no
+                            rule either. Pointing at a suggestion that is not
+                            there is bad enough on its own; here it also hides
+                            that the amount reaches NO ruta until the user picks
+                            one.
+
+                            Four ways in, measured, not only the import one:
+                            ruta 50 or 06 on a number ACCOUNT_TO_BOX does not
+                            know; a code naming no sats ("05") beside a label
+                            naming none either; a code on the wrong account
+                            class (ruta 20 on a revenue account), refused so an
+                            acquisition cannot land in a sales box; and a code
+                            the parser does not recognise, whether another
+                            vendor's spelling or an impossible rate. In every
+                            one the label is the last line of defence, which is
+                            why a descriptive account name lands in the third
+                            state instead. */}
                         {mapping.providerVatCode ? (
                           <p className="mt-1 text-xs text-muted-foreground">
-                            {t('vat_treatment_source_code', { code: mapping.providerVatCode })}
+                            {mapping.providerVatTreatment
+                              ? t('vat_treatment_source_code', { code: mapping.providerVatCode })
+                              : basBoxFor(mapping)
+                                ? t('vat_treatment_source_code_bas', {
+                                    code: mapping.providerVatCode,
+                                    box: basBoxFor(mapping)!,
+                                  })
+                                : mapping.defaultVatTreatment
+                                  ? t('vat_treatment_source_code_unreadable', { code: mapping.providerVatCode })
+                                  : t('vat_treatment_source_code_nowhere', { code: mapping.providerVatCode })}
                           </p>
                         ) : null}
                         </>
