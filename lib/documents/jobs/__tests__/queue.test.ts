@@ -10,6 +10,7 @@ vi.mock('@/lib/documents/classify/classify', () => ({
 vi.mock('@/lib/documents/extract/store', () => ({ extractDocument: vi.fn() }))
 vi.mock('@/lib/arkiv/agreements/store', () => ({ deriveDocument: vi.fn() }))
 vi.mock('@/lib/arkiv/facts/store', () => ({ recordFactsForDocument: vi.fn() }))
+vi.mock('@/lib/arkiv/usage', () => ({ recordArkivUsage: vi.fn(async () => undefined) }))
 
 import { enqueueDocumentJob, enqueueMissingExtractions, runDocumentJobs, type ClaimedJob } from '../queue'
 import { readAndStoreDocument } from '@/lib/documents/read/store'
@@ -17,6 +18,7 @@ import { classifyDocument } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
 import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
+import { recordArkivUsage } from '@/lib/arkiv/usage'
 
 const mock = createQueuedMockSupabase()
 const { enqueue, reset, findCalls } = mock
@@ -84,6 +86,20 @@ describe('runDocumentJobs', () => {
     expect(rpc).toHaveBeenCalledWith('claim_document_jobs', { p_batch_size: 8, p_worker: 'test' })
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'classify' })
     expect(lastJobUpdate()).toEqual({ status: 'done', result: 'read 3 pages (pdf_text)', last_error: null, locked_at: null, locked_by: null })
+    // The meter: three pages read, none of them by the vision model.
+    expect(recordArkivUsage).toHaveBeenCalledTimes(1)
+    expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'pages_read', 3)
+  })
+
+  it('meters vision pages as the costly kind, on top of pages read', async () => {
+    enqueue({ data: [job()] })
+    enqueue({ data: { ...DOCUMENT, mime_type: 'image/jpeg' } })
+    mocked(readAndStoreDocument).mockResolvedValue({ status: 'read', pages: 2, reader: 'claude_vision' })
+    enqueue({ data: true })
+    enqueue({})
+    await expect(run()).resolves.toMatchObject({ done: 1 })
+    expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'pages_read', 2)
+    expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'pages_vision', 2)
   })
 
   it('reads text for every company but classifies only in the rollout', async () => {
@@ -111,6 +127,9 @@ describe('runDocumentJobs', () => {
 
     await expect(run({ now: () => t0 })).resolves.toEqual({ claimed: 2, done: 1, failed: 1, returned: 0 })
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'extract' })
+    // A classified document counts once; a failed extraction counts nothing.
+    expect(recordArkivUsage).toHaveBeenCalledTimes(1)
+    expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'documents', 1)
     expect(lastJobUpdate()).toEqual({ status: 'failed', last_error: 'model timeout', run_after: new Date(t0 + 8 * 60_000).toISOString(), locked_at: null, locked_by: null })
   })
 
@@ -148,6 +167,7 @@ describe('runDocumentJobs', () => {
     expect(deriveDocument).toHaveBeenCalledWith(supabase, 'doc-2')
     expect(recordFactsForDocument).toHaveBeenCalledWith(supabase, 'doc-2')
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'derived 14 obligations, 2 deadlines, 9 facts, waiting on notice_months' })
+    expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'extractions', 1)
   })
 
   it('queues a derivation for a registration too (facts), and records facts even when no agreement is derived', async () => {

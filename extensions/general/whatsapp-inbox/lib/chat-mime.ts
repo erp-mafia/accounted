@@ -1,18 +1,18 @@
+import { IMAGE_MIME_TYPES, OFFICE_MIME_TYPES } from '@/lib/documents/read/types'
+
 /**
- * Chat intake accepts what phones actually produce. Narrower than the upload
- * allowlist on purpose: WhatsApp transcodes photos to JPEG, so HEIC never
- * arrives, and everything else gets the M15 nudge.
+ * Chat intake accepts every document the pipe can read: photos and PDFs as
+ * before, and since Arkiv phase 9e the office types too, so an agreement or
+ * a letter sent over WhatsApp goes through the same door as a receipt and
+ * lands where it belongs. HEIC never arrives (WhatsApp transcodes photos to
+ * JPEG); audio, video and the rest get the M15 nudge.
  *
- * Lives in its own dependency-free module because both the deferred worker
- * (the M15 rejection) and the webhook (the instant checkmark reaction) gate
- * on it, and tests that mock process-inbound must not lose the constant.
+ * Kept as its own module with only pure constants behind it, because both
+ * the deferred worker (the M15 rejection) and the webhook (the instant
+ * checkmark reaction) gate on it, and tests that mock process-inbound must
+ * not lose the constant.
  */
-export const CHAT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'application/pdf',
-])
+export const CHAT_ALLOWED_MIME_TYPES: ReadonlySet<string> = new Set(['application/pdf', ...IMAGE_MIME_TYPES, ...OFFICE_MIME_TYPES, 'text/plain'])
 
 /** Normalize a raw MIME header value to what the allowlist stores. */
 export function normalizeChatMime(mime: string | null | undefined): string {

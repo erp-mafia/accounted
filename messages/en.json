@@ -378,7 +378,7 @@
     "banking": "Transactions are fetched automatically. {appName} can only read, never move money.",
     "assistant": "What the assistant knows, remembers and can do.",
     "api": "Connect Claude, Cursor, and other AI assistants over MCP. API keys for your own integrations live here too.",
-    "whatsapp": "Link your mobile number and send receipts as photos or PDFs straight from WhatsApp."
+    "whatsapp": "Link your mobile number and send receipts, invoices and agreements as photos or PDFs straight from WhatsApp."
   },
   "settings_nav": {
     "aria_label": "Settings",
@@ -2157,6 +2157,9 @@
     "blockers_load_retry": "Try again"
   },
   "settings_billing": {
+    "arkiv_usage_title": "Arkiv",
+    "arkiv_usage_line": "Last twelve months: {documents, plural, one {1 document} other {# documents}} taken in, {pages, plural, one {1 page} other {# pages}} read, {asks, plural, =0 {no questions} one {1 question} other {# questions}} asked of documents.",
+    "arkiv_usage_note": "Included in the subscription. Counted per rolling twelve months.",
     "load_failed": "The subscription details could not be loaded, so your status cannot be shown right now.",
     "load_retry": "Try again",
     "team_agreement_status": "Included in {teamName}'s agreement",
@@ -3515,11 +3518,11 @@
     "confirm": "Confirm booking"
   },
   "settings_whatsapp": {
-    "group_label": "WhatsApp receipts",
+    "group_label": "WhatsApp documents",
     "loading": "Loading status …",
     "load_failed": "Could not read the WhatsApp link status.",
     "retry": "Try again",
-    "unlinked_intro": "Link your mobile number to send receipts as photos or PDFs straight from WhatsApp. They land in Underlag, ready to review and book.",
+    "unlinked_intro": "Link your mobile number to send receipts, invoices, agreements and other post as photos or PDFs straight from WhatsApp. Receipts and invoices land in Underlag, the rest in Arkiv.",
     "connect_button": "Link WhatsApp",
     "mint_failed": "Could not create a code. Try again in a moment.",
     "open_whatsapp": "Open WhatsApp",

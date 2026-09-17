@@ -7,6 +7,7 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readAndStoreDocument, type ReadableDocumentRow } from '@/lib/documents/read/store'
+import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('documents/jobs')
@@ -145,6 +146,9 @@ async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<strin
   const out = await readAndStoreDocument(supabase, data as ReadableDocumentRow)
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return `skipped: ${out.reason}`
+  // The meter: every page read counts; pages the vision model transcribed count once more, as the costly kind.
+  await recordArkivUsage(supabase, job.company_id, 'pages_read', out.pages)
+  if (out.reader === 'claude_vision') await recordArkivUsage(supabase, job.company_id, 'pages_vision', out.pages)
   if (isArkivEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
   return `read ${out.pages} pages (${out.reader})${out.partial ? `, partial: ${out.partial}` : ''}`
 }
@@ -154,6 +158,7 @@ async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities
   const out = await classifyDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
+  await recordArkivUsage(supabase, job.company_id, 'documents', 1)
   if (out.admission === 'admitted') await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   return `classified ${out.classification.doc_type} (${out.admission})`
 }
@@ -163,6 +168,7 @@ async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities:
   const out = await extractDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
+  await recordArkivUsage(supabase, job.company_id, 'extractions', 1)
   if (agreementKindFor(out.schemaType) || hasFactPredicates(out.schemaType)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'derive')
   return `extracted ${out.schemaType}${out.reviewFields.length ? `, review: ${out.reviewFields.join(', ')}` : ''}`
 }
