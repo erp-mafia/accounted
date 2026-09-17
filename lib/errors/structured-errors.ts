@@ -2521,8 +2521,8 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   },
   BANK_FILE_INVALID_SETTLEMENT_ACCOUNT: {
     httpStatus: 400,
-    message_sv: 'Bankkontot måste vara ett konto i kontoklass 19 (till exempel 1930).',
-    message_en: 'The bank account must be a class 19 ledger account (for example 1930).',
+    message_sv: 'Bankkontot måste vara ett aktivt konto i kontoklass 19 i din kontoplan (till exempel 1930).',
+    message_en: 'The bank account must be an active class 19 account in your chart of accounts (for example 1930).',
   },
   BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE: {
     httpStatus: 409,

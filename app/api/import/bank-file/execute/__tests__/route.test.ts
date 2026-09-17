@@ -285,6 +285,7 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
   })
 
   it('finds or creates the cash account for the picked ledger and hands it to ingest', async () => {
+    enqueue({ data: { account_number: '1940' } }) // chart_of_accounts: active 1940
     enqueue({ data: { id: 'import-1' } }) // upsert
     enqueue({ data: null }) // sie_imports overlap: none
     enqueue({ data: null }) // status update
@@ -302,7 +303,8 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
     expect(ingestOptions.settlementAccount).toBe('1940')
   })
 
-  it('uses the file currency for a new cash account', async () => {
+  it('denominates a new cash account in the currency most rows use', async () => {
+    enqueue({ data: { account_number: '1932' } }) // chart_of_accounts
     enqueue({ data: { id: 'import-1' } })
     enqueue({ data: null })
     enqueue({ data: null })
@@ -312,13 +314,38 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
       method: 'POST',
       body: makeBody({
         settlement_account: '1932',
-        transactions: [{ date: '2025-03-10', description: 'Rent', amount: -1200, currency: 'EUR' }],
+        // A Wise or camt.053 file for a EUR account with one row in SEK.
+        transactions: [
+          { date: '2025-03-10', description: 'Rent', amount: -1200, currency: 'EUR' },
+          { date: '2025-03-11', description: 'Fee', amount: -3, currency: 'SEK' },
+          { date: '2025-03-12', description: 'Client', amount: 4000, currency: 'EUR' },
+        ],
       }),
     })
     const response = await POST(request, emptyParams)
 
     expect(response.status).toBe(200)
     expect(ensureCashAccountMock).toHaveBeenCalledWith(supabase, 'company-1', '1932', 'EUR')
+  })
+
+  it('returns 400 for a class 19 ledger the company chart does not have, before any write', async () => {
+    enqueue({ data: null }) // chart_of_accounts: no active 1945
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1945' }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { account: string } }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT')
+    expect(body.error.details.account).toBe('1945')
+    expect(ensureCashAccountMock).not.toHaveBeenCalled()
+    expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
+    expect(ingestMock).not.toHaveBeenCalled()
   })
 
   it('touches no cash account when the request names none', async () => {
@@ -357,6 +384,7 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
     ensureCashAccountMock.mockRejectedValue(
       new Error('Cash account 1940 is denominated in EUR, not SEK'),
     )
+    enqueue({ data: { account_number: '1940' } }) // chart_of_accounts
 
     const request = createMockRequest('/api/import/bank-file/execute', {
       method: 'POST',
