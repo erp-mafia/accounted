@@ -16,5 +16,4 @@ export const ENABLED_EXTENSION_IDS: ReadonlySet<string> = new Set([
   'woocommerce',
   'shopify',
   'zettle',
-  'mail',
 ])

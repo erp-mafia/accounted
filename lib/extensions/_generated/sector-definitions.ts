@@ -195,17 +195,5 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "longDescription": "Anslut ditt Zettle-konto så hämtas betalda köp och återbetalningar automatiskt varje natt till Ordersidan, med belopp, betalsätt, moms per sats och radunderlag. Inget bokförs automatiskt: du bokför varje köp själv från Ordersidan.",
           "hasOwnData": true
     },
-    {
-          "slug": "mail",
-          "name": "Brevlådor",
-          "sector": "general",
-          "category": "operations",
-          "icon": "Mail",
-          "dataPattern": "manual",
-          "description": "Låt Kvittojakten leta upp kvitton i era brevlådor",
-          "longDescription": "Koppla en eller flera brevlådor, så letar Kvittojakten själv upp kvitton till kortköp som saknar underlag. Åtkomsten är läsbehörighet: agenten kan aldrig skicka, ändra eller radera något i din mejl. Inkorgen kopieras aldrig, utan bara mejl som kan vara ett kvitto till ett visst köp hämtas i stunden och släpps igen. Det som blir underlag arkiveras i ert vanliga sjuåriga arkiv, efter att du godkänt det.",
-          "hasOwnData": true,
-          "subscriptionNotice": "Kräver ett Google-konto. Varje brevlåda kopplas av sin egen ägare och kan kopplas från när som helst."
-    },
   ],
 }

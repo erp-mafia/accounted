@@ -15,7 +15,6 @@ import { whatsappInboxExtension } from '@/extensions/general/whatsapp-inbox'
 import { woocommerceExtension } from '@/extensions/general/woocommerce'
 import { shopifyExtension } from '@/extensions/general/shopify'
 import { zettleExtension } from '@/extensions/general/zettle'
-import { mailExtension } from '@/extensions/general/mail'
 
 export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   calendarExtension,
@@ -33,5 +32,4 @@ export const FIRST_PARTY_EXTENSIONS: Extension[] = [
   woocommerceExtension,
   shopifyExtension,
   zettleExtension,
-  mailExtension,
 ]
