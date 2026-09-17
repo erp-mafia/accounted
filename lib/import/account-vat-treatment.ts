@@ -160,8 +160,26 @@ export function enrichAccountMappingsWithVat(
     const accountClass = Number(mapping.sourceAccount.charAt(0))
     if (accountClass < 3 || accountClass > 6) return mapping
 
+    // Settled means a person answered, which is not the same as the answer
+    // being a treatment: "Använd BAS-standard / Ingen" is an answer too, and it
+    // writes NULL into default_vat_treatment. Reading the treatment alone made
+    // that answer indistinguishable from never-asked, so every class 3 and 4
+    // account that correctly has no VAT handling came back in the review list
+    // on every later import, for as many years as were imported (#2700).
+    //
+    // Either signal counts, which is also why the column needs no backfill: an
+    // account settled to a real treatment before vat_treatment_reviewed_at
+    // existed is still recognised by the treatment, exactly as before.
+    // A settled answer outranks a provider code that disagrees with it, and
+    // outranks it SILENTLY: "chart treatment > provider code > label, because a
+    // treatment the company set in Accounted is a deliberate later edit and the
+    // provider code is the user's own configuration in the system they are
+    // leaving" (DECISIONS 2026-09-14, #2585; pinned by the applySourceVatCodes
+    // test "yields to a treatment the company already set on the account").
+    // A settled "none" is the same kind of deliberate later edit, so it takes
+    // the same precedence rather than a weaker one.
     const existing = existingByNumber.get(mapping.targetAccount)
-    if (existing?.default_vat_treatment) {
+    if (existing?.default_vat_treatment || existing?.vat_treatment_reviewed_at) {
       return {
         ...mapping,
         defaultVatTreatment: existing.default_vat_treatment,

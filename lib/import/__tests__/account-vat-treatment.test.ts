@@ -75,6 +75,107 @@ describe('enrichAccountMappingsWithVat', () => {
     })
   })
 
+  it('stops asking about an account settled to NO treatment', () => {
+    // The answer "Använd BAS-standard / Ingen" writes NULL into
+    // default_vat_treatment, which is the same bytes as never having been
+    // asked. Reading the treatment alone brought every such account back into
+    // the review list on every later import: 13 of the 16 rows a real 2022
+    // Spiris file raised were accounts answered that way during 2021 (#2700).
+    const [result] = enrichAccountMappingsWithVat(
+      [mapping('4400', 'Momspliktiga inköp i Sverige')],
+      [{
+        account_number: '4400',
+        default_vat_treatment: null,
+        default_vat_rate: null,
+        vat_treatment_reviewed_at: '2026-09-17T10:00:00.000Z',
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: null,
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
+  it('keeps a settled "none" even when the source chart names a treatment', () => {
+    // Precedence is chart treatment > provider code > label (DECISIONS
+    // 2026-09-14, #2585): a treatment the company set in Accounted is a
+    // deliberate later edit, and the provider code is the user's own
+    // configuration in the system they are leaving. A settled "none" is the
+    // same kind of deliberate edit, so it takes the same precedence. The
+    // sibling rule for a settled TREATMENT is pinned in the applySourceVatCodes
+    // block below.
+    const [result] = enrichAccountMappingsWithVat(
+      [{ ...mapping('4400', 'Momspliktiga inköp i Sverige'),
+         providerVatCode: '23-25%',
+         providerVatTreatment: 'reverse_charge_domestic' }],
+      [{
+        account_number: '4400',
+        default_vat_treatment: null,
+        default_vat_rate: null,
+        vat_treatment_reviewed_at: '2026-09-17T10:00:00.000Z',
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: null,
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
+  it('leaves a settled account alone when the source chart agrees with it', () => {
+    const [result] = enrichAccountMappingsWithVat(
+      [{ ...mapping('4415', 'Inköpta varor i Sverige, omvänd skattskyldighet'),
+         providerVatCode: '23-25%',
+         providerVatTreatment: 'reverse_charge_domestic' }],
+      [{
+        account_number: '4415',
+        default_vat_treatment: 'reverse_charge_domestic',
+        default_vat_rate: 0.25,
+        vat_treatment_reviewed_at: '2026-09-17T10:00:00.000Z',
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_domestic',
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
+  it('still asks about the same account when nobody has settled it', () => {
+    // The other half of the pair: without the timestamp the row is genuinely
+    // undecided, and a class 4 account must still be asked about.
+    const [result] = enrichAccountMappingsWithVat(
+      [mapping('4400', 'Momspliktiga inköp i Sverige')],
+      [{
+        account_number: '4400',
+        default_vat_treatment: null,
+        default_vat_rate: null,
+      } as never],
+    )
+    expect(result.requiresVatTreatmentReview).toBe(true)
+    expect(result.vatTreatmentReviewed).toBe(false)
+  })
+
+  it('recognises an account settled before the timestamp column existed', () => {
+    // Why the column needs no backfill: a real treatment is still accepted as
+    // its own evidence of having been settled.
+    const [result] = enrichAccountMappingsWithVat(
+      [mapping('3041', 'Försäljning tjänst 25% sv')],
+      [{
+        account_number: '3041',
+        default_vat_treatment: 'standard_25',
+        default_vat_rate: 0.25,
+        vat_treatment_reviewed_at: null,
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: 'standard_25',
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
   it('preserves an existing booking rate when suggesting a missing treatment', () => {
     const [result] = enrichAccountMappingsWithVat(
       [mapping('3041', 'Försäljning tjänst 25% sv')],

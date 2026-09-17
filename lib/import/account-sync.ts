@@ -86,6 +86,11 @@ function buildInsertRow(
       sort_order: sortOrder,
       default_vat_treatment: vatDefaults?.treatment ?? null,
       default_vat_rate: vatDefaults?.rate ?? null,
+      // Being in vatDefaults at all IS the review: buildSIEVatDefaults admits
+      // only mappings a person settled. Recorded separately from the treatment
+      // because a settled "no VAT handling" writes NULL there, and NULL cannot
+      // be told from never-asked (issue #2700).
+      vat_treatment_reviewed_at: vatDefaults ? new Date().toISOString() : null,
     }
   }
 
@@ -109,6 +114,7 @@ function buildInsertRow(
     sort_order: sortOrder,
     default_vat_treatment: vatDefaults?.treatment ?? null,
     default_vat_rate: vatDefaults?.rate ?? null,
+    vat_treatment_reviewed_at: vatDefaults ? new Date().toISOString() : null,
   }
 }
 
@@ -294,6 +300,7 @@ export async function syncMappedAccounts(
       .update({
         default_vat_treatment: defaults.treatment,
         default_vat_rate: defaults.rate,
+        vat_treatment_reviewed_at: new Date().toISOString(),
       })
       .eq('company_id', companyId)
       .eq('account_number', account)

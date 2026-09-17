@@ -157,6 +157,42 @@ describe('syncMappedAccounts: create pass', () => {
     })
   })
 
+  it('stamps the review even when the settled answer is NO treatment', async () => {
+    // The row a person answered "Använd BAS-standard / Ingen" writes NULL into
+    // default_vat_treatment, so without this stamp the next import cannot tell
+    // the answer from never having asked, and asks again (#2700).
+    const { supabase, inserts } = buildCapturingSupabase()
+    const result = await run(supabase, [
+      mapping({
+        sourceAccount: '4400',
+        targetAccount: '4400',
+        sourceName: 'Momspliktiga inköp i Sverige',
+        defaultVatTreatment: null,
+        defaultVatRate: null,
+        vatTreatmentReviewed: true,
+      }),
+    ])
+    expect(result.error).toBeNull()
+    expect(inserts[0].default_vat_treatment).toBeNull()
+    expect(inserts[0].vat_treatment_reviewed_at).toEqual(expect.any(String))
+  })
+
+  it('leaves the review unstamped on an account nobody settled', async () => {
+    const { supabase, inserts } = buildCapturingSupabase()
+    const result = await run(supabase, [
+      mapping({
+        sourceAccount: '4400',
+        targetAccount: '4400',
+        sourceName: 'Momspliktiga inköp i Sverige',
+        defaultVatTreatment: null,
+        defaultVatRate: null,
+        vatTreatmentReviewed: false,
+      }),
+    ])
+    expect(result.error).toBeNull()
+    expect(inserts[0].vat_treatment_reviewed_at).toBeNull()
+  })
+
   it('derives the booking rate for a confirmed treatment when the rate is unset', async () => {
     const { supabase, inserts } = buildCapturingSupabase()
     const result = await run(supabase, [
