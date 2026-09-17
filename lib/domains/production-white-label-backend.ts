@@ -34,6 +34,7 @@ const CUSTOMER_PRODUCTION_WHITE_LABEL_HOSTS = new Set([
   'acount.accounted.se',
   'amnas.accounted.se',
   'app.gnubok.se',
+  'app.ziffr.se',
   'arbore.accounted.se',
   'elma.accounted.se',
   'improveone.accounted.se',

@@ -12,6 +12,7 @@ const APPROVED_PRODUCTION_HOSTS = [
   'acount.accounted.se',
   'amnas.accounted.se',
   'app.gnubok.se',
+  'app.ziffr.se',
   'arbore.accounted.se',
   'elma.accounted.se',
   'improveone.accounted.se',
