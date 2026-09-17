@@ -170,6 +170,14 @@ export function enrichAccountMappingsWithVat(
     // Either signal counts, which is also why the column needs no backfill: an
     // account settled to a real treatment before vat_treatment_reviewed_at
     // existed is still recognised by the treatment, exactly as before.
+    // A settled answer outranks a provider code that disagrees with it, and
+    // outranks it SILENTLY: "chart treatment > provider code > label, because a
+    // treatment the company set in Accounted is a deliberate later edit and the
+    // provider code is the user's own configuration in the system they are
+    // leaving" (DECISIONS 2026-09-14, #2585; pinned by the applySourceVatCodes
+    // test "yields to a treatment the company already set on the account").
+    // A settled "none" is the same kind of deliberate later edit, so it takes
+    // the same precedence rather than a weaker one.
     const existing = existingByNumber.get(mapping.targetAccount)
     if (existing?.default_vat_treatment || existing?.vat_treatment_reviewed_at) {
       return {

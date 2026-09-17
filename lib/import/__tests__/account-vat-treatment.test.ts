@@ -97,6 +97,51 @@ describe('enrichAccountMappingsWithVat', () => {
     })
   })
 
+  it('keeps a settled "none" even when the source chart names a treatment', () => {
+    // Precedence is chart treatment > provider code > label (DECISIONS
+    // 2026-09-14, #2585): a treatment the company set in Accounted is a
+    // deliberate later edit, and the provider code is the user's own
+    // configuration in the system they are leaving. A settled "none" is the
+    // same kind of deliberate edit, so it takes the same precedence. The
+    // sibling rule for a settled TREATMENT is pinned in the applySourceVatCodes
+    // block below.
+    const [result] = enrichAccountMappingsWithVat(
+      [{ ...mapping('4400', 'Momspliktiga inköp i Sverige'),
+         providerVatCode: '23-25%',
+         providerVatTreatment: 'reverse_charge_domestic' }],
+      [{
+        account_number: '4400',
+        default_vat_treatment: null,
+        default_vat_rate: null,
+        vat_treatment_reviewed_at: '2026-09-17T10:00:00.000Z',
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: null,
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
+  it('leaves a settled account alone when the source chart agrees with it', () => {
+    const [result] = enrichAccountMappingsWithVat(
+      [{ ...mapping('4415', 'Inköpta varor i Sverige, omvänd skattskyldighet'),
+         providerVatCode: '23-25%',
+         providerVatTreatment: 'reverse_charge_domestic' }],
+      [{
+        account_number: '4415',
+        default_vat_treatment: 'reverse_charge_domestic',
+        default_vat_rate: 0.25,
+        vat_treatment_reviewed_at: '2026-09-17T10:00:00.000Z',
+      } as never],
+    )
+    expect(result).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_domestic',
+      vatTreatmentReviewed: true,
+      requiresVatTreatmentReview: false,
+    })
+  })
+
   it('still asks about the same account when nobody has settled it', () => {
     // The other half of the pair: without the timestamp the row is genuinely
     // undecided, and a class 4 account must still be asked about.
