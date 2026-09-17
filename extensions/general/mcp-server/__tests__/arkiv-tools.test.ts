@@ -187,3 +187,26 @@ describe('gnubok_ask_document', () => {
     await expect(tool('gnubok_ask_document').execute({ record_ref: `document:${DOC}`, question: 'Vad?' }, CO, 'user-1', supabase)).rejects.toThrow(/No such document/)
   })
 })
+
+describe('gnubok_resolve_missing', () => {
+  const FINDING = 'ffffffff-ffff-4fff-8fff-ffffffffffff'
+
+  it('closes an open item as dismissed with the note, remembered for the lint', async () => {
+    enqueue({ data: { id: FINDING, detail: { rule: 'loan', expected_type: 'agreement.loan' } } })
+    enqueue({})
+    const out = await tool('gnubok_resolve_missing').execute({ finding_id: FINDING, resolution: 'not_applicable' }, CO, 'user-1', supabase)
+    expect(out).toEqual({ finding_id: FINDING, status: 'dismissed', note: 'not_applicable' })
+    expect(JSON.stringify(mock.findCalls('arkiv_findings', 'update'))).toContain('"resolution_note":"not_applicable"')
+  })
+
+  it('resolves an uploaded item with the document it was closed by, and refuses what it cannot find', async () => {
+    enqueue({ data: { id: FINDING, detail: { rule: 'loan' } } })
+    enqueue({})
+    const out = await tool('gnubok_resolve_missing').execute({ finding_id: FINDING, resolution: 'uploaded', document_ref: `document:${DOC}` }, CO, 'user-1', supabase)
+    expect(out).toEqual({ finding_id: FINDING, status: 'resolved', note: 'uploaded' })
+    expect(JSON.stringify(mock.findCalls('arkiv_findings', 'update'))).toContain(`"resolved_document_id":"${DOC}"`)
+    enqueue({ data: null })
+    await expect(tool('gnubok_resolve_missing').execute({ finding_id: FINDING, resolution: 'not_exists' }, CO, 'user-1', supabase)).rejects.toThrow(/No open missing-document item/)
+    await expect(tool('gnubok_resolve_missing').execute({ finding_id: 'nope', resolution: 'not_exists' }, CO, 'user-1', supabase)).rejects.toThrow(/uuid/)
+  })
+})

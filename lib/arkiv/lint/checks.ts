@@ -7,7 +7,7 @@ import { daysBetween } from '@/lib/arkiv/agreements/dates'
  * can act on, keyed so a rerun updates rather than repeats. Nothing here
  * changes settings or records: a finding proposes, a person applies.
  */
-export type FindingKind = 'settings_mismatch' | 'agreement_ending' | 'agreement_no_counterparty' | 'agreement_duplicate' | 'duplicate_document' | 'document_stuck'
+export type FindingKind = 'settings_mismatch' | 'agreement_ending' | 'agreement_no_counterparty' | 'agreement_duplicate' | 'duplicate_document' | 'document_stuck' | 'document_expected'
 export type FindingSeverity = 'info' | 'warning'
 export type FindingSubjectKind = 'company' | 'agreement' | 'document'
 
@@ -249,4 +249,98 @@ export function stuckDocuments(jobs: StuckJob[]): FindingDraft[] {
     })
   }
   return out
+}
+
+/** A posted journal line the expectations read: account, date, side. */
+export interface LedgerLine {
+  account_number: string
+  entry_date: string
+  debit: number
+  credit: number
+}
+
+/**
+ * Phase 9: what the books say should exist. A rule names the cost accounts
+ * or the balance accounts that prove an agreement of a kind, and how many
+ * months of evidence it takes. Money-backed rules only: a single transaction
+ * never asks anyone for anything.
+ */
+export interface ExpectationRule {
+  id: string
+  expectedType: string
+  agreementKind: string
+  label: string
+  hint: string
+  cost?: { from: string; to: string }
+  balance?: Array<{ from: string; to: string }>
+  minMonths: number
+}
+
+export const EXPECTATION_RULES: ExpectationRule[] = [
+  {
+    id: 'loan',
+    expectedType: 'agreement.loan',
+    agreementKind: 'loan',
+    label: 'Låneavtal',
+    hint: 'Skuldebrev eller låneavtal, oftast en PDF från banken eller Almi i mejlen kring utbetalningen.',
+    cost: { from: '8410', to: '8419' },
+    balance: [
+      { from: '2350', to: '2359' },
+      { from: '2390', to: '2399' },
+      { from: '2840', to: '2849' },
+    ],
+    minMonths: 3,
+  },
+  {
+    id: 'rent',
+    expectedType: 'agreement.rental',
+    agreementKind: 'rental',
+    label: 'Hyresavtal',
+    hint: 'Hyresavtalet, ofta en PDF från hyresvärden eller i mejlen kring inflyttningen.',
+    cost: { from: '5010', to: '5019' },
+    minMonths: 3,
+  },
+]
+
+const inRange = (account: string, r: { from: string; to: string }) => account >= r.from && account <= r.to
+const monthOf = (d: string) => d.slice(0, 7)
+function monthsBack(today: string, n: number): string {
+  const d = new Date(`${today}T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - n)
+  return d.toISOString().slice(0, 10)
+}
+
+/** A recurring cost or a moving balance in the last six months with no active agreement of that kind in the archive. */
+export function expectedDocuments(lines: LedgerLine[], agreements: AgreementForLint[], today: string): FindingDraft[] {
+  const since = monthsBack(today, 6)
+  const recent = lines.filter((l) => l.entry_date >= since)
+  const drafts: FindingDraft[] = []
+  for (const rule of EXPECTATION_RULES) {
+    if (agreements.some((a) => a.kind === rule.agreementKind && a.status === 'active')) continue
+    const costLines = rule.cost ? recent.filter((l) => inRange(l.account_number, rule.cost as { from: string; to: string }) && l.debit > 0) : []
+    const costMonths = new Set(costLines.map((l) => monthOf(l.entry_date)))
+    const costTotal = costLines.reduce((n, l) => n + l.debit, 0)
+    const balanceLines = rule.balance ? recent.filter((l) => (rule.balance ?? []).some((r) => inRange(l.account_number, r))) : []
+    const balanceMonths = new Set(balanceLines.map((l) => monthOf(l.entry_date)))
+    if (costMonths.size < rule.minMonths && balanceMonths.size < rule.minMonths) continue
+    drafts.push({
+      kind: 'document_expected',
+      key: `document_expected:${rule.id}`,
+      severity: 'info',
+      subjectKind: 'company',
+      subjectId: null,
+      detail: {
+        rule: rule.id,
+        expected_type: rule.expectedType,
+        evidence: {
+          cost_months: costMonths.size,
+          cost_total: Math.round(costTotal * 100) / 100,
+          balance_months: balanceMonths.size,
+          accounts: [...new Set([...costLines, ...balanceLines].map((l) => l.account_number))].sort(),
+          since,
+        },
+      },
+    })
+  }
+  return drafts
 }

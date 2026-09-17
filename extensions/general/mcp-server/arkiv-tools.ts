@@ -8,6 +8,7 @@ import { searchDocumentPages } from '@/lib/documents/read/search'
 import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/arkiv-propose-fact'
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
 import { askDocument } from '@/lib/arkiv/ask'
+import { captureArkivEvent } from '@/lib/arkiv/events'
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -30,6 +31,8 @@ export function parseRecordRef(ref: unknown): { kind: RecordKind; id: string } {
 }
 
 const recordRef = (kind: RecordKind, id: string) => `${kind}:${id}`
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function assertEnabled(companyId: string): void {
   if (!isArkivEnabled(companyId)) throw new Error('Arkiv is not enabled for this company yet')
@@ -667,6 +670,67 @@ export function createArkivTools(deps: Deps): McpTool[] {
           pages_read: out.pages_read,
           page_count: out.page_count,
         }
+      },
+    },
+    {
+      name: 'gnubok_resolve_missing',
+      keywords: ['arkiv', 'saknas', 'hämta dokument', 'finns inte', 'gäller inte'],
+      title: 'Resolve Missing Document',
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      description:
+        'Close one item from Accounted://arkiv/missing: uploaded (with the document record_ref) after you put the document in, not_exists or not_applicable when the person says so. The two latter answers are remembered and never asked again.',
+      inputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          finding_id: { type: 'string', description: 'finding_id from Accounted://arkiv/missing.' },
+          resolution: { type: 'string', enum: ['uploaded', 'not_exists', 'not_applicable'] },
+          document_ref: { type: 'string', description: 'document:<uuid> of what was uploaded. Only with resolution uploaded.' },
+        },
+        required: ['finding_id', 'resolution'],
+      },
+      outputSchema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          finding_id: { type: 'string' },
+          status: { type: 'string', enum: ['resolved', 'dismissed'] },
+          note: { type: 'string' },
+        },
+        required: ['finding_id', 'status', 'note'],
+      },
+      async execute(args, companyId, userId, supabase) {
+        assertEnabled(companyId)
+        const findingId = String(args.finding_id ?? '').trim()
+        if (!UUID_RE.test(findingId)) throw new Error('finding_id must be a uuid from Accounted://arkiv/missing')
+        const resolution = String(args.resolution ?? '')
+        if (!['uploaded', 'not_exists', 'not_applicable'].includes(resolution)) throw new Error('resolution must be uploaded, not_exists or not_applicable')
+        let documentId: string | null = null
+        if (args.document_ref != null) {
+          const ref = parseRecordRef(String(args.document_ref))
+          if (!ref || ref.kind !== 'document') throw new Error('document_ref must be document:<uuid>')
+          documentId = ref.id
+        }
+        const { data: finding, error: findError } = await supabase
+          .from('arkiv_findings')
+          .select('id, detail')
+          .eq('id', findingId)
+          .eq('company_id', companyId)
+          .eq('kind', 'document_expected')
+          .eq('status', 'open')
+          .maybeSingle()
+        if (findError) throw dbError(findError)
+        if (!finding) throw new Error('No open missing-document item with that id in this company')
+        const detail: Record<string, unknown> = { ...((finding as { detail: Record<string, unknown> }).detail ?? {}), ...(documentId ? { resolved_document_id: documentId } : {}) }
+        const status = resolution === 'uploaded' ? 'resolved' : 'dismissed'
+        const { error: updateError } = await supabase
+          .from('arkiv_findings')
+          .update({ status, resolution: resolution === 'uploaded' ? 'applied' : 'dismissed', resolution_note: resolution, resolved_at: new Date().toISOString(), detail })
+          .eq('id', findingId)
+          .eq('company_id', companyId)
+        if (updateError) throw dbError(updateError)
+        captureArkivEvent('arkiv_missing_resolved', { companyId, userId, rule: detail.rule ?? null, resolution: status === 'resolved' ? 'applied' : 'dismissed', note: resolution, by: 'agent' })
+        return { finding_id: findingId, status, note: resolution }
       },
     },
     {

@@ -62,13 +62,13 @@ export function ArkivReview() {
   const docMeta = (d: { file_name: string; page_count: number | null; doc_type: string | null }) =>
     [d.page_count ? t('decision_pages', { count: d.page_count }) : null, d.doc_type ? typeLabel(d.doc_type) : null].filter(Boolean).join(', ')
 
-  const closeFinding = async (f: FindingView, resolution: 'applied' | 'dismissed') => {
+  const closeFinding = async (f: FindingView, resolution: 'applied' | 'dismissed', note?: DismissNote) => {
     setBusy(f.finding_id)
     try {
       if (resolution === 'applied' && f.kind === 'settings_mismatch') {
         await send('PUT', '/api/settings', { [String(f.detail.field)]: f.detail.proposed })
       }
-      await send('POST', `/api/arkiv/findings/${f.finding_id}`, { resolution })
+      await send('POST', `/api/arkiv/findings/${f.finding_id}`, note ? { resolution, note } : { resolution })
       toast({ title: resolution === 'applied' ? t('finding_applied') : t('finding_dismissed') })
       await load()
     } catch {
@@ -139,7 +139,7 @@ export function ArkivReview() {
           {findings && findings.length > 0 && (
             <Group title={t('findings_title')} id="fynd">
               {findings.map((f) => (
-                <FindingRow key={f.finding_id} finding={f} busy={busy === f.finding_id} onClose={(resolution) => closeFinding(f, resolution)} />
+                <FindingRow key={f.finding_id} finding={f} busy={busy === f.finding_id} onClose={(resolution, note) => closeFinding(f, resolution, note)} />
               ))}
             </Group>
           )}
@@ -183,7 +183,9 @@ function Row({ label, count, onClick }: { label: string; count?: number; onClick
 }
 
 /** One finding of the nightly lint with what to do about it. */
-function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: boolean; onClose: (resolution: 'applied' | 'dismissed') => void }) {
+type DismissNote = 'not_exists' | 'not_applicable'
+
+function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: boolean; onClose: (resolution: 'applied' | 'dismissed', note?: DismissNote) => void }) {
   const t = useTranslations('arkiv')
   const d = finding.detail
   const settingValue = (value: unknown): string => {
@@ -221,6 +223,12 @@ function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: bo
       text = t('finding_document_stuck', { file: shortFileName(String(d.file_name), 40), step: String(d.step) })
       href = `/arkiv/dokument/${finding.subject_id}`
       break
+    case 'document_expected': {
+      // What the books say should exist: the evidence is months of money, never one transaction.
+      const evidence = (d.evidence ?? {}) as { cost_months?: number; balance_months?: number }
+      text = t('finding_document_expected', { what: t(`finding_expected_${String(d.rule)}` as never), months: String(Math.max(evidence.cost_months ?? 0, evidence.balance_months ?? 0)) })
+      break
+    }
   }
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border px-1 py-3 text-[13.5px]">
@@ -239,14 +247,38 @@ function FindingRow({ finding, busy, onClose }: { finding: FindingView; busy: bo
         ) : null}
       </span>
       <div className="flex items-center gap-3">
-        <button
-          type="button"
-          disabled={busy}
-          className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
-          onClick={() => onClose('dismissed')}
-        >
-          {t('finding_dismiss')}
-        </button>
+        {finding.kind === 'document_expected' ? (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
+              onClick={() => onClose('dismissed', 'not_exists')}
+            >
+              {t('finding_not_exists')}
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
+              onClick={() => onClose('dismissed', 'not_applicable')}
+            >
+              {t('finding_not_applicable')}
+            </button>
+            <Button size="sm" asChild>
+              <Link href="/arkiv">{t('finding_upload')}</Link>
+            </Button>
+          </>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
+            onClick={() => onClose('dismissed')}
+          >
+            {t('finding_dismiss')}
+          </button>
+        )}
         {finding.kind === 'settings_mismatch' && (
           <Button size="sm" disabled={busy} onClick={() => onClose('applied')}>
             {t('finding_apply')}

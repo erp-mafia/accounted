@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, getAiStatus } from '@/lib/ai'
 import { recordActivity, softwareAgent } from '@/lib/documents/provenance'
+import { captureArkivEvent } from '@/lib/arkiv/events'
 import { locateQuote, type PageText } from '@/lib/documents/extract/locate'
 import type { WordBox } from '@/lib/documents/read/types'
 
@@ -206,6 +207,7 @@ export async function askDocument(
         pages_sent: sent.map((p) => p.pageNo),
       },
     })
+    captureArkivEvent('arkiv_document_asked', { companyId: input.companyId, answered: !notFound, pages_sent: sent.length, agent: input.askedBy.agentName })
     return {
       status: 'answered',
       answer: notFound ? null : answer,

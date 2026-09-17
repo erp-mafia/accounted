@@ -536,7 +536,11 @@ describe('tools/list payload size guard', () => {
     //   * Arkiv phase 8 (schema on read): gnubok_ask_document joins the default
     //     catalog, the one write-free way for an agent to read a clause the
     //     record does not carry. Measured 63 090 on the rebased branch.
-    expect(approxTokens).toBeLessThan(63_200)
+    //   * Arkiv phase 9a (the agent door): gnubok_resolve_missing joins the
+    //     default catalog so an agent can close what it gathered; a direct
+    //     write, so the staging bridge cannot reach it. Measured 63 381 on
+    //     the rebased branch.
+    expect(approxTokens).toBeLessThan(63_500)
   })
 
   /**

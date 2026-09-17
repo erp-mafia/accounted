@@ -106,6 +106,7 @@ const EXPECTED_QUERIES: { table: string; columns: string[] }[] = [
   { table: 'invoice_deliveries', columns: ['sent_at'] },
   { table: 'bank_connections', columns: ['last_synced_at'] },
   { table: 'deadlines', columns: ['id', 'title', 'due_date', 'deadline_type', 'priority', 'status'] },
+  { table: 'company_inboxes', columns: ['local_part'] },
 ]
 
 /** One empty result per query, so the resource can run end to end. */
