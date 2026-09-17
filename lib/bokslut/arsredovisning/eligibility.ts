@@ -1,3 +1,4 @@
+import { isEntityType, preparesArsredovisning } from '@/lib/company/entity-type'
 import type {
   AnnualReportComplianceIssue,
   AnnualReportEligibilityResult,
@@ -111,11 +112,13 @@ export function evaluateAnnualReportEligibility(
   const size = sizeClassification(input.metrics)
   const relief = reliefClassification(input.metrics)
 
-  if (input.entityType !== 'aktiebolag') {
+  // The form's profile says whether the product prepares an årsredovisning
+  // for it; an unknown form is a blocker, never an aktiebolag by default.
+  if (!isEntityType(input.entityType) || !preparesArsredovisning(input.entityType)) {
     issues.push(
       issue(
         'AR-SCOPE-ENTITY',
-        'Accounteds årsredovisningsflöde stöder för närvarande aktiebolag.',
+        'Accounteds årsredovisningsflöde stöder inte den här företagsformen ännu.',
         'Använd rätt årsboksluts- eller deklarationsflöde för företagsformen.',
       ),
     )

@@ -22,6 +22,7 @@ export const GET = withRouteContext(
           eligibility: model.eligibility,
           validation: model.validation,
           capabilities: getAnnualReportCapabilities(
+            model.entity_type,
             model.report.accounting_framework,
             model.eligibility,
           ),

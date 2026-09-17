@@ -25,6 +25,24 @@ function completeProfile() {
 }
 
 describe('evaluateAnnualReportEligibility', () => {
+  it.each(['ideell_forening', 'enskild_firma', 'handelsbolag'])(
+    'blocks a form whose profile prepares no årsredovisning (%s)',
+    (entityType) => {
+      const result = evaluateAnnualReportEligibility({
+        entityType,
+        framework: 'k2',
+        periodStart: '2026-01-01',
+        periodEnd: '2026-12-31',
+        profile: completeProfile(),
+        metrics,
+      })
+      expect(result.digital_filing_eligible).toBe(false)
+      expect(result.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ code: 'AR-SCOPE-ENTITY' })]),
+      )
+    },
+  )
+
   it('accepts a confirmed smaller private K2 company without auditor report', () => {
     const result = evaluateAnnualReportEligibility({
       entityType: 'aktiebolag',
