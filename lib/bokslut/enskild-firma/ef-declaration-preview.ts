@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
+import { filesIncomeReturn, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { calculateEgenavgifter, type EgenavgiftCategory } from './egenavgifter-calculator'
 import { calculateRantefordelning } from './rantefordelning-calculator'
@@ -14,6 +16,28 @@ export interface EfDeclarationPreviewInput {
   pfondDesiredAmount?: number
   expansionsfondExistingBalance?: number
   expansionsfondDesiredChange?: number
+  /**
+   * The company's legal form when the caller already resolved it (the
+   * readiness aggregator); saves the companies read. Never a guess: an
+   * invalid hint falls back to companies.entity_type.
+   */
+  entityType?: EntityType
+}
+
+/**
+ * Egenavgifter, räntefördelning and the EF periodiseringsfond exist only for
+ * a form that files NE-bilagan. Same shape as the NE engine's refusal
+ * (lib/reports/ne-bilaga/ne-engine.ts), with a stable code so an MCP client
+ * can dispatch on it instead of parsing prose.
+ */
+export class EfDeclarationNotApplicableError extends Error {
+  readonly code = 'EF_DECLARATION_WRONG_LEGAL_FORM'
+  constructor(readonly entityType: EntityType) {
+    super(
+      `EF declaration preview is only for a form that files NE-bilagan (enskild firma); this company is ${entityType}`,
+    )
+    this.name = 'EfDeclarationNotApplicableError'
+  }
 }
 
 export interface EfDeclarationPreview {
@@ -39,6 +63,12 @@ export async function computeEfDeclarationPreview(
   fiscalPeriodId: string,
   input: EfDeclarationPreviewInput = {},
 ): Promise<EfDeclarationPreview> {
+  // Resolved before any other read, never defaulted: an aktiebolag or an
+  // ideell förening has no egenavgifter and no NE-bilaga, so computing the
+  // figures at all would hand an agent numbers that mean nothing for it.
+  const form = await resolveCompanyEntityType(supabase, companyId, input.entityType)
+  if (filesIncomeReturn(form) !== 'NE') throw new EfDeclarationNotApplicableError(form)
+
   const { data: period, error } = await supabase
     .from('fiscal_periods')
     .select('id, name, period_start, period_end')
