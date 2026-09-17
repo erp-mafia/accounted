@@ -4,8 +4,8 @@ import { errorResponse } from '../get-structured-error'
 
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 
-async function envelope(err: unknown) {
-  const res = errorResponse(err, log as never, { requestId: 'req-1' })
+async function envelope(err: unknown, ctx: Record<string, unknown> = {}) {
+  const res = errorResponse(err, log as never, { requestId: 'req-1', ...ctx })
   return { status: res.status, body: (await res.json()) as { error: { code: string; message: string; message_en: string } } }
 }
 
@@ -26,6 +26,36 @@ describe('userFacing', () => {
     const { body } = await envelope(userFacing(new Error('Välj vad som ska importeras.')))
     expect(body.error.message).toBe('Välj vad som ska importeras.')
     expect(body.error.message_en).toBe('Välj vad som ska importeras.')
+  })
+
+  it('survives a VALIDATION_ERROR that also carries field issues', async () => {
+    // buildResponse rewrites both locales from `details.issues` so that API
+    // consumers reading only error.message get the actionable summary. An
+    // authored sentence must not be what it rewrites: that is the one thing
+    // this path exists to prevent. Not reachable today (no marked error
+    // populates `issues`), guarded rather than left to the next caller that
+    // pairs the two.
+    const refusal = 'Perioden är låst. Öppna den under Bokföring > Perioder.'
+    const { body } = await envelope(
+      userFacing(new Error(refusal), 'VALIDATION_ERROR'),
+      { details: { issues: [{ field: 'entry_date', message: 'Ogiltigt datum', code: 'invalid' }] } },
+    )
+    expect(body.error.message).toBe(refusal)
+    expect(body.error.message_en).toBe(refusal)
+    // The issues themselves are untouched: API clients still get the array.
+    const details = (body.error as unknown as { details: { issues: unknown[] } }).details
+    expect(details.issues).toHaveLength(1)
+  })
+
+  it('still summarises field issues when no sentence was authored', async () => {
+    // The other half: an ordinary Zod failure has no authored message, so the
+    // summary is exactly what the reader should get.
+    const { body } = await envelope(
+      Object.assign(new Error('nope'), { code: 'VALIDATION_ERROR' }),
+      { details: { issues: [{ field: 'entry_date', message: 'Ogiltigt datum', code: 'invalid' }] } },
+    )
+    expect(body.error.message).not.toBe('nope')
+    expect(body.error.message).toContain('entry_date')
   })
 
   it('lets the caller pick how the failure is classified', async () => {
