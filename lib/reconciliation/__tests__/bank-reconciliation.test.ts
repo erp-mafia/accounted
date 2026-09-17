@@ -36,6 +36,7 @@ import {
   getReconciliationStatus,
   scopeTransactionsToAccount,
   ledgerLineAmountIn,
+  fetchJunctionLinkMap,
 } from '../bank-reconciliation'
 import type { UnlinkedGLLine } from '../bank-reconciliation'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
@@ -3021,5 +3022,34 @@ describe('unscoped cash-account diagnostic', () => {
     })
 
     expect(logWarn).not.toHaveBeenCalled()
+  })
+})
+
+describe('fetchJunctionLinkMap', () => {
+  it('lists bank_line anchors before supplementary ones, deduplicated', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { transaction_id: 'tx-1', journal_entry_id: 'je-residual', role: 'other' },
+        { transaction_id: 'tx-1', journal_entry_id: 'je-main', role: 'bank_line' },
+        { transaction_id: 'tx-1', journal_entry_id: 'je-main', role: 'bank_line' },
+      ],
+    })
+
+    const out = await fetchJunctionLinkMap(supabase as never, 'company-1', ['tx-1'])
+
+    expect(out.get('tx-1')).toEqual(['je-main', 'je-residual'])
+  })
+
+  it('throws when a later chunk fails instead of answering with a partial map', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    // 151 ids: two chunks of 150. The first chunk answers, the second fails.
+    enqueue({ data: [{ transaction_id: 'tx-1', journal_entry_id: 'je-1', role: 'bank_line' }] })
+    enqueue({ data: null, error: { message: 'boom' } })
+    const ids = Array.from({ length: 151 }, (_, i) => `tx-${i + 1}`)
+
+    await expect(fetchJunctionLinkMap(supabase as never, 'company-1', ids)).rejects.toThrow(
+      'Kunde inte hämta verifikatkopplingar: boom',
+    )
   })
 })

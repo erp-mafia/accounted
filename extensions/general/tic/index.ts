@@ -36,6 +36,7 @@ import {
 } from './lib/bankid-flow-cookie'
 import {
   lookupCompanyByOrgNumber,
+  pickCompanyName,
   registrationDateToMs,
   searchCompaniesForLookup,
 } from './lib/lookup'
@@ -567,9 +568,7 @@ export const ticExtension: Extension = {
             )
           }
 
-          const nameEntry =
-            doc.names.find((n) => n.companyNamingType === 'name') ?? doc.names[0]
-          const companyName = nameEntry?.nameOrIdentifier ?? ''
+          const companyName = pickCompanyName(doc.names)
           const companyId = doc.companyId
 
           // Phase 2: ONLY data not already present at the top level of the

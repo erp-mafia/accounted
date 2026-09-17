@@ -138,6 +138,8 @@ describe('durable SIE HTTP boundaries',()=>{
     expect((await response.json()).error).toMatchObject({
       code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS',
       message: expect.stringContaining('1000-8999'), message_en: expect.stringContaining('1000-8999'),
+      // The offending accounts ride along so the client can name them (desk crm#63).
+      details: { account_numbers: ['9999'] },
     })
     expect(supabase.from).not.toHaveBeenCalled()
     expect(supabase.storage.from).not.toHaveBeenCalled()

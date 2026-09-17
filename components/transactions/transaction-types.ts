@@ -1,6 +1,7 @@
 import type { Transaction, TransactionCategory, Invoice, Customer, SupplierInvoice, VatTreatment } from '@/types'
 import type { RotRutPayoutRequestCandidate } from '@/lib/invoices/rot-rut-payout-matching'
 import type { ExpensePayoutDue } from '@/lib/worklist/types'
+import type { EmbeddedVoucherLink } from '@/lib/transactions/is-booked'
 
 /** An open ROT/RUT begäran offered to an income row, with the invoices it
  *  covers (so the user sees which fakturor the payout settles). */
@@ -36,6 +37,10 @@ export interface TransactionWithInvoice extends Transaction {
    *  (lib/expenses/expense-payout-candidates): computed at read time, no
    *  hint column. Present only while their claims are still registered. */
   potential_expense_payout?: ExpensePayoutDue
+  /** Junction anchors embedded by the list fetch: a row split over several
+   *  verifikat (#1553) or bulk-booked has journal_entry_id NULL and is booked
+   *  through these. Read via getLinkedJournalEntryIds, never the pointer alone. */
+  transaction_voucher_links?: EmbeddedVoucherLink[] | null
 }
 
 // Page view modes. 'review' is the migrator surface: rows whose sweep

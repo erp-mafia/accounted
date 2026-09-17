@@ -4,7 +4,7 @@ import { SIEJobMappingsSchema } from '@/lib/api/schemas'
 import { suggestMappings } from '../account-mapper'
 import { prepareSIEPreviewMappings } from '../sie-preview-mappings'
 import { parseSIEFile } from '../sie-parser'
-import { validateSIEJobInput } from '../sie-jobs'
+import { SIEJobValidationError, validateSIEJobInput } from '../sie-jobs'
 import { buildSIEAccountRows } from '../account-sync'
 
 const ledger = '#SIETYP 4\n#RAR 0 20260101 20261231\n#KONTO 1930 "Bank"\n#KONTO 3001 "Sales"\n' +
@@ -26,7 +26,34 @@ describe('SIE preview account boundaries', () => {
     expect(buildSIEAccountRows('company', 'user', mappings).map(a => a.account_number)).toEqual(['1930', '3001'])
   })
 
-  it.each(['999', '19300', '193000', '0099', '9999'])('requires a deliberate mapping for used source %s', number => {
+  it('routes a used class 9 observation account to 2999 OBS-konto and keeps an unused one as a definition', () => {
+    // Desk crm#63: Fortnox 9999 with amounts. The onboarding books flow has no
+    // mapping page, so an empty target there became a self-created 9999 and
+    // the job refused it with the generic class message.
+    const source = ledger.replaceAll('1930', '9999')
+    const result = preview(source)
+    const mapping = result.mappings.find(m => m.sourceAccount === '9999')!
+    expect(mapping).toMatchObject({ targetAccount: '2999', targetName: 'OBS-konto', matchType: 'class', confidence: 0.5, isOverride: false })
+    expect(() => validateSIEJobInput(source, parseSIEFile(source), SIEJobMappingsSchema.parse(result.mappings),
+      { filename: 'test.se', createFiscalPeriod: true, importTransactions: true, importOpeningBalances: true })).not.toThrow()
+
+    const unused = preview('#KONTO 9999 "OBS"\n' + ledger)
+    expect(unused.mappings.find(m => m.sourceAccount === '9999')).toMatchObject({ targetAccount: '9999' })
+  })
+
+  it('names the accounts behind SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS in the error details', () => {
+    const source = ledger.replaceAll('1930', '9999')
+    const mapped = preview(source).mappings.map(m => m.sourceAccount === '9999' ? { ...m, targetAccount: '9998', targetName: 'Internt' } : m)
+    let thrown: unknown
+    try {
+      validateSIEJobInput(source, parseSIEFile(source), SIEJobMappingsSchema.parse(mapped),
+        { filename: 'test.se', createFiscalPeriod: true, importTransactions: true, importOpeningBalances: true })
+    } catch (err) { thrown = err }
+    expect(thrown).toBeInstanceOf(SIEJobValidationError)
+    expect(thrown as SIEJobValidationError).toMatchObject({ code: 'SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS', details: { account_numbers: ['9998'] } })
+  })
+
+  it.each(['999', '19300', '193000', '0099'])('requires a deliberate mapping for used source %s', number => {
     const source = ledger.replaceAll('1930', number)
     const result = preview(source)
     expect(result.archivedOnlyAccounts).toEqual([])

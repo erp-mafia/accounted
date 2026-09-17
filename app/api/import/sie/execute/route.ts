@@ -5,7 +5,7 @@ import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
-import { submitSIEJob } from '@/lib/import/sie-jobs'
+import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -55,6 +55,10 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
       {status:202,headers:{Location:`/api/import/sie/${job.id}`,'Retry-After':'2'}})
   } catch (error) {
     if (error instanceof SyntaxError) return errorResponseFromCode('VALIDATION_ERROR',log,{requestId})
+    // The job's own details (the accounts behind SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS)
+    // travel with the structured code so the client can name them instead of
+    // the registry's generic sentence.
+    if (error instanceof SIEJobValidationError && error.details) return errorResponse(error,log,{requestId,details:error.details})
     return errorResponse(error,log,{requestId})
   }
 },{requireWrite:true})
