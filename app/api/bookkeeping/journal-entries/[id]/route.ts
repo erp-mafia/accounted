@@ -3,7 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { eventBus } from '@/lib/events/bus'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createLogger } from '@/lib/logger'
-import { syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
+import { loadPaymentEntryLinks, syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateJournalEntrySchema } from '@/lib/api/schemas'
@@ -57,6 +57,15 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
     .eq('company_id', companyId)
     .single()
 
+  // The payment rows and bank rows are read now, while the entry exists: their
+  // journal_entry_id FKs are ON DELETE SET NULL, so after the RPC they can no
+  // longer be found by entry id, and the sync would leave the payment row in
+  // the invoice's history and revert the whole paid_amount instead of this
+  // payment's share.
+  const paymentLinks = entryBefore
+    ? await loadPaymentEntryLinks(supabase, companyId, entryBefore)
+    : null
+
   // delete_last_voucher clears journal_entry_id on every document hanging on
   // the voucher (the FK is ON DELETE RESTRICT, so it has no choice). Capture
   // them first: a document that is a supplier invoice's retained source
@@ -85,7 +94,7 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
   if (entryBefore) {
     try {
-      await syncInvoiceStatusFromPaymentEntry(supabase, companyId, entryBefore)
+      await syncInvoiceStatusFromPaymentEntry(supabase, companyId, entryBefore, paymentLinks)
     } catch (syncError) {
       logger.warn('payment status sync failed after delete', { entryId: id, error: syncError })
     }

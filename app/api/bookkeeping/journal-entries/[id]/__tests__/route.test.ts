@@ -29,6 +29,7 @@ vi.mock('@/lib/events/bus', () => ({
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', () => ({
+  loadPaymentEntryLinks: vi.fn().mockResolvedValue(null),
   syncInvoiceStatusFromPaymentEntry: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -37,6 +38,7 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
 }))
 
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
+import { loadPaymentEntryLinks, syncInvoiceStatusFromPaymentEntry } from '@/lib/bookkeeping/payment-sync'
 
 import { DELETE } from '../route'
 
@@ -104,5 +106,55 @@ describe('DELETE /api/bookkeeping/journal-entries/[id]', () => {
       'company-1',
       [],
     )
+  })
+
+  // The payment row and bank rows are linked by ON DELETE SET NULL FKs, so the
+  // route must read them while the entry exists and hand them to the sync:
+  // looked up after the RPC they are gone, and the payment row stayed in the
+  // invoice's history.
+  it('loads the payment links before the delete and passes them to the sync', async () => {
+    const links = {
+      paymentRows: [{ id: 'sip-1', amount: 1500, transaction_id: null }],
+      transactionIds: [],
+    }
+    const order: string[] = []
+    vi.mocked(loadPaymentEntryLinks).mockImplementationOnce(async () => {
+      order.push('load')
+      return links
+    })
+    const rpc = mockSupabase.rpc
+    enqueue({ data: { id: 'je-1', source_type: 'supplier_invoice_paid', source_id: 'si-1' } })
+    enqueue({ data: [] })
+    enqueue({ data: { deleted: true, voucher_series: 'E', voucher_number: 67 } })
+    vi.mocked(syncInvoiceStatusFromPaymentEntry).mockImplementationOnce(async () => {
+      order.push('sync')
+    })
+
+    const { status } = await parseJsonResponse(await run())
+
+    expect(status).toBe(200)
+    expect(order).toEqual(['load', 'sync'])
+    expect(vi.mocked(loadPaymentEntryLinks).mock.invocationCallOrder[0]).toBeLessThan(
+      rpc.mock.invocationCallOrder[0],
+    )
+    expect(syncInvoiceStatusFromPaymentEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      { id: 'je-1', source_type: 'supplier_invoice_paid', source_id: 'si-1' },
+      links,
+    )
+  })
+
+  it('refuses the delete when the payment links cannot be read', async () => {
+    vi.mocked(loadPaymentEntryLinks).mockRejectedValueOnce(
+      Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+    )
+    enqueue({ data: { id: 'je-1', source_type: 'supplier_invoice_paid', source_id: 'si-1' } })
+
+    const { status } = await parseJsonResponse(await run())
+
+    expect(status).toBeGreaterThanOrEqual(500)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(syncInvoiceStatusFromPaymentEntry).not.toHaveBeenCalled()
   })
 })
