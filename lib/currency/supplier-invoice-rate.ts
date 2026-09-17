@@ -57,17 +57,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { roundOre } from '@/lib/money'
-import type { Currency } from '@/types'
+import { CURRENCIES, type Currency } from '@/types'
 
 /** Currencies Riksbanken's SWEA series cover (mirrors lib/currency/riksbanken.ts). */
-const SUPPORTED_CURRENCIES: ReadonlySet<string> = new Set([
-  'SEK',
-  'EUR',
-  'USD',
-  'GBP',
-  'NOK',
-  'DKK',
-])
+const SUPPORTED_CURRENCIES: ReadonlySet<string> = new Set(CURRENCIES)
 
 /**
  * Upper plausibility bound for a caller-supplied rate. Same value as the

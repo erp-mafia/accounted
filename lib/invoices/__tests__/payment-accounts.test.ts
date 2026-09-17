@@ -8,7 +8,9 @@ import {
   hasRequiredInvoicePaymentAccount,
   hasUsableInvoicePaymentAccount,
   invoiceRequiresPaymentAccount,
+  printedLegacySekAccount,
   resolveInvoicePaymentAccount,
+  summarizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { makeInvoice } from '@/tests/helpers'
 import type { CompanySettings } from '@/types'
@@ -293,5 +295,58 @@ describe('per-invoice payee override (invoices.payment_details)', () => {
     expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, payment_details: frozen })).toBe(true)
     // A frozen bankgiro-only payee is not enough for a EUR invoice.
     expect(hasRequiredInvoicePaymentAccount(settings, { ...invoice, currency: 'EUR', payment_details: frozen })).toBe(false)
+  })
+})
+
+describe('summarizeInvoicePaymentAccount', () => {
+  it('lists the printable identifiers in invoice order', () => {
+    expect(summarizeInvoicePaymentAccount({
+      bank_name: 'SEB',
+      clearing_number: '5000',
+      account_number: '1234567',
+      bankgiro: '5317-5048',
+      plusgiro: null,
+      swish: '1235955695',
+      iban: 'SE4550000000058398257466',
+      bic: 'ESSESESS',
+      bank_code: null,
+      foreign_account_number: null,
+    })).toBe('BG 5317-5048 · 5000-1234567 · Swish 1235955695 · IBAN SE45 5000 0000 0583 9825 7466')
+  })
+
+  it('falls back to the routing pair only without an IBAN, and is empty for nothing', () => {
+    const base = {
+      bank_name: null, clearing_number: null, account_number: null, bankgiro: null,
+      plusgiro: null, swish: null, iban: null, bic: 'CHASUS33', bank_code: '021000021', foreign_account_number: '123456789',
+    }
+    expect(summarizeInvoicePaymentAccount(base)).toBe('021000021 123456789')
+    expect(summarizeInvoicePaymentAccount({ ...base, iban: 'GB33BUKB20201555555555' })).toBe('IBAN GB33 BUKB 2020 1555 5555 55')
+    expect(summarizeInvoicePaymentAccount({ ...base, bank_code: null, foreign_account_number: null, bic: null })).toBe('')
+    expect(summarizeInvoicePaymentAccount(null)).toBe('')
+  })
+})
+
+describe('printedLegacySekAccount', () => {
+  it('returns the company profile details when no SEK entry is saved (what the invoice prints)', () => {
+    const printed = printedLegacySekAccount(company({ invoice_payment_accounts: {} }))
+    expect(printed).toEqual(resolveInvoicePaymentAccount(company({ invoice_payment_accounts: {} }), 'SEK'))
+    expect(printed?.bankgiro).toBe('123-4567')
+  })
+
+  it('is null once a SEK entry exists, since the entry prints instead of the profile', () => {
+    expect(printedLegacySekAccount(company({
+      invoice_payment_accounts: { SEK: { bank_name: 'Acct', clearing_number: null, account_number: null, bankgiro: '5050-1234', plusgiro: null, swish: null, iban: null, bic: null, bank_code: null, foreign_account_number: null } },
+    }))).toBeNull()
+  })
+
+  it('is null when the profile details cannot be paid to', () => {
+    expect(printedLegacySekAccount(company({
+      invoice_payment_accounts: {},
+      bankgiro: null, plusgiro: null, swish: null, iban: null, clearing_number: null, account_number: null,
+    }))).toBeNull()
+    expect(printedLegacySekAccount(company({
+      invoice_payment_accounts: {},
+      bankgiro: null, plusgiro: null, swish: null, iban: null, clearing_number: '1234', account_number: null,
+    }))).toBeNull()
   })
 })

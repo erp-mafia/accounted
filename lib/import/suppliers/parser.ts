@@ -1,4 +1,4 @@
-import type { SupplierType } from '@/types'
+import { CURRENCIES, type SupplierType } from '@/types'
 import { detectSupplierColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
 import { classifySupplier } from '../shared/classify'
@@ -15,7 +15,7 @@ const VALID_SUPPLIER_TYPES: SupplierType[] = [
   'non_eu_business',
 ]
 
-const VALID_CURRENCIES = new Set(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+const VALID_CURRENCIES: ReadonlySet<string> = new Set(CURRENCIES)
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 

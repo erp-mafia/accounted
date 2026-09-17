@@ -29,10 +29,9 @@ import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { formatQty, todayIso } from '@/components/sales-orders/labels'
-import type { Article, SalesOrder, SalesOrderItem, SalesOrderItemInput } from '@/types'
+import { CURRENCIES, type Article, type SalesOrder, type SalesOrderItem, type SalesOrderItemInput } from '@/types'
 
 // The invoice editor's currency set (CurrencySchema in lib/api/schemas.ts).
-const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] as const
 
 // Dense-row cell controls: same vocabulary as the invoice editor's line grid
 // (rounded-sm leaves inside the table surface, hairline-free until focus).

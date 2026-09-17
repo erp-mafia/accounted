@@ -44,7 +44,7 @@ import {
   orgNumberHoldsPersonalNumber,
   personalNumberDigits,
 } from '@/lib/customers/personal-number-shape'
-import type { AuditAction, Currency, InvoiceDocumentType } from '@/types'
+import { CURRENCIES, type AuditAction, type Currency, type InvoiceDocumentType } from '@/types'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 import {
   mentionsPeriodPlaceholder,
@@ -318,7 +318,7 @@ export const VatTreatmentSchema = z.enum([
 
 export const AccountingMethodSchema = z.enum(['accrual', 'cash'])
 
-export const CurrencySchema = z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+export const CurrencySchema = z.enum(CURRENCIES)
 
 export const TransactionCategorySchema = z.enum([
   'income_services',
@@ -4066,7 +4066,7 @@ export const ByraBrandUpdateSchema = z.object({
 
 // ============ Expense claims (utlägg) ============
 
-const expenseCurrency = z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'])
+const expenseCurrency = CurrencySchema
 
 export const CreateExpenseClaimSchema = z
   .object({

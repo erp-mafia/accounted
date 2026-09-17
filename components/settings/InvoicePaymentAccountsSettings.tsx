@@ -26,8 +26,11 @@ import {
   INVOICE_PAYMENT_ACCOUNT_CURRENCIES,
   bankCodeLabelKey,
   hasNonIbanForeignRouting,
+  isInvoicePaymentAccountCurrency,
   isNonIbanCurrency,
   normalizeInvoicePaymentAccount,
+  printedLegacySekAccount,
+  summarizeInvoicePaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
@@ -88,17 +91,7 @@ function accountLabel(account: CashAccount): string {
 
 /** One-line summary of what the account prints: "BG 5050-1234 · IBAN SE12 ...". */
 function payeeSummary(account: CashAccount): string {
-  const payee = cashAccountPayee(account)
-  const parts: string[] = []
-  if (payee.bankgiro) parts.push(`BG ${payee.bankgiro}`)
-  if (payee.plusgiro) parts.push(`PG ${payee.plusgiro}`)
-  if (payee.clearing_number && payee.account_number) parts.push(`${payee.clearing_number}-${payee.account_number}`)
-  if (payee.swish) parts.push(`Swish ${payee.swish}`)
-  if (payee.iban) parts.push(`IBAN ${formatIbanGroups(payee.iban)}`)
-  if (!payee.iban && payee.bank_code && payee.foreign_account_number) {
-    parts.push(`${payee.bank_code} ${payee.foreign_account_number}`)
-  }
-  return parts.join(' · ')
+  return summarizeInvoicePaymentAccount(cashAccountPayee(account))
 }
 
 /**
@@ -233,6 +226,14 @@ export function InvoicePaymentAccountsSettings({
       ),
     [settings.invoice_payment_accounts, defaultByCurrency],
   )
+  // Bank details typed on the company profile (Inställningar, Företag) while
+  // no SEK payee account is chosen: the resolver still prints them on SEK
+  // invoices, so this page must say so instead of "Inget", or it contradicts
+  // the invoice and the user concludes nothing was saved.
+  const legacySek = useMemo(
+    () => (defaultByCurrency.has('SEK') ? null : printedLegacySekAccount(settings)),
+    [settings, defaultByCurrency],
+  )
   const shownCurrencies = useMemo(() => {
     const set = new Set<Currency>(['SEK', ...defaultByCurrency.keys() as Iterable<Currency>, ...unlinkedCurrencies, ...extraCurrencies])
     return INVOICE_PAYMENT_ACCOUNT_CURRENCIES.filter((c) => set.has(c))
@@ -306,6 +307,25 @@ export function InvoicePaymentAccountsSettings({
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      // Same rule as saveNew: the first usable account for a currency with no
+      // default becomes the default, so typing details into an existing
+      // account is enough for invoices to pick them up. Without this the
+      // page kept saying "Inget" after a save and invoices fell back to the
+      // company profile, which reads as "nothing was saved".
+      const saved = (json?.data ?? null) as CashAccount | null
+      const currency = editingAccount.currency
+      if (
+        saved
+        && isInvoicePaymentAccountCurrency(currency)
+        && !defaultByCurrency.has(currency)
+        && isUsableInvoicePayee(saved, currency)
+      ) {
+        try {
+          await setDefault(currency, saved.id, { silent: true })
+        } catch (err) {
+          toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+        }
+      }
       cancelEdit()
       await afterWrite(t('saved_account', { account: accountLabel(editingAccount) }))
     } catch (err) {
@@ -650,6 +670,7 @@ export function InvoicePaymentAccountsSettings({
             const usable = accounts.filter((a) => isUsableInvoicePayee(a, currency))
             const current = defaultByCurrency.get(currency) ?? NONE
             const unlinked = unlinkedCurrencies.includes(currency)
+            const legacy = currency === 'SEK' && !unlinked && current === NONE ? legacySek : null
             return (
               <SettingsRow
                 key={currency}
@@ -668,12 +689,17 @@ export function InvoicePaymentAccountsSettings({
                   disabled={isSaving}
                   aria-label={t('default_label', { currency })}
                 >
-                  <option value={NONE}>{unlinked ? t('default_unlinked_option') : t('default_none')}</option>
+                  <option value={NONE}>
+                    {unlinked ? t('default_unlinked_option') : legacy ? t('default_legacy_option') : t('default_none')}
+                  </option>
                   {usable.map((account) => (
                     <option key={account.id} value={account.id}>{accountLabel(account)}</option>
                   ))}
                 </SettingsSelect>
                 {unlinked && <SettingsRowNote>{t('unlinked_hint', { currency })}</SettingsRowNote>}
+                {legacy && (
+                  <SettingsRowNote>{t('legacy_hint', { summary: summarizeInvoicePaymentAccount(legacy) })}</SettingsRowNote>
+                )}
                 {!unlinked && usable.length === 0 && (
                   <SettingsRowNote>{t(currency === 'SEK' ? 'no_usable_sek' : 'no_usable_foreign', { currency })}</SettingsRowNote>
                 )}

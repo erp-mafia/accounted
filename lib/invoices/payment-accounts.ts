@@ -1,18 +1,13 @@
-import type {
-  CompanySettings,
-  Currency,
-  Invoice,
-  InvoicePaymentAccount,
+import {
+  CURRENCIES,
+  type CompanySettings,
+  type Currency,
+  type Invoice,
+  type InvoicePaymentAccount,
 } from '@/types'
+import { formatIbanGroups } from '@/lib/company/connection-iban'
 
-export const INVOICE_PAYMENT_ACCOUNT_CURRENCIES: readonly Currency[] = [
-  'SEK',
-  'EUR',
-  'USD',
-  'GBP',
-  'NOK',
-  'DKK',
-]
+export const INVOICE_PAYMENT_ACCOUNT_CURRENCIES: readonly Currency[] = CURRENCIES
 
 const PAYMENT_FIELDS: readonly (keyof InvoicePaymentAccount)[] = [
   'bank_name',
@@ -111,6 +106,41 @@ export function resolveInvoicePaymentAccount(
   const configured = company.invoice_payment_accounts?.[currency]
   if (configured) return normalizeInvoicePaymentAccount(configured)
   return currency === 'SEK' ? legacySekInvoicePaymentAccount(company) : null
+}
+
+/**
+ * One line of what an account prints on the invoice, in the order the
+ * invoice shows them: "BG 5050-1234 · Swish 1234567890 · IBAN SE12 3456 ...".
+ * Empty when the account has nothing printable.
+ */
+export function summarizeInvoicePaymentAccount(account: InvoicePaymentAccount | null): string {
+  if (!account) return ''
+  const parts: string[] = []
+  if (account.bankgiro) parts.push(`BG ${account.bankgiro}`)
+  if (account.plusgiro) parts.push(`PG ${account.plusgiro}`)
+  if (account.clearing_number && account.account_number) {
+    parts.push(`${account.clearing_number}-${account.account_number}`)
+  }
+  if (account.swish) parts.push(`Swish ${account.swish}`)
+  if (account.iban) parts.push(`IBAN ${formatIbanGroups(account.iban)}`)
+  if (!account.iban && account.bank_code && account.foreign_account_number) {
+    parts.push(`${account.bank_code} ${account.foreign_account_number}`)
+  }
+  return parts.join(' · ')
+}
+
+/**
+ * The payee a SEK invoice prints when the company has neither a default
+ * payee account nor a saved SEK entry: the bank details typed on the
+ * company profile (the legacy company_settings columns). Null when a SEK
+ * entry exists (then the entry prints, not the profile) or when the
+ * profile details cannot be paid to. Same resolution as the renderers, so
+ * a settings page that shows this never disagrees with the invoice.
+ */
+export function printedLegacySekAccount(company: CompanySettings): InvoicePaymentAccount | null {
+  if (company.invoice_payment_accounts?.SEK) return null
+  const account = resolveInvoicePaymentAccount(company, 'SEK')
+  return hasUsableInvoicePaymentAccount(account, 'SEK') ? account : null
 }
 
 export function hasUsableInvoicePaymentAccount(

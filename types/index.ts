@@ -304,7 +304,17 @@ export type ProcessingHistoryAggregateType =
 export type BankConnectionStatus = 'pending' | 'pending_selection' | 'active' | 'expired' | 'revoked' | 'error'
 
 // Currency types
-export type Currency = 'SEK' | 'EUR' | 'USD' | 'GBP' | 'NOK' | 'DKK'
+/**
+ * Currencies the app can book. Single source for every TS list: the Zod
+ * schema, the form dropdowns, the MCP tool schemas and the Riksbanken series
+ * map all derive from this tuple. Must match the seed of public.currencies
+ * (supabase/migrations) and the SERIES_IDS map in lib/currency/riksbanken.ts;
+ * lib/currency/__tests__/currencies.test.ts pins both.
+ */
+export const CURRENCIES = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF'] as const
+export type Currency = (typeof CURRENCIES)[number]
+/** Currencies that need an exchange rate to reach SEK. */
+export const FOREIGN_CURRENCIES: readonly Currency[] = CURRENCIES.filter((c) => c !== 'SEK')
 
 export interface InvoicePaymentAccount {
   bank_name: string | null

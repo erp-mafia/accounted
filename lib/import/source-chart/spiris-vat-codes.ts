@@ -1,4 +1,7 @@
-import type { AccountVatTreatment } from '@/lib/vat/account-vat-treatment'
+import {
+  resolveVatTreatmentRuta,
+  type AccountVatTreatment,
+} from '@/lib/vat/account-vat-treatment'
 
 /**
  * Spiris Bokföring VAT codes, which name the momsdeklaration ruta directly.
@@ -59,13 +62,46 @@ const COST_TREATMENT: Record<string, AccountVatTreatment> = {
   '22': 'reverse_charge_non_eu_services',
   '37': 'triangulation_eu_goods',
   '50': 'import_goods',
-  // Both are omvänd skattskyldighet inom Sverige. Which ruta gets filed is
-  // decided downstream by resolveVatTreatmentRuta from the account number, so
-  // the 23/24 split the source system made is not carried through. Lossy on
-  // purpose: the account number is the better source, and carrying two
-  // treatments that resolve identically would add a state nothing reads.
+  // Both are omvänd skattskyldighet inom Sverige, and one treatment covers
+  // them: which ruta gets filed is decided downstream by
+  // resolveVatTreatmentRuta from the account number (441x varor, 442x
+  // tjänster). Carrying two treatments that resolve identically would add a
+  // state nothing reads. What the split DOES buy is a check, see
+  // filesTheRutaItNames: the account number only carries the goods/services
+  // distinction for those six BAS numbers, and outside them the code would be
+  // filed in whichever box the fallback picks rather than the one Spiris
+  // wrote.
   '23': 'reverse_charge_domestic',
   '24': 'reverse_charge_domestic',
+}
+
+/**
+ * Whether the treatment a code names actually files the ruta the code wrote,
+ * for this account.
+ *
+ * Every other treatment fixes its box by itself, so this is a tautology for
+ * them and a real test for exactly one: reverse_charge_domestic resolves to
+ * ruta 23 (varor) or ruta 24 (tjänster) from the account NUMBER, and the
+ * number only says which for 4415-4417 and 4425-4427. A Spiris "24" on any
+ * other class 4 account resolved to ruta 23 and filed a service purchase as
+ * goods, silently, because the code HAD translated and so the row never
+ * reached the review list. Refusing the translation puts it there instead:
+ * null is the file's existing answer for a code it cannot express, and
+ * applySourceVatCodes already keeps the code on the mapping, shows it, and
+ * falls back to the label suggestion.
+ *
+ * Asking the resolver rather than re-testing the six numbers here keeps one
+ * definition of the boundary. A pinning test asserts the round trip holds for
+ * every code in both tables, so a future code whose treatment files somewhere
+ * else fails there rather than in a declaration.
+ */
+function filesTheRutaItNames(
+  treatment: AccountVatTreatment,
+  accountClass: number,
+  accountNumber: string,
+  ruta: string,
+): boolean {
+  return resolveVatTreatmentRuta(treatment, accountClass, accountNumber)?.box === `ruta${ruta}`
 }
 
 /**
@@ -120,19 +156,24 @@ export function spirisVatTreatment(
 
   const accountClass = Number(accountNumber.charAt(0))
 
+  const named = (treatment: AccountVatTreatment | null): AccountVatTreatment | null =>
+    treatment && filesTheRutaItNames(treatment, accountClass, accountNumber, parsed.ruta)
+      ? treatment
+      : null
+
   if (accountClass === 3) {
     if (parsed.ruta === '05') {
-      if (parsed.rate === 0.12) return 'reduced_12'
-      if (parsed.rate === 0.06) return 'reduced_6'
+      if (parsed.rate === 0.12) return named('reduced_12')
+      if (parsed.rate === 0.06) return named('reduced_6')
       // 25 % is the default, but only for a code that actually named a rate:
       // a bare "05" states nothing and must not be read as standard rate.
-      return parsed.rate === 0.25 ? 'standard_25' : null
+      return parsed.rate === 0.25 ? named('standard_25') : null
     }
-    return REVENUE_TREATMENT[parsed.ruta] ?? null
+    return named(REVENUE_TREATMENT[parsed.ruta] ?? null)
   }
 
   if (accountClass >= 4 && accountClass <= 6) {
-    return COST_TREATMENT[parsed.ruta] ?? null
+    return named(COST_TREATMENT[parsed.ruta] ?? null)
   }
 
   // Classes 1, 2, 7 and 8 carry no account treatment in this project.

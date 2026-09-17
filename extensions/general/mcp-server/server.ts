@@ -255,7 +255,7 @@ import {
   type AgiSubmissionState,
 } from '@/lib/salary/agi-submission-state'
 import { generateSupplierLedger } from '@/lib/reports/supplier-ledger'
-import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
+import { fetchJunctionLinkedTxIds, getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
@@ -362,6 +362,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
+import { CURRENCIES } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
@@ -5707,35 +5708,56 @@ export const tools: McpTool[] = [
         throw new Error('cash_account_id must be a cash account UUID (cash_accounts.id), not a ledger account number')
       }
 
-      // Get total count. is_ignored = false on both queries: a transaction
-      // ignored via gnubok_ignore_transaction has no journal entry by CHECK
-      // constraint, so journal_entry_id IS NULL alone kept listing it as work
-      // to do (feedback seq 330091). Same predicate as the Att göra worklist.
-      let countQuery = supabase
-        .from('transactions')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
-      if (cashAccountId) countQuery = countQuery.eq('cash_account_id', cashAccountId)
-      const { count: totalCount, error: countError } = await countQuery
+      // is_ignored = false on every query: a transaction ignored via
+      // gnubok_ignore_transaction has no journal entry by CHECK constraint, so
+      // journal_entry_id IS NULL alone kept listing it as work to do
+      // (feedback seq 330091). Same predicate as the Att göra worklist.
+      //
+      // journal_entry_id IS NULL is only the first of the "booked" anchors
+      // (lib/transactions/is-booked.ts): a row split over several verifikat
+      // (#1553) or bulk-booked into a samlingsverifikat is anchored through
+      // transaction_voucher_links alone and was listed here as unbooked
+      // (crm#48). Ids first, junction rows subtracted, then the page: the
+      // offset and total_count stay exact instead of a page shrinking after a
+      // post-hoc filter.
+      const candidateIds = await fetchAllRows<{ id: string }>(({ from, to }) => {
+        let idQuery = supabase
+          .from('transactions')
+          .select('id')
+          .eq('company_id', companyId)
+          .is('journal_entry_id', null)
+          .eq('is_ignored', false)
+        if (cashAccountId) idQuery = idQuery.eq('cash_account_id', cashAccountId)
+        return idQuery.order('date', { ascending: false }).order('id', { ascending: true }).range(from, to)
+      })
+      const junctionLinked =
+        candidateIds.length > 0
+          ? await fetchJunctionLinkedTxIds(supabase, companyId, candidateIds.map((row) => row.id))
+          : new Set<string>()
+      const openIds = candidateIds.filter((row) => !junctionLinked.has(row.id)).map((row) => row.id)
+      const totalCount = openIds.length
+      const pageIds = openIds.slice(offset, offset + limit)
 
-      if (countError) throw dbError(countError)
-
-      let listQuery = supabase
-        .from('transactions')
-        .select(
-          'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
-        )
-        .eq('company_id', companyId)
-        .is('journal_entry_id', null)
-        .eq('is_ignored', false)
-      if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
-      const { data, error } = await listQuery
-        .order('date', { ascending: false })
-        .range(offset, offset + limit - 1)
-
-      if (error) throw dbError(error)
+      let data: unknown[] | null = []
+      if (pageIds.length > 0) {
+        // The unbooked predicate is repeated on the page read so a row booked
+        // between the two reads drops out instead of coming back as work.
+        let listQuery = supabase
+          .from('transactions')
+          .select(
+            'id, date, description, amount, currency, merchant_name, reference, is_business, category, cash_account_id'
+          )
+          .eq('company_id', companyId)
+          .in('id', pageIds)
+          .is('journal_entry_id', null)
+          .eq('is_ignored', false)
+        if (cashAccountId) listQuery = listQuery.eq('cash_account_id', cashAccountId)
+        const { data: pageData, error } = await listQuery
+          .order('date', { ascending: false })
+          .order('id', { ascending: true })
+        if (error) throw dbError(error)
+        data = pageData
+      }
 
       // Resolve the bank account's BAS ledger for the rows on this page so a
       // per-account reconciliation can be driven from outside (customer
@@ -5762,7 +5784,7 @@ export const tools: McpTool[] = [
         cash_account_id: t.cash_account_id ?? null,
         cash_account_ledger: t.cash_account_id ? ledgerByCashAccount.get(t.cash_account_id) ?? null : null,
       }))
-      const total = totalCount ?? 0
+      const total = totalCount
 
       return { transactions: rows, ...pageTail(rows, total, offset) }
     },
@@ -7188,7 +7210,7 @@ export const tools: McpTool[] = [
         },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         due_date: { type: 'string', description: 'YYYY-MM-DD (default from payment terms)' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol BuyerReference.' },
@@ -7606,7 +7628,7 @@ export const tools: McpTool[] = [
         },
         order_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         requested_delivery_date: { type: 'string', description: 'YYYY-MM-DD' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         notes: { type: 'string' },
@@ -21949,7 +21971,7 @@ export const tools: McpTool[] = [
           description: 'Whole hour (0-23) in Europe/Stockholm time at which the schedule runs. Default 8.',
         },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90, description: 'due_date = invoice_date + terms. Default 30.' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'], description: 'Default SEK.' },
+        currency: { type: 'string', enum: [...CURRENCIES], description: 'Default SEK.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
         notes: { type: 'string', description: 'Printed on every generated invoice. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },
@@ -22158,7 +22180,7 @@ export const tools: McpTool[] = [
         },
         send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         your_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
         our_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
         notes: { type: ['string', 'null'], description: 'Null clears the field. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },

@@ -56,7 +56,10 @@ export const GET = withRouteContext('transaction.list', async (request, { supaba
 
   let query = supabase
     .from('transactions')
-    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+    // The junction rides along in every mode so a caller can tell a row split
+    // over several verifikat (journal_entry_id NULL, #1553) from an unbooked
+    // one with lib/transactions/is-booked.ts getLinkedJournalEntryIds (crm#48).
+    .select('id, date, description, amount, currency, amount_sek, exchange_rate, reference, journal_entry_id, reconciliation_method, is_ignored, cash_account_id, transaction_voucher_links(journal_entry_id, role)')
     .eq('company_id', companyId)
 
   // unmatched and reconciled are mutually exclusive: unmatched wins if both set
