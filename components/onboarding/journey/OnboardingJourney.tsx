@@ -42,6 +42,7 @@ import {
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS_SV,
   creatableEntityTypes,
+  fiscalYearLockedToCalendar,
   isEntityType,
   isEntityTypeCreatable,
   plannedLegalForms,
@@ -222,7 +223,14 @@ export default function OnboardingJourney({
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
-  const isEf = entity === 'enskild_firma'
+  // Two capabilities drive every wording difference between the forms.
+  // personOwned: the org number is the owner's personnummer (enskild
+  // firma), so the company IS the person and the questions say "du" and
+  // "firman"; every juridisk person shares the form-neutral "företaget"
+  // copy. calendarOnly: BFL 3 kap 1 § binds a fysisk person to the
+  // calendar year, so the fiscal-year questions collapse to first-year-or-not.
+  const personOwned = isEntityType(entity) && usesPersonnummerAsOrgNumber(entity)
+  const calendarOnly = isEntityType(entity) && fiscalYearLockedToCalendar(entity)
 
   const monthLong = useMemo(() => {
     const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'long' })
@@ -805,13 +813,13 @@ export default function OnboardingJourney({
         const suggested = s.company_name ?? ''
         return (
           <Question
-            title={isEf ? t('journey_name_ef_title') : t('journey_name_ab_title')}
-            sub={isEf ? t('journey_name_ef_sub') : t('journey_name_ab_sub')}
+            title={personOwned ? t('journey_name_ef_title') : t('journey_name_ab_title')}
+            sub={personOwned ? t('journey_name_ef_sub') : t('journey_name_ab_sub')}
           >
             <NameInput
               key={state.step}
               initial={suggested}
-              placeholder={isEf ? t('journey_name_ef_placeholder') : t('journey_name_ab_placeholder')}
+              placeholder={personOwned ? t('journey_name_ef_placeholder') : t('journey_name_ab_placeholder')}
               hint={
                 <>
                   {t('journey_press')} <b>Enter</b>
@@ -826,7 +834,7 @@ export default function OnboardingJourney({
 
       case 'address':
         return (
-          <Question title={isEf ? t('journey_addr_ef_title') : t('journey_addr_ab_title')}>
+          <Question title={personOwned ? t('journey_addr_ef_title') : t('journey_addr_ab_title')}>
             <AddressFields
               initial={{ street: s.address_line1 ?? '', postalCode: s.postal_code ?? '', city: s.city ?? '' }}
               onChange={(v) => dispatch({ type: 'DRAFT_SETTINGS', settings: { address_line1: v.street, postal_code: v.postalCode, city: v.city } })}
@@ -849,7 +857,7 @@ export default function OnboardingJourney({
       case 'fskatt':
         return (
           <Question
-            title={isEf ? t('journey_fskatt_ef_title') : t('journey_fskatt_ab_title')}
+            title={personOwned ? t('journey_fskatt_ef_title') : t('journey_fskatt_ab_title')}
             info={t('journey_fskatt_info')}
           >
             <ChipRow
@@ -864,7 +872,7 @@ export default function OnboardingJourney({
         )
 
       case 'fy': {
-        if (isEf) {
+        if (calendarOnly) {
           return (
             <Question
               title={t('journey_fy_ef_title')}
@@ -953,11 +961,11 @@ export default function OnboardingJourney({
           : null
         return (
           <Question
-            title={isEf ? t('journey_fystart_ef_title') : t('journey_fystart_ab_title')}
+            title={personOwned ? t('journey_fystart_ef_title') : t('journey_fystart_ab_title')}
             sub={
               regIso
                 ? t('journey_fystart_reg_sub', { date: formatDayMonthYear(regIso) })
-                : isEf
+                : personOwned
                   ? t('journey_fystart_ef_sub')
                   : t('journey_fystart_ab_sub')
             }
@@ -984,7 +992,7 @@ export default function OnboardingJourney({
         return (
           <FyEndStep
             t={t}
-            isEf={isEf}
+            calendarOnly={calendarOnly}
             startDate={s.first_year_start ?? ''}
             monthShort={monthShort}
             formatDate={formatDayMonthYear}
@@ -996,7 +1004,7 @@ export default function OnboardingJourney({
       case 'momsyn':
         return (
           <Question
-            title={isEf ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
+            title={personOwned ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
             info={t('journey_momsyn_info')}
           >
             <ChipRow
@@ -1015,7 +1023,7 @@ export default function OnboardingJourney({
         if (s.vat_number) info += ' ' + t('journey_moms_info_vatnr', { vatNumber: s.vat_number })
         return (
           <Question
-            title={isEf ? t('journey_moms_ef_title') : t('journey_moms_ab_title')}
+            title={personOwned ? t('journey_moms_ef_title') : t('journey_moms_ab_title')}
             sub={state.lookupRan && state.ticLookup?.registration.vat ? t('journey_moms_sub_registered') : undefined}
             info={info}
           >
@@ -1037,7 +1045,7 @@ export default function OnboardingJourney({
       case 'method':
         return (
           <Question
-            title={isEf ? t('journey_method_ef_title') : t('journey_method_ab_title')}
+            title={personOwned ? t('journey_method_ef_title') : t('journey_method_ab_title')}
             info={t('journey_method_info')}
             attn={state.serverError === 'generic' ? t('journey_err_generic') : undefined}
           >
@@ -1310,7 +1318,7 @@ function FyStartWithSuggestion({
 
 function FyEndStep({
   t,
-  isEf,
+  calendarOnly,
   startDate,
   monthShort,
   formatDate,
@@ -1318,7 +1326,8 @@ function FyEndStep({
   flyProps,
 }: {
   t: TFn
-  isEf: boolean
+  /** BFL 3 kap 1 §: the first year must end 31 December, so no other end month is offered. */
+  calendarOnly: boolean
   startDate: string
   monthShort: string[]
   formatDate: (iso: string) => string
@@ -1329,7 +1338,7 @@ function FyEndStep({
   const [showMonths, setShowMonths] = useState(false)
   const [preview, setPreview] = useState<FirstYearEndOption | null>(null)
   const [sy, sm] = startDate.split('-').map(Number)
-  const options = isEf
+  const options = calendarOnly
     ? efFirstYearEndOptions(sy, sm)
     : abFirstYearEndOptions(sy, sm, endMonth)
   const cells: 24 | 36 = sm - 1 + 19 > 24 ? 36 : 24
@@ -1340,7 +1349,7 @@ function FyEndStep({
     <Question
       title={t('journey_fyend_title')}
       sub={t('journey_fyend_sub')}
-      info={isEf ? t('journey_fyend_ef_info') : t('journey_fyend_ab_info')}
+      info={calendarOnly ? t('journey_fyend_ef_info') : t('journey_fyend_ab_info')}
     >
       <YearBand
         cells={cells}
@@ -1378,7 +1387,7 @@ function FyEndStep({
             <span className="jny-rec">{t('journey_fyend_months', { count: o.months })}</span>
           </button>
         ))}
-        {!isEf ? (
+        {!calendarOnly ? (
           <button type="button" className="jny-pick" onClick={() => setShowMonths(true)}>
             {t('journey_fyend_other_month')}
           </button>
