@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import {
+  acceptSourceChartWithoutReview,
+  applySourceChartCsv,
+} from '@/lib/import/source-chart/apply-source-chart'
+import { sourceChartFormatForProvider } from '@/lib/import/source-chart/formats'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
@@ -39,10 +44,57 @@ interface FileEntry {
   parsed?: ParsedFile
   error?: string
   dupImportId?: string
+  /**
+   * What this year's chart of accounts export did, once the user picked one.
+   * Per file because the chart belongs to a fiscal year: codes move between
+   * years, and last year's chart on this year's ledger is the quiet way to a
+   * wrong ruta.
+   */
+  /**
+   * The chart currently in force for this year. Only ever the one whose codes
+   * the mappings actually carry, so the row cannot describe a file the import
+   * is not using.
+   */
+  chart?: { name: string; treatments: number; format: string | null }
+  /**
+   * A pick that could not be used, kept beside the chart rather than replacing
+   * it. applySourceChartCsv leaves the mappings untouched when it cannot read
+   * a file, so the previous chart's treatments are still what gets imported;
+   * overwriting the row's state here would have it report an unread chart
+   * while the import quietly used the old one.
+   *
+   * `why` is an import_notices code. The parser knows whether the header
+   * matched no format, the file carried no codes, or it held no accounts, and
+   * one flat "kunde inte läsas" throws away the half that says what to do next.
+   */
+  chartRejected?: { name: string; why: string | null }
+  /**
+   * A chart file whose text() has not come back yet. The import reads the
+   * mappings out of this state, so between the pick and the state update the
+   * row holds a ledger the chart has not reached; starting the import in that
+   * window would write the whole year without the momskoder the pick was for,
+   * and the row would then claim the chart was applied.
+   */
+  chartReading?: boolean
 }
 
 type Phase = 'drop' | 'importing' | 'imported'
 type Reg = null | 'card' | 'connecting' | 'token' | 'running' | 'done' | 'skipped'
+
+/**
+ * A chart filename short enough to sit beside the SIE file it belongs to.
+ *
+ * The drop surface is 560px wide and centred, and a Spiris export is named
+ * ChartAccounts_Export_20260914-2021.csv: thirty of those thirty-eight
+ * characters are the same on every row, and they pushed the count onto a line
+ * of its own. Elided in the middle rather than truncated at the end, because
+ * the tail is the half that matters here; the year is what says the chart was
+ * paired with the right ledger. The full name stays in the title attribute.
+ */
+function shortChartName(name: string): string {
+  if (name.length <= 24) return name
+  return `${name.slice(0, 10)}…${name.slice(-12)}`
+}
 
 function yearsOf(files: FileEntry[]): string[] {
   const set = new Set<string>()
@@ -60,11 +112,22 @@ function yearsOf(files: FileEntry[]): string[] {
  */
 export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  // The parser's own complaints live in the import-wide notice namespace.
+  const tn = useTranslations('import_notices')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { state, dispatch, flags, loadFindings } = ctx
   const { settings } = useCompanySettings()
   const inputRef = useRef<HTMLInputElement | null>(null)
   const [files, setFiles] = useState<FileEntry[]>([])
+  const chartInputRef = useRef<HTMLInputElement | null>(null)
+  const chartForFile = useRef<string | null>(null)
+  /**
+   * Which pick is current, per file. file.text() is a promise, so choosing a
+   * second chart for the same year before the first has been read would
+   * otherwise let whichever resolves last decide, and that is not necessarily
+   * the file on screen.
+   */
+  const chartPick = useRef<Record<string, number>>({})
   const [over, setOver] = useState(false)
   const [optsOpen, setOptsOpen] = useState(false)
   const [ibOn, setIbOn] = useState<boolean | null>(null)
@@ -98,6 +161,13 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
 
   const provName = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === regProvider)?.name ?? null, [regProvider])
   const sieFirst = SIE_FIRST_PROVIDERS.has(state.provider ?? '')
+  /**
+   * Whether this provider's chart of accounts can be read at all. Both
+   * SIE-first providers need a file for the ledger, but only one of them
+   * exports a chart this project has a translator for, and offering the
+   * picker to the other is a promise the parser cannot keep.
+   */
+  const chartFormat = sourceChartFormatForProvider(state.provider)
 
   /* ── parse ───────────────────────────────────────────────────────── */
   const parseOne = useCallback(async (file: File, id: string) => {
@@ -119,6 +189,57 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       setFiles((prev) => prev.map((f) => (f.id === id ? { ...f, status: 'error', error: t('sie_network') } : f)))
     }
   }, [t])
+
+  /**
+   * The chart of accounts the source system exports, for one SIE file's year.
+   *
+   * Applied and accepted in the same step: this act has no mapping page to
+   * confirm on, and the alternative is not a review, it is nothing at all.
+   * buildSIEVatDefaults writes a treatment only for a row marked reviewed, so
+   * an unaccepted chart would leave the ledger exactly as momskod-less as it
+   * is today. Only codes the translator could read are accepted; the rest stay
+   * open for the genomlysning.
+   *
+   * The empty chart argument is the company's own: in this act it is created
+   * by the very import being prepared, so there is nothing to restore against.
+   */
+  async function applyChart(fileId: string, file: File) {
+    const pick = (chartPick.current[fileId] = (chartPick.current[fileId] ?? 0) + 1)
+    const settled = (entry: FileEntry): FileEntry => ({ ...entry, chartReading: false })
+    // Before the await: the import is gated on this flag, and a gate raised
+    // after the read has started is not a gate. A superseded pick leaves it
+    // set on purpose, because the pick that replaced it is still reading.
+    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, chartReading: true } : f)))
+    try {
+      const csv = await file.text()
+      if (pick !== chartPick.current[fileId]) return
+      setFiles((prev) => prev.map((f) => {
+        if (f.id !== fileId) return f
+        if (!f.parsed) return settled(f)
+        const result = applySourceChartCsv(f.parsed.mappings, csv, [])
+        if (!result.applied) {
+          // The mappings are untouched, so whatever chart was in force still
+          // is. Say the pick failed without unsaying the chart.
+          return settled({ ...f, chartRejected: { name: file.name, why: result.notices[0]?.code ?? null } })
+        }
+        return settled({
+          ...f,
+          parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
+          chart: {
+            name: file.name,
+            treatments: result.summary.treatmentsApplied,
+            format: result.summary.formatLabel,
+          },
+          chartRejected: undefined,
+        })
+      }))
+    } catch {
+      if (pick !== chartPick.current[fileId]) return
+      setFiles((prev) => prev.map((f) => (
+        f.id === fileId ? settled({ ...f, chartRejected: { name: file.name, why: null } }) : f
+      )))
+    }
+  }
 
   function addFiles(list: FileList | File[]) {
     const incoming = Array.from(list).filter((f) => /\.(se|sie)$/i.test(f.name) || f.size > 0)
@@ -144,6 +265,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   const ready = useMemo(() => files.filter((f) => f.status === 'ready' && f.parsed), [files])
   const ordered = useMemo(() => [...ready].sort((a, b) => (a.parsed!.stats.fiscalYearStart ?? '').localeCompare(b.parsed!.stats.fiscalYearStart ?? '')), [ready])
   const parsing = files.some((f) => f.status === 'parsing')
+  const readingChart = files.some((f) => f.chartReading)
   const company = ready[0]?.parsed?.header.companyName ?? null
   const nYears = yearsOf(ready).length || ready.length
   const totalVouchers = ready.reduce((s, f) => s + (f.parsed?.stats.totalVouchers ?? 0), 0)
@@ -214,7 +336,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
   }
 
   async function runImport() {
-    if (ordered.length === 0 || parsing) return
+    if (ordered.length === 0 || parsing || readingChart) return
     setPhase('importing')
     setImportError(null)
     setTick(0)
@@ -423,6 +545,21 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       {showDrop ? (
         <>
           <input ref={inputRef} type="file" accept=".se,.sie" multiple hidden onChange={(e) => { if (e.target.files) addFiles(e.target.files); e.target.value = '' }} />
+          {/* One input for every file's chart: chartForFile says which row
+              opened it, so the picker never has to be rendered per row. */}
+          <input
+            ref={chartInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            hidden
+            onChange={(e) => {
+              const picked = e.target.files?.[0]
+              const target = chartForFile.current
+              e.target.value = ''
+              chartForFile.current = null
+              if (picked && target) void applyChart(target, picked)
+            }}
+          />
           {files.length === 0 ? (
             <button
               type="button"
@@ -448,8 +585,61 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
                     </span>
                   ) : null}
                   {f.status === 'error' ? <span className="bks-f is-warn" style={{ marginLeft: 8 }}>{f.error}</span> : null}
+                  {/* Chart first, then what it did to this year. Both belong
+                      on the row and neither belongs in the facts line: the
+                      counts do not add up across years. The same 47 accounts
+                      recur in every chart, so a total of 267 would describe
+                      roughly 47 accounts counted six times. A per-year count
+                      is a fact; their sum is a number with no referent. */}
+                  {f.status === 'ready' && chartFormat ? (
+                    <span style={{ whiteSpace: 'nowrap' }}>
+                      <button
+                        type="button"
+                        className="imp-change"
+                        style={{ marginLeft: 8 }}
+                        title={f.chart?.name}
+                        onClick={() => { chartForFile.current = f.id; chartInputRef.current?.click() }}
+                      >
+                        {f.chart ? shortChartName(f.chart.name) : t('sie_chart_pick')}
+                      </button>
+                      {/* Both outcomes land after file.text() resolves, with
+                          nothing moving and no focus change, so without a live
+                          region a screen reader never learns the pick worked.
+                          The button stays outside it: a live region is for
+                          text that appears, not for a control that was already
+                          there. */}
+                      <span role="status" aria-live="polite">
+                        {f.chart ? (
+                          <span className="bks-f" style={{ marginLeft: 6, color: 'hsl(var(--muted-foreground))' }}>
+                            {t('sie_chart_count', { count: f.chart.treatments })}
+                          </span>
+                        ) : null}
+                        {/* A rejected pick sits beside the chart, never over
+                            it: the row keeps naming the file whose codes the
+                            import will actually use. */}
+                        {f.chartRejected ? (
+                          <span className="bks-f is-warn" style={{ marginLeft: 6 }}>
+                            {f.chartRejected.why && tn.has(f.chartRejected.why)
+                              ? tn(f.chartRejected.why, { formats: chartFormat.label, format: chartFormat.label, count: 0 })
+                              : t('sie_chart_unread')}
+                          </span>
+                        ) : null}
+                      </span>
+                    </span>
+                  ) : null}
                 </p>
               ))}
+              {/* Why, and where to get one. Once, in the small sub-line the
+                  surface already uses, and only while it is still an open
+                  question: a reader who has picked their charts does not need
+                  to be told what they are for. The menu path is the half that
+                  decides whether the invitation can be acted on at all, and
+                  the mapping step's own help carries the same sentence. */}
+              {chartFormat && ready.length > 0 && ready.every((f) => !f.chart) ? (
+                <p className="s" style={{ marginTop: 8 }}>
+                  {t('sie_chart_why')}<br />{t('sie_chart_where')}
+                </p>
+              ) : null}
               {facts.length ? <Facts facts={facts} /> : null}
             </div>
           )}
@@ -485,7 +675,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
               </>
             ) : null}
             {ready.length > 0 && !parsing ? (
-              <button type="button" className="jny-btn" onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</button>
+              <button type="button" className="jny-btn" disabled={readingChart} onClick={() => void runImport()}>{t('sie_import', { count: nYears })}</button>
             ) : null}
           </div>
         </>
