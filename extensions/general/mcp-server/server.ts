@@ -1478,23 +1478,25 @@ async function categorizeTransactionCore(
     }
   }
 
-  // Get entity type
+  // Get entity type and VAT registration
   const { data: settings } = await supabase
     .from('company_settings')
-    .select('entity_type, fiscal_year_start_month')
+    .select('entity_type, fiscal_year_start_month, vat_registered')
     .eq('company_id', companyId)
     .single()
 
   const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
 
-  // Build mapping
+  // Build mapping. A non-registered company books no moms line
+  // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
   let mappingResult = buildMappingResultFromCategory(
     category,
     transaction as Transaction,
     isBusiness,
     entityType,
     vatTreatment,
-    vatAmount
+    vatAmount,
+    settings?.vat_registered ?? null
   )
   const settlementAccount = await resolveSettlementAccount(
     supabase,

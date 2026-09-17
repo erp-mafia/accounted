@@ -242,6 +242,53 @@ describe('POST /api/transactions/[id]/categorize', () => {
     ).toHaveLength(2)
   })
 
+  // VAT registration: the route loads company_settings.vat_registered and
+  // hands it to the category mapping as loaded, so a non-registered company
+  // books no moms line (lib/bookkeeping/vat-registration.ts). Same queue as
+  // the business-expense case right below.
+  it.each([false, true])(
+    'hands company_settings.vat_registered = %s to the category mapping as loaded',
+    async (vatRegistered) => {
+      const tx = makeTransaction({
+        id: 'tx-1',
+        amount: -500,
+        merchant_name: 'Adobe',
+        journal_entry_id: null,
+      })
+
+      enqueue({ data: tx, error: null }) // fetch transaction
+      enqueue({
+        data: { entity_type: 'ideell_forening', fiscal_year_start_month: 1, vat_registered: vatRegistered },
+        error: null,
+      }) // settings
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no cash accounts -> 1930
+      enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+      mockSaveUserMappingRule.mockResolvedValue(undefined)
+
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<unknown>(response)
+
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(mockBuildMappingResultFromCategory).toHaveBeenCalledWith(
+        'expense_software',
+        expect.objectContaining({ id: 'tx-1' }),
+        true,
+        'ideell_forening',
+        undefined,
+        null,
+        vatRegistered,
+      )
+    },
+  )
+
   it('creates journal entry for business expense', async () => {
     const tx = makeTransaction({
       id: 'tx-1',

@@ -579,3 +579,96 @@ describe('category default → leaf account guarantee', () => {
     expect(getDefaultAccountForCategory('income_other', 'enskild_firma')).toBe('3999')
   })
 })
+
+// ============================================================
+// VAT registration: a non-registered company books no moms line
+// (lib/bookkeeping/vat-registration.ts, the bank-transaction half of the
+// supplier-invoice guard in app/api/supplier-invoices/route.ts)
+// ============================================================
+
+describe('VAT registration', () => {
+  const expense = makeTransaction({ amount: -1250, description: 'Adobe' })
+  const income = makeTransaction({ amount: 1250, description: 'Faktura 12' })
+
+  it('a registered company (true, null or undefined) books exactly as before', () => {
+    const baseline = buildMappingResultFromCategory('expense_software', expense, true, 'aktiebolag')
+    for (const flag of [true, null, undefined]) {
+      expect(
+        buildMappingResultFromCategory('expense_software', expense, true, 'aktiebolag', undefined, null, flag),
+      ).toEqual(baseline)
+    }
+    expect(baseline.debit_account).toBe('5420')
+    expect(baseline.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2641', debit_amount: 250 }),
+    ])
+
+    const incomeBaseline = buildMappingResultFromCategory('income_services', income, true, 'aktiebolag')
+    for (const flag of [true, null, undefined]) {
+      expect(
+        buildMappingResultFromCategory('income_services', income, true, 'aktiebolag', undefined, null, flag),
+      ).toEqual(incomeBaseline)
+    }
+    expect(incomeBaseline.credit_account).toBe('3001')
+    expect(incomeBaseline.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2611', credit_amount: 250 }),
+    ])
+  })
+
+  it('a non-registered company books an expense gross with no ingående moms', () => {
+    const result = buildMappingResultFromCategory(
+      'expense_software', expense, true, 'ideell_forening', undefined, null, false,
+    )
+    expect(result.debit_account).toBe('5420')
+    expect(result.credit_account).toBe('1930')
+    expect(result.vat_lines).toEqual([])
+    const mapping = getCategoryAccountMapping('expense_software', -1250, true, 'ideell_forening', undefined, false)
+    expect(mapping.vatTreatment).toBe('exempt')
+  })
+
+  it('a non-registered company books income as a momsfri supply: 3004 and no utgående moms', () => {
+    const result = buildMappingResultFromCategory(
+      'income_services', income, true, 'ideell_forening', undefined, null, false,
+    )
+    expect(result.credit_account).toBe('3004')
+    expect(result.vat_lines).toEqual([])
+    const mapping = getCategoryAccountMapping('income_services', 1250, true, 'ideell_forening', undefined, false)
+    expect(mapping.vatTreatment).toBe('exempt')
+    expect(mapping.vatCreditAccount).toBeNull()
+  })
+
+  it('applies to every legal form: an enskild firma or aktiebolag that is not registered books the same way', () => {
+    for (const form of ['enskild_firma', 'aktiebolag'] as const) {
+      const result = buildMappingResultFromCategory('expense_office', expense, true, form, undefined, null, false)
+      expect(result.vat_lines).toEqual([])
+      expect(result.debit_account).toBe('6110')
+    }
+  })
+
+  it('keeps reverse charge for a non-registered company: self-assessment is a separate obligation', () => {
+    const registered = buildMappingResultFromCategory(
+      'expense_professional_services', expense, true, 'aktiebolag', 'reverse_charge',
+    )
+    const notRegistered = buildMappingResultFromCategory(
+      'expense_professional_services', expense, true, 'aktiebolag', 'reverse_charge', null, false,
+    )
+    expect(notRegistered.vat_lines).toEqual(registered.vat_lines)
+    expect(notRegistered.vat_lines.some((l) => l.account_number === '2645')).toBe(true)
+    expect(notRegistered.vat_lines.some((l) => l.account_number === '2614')).toBe(true)
+  })
+
+  it('refuses a vat_amount override for a non-registered company instead of booking 2641', () => {
+    expect(() =>
+      buildMappingResultFromCategory('expense_software', expense, true, 'aktiebolag', 'standard_25', 100, false),
+    ).toThrow(/not VAT-registered/)
+  })
+
+  it('the category default resolves to exempt only for an explicit false', () => {
+    expect(getDefaultVatTreatmentForCategory('expense_software', false)).toBe('exempt')
+    expect(getDefaultVatTreatmentForCategory('expense_representation', false)).toBe('exempt')
+    expect(getDefaultVatTreatmentForCategory('expense_software', true)).toBe('standard_25')
+    expect(getDefaultVatTreatmentForCategory('expense_software', null)).toBe('standard_25')
+    expect(getDefaultVatTreatmentForCategory('expense_software')).toBe('standard_25')
+    expect(getDefaultVatTreatmentForCategory('expense_bank_fees', false)).toBeNull()
+    expect(getDefaultVatTreatmentForCategory('private', false)).toBeNull()
+  })
+})

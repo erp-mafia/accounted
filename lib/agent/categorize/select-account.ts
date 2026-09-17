@@ -5,6 +5,7 @@ import {
   getDefaultAccountForCategory,
   getDefaultVatTreatmentForCategory,
 } from '@/lib/bookkeeping/category-mapping'
+import { vatTreatmentForRegistration } from '@/lib/bookkeeping/vat-registration'
 import type { EntityType, TransactionCategory, VatTreatment } from '@/types'
 
 /**
@@ -339,6 +340,12 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
     account = getDefaultAccountForCategory(choice.category, input.entityType)
     vatTreatment = getDefaultVatTreatmentForCategory(choice.category)
   }
+
+  // A company that is not VAT-registered books no moms line, so the category
+  // default (and a candidate learned while it still booked 2641) resolves to
+  // exempt here, exactly as the booking seam does
+  // (lib/bookkeeping/vat-registration.ts). Undefined leaves it untouched.
+  vatTreatment = vatTreatmentForRegistration(vatTreatment, input.vatRegistered)
 
   // Reverse charge overrides VAT only for a VAT-registered company; it never
   // invents an account, only the treatment.

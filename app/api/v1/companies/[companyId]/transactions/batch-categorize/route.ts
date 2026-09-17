@@ -140,6 +140,8 @@ async function categorizeOne(
   companyId: string,
   userId: string,
   entityType: EntityType,
+  /** company_settings.vat_registered as loaded (lib/bookkeeping/vat-registration.ts). */
+  vatRegistered: boolean | null,
   index: number,
   transactionId: string,
   input: z.infer<typeof CategorizeTransactionSchema>,
@@ -198,7 +200,9 @@ async function categorizeOne(
   let mappingResult
   if (input.template_id) {
     const template = getTemplateById(input.template_id)!
-    mappingResult = buildMappingResultFromTemplate(template, transaction as Transaction, entityType)
+    mappingResult = buildMappingResultFromTemplate(
+      template, transaction as Transaction, entityType, vatRegistered,
+    )
   } else {
     mappingResult = buildMappingResultFromCategory(
       finalCategory,
@@ -206,6 +210,8 @@ async function categorizeOne(
       is_business,
       entityType,
       input.vat_treatment,
+      null,
+      vatRegistered,
     )
   }
   try {
@@ -541,10 +547,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, vat_registered')
       .eq('company_id', ctx.companyId!)
       .single()
     const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
+    const vatRegistered: boolean | null = settings?.vat_registered ?? null
 
     const results: Item[] = []
     for (let i = 0; i < body.items.length; i++) {
@@ -554,6 +561,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         ctx.companyId!,
         ctx.userId,
         entityType,
+        vatRegistered,
         i,
         item.transaction_id,
         item.categorization,

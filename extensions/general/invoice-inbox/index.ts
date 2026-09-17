@@ -3353,7 +3353,7 @@ export const invoiceInboxExtension: Extension = {
         try {
           const { data: settings } = await ctx.supabase
             .from('company_settings')
-            .select('entity_type')
+            .select('entity_type, vat_registered')
             .eq('company_id', ctx.companyId)
             .maybeSingle()
           // Resolved, never defaulted: a guessed form proposes the wrong
@@ -3375,12 +3375,15 @@ export const invoiceInboxExtension: Extension = {
           // evaluateMappingRules applies the settlement account itself on every
           // return path. Applying it again rewrote a legitimate 1930 leg, which
           // on an own-account transfer collapsed both sides onto one account.
+          // A non-registered company is proposed no moms line either
+          // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
           const mapping = await evaluateMappingRules(
             ctx.supabase,
             ctx.companyId,
             tx as Transaction,
             entityType,
             settlementAccount,
+            settings?.vat_registered ?? null,
           )
 
           // getDefaultResult is the engine's way of saying it has nothing: a

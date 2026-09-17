@@ -172,10 +172,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     const { data: settings } = await ctx.supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, vat_registered')
       .eq('company_id', ctx.companyId!)
       .single()
     const entityType: EntityType = await resolveCompanyEntityType(ctx.supabase, ctx.companyId!, settings?.entity_type)
+    // Icke momsregistrerad verksamhet books no moms line on a bank
+    // transaction (lib/bookkeeping/vat-registration.ts); passed as loaded.
+    const vatRegistered: boolean | null = settings?.vat_registered ?? null
 
     // Resolve final category and mapping result. Mirrors the internal route.
     let finalCategory: TransactionCategory
@@ -223,6 +226,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         match,
         transaction as Transaction,
         entityType,
+        vatRegistered,
       )
     } else if (body.template_id) {
       const template = getTemplateById(body.template_id)!
@@ -230,6 +234,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         template,
         transaction as Transaction,
         entityType,
+        vatRegistered,
       )
     } else {
       mappingResult = buildMappingResultFromCategory(
@@ -238,6 +243,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         is_business,
         entityType,
         body.vat_treatment,
+        null,
+        vatRegistered,
       )
     }
 

@@ -377,13 +377,16 @@ export async function categorizeMatchedTransaction(
   const isBusiness = category !== 'private'
 
   const { data: settings } = await supabase
-    .from('company_settings').select('entity_type, fiscal_year_start_month').eq('company_id', companyId).single()
+    .from('company_settings').select('entity_type, fiscal_year_start_month, vat_registered').eq('company_id', companyId).single()
 
   const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
   const fiscalYearStartMonth = settings?.fiscal_year_start_month ?? 1
 
+  // A non-registered company books no moms line
+  // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
   let mappingResult = buildMappingResultFromCategory(
-    category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount
+    category, transaction as Transaction, isBusiness, entityType, vatTreatment, vatAmount,
+    settings?.vat_registered ?? null,
   )
   const settlementAccount = await resolveSettlementAccount(
     supabase,

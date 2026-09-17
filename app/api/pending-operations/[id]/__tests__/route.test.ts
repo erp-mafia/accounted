@@ -354,7 +354,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     // 6th arg = vat_amount override, carried over from the staged params
     // (vat_treatment persists too, only the category changed)
     expect(mappingMock).toHaveBeenCalledWith(
-      'expense_office', expect.anything(), true, 'enskild_firma', 'reduced_12', 42.43,
+      'expense_office', expect.anything(), true, 'enskild_firma', 'reduced_12', 42.43, null,
     )
   })
 
@@ -396,7 +396,7 @@ describe('PATCH /api/pending-operations/[id]', () => {
     )
     expect(res.status).toBe(200)
     expect(mappingMock).toHaveBeenCalledWith(
-      'expense_bank_fees', expect.anything(), true, 'enskild_firma', undefined, null,
+      'expense_bank_fees', expect.anything(), true, 'enskild_firma', undefined, null, null,
     )
   })
 
