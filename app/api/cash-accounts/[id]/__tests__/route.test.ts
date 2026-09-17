@@ -227,6 +227,24 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       expect(response.status).toBe(200)
     })
 
+    // Regression (Superagent P2): a fixed row cap on the candidate query could
+    // return a page where every row happens to be junction-anchored while a
+    // genuinely open row sits past the cap, waving the disable through. 60
+    // candidates, 59 junction-linked and 1 genuinely open, must still block.
+    it('finds an open transaction beyond the old 50-row cap', async () => {
+      const candidates = Array.from({ length: 60 }, (_, i) => ({ id: `tx-${i}` }))
+      const linked = candidates.slice(0, 59).map((c) => ({ transaction_id: c.id })) // tx-59 stays open
+
+      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: candidates })
+      enqueue({ data: linked })
+
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('CASH_ACCOUNT_DISABLE_UNRESOLVED')
+    })
+
     it('disables a manual, non-primary account with no open transactions', async () => {
       enqueue({ data: { id: CA_1, is_primary: false } })
       enqueue({ data: [] }) // no unbooked candidates

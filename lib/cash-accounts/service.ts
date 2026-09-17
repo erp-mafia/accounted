@@ -1636,33 +1636,47 @@ export async function setEnabled(
  * verifikat (transaction_voucher_links, #1553) or booked through a multi
  * allocation carries the same NULL but is not open work, so junction-anchored
  * rows are subtracted the same way lib/transactions/is-booked.ts does.
+ *
+ * No row cap: an arbitrary `.limit()` here could return a page that happens
+ * to be all junction-anchored while a genuinely open row sits past it,
+ * letting the guard wave through an account that still has unbokförda
+ * affärshändelser (BFL 5 kap). fetchAllRows pages past PostgREST's 1000-row
+ * cap instead.
  */
 export async function hasOpenTransactions(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
-    .from('transactions')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('cash_account_id', cashAccountId)
-    .is('journal_entry_id', null)
-    .eq('is_ignored', false)
-    .limit(50)
-  if (error) throw new Error(`cash_accounts hasOpenTransactions failed: ${error.message}`)
-  const candidateIds = (data ?? []).map((row) => (row as { id: string }).id)
+  const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('transactions')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('cash_account_id', cashAccountId)
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  const candidateIds = candidates.map((row) => row.id)
   if (candidateIds.length === 0) return false
   // lib/reconciliation/bank-reconciliation.ts already imports this module, so
   // its fetchJunctionLinkedTxIds() can't be imported back here without a
-  // cycle; the same two-column lookup, inlined.
-  const { data: linkRows, error: linkError } = await supabase
-    .from('transaction_voucher_links')
-    .select('transaction_id')
-    .eq('company_id', companyId)
-    .in('transaction_id', candidateIds)
-  if (linkError) throw new Error(`cash_accounts hasOpenTransactions junction lookup failed: ${linkError.message}`)
-  const junctionLinked = new Set((linkRows ?? []).map((row) => (row as { transaction_id: string }).transaction_id))
+  // cycle; the same two-column lookup, inlined, chunked at the same size the
+  // rebind helpers above use to stay under PostgREST's URL length limit.
+  const junctionLinked = new Set<string>()
+  for (const idChunk of chunkIds(candidateIds, REBIND_ID_CHUNK_SIZE)) {
+    const { data: linkRows, error: linkError } = await supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id')
+      .eq('company_id', companyId)
+      .in('transaction_id', idChunk)
+    if (linkError) throw new Error(`cash_accounts hasOpenTransactions junction lookup failed: ${linkError.message}`)
+    for (const row of (linkRows ?? []) as { transaction_id: string }[]) {
+      junctionLinked.add(row.transaction_id)
+    }
+  }
   return candidateIds.some((id) => !junctionLinked.has(id))
 }
 
