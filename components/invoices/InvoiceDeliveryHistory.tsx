@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useBranding } from '@/lib/branding/brand-context'
+import { isDestructiveDeliveryStatus } from '@/lib/invoices/delivery-recipient-statuses'
 import type { InvoiceDelivery, InvoiceDeliveryProviderStatus } from '@/types'
 
 export type InvoiceDeliveryView = Pick<
@@ -116,6 +117,14 @@ export function InvoiceDeliveryHistory({
                 outcome: recipientStatuses[`cc:${index + 1}`],
               })),
             ]
+            // A destructive outcome that no listed recipient carries came for
+            // an address outside the send (a forward target, typically). Say
+            // so, or the row reads "bounced" over two delivered recipients.
+            const outcomeNamesNoRecipient =
+              isEmailSend
+              && hasRecipientStatuses
+              && isDestructiveDeliveryStatus(outcome)
+              && !recipientRows.some((recipient) => recipient.outcome?.status === outcome)
 
             return (
               <details key={delivery.id} className="group">
@@ -216,6 +225,11 @@ export function InvoiceDeliveryHistory({
                                 </li>
                               ))}
                             </ul>
+                            {outcomeNamesNoRecipient && (
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {t('delivery_status_unmatched_recipient_note')}
+                              </p>
+                            )}
                           </dd>
                         </>
                       )}

@@ -4610,7 +4610,8 @@
     "delivery_provider_reason_label": "Besked från mottagaren",
     "delivery_recipient_statuses_label": "Status per mottagare",
     "delivery_recipient_statuses_summary": "Den övergripande statusen visar det allvarligaste beskedet. Resultatet för varje mottagare visas nedan.",
-    "delivery_recipient_status_unknown": "Inget leveransbesked ännu"
+    "delivery_recipient_status_unknown": "Inget leveransbesked ännu",
+    "delivery_status_unmatched_recipient_note": "Studsen pekar inte på någon av mottagarna ovan. Vanlig orsak är vidarebefordran eller ett filter hos mottagaren som avvisade mailet efter att servern tagit emot det."
   },
   "invoice_credit": {
     "back": "Tillbaka",

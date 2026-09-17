@@ -14,7 +14,13 @@ import {
   isDeliveryWebhookConfigured,
   toDeliveryReport,
   verifyDeliveryWebhook,
+  type ProviderDeliveryReport,
 } from './lib/delivery-webhook'
+import {
+  annotateUnmatchedReportDetail,
+  isDestructiveDeliveryStatus,
+  unmatchedReportRecipients,
+} from '@/lib/invoices/delivery-recipient-statuses'
 import {
   applySendingDomainStatusFromWebhook,
   checkSendingDomainVerification,
@@ -44,6 +50,53 @@ const PatchSendingDomainSchema = z
     enabled: z.boolean().optional(),
   })
   .strict()
+
+/**
+ * A bounce can name an address outside the send: a forward target the
+ * customer never told us about, or no address at all. The RPC then records
+ * the delivery-level outcome but flips no recipient, and the row reads
+ * "bounced" over a list of delivered recipients. Read the send's addresses
+ * once and say who the report was for, domain only. A failed read keeps the
+ * plain detail: this is a diagnostic, never a reason to make the provider
+ * retry.
+ */
+async function detailWithUnmatchedRecipients(
+  service: SupabaseClient,
+  report: ProviderDeliveryReport,
+): Promise<string | null> {
+  if (!isDestructiveDeliveryStatus(report.status)) return report.detail
+
+  const { data, error } = await service
+    .from('invoice_deliveries')
+    .select('to_addresses, cc_addresses, bcc_addresses')
+    .eq('provider', 'resend')
+    .eq('provider_message_id', report.providerMessageId)
+    .maybeSingle()
+
+  if (error) {
+    log.warn('could not read delivery recipients for a provider report', {
+      status: report.status,
+      error: error.message,
+    })
+    return report.detail
+  }
+  if (!data) return report.detail
+
+  const row = data as {
+    to_addresses: string[] | null
+    cc_addresses: string[] | null
+    bcc_addresses: string[] | null
+  }
+  const unmatched = unmatchedReportRecipients(
+    {
+      to_addresses: row.to_addresses ?? [],
+      cc_addresses: row.cc_addresses ?? [],
+      bcc_addresses: row.bcc_addresses ?? [],
+    },
+    report.recipients,
+  )
+  return annotateUnmatchedReportDetail(report.status, report.detail, report.recipients, unmatched)
+}
 
 async function isCompanyAdmin(
   supabase: SupabaseClient,
@@ -253,14 +306,17 @@ export const emailExtension: Extension = {
           return NextResponse.json({ data: { applied: false, reason: 'ignored_event' } })
         }
 
-        const { data, error } = await createServiceClientNoCookies().rpc(
+        const service = createServiceClientNoCookies()
+        const detail = await detailWithUnmatchedRecipients(service, report)
+
+        const { data, error } = await service.rpc(
           'apply_invoice_delivery_provider_event',
           {
             p_provider: 'resend',
             p_provider_message_id: report.providerMessageId,
             p_status: report.status,
             p_occurred_at: report.occurredAt,
-            p_detail: report.detail,
+            p_detail: detail,
             p_recipient_addresses: report.recipients,
           },
         )
