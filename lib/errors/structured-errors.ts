@@ -2519,6 +2519,16 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ogiltiga listparametrar: limit måste vara 1-100, offset ett icke-negativt heltal och status ett giltigt importstatus.',
     message_en: 'Invalid list parameters: limit must be 1-100, offset a nonnegative integer, and status a valid import status.',
   },
+  BANK_FILE_INVALID_SETTLEMENT_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot måste vara ett konto i kontoklass 19 (till exempel 1930).',
+    message_en: 'The bank account must be a class 19 ledger account (for example 1930).',
+  },
+  BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Det valda bankkontot kan inte användas för den här filen. Inget importerades.',
+    message_en: 'The selected bank account cannot be used for this file. Nothing was imported.',
+  },
 }
 
 /**

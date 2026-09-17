@@ -459,8 +459,9 @@ export async function ingestTransactions(
   // single account the user picked. cash_accounts.ledger_account is unique per
   // company, so this is a single-row lookup. Tolerate a miss: the row stays
   // unbound (cash_account_id NULL) and reconciliation falls back to currency.
-  // We never auto-create a cash account here; that would race upsertFromPsd2's
-  // seed-promotion logic in lib/cash-accounts/service.ts.
+  // Nothing is auto-created here: a caller that lets the user pick a ledger
+  // (the bank-file execute route) runs ensureManualCashAccount first, so the
+  // lookup below finds the row.
   let cashAccountId: string | null = null
   if (options?.settlementAccount) {
     const { data: ca } = await supabase

@@ -8,6 +8,7 @@ import { getFormat } from '@/lib/import/bank-file/formats'
 import { CreateCashAccountSchema } from '@/lib/api/schemas'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
+import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
@@ -82,6 +83,34 @@ export const POST = withRouteContext(
     }
 
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
+
+    // The wizard offers any active 19xx chart account, but a row only binds to
+    // a cash_accounts row (ingestTransactions looks the ledger up and tolerates
+    // a miss). Without this step a picked ledger with no cash account was
+    // silently dropped: every row stayed unbound and the booking dialog fell
+    // back to 1930. Find or create the manual row first, before any import
+    // record exists, so a refused account leaves nothing behind.
+    if (settlement_account !== undefined) {
+      if (typeof settlement_account !== 'string' || !/^19\d{2}$/.test(settlement_account)) {
+        return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, { requestId })
+      }
+      const batchCurrency = transactions[0].currency || 'SEK'
+      try {
+        await ensureManualCashAccount(supabase, companyId, settlement_account, batchCurrency)
+      } catch (err) {
+        opLog.error('settlement cash account unavailable', err as Error, {
+          settlementAccount: settlement_account,
+          currency: batchCurrency,
+        })
+        return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE', opLog, {
+          requestId,
+          details: {
+            account: settlement_account,
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
+          },
+        })
+      }
+    }
 
     try {
       const { data: importRecord, error: importError } = await supabase

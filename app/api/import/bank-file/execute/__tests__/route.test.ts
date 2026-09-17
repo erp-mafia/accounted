@@ -34,6 +34,11 @@ vi.mock('@/lib/transactions/ingest', () => ({
   ingestTransactions: (...args: unknown[]) => ingestMock(...args),
 }))
 
+const ensureCashAccountMock = vi.fn()
+vi.mock('@/lib/cash-accounts/service', () => ({
+  ensureManualCashAccount: (...args: unknown[]) => ensureCashAccountMock(...args),
+}))
+
 const sweepMock = vi.fn()
 vi.mock('@/lib/reconciliation/unattended-sweep', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/reconciliation/unattended-sweep')>()
@@ -95,6 +100,7 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
     ingestMock.mockResolvedValue(emptyIngestResult())
     sweepMock.mockResolvedValue(emptySweepResult())
+    ensureCashAccountMock.mockResolvedValue('ca-1')
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -258,5 +264,114 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
     expect(ingestOptions.rawInsertOnly).toBe(true)
     expect(sweepMock).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * The wizard offers any active 19xx chart account. A picked ledger with no
+ * cash_accounts row used to be dropped silently by ingest (cash_account_id
+ * NULL on every row, booking dialog defaulting to 1930). The route now finds
+ * or creates the manual cash account before anything is written.
+ */
+describe('POST /api/import/bank-file/execute (settlement account)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+    getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'owner', companyId: 'company-1' })
+    ingestMock.mockResolvedValue(emptyIngestResult())
+    sweepMock.mockResolvedValue(emptySweepResult())
+    ensureCashAccountMock.mockResolvedValue('ca-1')
+  })
+
+  it('finds or creates the cash account for the picked ledger and hands it to ingest', async () => {
+    enqueue({ data: { id: 'import-1' } }) // upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1940' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(ensureCashAccountMock).toHaveBeenCalledWith(supabase, 'company-1', '1940', 'SEK')
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBe('1940')
+  })
+
+  it('uses the file currency for a new cash account', async () => {
+    enqueue({ data: { id: 'import-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 't-1' }] })
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({
+        settlement_account: '1932',
+        transactions: [{ date: '2025-03-10', description: 'Rent', amount: -1200, currency: 'EUR' }],
+      }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(ensureCashAccountMock).toHaveBeenCalledWith(supabase, 'company-1', '1932', 'EUR')
+  })
+
+  it('touches no cash account when the request names none', async () => {
+    enqueue({ data: { id: 'import-1' } })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: [{ id: 't-1' }] })
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody(),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(ensureCashAccountMock).not.toHaveBeenCalled()
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBeUndefined()
+  })
+
+  it('returns 400 for a settlement account outside class 19, before any write', async () => {
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '2440' }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT')
+    expect(ensureCashAccountMock).not.toHaveBeenCalled()
+    expect(ingestMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 409 and writes nothing when the cash account cannot be used', async () => {
+    ensureCashAccountMock.mockRejectedValue(
+      new Error('Cash account 1940 is denominated in EUR, not SEK'),
+    )
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1940' }),
+    })
+    const response = await POST(request, emptyParams)
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details: { account: string } }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE')
+    expect(body.error.details.account).toBe('1940')
+    // No bank_file_imports record and no ingest: the refusal leaves nothing behind.
+    expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
+    expect(ingestMock).not.toHaveBeenCalled()
   })
 })
