@@ -100,19 +100,20 @@ import {
   buildSelfBilledPayload,
   hasDimensionValues,
 } from '@/lib/invoices/editor-payload'
-import type {
-  Article,
-  CashAccount,
-  CreateCustomerInput,
-  Currency,
-  Customer,
-  Invoice,
-  InvoiceDocumentType,
-  InvoiceItem,
-  InvoicePayeeDefault,
+import {
+  CURRENCIES,
+  type Article,
+  type CashAccount,
+  type CreateCustomerInput,
+  type Currency,
+  type Customer,
+  type Invoice,
+  type InvoiceDocumentType,
+  type InvoiceItem,
+  type InvoicePayeeDefault,
 } from '@/types'
 
-const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const currencies: readonly Currency[] = CURRENCIES
 
 // A draft invoice + its line items, as fetched for the edit flow.
 export type InvoiceForEdit = Invoice & { items: InvoiceItem[] }
@@ -419,7 +420,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       // superRefine below so the error lands under the visible field.
       valid_until: z.string().optional(),
       delivery_date: z.string().optional(),
-      currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+      currency: z.enum(CURRENCIES),
       // Bank account the customer pays to; '' = the company default per currency.
       payment_cash_account_id: z.string().optional(),
       document_type: z.enum(['invoice', 'proforma', 'delivery_note', 'quote']),

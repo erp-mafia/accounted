@@ -29,7 +29,7 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Trash2, Type } from 'lucide-react'
-import type { Customer, Currency, RecurringInvoiceSchedule } from '@/types'
+import { CURRENCIES, type Customer, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
@@ -49,7 +49,7 @@ import {
 import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
 import UnitDatalist from '@/components/invoices/UnitDatalist'
 
-const currencies: Currency[] = ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const currencies: readonly Currency[] = CURRENCIES
 
 /**
  * Today as yyyy-mm-dd in Europe/Stockholm: the calendar the server validates
@@ -176,7 +176,7 @@ function NewRecurringScheduleForm({
         run_date: z.string().regex(ISO_DATE_RE, t('validation_run_date_required')),
         send_hour: z.number().int().min(0).max(23),
         payment_terms_days: z.number().int().min(0).max(90),
-        currency: z.enum(['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']),
+        currency: z.enum(CURRENCIES),
         auto_send: z.boolean(),
         your_reference: z.string().optional(),
         our_reference: z.string().optional(),

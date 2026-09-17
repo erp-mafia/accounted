@@ -50,17 +50,10 @@ import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
-import type { CreateJournalEntryLineInput, FiscalPeriod, JournalEntrySourceType, Currency, BookingTemplateLibrary, BookingTemplateCategory } from '@/types'
+import { CURRENCIES, type CreateJournalEntryLineInput, type FiscalPeriod, type JournalEntrySourceType, type Currency, type BookingTemplateLibrary, type BookingTemplateCategory } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
-const CURRENCIES: { value: Currency; label: string }[] = [
-  { value: 'SEK', label: 'SEK' },
-  { value: 'EUR', label: 'EUR' },
-  { value: 'USD', label: 'USD' },
-  { value: 'GBP', label: 'GBP' },
-  { value: 'NOK', label: 'NOK' },
-  { value: 'DKK', label: 'DKK' },
-]
+const CURRENCY_OPTIONS: { value: Currency; label: string }[] = CURRENCIES.map((c) => ({ value: c, label: c }))
 
 export interface FormLine {
   account_number: string
@@ -1504,7 +1497,7 @@ export default function JournalEntryForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CURRENCIES.map((c) => (
+                {CURRENCY_OPTIONS.map((c) => (
                   <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
                 ))}
               </SelectContent>

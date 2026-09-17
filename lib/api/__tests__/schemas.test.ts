@@ -175,7 +175,7 @@ describe('Enum schemas', () => {
   })
 
   it('CurrencySchema accepts supported currencies', () => {
-    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK']) {
+    for (const c of ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK', 'CHF']) {
       expect(CurrencySchema.safeParse(c).success).toBe(true)
     }
     expect(CurrencySchema.safeParse('JPY').success).toBe(false)

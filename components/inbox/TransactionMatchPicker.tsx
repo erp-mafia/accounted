@@ -25,7 +25,7 @@ import {
 } from '@/lib/documents/core-receipt-matcher'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
-import type { InvoiceExtractionResult } from '@/types'
+import { FOREIGN_CURRENCIES, type InvoiceExtractionResult } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 // TransactionMatchPicker
@@ -83,7 +83,7 @@ interface Props {
 // Currencies the /api/currency/rate endpoint (Riksbanken) can resolve. Used
 // to normalise a foreign-currency underlag total into SEK so it can be
 // compared against SEK bank charges.
-const SUPPORTED_FX = ['EUR', 'USD', 'GBP', 'NOK', 'DKK']
+const SUPPORTED_FX: readonly string[] = FOREIGN_CURRENCIES
 
 // Date tolerance used only for *ranking* candidates (not for filtering, there
 // is no longer a date window). Far wider than the receipt matcher's tight ±3d

@@ -117,7 +117,7 @@ describe('PATCH /api/sales-orders/[id]', () => {
   })
 
   it('returns 400 for an unsupported currency', async () => {
-    const { status } = await parseJsonResponse(await patch({ currency: 'CHF' }))
+    const { status } = await parseJsonResponse(await patch({ currency: 'JPY' }))
     expect(status).toBe(400)
   })
 

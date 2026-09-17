@@ -362,6 +362,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 // ensureInitialized() is called by the extension router (ext/[...path]/route.ts)
 // which dispatches to this handler: no duplicate call needed here.
+import { CURRENCIES } from '@/types'
 import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, VatPeriodType, VatDeclarationRutor, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 
 // ── Actor context ────────────────────────────────────────────
@@ -7209,7 +7210,7 @@ export const tools: McpTool[] = [
         },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         due_date: { type: 'string', description: 'YYYY-MM-DD (default from payment terms)' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference; feeds Peppol BuyerReference.' },
@@ -7627,7 +7628,7 @@ export const tools: McpTool[] = [
         },
         order_date: { type: 'string', description: 'YYYY-MM-DD (default today)' },
         requested_delivery_date: { type: 'string', description: 'YYYY-MM-DD' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         our_reference: { type: 'string' },
         your_reference: { type: 'string' },
         notes: { type: 'string' },
@@ -21970,7 +21971,7 @@ export const tools: McpTool[] = [
           description: 'Whole hour (0-23) in Europe/Stockholm time at which the schedule runs. Default 8.',
         },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90, description: 'due_date = invoice_date + terms. Default 30.' },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'], description: 'Default SEK.' },
+        currency: { type: 'string', enum: [...CURRENCIES], description: 'Default SEK.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
         notes: { type: 'string', description: 'Printed on every generated invoice. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },
@@ -22179,7 +22180,7 @@ export const tools: McpTool[] = [
         },
         send_hour: { type: 'integer', minimum: 0, maximum: 23, description: 'Whole hour (0-23) in Europe/Stockholm time.' },
         payment_terms_days: { type: 'integer', minimum: 0, maximum: 90 },
-        currency: { type: 'string', enum: ['SEK', 'EUR', 'USD', 'GBP', 'NOK', 'DKK'] },
+        currency: { type: 'string', enum: [...CURRENCIES] },
         your_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
         our_reference: { type: ['string', 'null'], description: 'Null clears the field.' },
         notes: { type: ['string', 'null'], description: 'Null clears the field. Placeholders in notes and line descriptions are substituted when each invoice is created: {månad} {nästa månad} {föregående månad} {år} (month names in the customer language) and, when period_start is set, {periodstart} {periodslut} (last day of the period) {nästa periodstart}.' },
