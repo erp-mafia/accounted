@@ -3468,6 +3468,11 @@ export type AuditAction =
   // guard, what it would have flagged and the voucher it was overridden for
   // live in new_state (migration 20260914150102).
   | 'GUARD_BYPASSED'
+  // A link between a payable and an existing verifikat that someone undid
+  // (unlink_supplier_invoice_from_voucher, migration 20260916150000). The
+  // removed payment row and the restored payable live in old_state/new_state;
+  // the row is the only surviving record, because the payment row is deleted.
+  | 'SUBLEDGER_LINK_REMOVED'
 
 export interface AuditLogEntry {
   id: string

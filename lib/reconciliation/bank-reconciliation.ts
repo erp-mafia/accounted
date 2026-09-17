@@ -1732,13 +1732,60 @@ export async function autoReconcileTransactionForLinkedVoucher(
 
   // 1. If a bank transaction already points at this voucher, the bank side is
   //    settled: don't attach another one behind the user's back.
+  //
+  //    Reconciling is not the same as tagging, though. When the one row already
+  //    on this voucher carries no invoice pointer, the tag below is still owed:
+  //    that is the state an undone link leaves behind
+  //    (unlink_supplier_invoice_from_voucher clears supplier_invoice_id and
+  //    deliberately keeps journal_entry_id, because the bank line genuinely paid
+  //    the voucher). Without this, correcting a wrong link left the bank row
+  //    permanently untied to ANY payable: worse traceability after the
+  //    correction than before it.
+  //
+  //    Conservative in both directions: only when exactly one row is on the
+  //    voucher (two is the ambiguous N:1 case this function never resolves on
+  //    its own), and only into an empty column, so a voucher settling two
+  //    payables never has its existing tag silently overwritten by the second.
   const { data: alreadyLinked } = await supabase
     .from('transactions')
-    .select('id')
+    .select('id, invoice_id, supplier_invoice_id')
     .eq('company_id', companyId)
     .eq('journal_entry_id', journalEntryId)
-    .limit(1)
-  if (alreadyLinked && alreadyLinked.length > 0) return null
+    .limit(2)
+  if (alreadyLinked && alreadyLinked.length > 0) {
+    if (alreadyLinked.length > 1) return null
+    const existing = alreadyLinked[0] as {
+      id: string
+      invoice_id: string | null
+      supplier_invoice_id: string | null
+    }
+    const retag: Record<string, unknown> = {}
+    if (options.invoiceId && !existing.invoice_id) {
+      retag.invoice_id = options.invoiceId
+      retag.potential_invoice_id = null
+    }
+    if (options.supplierInvoiceId && !existing.supplier_invoice_id) {
+      retag.supplier_invoice_id = options.supplierInvoiceId
+      retag.potential_supplier_invoice_id = null
+    }
+    if (Object.keys(retag).length === 0) return null
+
+    // Compare-and-set on the very fields being claimed. The link RPCs lock the
+    // invoice row, not this transaction, so two links can read the same null
+    // pointer and both write, the later silently winning while both report
+    // success. Re-asserting NULL in the predicate makes the loser write nothing,
+    // and requiring a returned row makes it say so instead of claiming the tag.
+    let retagQuery = supabase
+      .from('transactions')
+      .update(retag)
+      .eq('id', existing.id)
+      .eq('company_id', companyId)
+    if ('invoice_id' in retag) retagQuery = retagQuery.is('invoice_id', null)
+    if ('supplier_invoice_id' in retag) retagQuery = retagQuery.is('supplier_invoice_id', null)
+    const { data: retagged, error: retagError } = await retagQuery.select('id')
+    if (retagError || !retagged || retagged.length === 0) return null
+    return { linkedTransactionId: existing.id }
+  }
 
   // 2. Load the voucher (must be posted) and its lines.
   const { data: entry } = await supabase

@@ -348,6 +348,77 @@ describe('auditRowToEvent: bypassed guards (issue #2366)', () => {
   })
 })
 
+describe('auditRowToEvent: an undone voucher link (#2673)', () => {
+  // The row is written by unlink_supplier_invoice_from_voucher
+  // (migration 20260916150000). Its jsonb keys are the contract between that
+  // PL/pgSQL and the reader below; the pg test for the RPC feeds a REAL row
+  // through auditRowToEvent so a rename on either side fails there.
+  const unlinkRow = (overrides: Record<string, unknown> = {}) =>
+    auditRow({
+      action: 'SUBLEDGER_LINK_REMOVED',
+      table_name: 'supplier_invoice_payments',
+      record_id: 'payment-1',
+      old_state: {
+        supplier_invoice_id: 'si-1',
+        journal_entry_id: 'entry-1',
+        transaction_id: null,
+        payment_date: '2026-05-12',
+        amount: 859,
+        currency: 'SEK',
+        status: 'paid',
+        paid_amount: 859,
+        remaining_amount: 0,
+      },
+      new_state: {
+        invoice_status: 'approved',
+        paid_amount: 0,
+        remaining_amount: 3500,
+      },
+      ...overrides,
+    })
+
+  const ctxWithEntries = (entries: Array<Record<string, unknown>>) => ({
+    rattelseMetadataAt: new Map<string, number[]>(),
+    entryById: new Map(entries.map((e) => [e.id as string, { ...baseEntry, ...e }])),
+  })
+
+  it('names the removed payment, the restored payable and that nothing was booked', () => {
+    const ev = auditRowToEvent(
+      unlinkRow(),
+      ctxWithEntries([{ id: 'entry-1', voucher_series: 'B', voucher_number: 4 }]),
+    )!
+    expect(ev).toMatchObject({
+      category: 'ovrigt',
+      code: 'supplier_invoice.voucher_link_removed',
+      event: 'Koppling mellan leverantörsfaktura och verifikat borttagen',
+      // Hung on the verifikat that stayed posted, so the reader can see which
+      // one the reskontra stopped claiming.
+      object: 'B4',
+    })
+    expect(ev.details).toEqual([
+      'Borttagen betalningspost: 859,00 SEK, 2026-05-12',
+      'Fakturan återställd till approved, kvar att betala 3\u00a0500,00',
+      'Ingen bokföring ändrades: verifikatet är kvar bokfört.',
+    ])
+  })
+
+  it('renders without the verifikat when it is outside the reported year', () => {
+    const ev = auditRowToEvent(unlinkRow(), ctxWithEntries([]))!
+    expect(ev.object).toBeNull()
+    expect(ev.details[0]).toContain('859,00 SEK')
+  })
+
+  it('still states that no bookkeeping changed when the states are missing', () => {
+    // The statutory point of the line survives a row this version cannot read
+    // in full: something was unlinked, and the ledger did not move.
+    const ev = auditRowToEvent(
+      unlinkRow({ old_state: null, new_state: null }),
+      ctxWithEntries([]),
+    )!
+    expect(ev.details).toEqual(['Ingen bokföring ändrades: verifikatet är kvar bokfört.'])
+  })
+})
+
 describe('auditRowToEvent: system changes', () => {
   it('kontoplan: INSERT / UPDATE diff / DELETE, and no-op UPDATE is dropped', () => {
     const ins = auditRowToEvent(

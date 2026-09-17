@@ -242,6 +242,12 @@ export const GLOBAL_ACTIONS = [
   // by action, not by table, because the tables such guards sit in front of
   // (supplier_invoices today) are registers that are otherwise out of scope.
   'GUARD_BYPASSED',
+  // A link between a payable and an existing verifikat that someone undid
+  // (unlink_supplier_invoice_from_voucher, migration 20260916150000). Selected
+  // by action for the same reason as GUARD_BYPASSED: supplier_invoice_payments
+  // is a register, and only this one row type in it is in scope. The row is the
+  // sole surviving record, because the payment row is hard-deleted.
+  'SUBLEDGER_LINK_REMOVED',
 ] as const
 
 /**
@@ -250,7 +256,7 @@ export const GLOBAL_ACTIONS = [
  * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
  */
 export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
+  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)'
 
 const SOURCE_TYPE_LABELS: Record<string, string> = {
   manual: 'Manuell',
@@ -1213,6 +1219,49 @@ function guardBypassedEvent(
   })
 }
 
+/**
+ * A link between a payable and an existing verifikat that someone undid
+ * (audit_log SUBLEDGER_LINK_REMOVED, migration 20260916150000). Nothing in the
+ * ledger changed, which is precisely why it needs saying: the reskontra moved
+ * and the verifikat did not.
+ */
+function subledgerLinkRemovedEvent(
+  row: AuditLogEntry,
+  ctx: NormaliseContext,
+): RawBehandlingshistorikEvent | null {
+  const before = (row.old_state ?? {}) as Record<string, unknown>
+  const after = (row.new_state ?? {}) as Record<string, unknown>
+
+  const entryId = str(before.journal_entry_id)
+  const entry = entryId ? ctx.entryById.get(entryId) : undefined
+  const details: string[] = []
+
+  const amount = num(before.amount)
+  if (amount !== null) {
+    details.push(
+      `Borttagen betalningspost: ${fmtAmount(amount)} ${str(before.currency) ?? 'SEK'}` +
+        `, ${str(before.payment_date) ?? '(okänt datum)'}`,
+    )
+  }
+  const newStatus = str(after.invoice_status)
+  const newRemaining = num(after.remaining_amount)
+  if (newStatus) {
+    details.push(
+      `Fakturan återställd till ${newStatus}` +
+        (newRemaining !== null ? `, kvar att betala ${fmtAmount(newRemaining)}` : ''),
+    )
+  }
+  details.push('Ingen bokföring ändrades: verifikatet är kvar bokfört.')
+
+  return auditEvent(row, {
+    category: 'ovrigt',
+    code: 'supplier_invoice.voucher_link_removed',
+    event: 'Koppling mellan leverantörsfaktura och verifikat borttagen',
+    object: entry ? voucherLabel(entry.voucher_series, entry.voucher_number) : null,
+    details,
+  })
+}
+
 /** One audit_log row → zero or one behandlingshistorik event. Exported for tests. */
 export function auditRowToEvent(
   row: AuditLogEntry,
@@ -1221,6 +1270,7 @@ export function auditRowToEvent(
   // Ahead of the generic global branch: a bypassed guard is a verifikat event
   // with its own wording, not an untyped "Säkerhetshändelse".
   if (row.action === 'GUARD_BYPASSED') return guardBypassedEvent(row, ctx)
+  if (row.action === 'SUBLEDGER_LINK_REMOVED') return subledgerLinkRemovedEvent(row, ctx)
   if ((GLOBAL_ACTIONS as readonly string[]).includes(row.action)) return globalActionEvent(row)
   switch (row.table_name) {
     case 'journal_entries':
@@ -1786,7 +1836,7 @@ async function fetchAuditRows(
       // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
       // resolves string literals here. A test pins the two to each other.
       .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
+        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED,SUBLEDGER_LINK_REMOVED)',
       )
       .order('created_at', { ascending: true })
       .order('id', { ascending: true })
@@ -1820,6 +1870,23 @@ async function fetchAuditRows(
         .eq('company_id', companyId)
         .eq('action', 'GUARD_BYPASSED')
         .in('new_state->>journal_entry_id', ids)
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    for (const row of rows) byId.set(row.id, row)
+  }
+  // Same reasoning as the GUARD_BYPASSED union above: a link is undone on the
+  // day someone notices it, which is often a later year than the verifikat it
+  // pointed at. Selected by the voucher so the removal lands in the year whose
+  // reskontra it explains.
+  for (const ids of chunk(recordIds, ID_CHUNK)) {
+    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
+      supabase
+        .from('audit_log')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('action', 'SUBLEDGER_LINK_REMOVED')
+        .in('old_state->>journal_entry_id', ids)
         .order('id', { ascending: true })
         .range(from, to),
     )

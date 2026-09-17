@@ -788,3 +788,160 @@ function computeRemaining(invoice: SupplierInvoice): number {
   const paid = invoice.paid_amount ?? 0
   return Math.max(0, round2(invoice.total - paid))
 }
+
+// ── Unlink ──────────────────────────────────────────────────
+
+export type SupplierVoucherUnlinkErrorCode =
+  | 'UNLINK_SI_PAYMENT_NOT_FOUND'
+  | 'UNLINK_SI_PAYMENT_NOT_A_LINK'
+  | 'UNLINK_SI_PAYMENT_BOOKED_PAYMENT'
+  | 'UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED'
+  | 'UNLINK_SI_PAYMENT_FX_SETTLED'
+  | 'UNLINK_SI_PAYMENT_FORBIDDEN'
+  | 'UNLINK_SI_PAYMENT_DB_ERROR'
+
+export interface UnlinkSupplierInvoiceFromVoucherResult {
+  supplierInvoiceId: string
+  journalEntryId: string
+  paymentAmount: number
+  invoiceStatus: string
+  paidAmount: number
+  remainingAmount: number
+}
+
+interface RpcUnlinkOk {
+  ok: true
+  supplier_invoice_id: string
+  journal_entry_id: string
+  transaction_id: string | null
+  payment_amount: number
+  invoice_status: string
+  paid_amount: number
+  remaining_amount: number
+}
+
+interface RpcUnlinkErr {
+  ok: false
+  code: SupplierVoucherUnlinkErrorCode
+  details?: Record<string, unknown>
+}
+
+/**
+ * Undo a link made by linkSupplierInvoiceToVoucher: remove the
+ * supplier_invoice_payments row and restore the invoice's payable state.
+ *
+ * The RPC owns every check and both writes in one transaction, and refuses any
+ * row whose verifikat is a payment Accounted booked itself: those belong to the
+ * storno path (lib/bookkeeping/payment-sync.ts), which reverses the entry and
+ * the row together. Nothing here touches a journal entry, because the link
+ * never created one.
+ */
+export async function unlinkSupplierInvoiceFromVoucher(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: { supplierInvoiceId: string; paymentId: string },
+): Promise<
+  | { ok: true; result: UnlinkSupplierInvoiceFromVoucherResult }
+  | { ok: false; code: SupplierVoucherUnlinkErrorCode; details?: Record<string, unknown> }
+> {
+  const { supplierInvoiceId, paymentId } = params
+  const { data, error } = await supabase.rpc('unlink_supplier_invoice_from_voucher', {
+    p_payment_id: paymentId,
+    p_supplier_invoice_id: supplierInvoiceId,
+    p_company_id: companyId,
+    // Attribution for the audit row the RPC writes. Only load-bearing for
+    // service-role callers: for a user session the RPC prefers the JWT sub.
+    p_user_id: userId,
+  })
+
+  if (error) {
+    log.error('unlink_supplier_invoice_from_voucher RPC error', {
+      companyId,
+      userId,
+      paymentId,
+      message: error.message,
+    })
+    return { ok: false, code: 'UNLINK_SI_PAYMENT_DB_ERROR', details: { reason: error.message } }
+  }
+
+  const result = data as RpcUnlinkOk | RpcUnlinkErr | null
+  if (!result) {
+    return {
+      ok: false,
+      code: 'UNLINK_SI_PAYMENT_DB_ERROR',
+      details: { reason: 'empty RPC response' },
+    }
+  }
+  if (!result.ok) return { ok: false, code: result.code, details: result.details }
+
+  // Clear the invoice pointer the link's auto-reconcile stamped on the bank
+  // row, and ONLY that pointer. releaseLinkedTransactions (payment-sync) is
+  // deliberately not reused: it also clears journal_entry_id, which is right
+  // after a storno (the entry is reversed) and wrong here (the entry stays
+  // posted, and the bank line genuinely paid it; only the claim that it settled
+  // THIS payable was false). Best-effort: the RPC has already committed.
+  //
+  // Addressed to ONE row. transactions.journal_entry_id is not unique, so
+  // (company, invoice, entry) can match several bank rows when one payable was
+  // settled by a split payment reconciled to the same verifikat; clearing all of
+  // them would unpick bank rows whose own payment row is still there.
+  //
+  // Resolved by lookup rather than from result.transaction_id, which is always
+  // NULL on the rows this RPC can delete: the link path inserts the payment row
+  // with transaction_id NULL (20260830140000), and the paths that DO set it
+  // (match_batch_allocate, the utlägg mirror) are refused by the booked-payment
+  // guards before they ever reach here.
+  const { data: candidates } = await supabase
+    .from('transactions')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('supplier_invoice_id', result.supplier_invoice_id)
+    .eq('journal_entry_id', result.journal_entry_id)
+    .limit(2)
+
+  if ((candidates?.length ?? 0) > 1) {
+    log.warn('several bank rows point at this invoice and verifikat: pointer left alone', {
+      companyId,
+      paymentId,
+      supplierInvoiceId: result.supplier_invoice_id,
+      journalEntryId: result.journal_entry_id,
+    })
+  } else if (candidates?.length === 1) {
+    // Compare-and-set, not just an id: between the lookup and the write the row
+    // can be retagged to another payable, and an id-only update would then clear
+    // a pointer that is still true. Re-asserting both claims makes a moved row a
+    // no-op instead.
+    const { error: releaseError } = await supabase
+      .from('transactions')
+      .update({ supplier_invoice_id: null })
+      .eq('company_id', companyId)
+      .eq('id', candidates[0].id as string)
+      .eq('supplier_invoice_id', result.supplier_invoice_id)
+      .eq('journal_entry_id', result.journal_entry_id)
+    if (releaseError) {
+      log.error('failed to clear the supplier-invoice pointer after unlink', releaseError, {
+        companyId,
+        paymentId,
+        supplierInvoiceId: result.supplier_invoice_id,
+      })
+    }
+  }
+
+  // The audit row is NOT written here. audit_log has RLS with a SELECT policy
+  // and no INSERT policy, so this client (the request's user-scoped one) is
+  // refused with 42501 every time; the RPC is SECURITY DEFINER and writes it
+  // inside the same transaction as the delete, which is also where it belongs.
+
+  return {
+    ok: true,
+    result: {
+      supplierInvoiceId: result.supplier_invoice_id,
+      journalEntryId: result.journal_entry_id,
+      paymentAmount: result.payment_amount,
+      invoiceStatus: result.invoice_status,
+      paidAmount: result.paid_amount,
+      remainingAmount: result.remaining_amount,
+    },
+  }
+}

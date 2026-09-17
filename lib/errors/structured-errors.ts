@@ -3944,6 +3944,53 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Databasfel under länkning. Försök igen.',
     message_en: 'Database error while linking the voucher. Please retry.',
   },
+  UNLINK_SI_PAYMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Betalningen hittades inte.',
+    message_en: 'Payment row not found.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_NOT_A_LINK: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen pekar inte på någon verifikation och kan därför inte kopplas loss här.',
+    message_en:
+      'The payment does not point at a journal entry, so it cannot be unlinked here.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_BOOKED_PAYMENT: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen är bokförd med en egen verifikation som reglerar fakturan. Ångra den med en stornoverifikation istället, så att bokföringen och reskontran ändras tillsammans.',
+    message_en:
+      'The payment is booked with its own posted voucher that settles the invoice. Reverse that entry (storno) instead, so the ledger and the subledger change together.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_INVOICE_NOT_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är varken betald eller delbetald, så det finns ingen koppling att ta bort.',
+    message_en: 'The invoice is neither paid nor partially paid, so there is no link to remove.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_FX_SETTLED: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen avser en faktura i utländsk valuta, och kopplingen bokförde en valutakursdifferens. Ångra den med en stornoverifikation, så att differensen backas tillsammans med kopplingen.',
+    message_en:
+      'The payment settled a foreign-currency invoice and the link booked an exchange-rate difference. Reverse it with a storno so the difference is undone together with the link.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har läsbehörighet i det här företaget och kan inte ta bort kopplingen.',
+    message_en: 'Your role in this company is read-only, so you cannot remove the link.',
+    retryable: false,
+  },
+  UNLINK_SI_PAYMENT_DB_ERROR: {
+    httpStatus: 500,
+    message_sv: 'Databasfel när kopplingen skulle tas bort. Försök igen.',
+    message_en: 'Database error while removing the link. Please retry.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
