@@ -50,8 +50,8 @@ import {
 } from '@/lib/company/entity-type'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
-/** The picker leads with these; every other creatable form follows in registry order. */
-const FORM_PICKER_FIRST: readonly EntityType[] = ['enskild_firma', 'aktiebolag']
+/** The picker leads with these (AB first, as before); every other creatable form follows in registry order. */
+const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
 
 /** The selectable cards: the forms this deployment can create right now. */
 function pickerForms(): EntityType[] {
