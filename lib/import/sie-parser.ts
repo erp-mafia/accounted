@@ -1226,7 +1226,10 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
 
   // Check opening balance is balanced (for balance sheet accounts).
   // Uses the effective set so files without #IB 0 (where IB is derived from
-  // #UB -1, issue #675) still get the 2099-adjustment heads-up.
+  // #UB -1, issue #675) still get the adjustment heads-up. The parser has no
+  // company, so the text names equity rather than the form's result-closing
+  // account (2099 AB, 2010 EF, 2069 ideell förening): the import result says
+  // which account was used.
   const effectiveIB = getEffectiveOpeningBalances(parsed)
 
   if (effectiveIB.derivedFromPriorYearUB) {
@@ -1238,7 +1241,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
   const ibTotal = effectiveIB.balances.reduce((sum, b) => sum + b.amount, 0)
 
   if (Math.abs(ibTotal) > 0.01) {
-    warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot konto 2099 skapas vid import.`)
+    warnings.push(`Ingående balanser balanserar inte (differens: ${ibTotal.toFixed(2)} kr). En automatisk justeringspost mot eget kapital (företagsformens konto för årets resultat) skapas vid import.`)
   }
 
   // Completed fiscal year whose vouchers leave a residual on P&L accounts:

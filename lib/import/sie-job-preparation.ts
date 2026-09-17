@@ -13,6 +13,7 @@ import { applySIEFiscalYear, assertSIEReportingAccounts, readSIEJobSource, SIEJo
 import type { ParsedSIEFile, SIEVoucher } from './types'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from './sie-artifact-scan'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
+import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 
 // Disjoint namespaces keep immutable receipts stable when work resumes.
 export const SIE_CHECKPOINTS = { accounts: 0, dimensions: 10_000, values: 20_000,
@@ -155,9 +156,11 @@ async function snapshotSource(supabase: SupabaseClient, job: SIEJob, deadline: n
   return snapshot
 }
 
-async function createMetadata(supabase: SupabaseClient, job: SIEJob, snapshot: Snapshot, deadline: number): Promise<boolean> {
+async function createMetadata(supabase: SupabaseClient, job: SIEJob, snapshot: Snapshot, deadline: number, differenceAccount: string): Promise<boolean> {
   const input = jobInput(job)
-  const extras = ['3741','2099'].map(number => ({ sourceAccount:number,targetAccount:number,sourceName:'',targetName:'',confidence:1,matchType:'exact' as const,isOverride:false }))
+  // 3741 takes the migration adjustment's öre; the difference account takes
+  // the IB imbalance. Both must exist in the chart before the entries post.
+  const extras = ['3741',differenceAccount].map(number => ({ sourceAccount:number,targetAccount:number,sourceName:'',targetName:'',confidence:1,matchType:'exact' as const,isOverride:false }))
   const rows = buildSIEAccountRows(job.company_id,job.user_id,[...extras,...input.mappings])
   for (let n = Number(job.manifest.accountsThrough ?? 0); n < rows.length; n += 100) {
     if (Date.now() > deadline) return false
@@ -217,7 +220,14 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   if (!snapshot) return false
   const accountMap = mappingsToMap(input.mappings)
   validateSIEReportingMappings(snapshot.parsed,accountMap,input.options)
-  if (!job.manifest.metadataComplete && !await createMetadata(supabase,job,snapshot,deadline)) return false
+  // The IB difference lands on the form's result-closing account (2099 AB,
+  // 2010 EF, 2069 ideell förening): resolved at most once per preparation,
+  // only when the chart extras or the IB entry need it, and sealed in the
+  // manifest so finalize names the account that was actually used.
+  let resolvedDifferenceAccount: Promise<string> | null = null
+  const differenceAccount = () => (resolvedDifferenceAccount ??= resolveCompanyEntityType(supabase,job.company_id)
+    .then(form => resultClosingAccounts(form).closing))
+  if (!job.manifest.metadataComplete && !await createMetadata(supabase,job,snapshot,deadline,await differenceAccount())) return false
   const accountIds = await jobAccountIds(supabase,job)
   const totals: PreparationTotals = job.manifest.preparationTotals as PreparationTotals ?? {
     entries:0,movements:[],skippedSample:[],skippedCounts:{empty:0,unbalanced:0,unmapped:0,singleLine:0,total:0},
@@ -286,12 +296,14 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   if (!snapshot.hasCurrentYearIb) parsed.closingBalances = parsed.closingBalances.filter(b => b.yearIndex !== -1)
   const finalEntries: SIEPreparedEntry[] = []
   let rounding = 0
+  let openingBalanceDifferenceAccount: string | undefined
   if (input.options.importOpeningBalances && !job.manifest.prior_activity && snapshot.hasCurrentYearIb) {
     const validation = validateIBBalance(parsed,accountMap)
     rounding = validation.roundingAdjustment
     const used = new Set(snapshot.sourceSeries)
     const series = input.options.openingBalanceSeries?.trim().toUpperCase() || defaultOpeningBalanceSeries(used)
-    const opening = buildSIEOpeningBalanceEntry(job.fiscal_period_id,parsed,accountMap,rounding,series)
+    openingBalanceDifferenceAccount = await differenceAccount()
+    const opening = buildSIEOpeningBalanceEntry(job.fiscal_period_id,parsed,accountMap,rounding,series,openingBalanceDifferenceAccount)
     if (opening) {
       if (job.manifest.derivedFromPriorYearUB) opening.description += ' (härledda från föregående års utgående balans)'
       finalEntries.push(toPrepared(opening,job,50_000,accountIds))
@@ -307,7 +319,9 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   for (const payload of boundedChunks(finalEntries)) await sieJobRPC(supabase,job,'save_sie_import_chunk',{
     p_phase:'finalize',p_chunk_no:finalChunk++,p_payload:payload})
   const manifest = {...job.manifest,parserVersion:SIE_JOB_VERSION,mappingVersion:SIE_JOB_VERSION,
-    openingBalanceRounding:rounding,migrationAdjustmentAccounts:adjustment?.deltaAccounts ?? 0,
+    openingBalanceRounding:rounding,
+    ...(openingBalanceDifferenceAccount ? {openingBalanceDifferenceAccount} : {}),
+    migrationAdjustmentAccounts:adjustment?.deltaAccounts ?? 0,
     preparationWarnings:[...(adjustment?.warnings ?? []),...(snapshot.artifactWarning ? [snapshot.artifactWarning] : [])],finalChunks:finalChunk,
     skippedCounts:totals.skippedCounts,
     preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input)}

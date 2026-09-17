@@ -79,7 +79,12 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number)
   const warnings = [...(job.manifest.preparationWarnings as string[] ?? [])]
   if (skipped.total) warnings.push(`${skipped.total} verifikationer hoppades över. Behandlingshistoriken anger varje verifikation och orsak.`)
   const rounding = Number(job.manifest.openingBalanceRounding ?? 0)
-  if (Math.abs(rounding) > 0.01) warnings.push(`Ingående balanser justerades med ${rounding} SEK på konto 2099.`)
+  // The account preparation sealed (the form's result-closing account). Jobs
+  // sealed before the manifest carried it booked the difference on 2099
+  // unconditionally, so that is the account their text must name.
+  const differenceAccount = typeof job.manifest.openingBalanceDifferenceAccount === 'string'
+    ? job.manifest.openingBalanceDifferenceAccount : '2099'
+  if (Math.abs(rounding) > 0.01) warnings.push(`Ingående balanser justerades med ${rounding} SEK på konto ${differenceAccount}.`)
   const voucherMap = entries.map(e => ({sourceId:e.sourceId,series:e.series,targetNumber:e.voucherNumber}))
   const stats = getMappingStats(mappings)
   const documentation: MigrationDocumentation = {
