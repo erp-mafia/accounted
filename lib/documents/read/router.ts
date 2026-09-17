@@ -19,11 +19,14 @@ export async function readDocumentBytes(bytes: Buffer, mimeType: string | null |
     const local = await readPdfTextLayer(bytes)
     const pages: ReadPage[] = [...local.pages]
     let partial: ModelSkipReason | undefined
+    let modelPages = 0
     for (const pageNo of local.pagesNeedingVision) {
       if (!opts.allowModel) { partial = 'ai_gated'; break }
+      if (opts.maxModelPages != null && modelPages >= opts.maxModelPages) { partial = 'budget'; break }
       const single = await extractSinglePagePdf(bytes, pageNo)
       const out = await transcribeWithModel({ kind: 'pdf', data: single, fileName: `page-${pageNo}.pdf` })
       if (!out.ok) { partial = 'ai_unconfigured'; break }
+      modelPages++
       if (out.text) pages.push({ pageNo, text: out.text, reader: 'claude_vision', hasTextLayer: false })
     }
     pages.sort((a, b) => a.pageNo - b.pageNo)

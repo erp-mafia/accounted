@@ -11,6 +11,7 @@ import { askDocument } from '@/lib/arkiv/ask'
 import { captureArkivEvent } from '@/lib/arkiv/events'
 import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
+import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -745,8 +746,16 @@ export function createArkivTools(deps: Deps): McpTool[] {
         if (error) throw dbError(error)
         if (!doc) throw new Error('Document not found')
         const d = doc as { id: string; file_name: string; storage_path: string; page_count: number | null }
-        const { data: page, error: pageError } = await supabase.from('document_pages').select('text').eq('document_id', documentId).eq('page_no', pageNo).maybeSingle()
+        let { data: page, error: pageError } = await supabase.from('document_pages').select('text').eq('document_id', documentId).eq('page_no', pageNo).maybeSingle()
         if (pageError) throw dbError(pageError)
+        if (!(page as { text: string } | null)?.text) {
+          // History the lanes left unread or half read: the agent asking for the page is what it waited for.
+          const read = await ensureDocumentRead(supabase, companyId, documentId)
+          if (read.status === 'read') {
+            ;({ data: page, error: pageError } = await supabase.from('document_pages').select('text').eq('document_id', documentId).eq('page_no', pageNo).maybeSingle())
+            if (pageError) throw dbError(pageError)
+          }
+        }
         const ttlSeconds = 300
         const { data: signed, error: signError } = await supabase.storage.from('documents').createSignedUrl(d.storage_path, ttlSeconds)
         if (signError || !signed) throw new Error(`Failed to create signed URL: ${signError?.message ?? 'unknown error'}`)

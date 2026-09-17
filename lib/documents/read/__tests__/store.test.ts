@@ -86,7 +86,7 @@ describe('readAndStoreDocument', () => {
     asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'pdf_text', pageCount: 2, partial: 'ai_gated', pages: [{ pageNo: 1, text: 'a', reader: 'pdf_text', hasTextLayer: true }] })
     const { supabase, calls } = makeSupabase()
     const out = await readAndStoreDocument(supabase, doc)
-    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'application/pdf', { allowModel: false })
+    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'application/pdf', { allowModel: false, maxModelPages: null })
     expect(out).toEqual({ status: 'read', pages: 1, reader: 'pdf_text', partial: 'partial:ai_gated' })
     expect(calls.at(-1)!.payload).toMatchObject({ read_error: 'partial:ai_gated', page_count: 2 })
   })
@@ -109,7 +109,7 @@ describe('readUnreadDocuments', () => {
     const { supabase } = makeSupabase([], [{ ...doc, id: 'r1', mime_type: 'image/jpeg' }, { ...doc, id: 'r2', company_id: 'other', mime_type: 'image/jpeg' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 1, read: 1, skipped: 0, errors: 0 })
     expect(readDocumentBytes).toHaveBeenCalledTimes(1)
-    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true })
+    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null })
   })
 
   it('walks the unread batch and counts outcomes', async () => {

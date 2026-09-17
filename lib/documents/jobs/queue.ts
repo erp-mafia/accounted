@@ -6,7 +6,8 @@ import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
-import { readAndStoreDocument, type ReadableDocumentRow } from '@/lib/documents/read/store'
+import { LANE_COLUMNS, readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
+import { isActingType } from '@/lib/documents/read/lanes'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 
@@ -140,17 +141,21 @@ function runStep(supabase: SupabaseClient, job: ClaimedJob, identities: Map<stri
 }
 
 async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
-  const { data, error } = await supabase.from('document_attachments').select('id, company_id, storage_path, mime_type').eq('id', job.document_id).maybeSingle()
+  const { data, error } = await supabase.from('document_attachments').select(`${LANE_COLUMNS}, admission_state`).eq('id', job.document_id).maybeSingle()
   if (error) throw new Error(`document fetch failed: ${error.message}`)
   if (!data) return 'skipped: not_found'
-  const out = await readAndStoreDocument(supabase, data as ReadableDocumentRow)
+  const doc = data as ReadableDocumentRow & { admission_state: string | null }
+  // A second pass finishes a document the lane capped at one page (an acting type): the extraction waited for it.
+  const finishing = doc.read_error === 'partial:budget'
+  const { plan, outcome: out } = await readDocumentByPlan(supabase, doc)
+  if (!plan || !out) return 'skipped: lane_done'
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return `skipped: ${out.reason}`
-  // The meter: every page read counts; pages the vision model transcribed count once more, as the costly kind.
-  await recordArkivUsage(supabase, job.company_id, 'pages_read', out.pages)
-  if (out.reader === 'claude_vision') await recordArkivUsage(supabase, job.company_id, 'pages_vision', out.pages)
-  if (isArkivEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
-  return `read ${out.pages} pages (${out.reader})${out.partial ? `, partial: ${out.partial}` : ''}`
+  if (isArkivEnabled(job.company_id)) {
+    if (!doc.doc_type) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
+    else if (finishing && doc.admission_state === 'admitted') await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+  }
+  return `read ${out.pages} pages (${out.reader}, ${plan.lane})${out.partial ? `, partial: ${out.partial}` : ''}`
 }
 
 async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities: Map<string, CompanyIdentity>): Promise<string> {
@@ -159,7 +164,16 @@ async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
   await recordArkivUsage(supabase, job.company_id, 'documents', 1)
-  if (out.admission === 'admitted') await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+  if (out.admission === 'admitted') {
+    // A loose history document read one page deep that turned out to be an acting type is read in full before it is extracted.
+    const { data: row } = await supabase.from('document_attachments').select('read_error').eq('id', job.document_id).maybeSingle()
+    const capped = (row as { read_error?: string | null } | null)?.read_error === 'partial:budget'
+    if (capped && isActingType(out.classification.doc_type)) {
+      await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'read')
+      return `classified ${out.classification.doc_type} (${out.admission}), reading the rest`
+    }
+    await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+  }
   return `classified ${out.classification.doc_type} (${out.admission})`
 }
 
