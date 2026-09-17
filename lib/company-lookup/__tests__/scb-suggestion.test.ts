@@ -19,10 +19,17 @@ describe('toCompanySuggestion', () => {
     expect(toCompanySuggestion(candidate()).legalEntityType).toBe('AB')
     expect(toCompanySuggestion(candidate({ legalFormCode: '10' })).legalEntityType).toBe('EF')
     expect(toCompanySuggestion(candidate({ legalFormCode: '61' })).legalEntityType).toBe('Ideell förening')
-    // Insurance AB, bank AB, ekonomisk förening, stiftelse: not a plain AB.
-    for (const code of ['42', '41', '51', '72', null]) {
+    // Insurance AB, bank AB: not a plain AB, and not a planned form either.
+    for (const code of ['42', '41', null]) {
       expect(toCompanySuggestion(candidate({ legalFormCode: code })).legalEntityType).toBeNull()
     }
+  })
+
+  it('names the planned forms so the journey can stop on them instead of offering the picker', () => {
+    expect(toCompanySuggestion(candidate({ legalFormCode: '51' })).legalEntityType).toBe('Ekonomisk förening')
+    expect(toCompanySuggestion(candidate({ legalFormCode: '53' })).legalEntityType).toBe('Bostadsrättsförening')
+    expect(toCompanySuggestion(candidate({ legalFormCode: '62' })).legalEntityType).toBe('Samfällighetsförening')
+    expect(toCompanySuggestion(candidate({ legalFormCode: '72' })).legalEntityType).toBe('Annan stiftelse')
   })
 
   it('carries only what the picker shows plus the number it resolves to', () => {

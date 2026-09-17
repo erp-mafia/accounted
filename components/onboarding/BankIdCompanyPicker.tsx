@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { AttnLine } from '@/components/ui/attn-line'
-import { mapEntityType, mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
+import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { ENTITY_TYPE_LABELS_SV } from '@/lib/company/entity-type'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import '@/components/onboarding/journey/journey.css'
@@ -36,6 +36,8 @@ interface BankIdCompanyPickerProps {
 function humanTicEntityType(t: string): string {
   const mapped = mapEntityType(t)
   if (mapped) return ENTITY_TYPE_LABELS_SV[mapped]
+  const planned = mapPlannedLegalForm(t)
+  if (planned) return planned.label
   if (t.toLowerCase().includes('handelsbolag') || t.toLowerCase() === 'hb') return 'Handelsbolag'
   if (t.toLowerCase().includes('kommanditbolag') || t.toLowerCase() === 'kb') return 'Kommanditbolag'
   return t

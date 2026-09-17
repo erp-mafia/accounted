@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
@@ -38,17 +38,67 @@ import {
   type FirstYearEndOption,
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
-import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import {
+  ENTITY_TYPES,
+  ENTITY_TYPE_LABELS_SV,
+  creatableEntityTypes,
+  isEntityType,
+  isEntityTypeCreatable,
+  plannedLegalForms,
+  usesPersonnummerAsOrgNumber,
+} from '@/lib/company/entity-type'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
-/** Display order of the form picker (AB first, as before); flags filter it. */
-const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
+/** The picker leads with these; every other creatable form follows in registry order. */
+const FORM_PICKER_FIRST: readonly EntityType[] = ['enskild_firma', 'aktiebolag']
+
+/** The selectable cards: the forms this deployment can create right now. */
+function pickerForms(): EntityType[] {
+  const creatable = creatableEntityTypes()
+  return [
+    ...FORM_PICKER_FIRST.filter((form) => creatable.includes(form)),
+    ...creatable.filter((form) => !FORM_PICKER_FIRST.includes(form)),
+  ]
+}
 
 /** i18n key per legal form for the picker chips and the summary card. */
 const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
+}
+
+/**
+ * Per-form sentence for the picker's info text, shown only while the form is
+ * creatable; null when the base text already covers the form.
+ */
+const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
+  aktiebolag: null,
+  enskild_firma: null,
+  ideell_forening: 'journey_form_info_forening',
+}
+
+/**
+ * The "kommer snart" rows under the picker: known forms whose creation flag
+ * is off, then the forms that are scoped but not built. Non-selectable, so a
+ * treasurer sees their form named instead of picking the nearest supported
+ * one and getting the wrong equity chart.
+ */
+function plannedFormRows(): { code: string; label: string }[] {
+  return [
+    ...ENTITY_TYPES.filter((form) => !isEntityTypeCreatable(form)).map((form) => ({
+      code: form,
+      label: ENTITY_TYPE_LABELS_SV[form],
+    })),
+    ...plannedLegalForms().map((planned) => ({ code: planned.code, label: planned.label })),
+  ]
+}
+
+/** Statutory label for a planned-form code the reducer stored, or null. */
+function plannedFormLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  if (isEntityType(code)) return ENTITY_TYPE_LABELS_SV[code]
+  return plannedLegalForms().find((planned) => planned.code === code)?.label ?? null
 }
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'
@@ -548,6 +598,16 @@ export default function OnboardingJourney({
 
   const flyProps = { flyTargetRef: bandRef, flyTargetFrac: STATION_FRACS[station] }
 
+  // A form whose org number is the owner's personnummer (enskild firma)
+  // is identified by its form label in rows and previews, never by the
+  // number, which would print a personnummer in plain text.
+  function identFor(legalEntityType: string | null | undefined, orgNumber: string): string {
+    const mapped = mapEntityType(legalEntityType)
+    return mapped && usesPersonnummerAsOrgNumber(mapped)
+      ? t(FORM_LABEL_KEY[mapped])
+      : formatOrgNumber(orgNumber)
+  }
+
   function renderStep() {
     const s = state.settings
     switch (state.step) {
@@ -594,10 +654,7 @@ export default function OnboardingJourney({
               <>
                 <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
                   {suggestions.map((s, i) => {
-                    // A sole trader's org number is their personnummer:
-                    // the row names the form instead, never the number.
-                    const isSoleTrader = mapEntityType(s.legalEntityType) === 'enskild_firma'
-                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(s.orgNumber)
+                    const ident = identFor(s.legalEntityType, s.orgNumber)
                     const sub = [ident, s.city, s.active ? null : t('journey_suggest_inactive')]
                       .filter(Boolean)
                       .join(' · ')
@@ -631,10 +688,7 @@ export default function OnboardingJourney({
                 <p className="jny-enterhint">{t('journey_search_pick')}</p>
                 <ChipRow
                   options={state.searchHits.map((h) => {
-                    // A sole trader's org number is their personnummer: the
-                    // chip names the form instead, never the number.
-                    const isSoleTrader = mapEntityType(h.result.legalEntityType) === 'enskild_firma'
-                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(h.orgNumber)
+                    const ident = identFor(h.result.legalEntityType, h.orgNumber)
                     const city = h.result.address?.city
                     return {
                       key: h.orgNumber,
@@ -656,7 +710,7 @@ export default function OnboardingJourney({
                     <InkText text={preview.result.companyName} step={40} />
                     <span className="jny-found-sub">
                       {[
-                        mapEntityType(preview.result.legalEntityType) === 'enskild_firma' ? t('journey_form_ef') : formatOrgNumber(preview.orgNumber),
+                        identFor(preview.result.legalEntityType, preview.orgNumber),
                         preview.result.address?.city,
                       ]
                         .filter(Boolean)
@@ -704,19 +758,48 @@ export default function OnboardingJourney({
           </Question>
         )
 
-      case 'form':
+      case 'planned': {
+        // The registry named a form Accounted has scoped but cannot create
+        // yet: say so before the picker, so the nearest supported form is
+        // not picked by mistake. The picker stays one chip away.
+        const label = plannedFormLabel(state.plannedForm) ?? t('journey_form_planned_group')
         return (
-          <Question title={t('journey_form_title')} info={t('journey_form_info')}>
+          <Question title={t('journey_planned_title', { form: label })} sub={t('journey_planned_sub')}>
             <ChipRow
-              options={FORM_PICKER_ORDER.filter(isEntityTypeCreatable).map((key) => ({
-                key,
-                label: t(FORM_LABEL_KEY[key]),
-              }))}
-              onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
+              options={[
+                { key: 'edit', label: t('journey_notfound_edit') },
+                { key: 'continue', label: t('journey_planned_continue') },
+              ]}
+              onPick={(k) => dispatch({ type: k === 'edit' ? 'PLANNED_EDIT' : 'PLANNED_CONTINUE' })}
               {...flyProps}
             />
           </Question>
         )
+      }
+
+      case 'form': {
+        const forms = pickerForms()
+        const info = [
+          t('journey_form_info'),
+          ...forms.map((form) => FORM_INFO_KEY[form]).filter((key) => key !== null).map((key) => t(key)),
+          t('journey_form_info_tail'),
+        ].join(' ')
+        const plannedLabel = plannedFormLabel(state.plannedForm)
+        return (
+          <Question
+            title={t('journey_form_title')}
+            info={info}
+            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+          >
+            <ChipRow
+              options={forms.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
+              onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
+              {...flyProps}
+            />
+            <PlannedFormsGroup t={t} rows={plannedFormRows()} />
+          </Question>
+        )
+      }
 
       case 'name': {
         const suggested = s.company_name ?? ''
@@ -1064,6 +1147,40 @@ function preserveQuestionAnswers(previous: { journey: JourneyState; orgInput: st
 /* ── small step components ─────────────────────────────────────── */
 
 type TFn = ReturnType<typeof useTranslations<'onboarding'>>
+
+/**
+ * The forms Accounted has scoped but cannot create yet, folded under one
+ * quiet toggle as non-selectable rows marked "Kommer snart". Nothing here
+ * dispatches: the rows exist so the form is seen and named, not picked.
+ */
+function PlannedFormsGroup({ t, rows }: { t: TFn; rows: { code: string; label: string }[] }) {
+  const [open, setOpen] = useState(false)
+  const listId = useId()
+  if (rows.length === 0) return null
+  return (
+    <div className="jny-planned">
+      <button
+        type="button"
+        className="jny-btn-quiet"
+        aria-expanded={open}
+        aria-controls={listId}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {t('journey_form_planned_group')} &hellip;
+      </button>
+      {open ? (
+        <ul id={listId} className="jny-rowlist" aria-label={t('journey_form_planned_group')}>
+          {rows.map((row) => (
+            <li key={row.code} className="jny-rowplanned">
+              <span className="jny-rname">{row.label}</span>
+              <span className="jny-rorg">{t('journey_form_coming_soon')}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  )
+}
 
 function NameInput({
   initial,

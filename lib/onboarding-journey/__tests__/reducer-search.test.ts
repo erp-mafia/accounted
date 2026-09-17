@@ -287,6 +287,17 @@ describe('journeyReducer: search-as-you-type pick (SCB row, TIC on pick)', () =>
     expect(s.settings.org_number).toBe('5566778899')
   })
 
+  it('a planned legal form from the SCB row stops on the degraded path instead of the picker', () => {
+    const s = run(
+      initJourney(),
+      { type: 'SUGGESTION_PICKED', suggestion: suggestion({ name: 'Bygg Ek. för.', legalEntityType: 'Ekonomisk förening' }) },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'error' } },
+    )
+    expect(s.step).toBe('planned')
+    expect(s.plannedForm).toBe('ekonomisk_forening')
+    expect(s.settings.entity_type).toBeUndefined()
+  })
+
   it('a sole trader row still confirms the verksamhetsnamn', () => {
     const s = run(
       initJourney(),

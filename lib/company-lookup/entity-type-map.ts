@@ -1,5 +1,6 @@
 import type { EntityType } from '@/types'
-import { isEntityTypeCreatable } from '@/lib/company/entity-type'
+import { isEntityTypeCreatable, plannedLegalForms } from '@/lib/company/entity-type'
+import type { PlannedLegalForm } from '@/lib/company/forms'
 
 /**
  * Explicit allow-lists for TIC/Bolagsverket `legalEntityType` → Accounted
@@ -58,4 +59,30 @@ export function mapEntityType(ticType: string | null | undefined): EntityType | 
 export function mapSetupEntityType(ticType: string | null | undefined): EntityType | null {
   const mapped = mapEntityType(ticType)
   return mapped && isEntityTypeCreatable(mapped) ? mapped : null
+}
+
+/**
+ * Registry spellings of the forms that are scoped but not creatable
+ * (lib/company/forms PLANNED_LEGAL_FORMS), keyed by their future code. Same
+ * strict matching as above: the journey shows a "stöds inte ännu" stop for
+ * these instead of the picker, so a treasurer does not register the nearest
+ * supported form and get the wrong equity chart. The bare Swedish names are
+ * the Bolagsverket/TIC vocabulary; "Annan stiftelse" and "Familjestiftelse"
+ * are TIC's stiftelse categories.
+ */
+const PLANNED_FORM_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
+  ekonomisk_forening: new Set(['ekonomisk förening', 'ekonomisk forening', 'ekonomiska föreningar']),
+  bostadsrattsforening: new Set(['bostadsrättsförening', 'bostadsrattsforening', 'brf']),
+  samfallighetsforening: new Set(['samfällighetsförening', 'samfallighetsforening', 'samfällighet']),
+  stiftelse: new Set(['stiftelse', 'annan stiftelse', 'familjestiftelse', 'stiftelser']),
+}
+
+/** The planned form a registry type names, or null. Never maps a creatable form. */
+export function mapPlannedLegalForm(ticType: string | null | undefined): PlannedLegalForm | null {
+  if (!ticType) return null
+  const normalized = ticType.trim().toLowerCase()
+  for (const planned of plannedLegalForms()) {
+    if (PLANNED_FORM_VALUES[planned.code]?.has(normalized)) return planned
+  }
+  return null
 }

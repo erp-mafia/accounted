@@ -4,7 +4,12 @@ import type {
   CompanyLookupOutcome,
   CompanySearchOutcome,
 } from '@/lib/company-lookup/fetch-company-lookup'
-import { mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
+import {
+  mapEntityType,
+  mapPlannedLegalForm,
+  mapSetupEntityType,
+} from '@/lib/company-lookup/entity-type-map'
+import { isEntityType, isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
 
 /**
@@ -30,6 +35,7 @@ export type JourneyStep =
   | 'orgnr'
   | 'notfound'
   | 'ceased'
+  | 'planned'
   | 'form'
   | 'name'
   | 'address'
@@ -49,6 +55,7 @@ const STATION_OF: Record<JourneyStep, JourneyStation> = {
   orgnr: 0,
   notfound: 0,
   ceased: 0,
+  planned: 0,
   form: 0,
   name: 0,
   address: 0,
@@ -84,6 +91,13 @@ interface JourneySnapshot {
   addressAsked: boolean
   /** EF only: the verksamhetsnamn question was explicitly answered. */
   nameConfirmedForEf: boolean
+  /**
+   * The registry named a form Accounted has scoped but cannot create yet (a
+   * planned form's code, or a flagged-off EntityType): the picker becomes
+   * a "stöds inte ännu" stop. Null when the registry named nothing of the
+   * kind.
+   */
+  plannedForm: string | null
 }
 
 export interface JourneyState extends JourneySnapshot {
@@ -125,6 +139,8 @@ export type JourneyAction =
   | { type: 'NOTFOUND_EDIT' }
   | { type: 'CEASED_CONTINUE' }
   | { type: 'CEASED_EDIT' }
+  | { type: 'PLANNED_CONTINUE' }
+  | { type: 'PLANNED_EDIT' }
   | { type: 'ENTITY_PICKED'; entityType: EntityType }
   | { type: 'NAME_SUBMITTED'; name: string }
   | { type: 'ADDRESS_SUBMITTED'; addressLine1?: string; postalCode?: string; city?: string }
@@ -152,6 +168,7 @@ function snapshotOf(s: JourneySnapshot): JourneySnapshot {
     lookupNote: s.lookupNote,
     addressAsked: s.addressAsked,
     nameConfirmedForEf: s.nameConfirmedForEf,
+    plannedForm: s.plannedForm,
   }
 }
 
@@ -168,6 +185,7 @@ export function initJourney(init: JourneyInit = {}): JourneyState {
     lookupNote: 'none',
     addressAsked: false,
     nameConfirmedForEf: false,
+    plannedForm: null,
   }
   return {
     ...base,
@@ -203,19 +221,37 @@ function stay(state: JourneyState, patch: Partial<JourneyState>): JourneyState {
 }
 
 /**
+ * The form the picker must stop on when the registry named one Accounted
+ * cannot create yet: a planned form's code, or a known form whose creation
+ * flag is off. Null when the registry named nothing, or a creatable form.
+ */
+function plannedFormFor(legalEntityType: string | null | undefined): string | null {
+  const mapped = mapEntityType(legalEntityType)
+  if (mapped) return isEntityTypeCreatable(mapped) ? null : mapped
+  return mapPlannedLegalForm(legalEntityType)?.code ?? null
+}
+
+/** Where a company without a known form goes: the stop, or the picker. */
+function pickerStep(state: JourneyState): JourneyStep {
+  return state.plannedForm ? 'planned' : 'form'
+}
+
+/**
  * The Företaget station asks only what is still unknown, then hands over to
  * the fiscal-year station. Order: name → address → F-skatt.
  * - A company_name from the lookup (or BankID roles) skips the name
  *   question for every form: the orgnr answers it, Enter is the whole step
- *   (founder call 2026-09-11). An EF without lookup data still names its
- *   verksamhet, and the name stays editable in Settings.
+ *   (founder call 2026-09-11). A form whose org number is the owner's
+ *   personnummer (enskild firma) has no registered name, so without lookup
+ *   data it still names its verksamhet; the name stays editable in Settings.
  * - Address is asked only when the lookup did not provide one.
  * - F-skatt is asked whenever it is not lookup data.
  */
 function nextCompanyStep(state: JourneyState): JourneyStep {
   const s = state.settings
+  const nameIsFreelyChosen = isEntityType(s.entity_type) && usesPersonnummerAsOrgNumber(s.entity_type)
   const nameKnown =
-    s.entity_type === 'aktiebolag' || state.lookupRan || state.viaPrefill
+    !nameIsFreelyChosen || state.lookupRan || state.viaPrefill
       ? Boolean(s.company_name)
       : Boolean(s.company_name) && state.nameConfirmedForEf === true
   if (!nameKnown) return 'name'
@@ -263,8 +299,9 @@ function withOrgNumber(state: JourneyState, orgNumber: string): JourneyState {
  * advances past whatever the lookup already answered.
  */
 function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): JourneyState {
-  // Only forms this deployment can create are prefilled; a flagged-off form
-  // falls through to the picker instead of failing at the create step.
+  // Only forms this deployment can create are prefilled; a flagged-off or
+  // planned form is remembered so the journey stops on it instead of
+  // failing at the create step or offering the nearest supported form.
   const mapped = mapSetupEntityType(lookup.legalEntityType)
   const settings: Partial<CompanySettings> = {
     ...state.settings,
@@ -280,9 +317,10 @@ function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): Jou
     ticLookup: lookup,
     lookupRan: true,
     lookupNote: 'none' as const,
+    plannedForm: mapped ? null : plannedFormFor(lookup.legalEntityType),
   })
   if (lookup.isCeased) return go(enriched, 'ceased')
-  if (!settings.entity_type) return go(enriched, 'form')
+  if (!settings.entity_type) return go(enriched, pickerStep(enriched))
   return go(enriched, nextCompanyStep(enriched))
 }
 
@@ -310,6 +348,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupPending: true,
         searchHits: [],
         serverError: null,
+        plannedForm: null,
       })
     }
 
@@ -324,6 +363,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupPending: true,
         searchHits: [],
         serverError: null,
+        plannedForm: null,
       })
     }
 
@@ -351,7 +391,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         // questions path; entity/name from CompanyRoles survive as prefill.
         return go(noted, nextCompanyStep(noted))
       }
-      return go(noted, 'form')
+      return go(noted, pickerStep(noted))
     }
 
     case 'SEARCH_RESULT': {
@@ -405,16 +445,18 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         lookupPending: true,
         searchHits: [],
         serverError: null,
+        plannedForm: mapped ? null : plannedFormFor(suggestion.legalEntityType),
       })
     }
 
     case 'NOTFOUND_CONTINUE': {
       if (state.settings.entity_type) return go(state, nextCompanyStep(state))
-      return go(state, 'form')
+      return go(state, pickerStep(state))
     }
 
     case 'NOTFOUND_EDIT':
-    case 'CEASED_EDIT': {
+    case 'CEASED_EDIT':
+    case 'PLANNED_EDIT': {
       // Back to the orgnr question; the fresh submit re-runs the single lookup.
       // The abandoned number's name and form go with it (a picked SCB row or
       // a ceased lookup put them there); BankID's CompanyRoles prefill stays,
@@ -428,14 +470,21 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
         ticLookup: null,
         lookupRan: false,
         lookupNote: 'none',
+        plannedForm: null,
       })
     }
 
     case 'CEASED_CONTINUE': {
       // Proceed with the (ceased) lookup facts: same as wizard, which lets
       // the user continue after the inline warning.
-      if (!state.settings.entity_type) return go(state, 'form')
+      if (!state.settings.entity_type) return go(state, pickerStep(state))
       return go(state, nextCompanyStep(state))
+    }
+
+    case 'PLANNED_CONTINUE': {
+      // The user read the stop and still wants the picker; the planned form
+      // stays on the state so the picker can keep naming it.
+      return go(state, 'form')
     }
 
     case 'ENTITY_PICKED': {
