@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   calculateBolagsskatt,
@@ -50,15 +50,14 @@ export async function buildDispositionsProposal(
     settings?.entity_type,
   )
 
-  if (entityType !== 'aktiebolag') {
-    // Non-AB entities (enskild firma, handelsbolag, etc.) do not produce
-    // bookable bokslutsdispositioner: bolagsskatt, periodiseringsfond and
-    // SLP are AB-only mechanisms. EF tax mechanisms (egenavgifter,
-    // räntefördelning, periodiseringsfond-EF, expansionsfond) are
-    // declaration-only and surface through the dedicated
-    // /api/bookkeeping/fiscal-periods/[id]/ef-declaration endpoint and the
-    // EfDeclarationSection in the wizard: they never produce journal
-    // entries, so they have no place in this list.
+  if (!supportsCorporateTaxDispositions(entityType)) {
+    // A form without corporate tax dispositions (enskild firma, ideell
+    // förening) produces no bookable bokslutsdispositioner: bolagsskatt,
+    // periodiseringsfond and SLP are mechanisms of the forms whose profile
+    // says so. EF tax mechanisms (egenavgifter, räntefördelning,
+    // periodiseringsfond-EF, expansionsfond) are declaration-only and
+    // surface through the EfDeclarationSection in the wizard: they never
+    // produce journal entries, so they have no place in this list.
     const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
     return {
       entityType,
