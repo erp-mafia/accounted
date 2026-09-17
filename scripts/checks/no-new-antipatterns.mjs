@@ -623,7 +623,6 @@ const DIRECT_AI_CLIENT_ALLOWED = new Set([
   'lib/agent/composer/narrative.ts',
   'lib/agent/composer/prewarm.ts',
   'lib/receipt-hunt/adjudicate.ts',
-  'lib/receipt-hunt/mail-intelligence.ts',
   'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
   'scripts/smoke-ai.ts',
   // Out-of-tree CI reviewer with its own pinned SDK install (see the

@@ -95,16 +95,6 @@ export interface HuntProposal {
   sek_total?: number | null
   /** Settled by a second opinion rather than by the formula alone. */
   wasAdjudicated?: boolean
-  /**
-   * Where the document came from, carried through from the inbox item so the
-   * proposal can say "found in your mailbox" rather than implying a human
-   * uploaded it.
-   */
-  mailProvenance: {
-    mailbox?: string
-    subject?: string
-    from?: string
-  } | null
 }
 
 export interface SuppressionSets {
@@ -193,19 +183,7 @@ export function selectProposals(
 
     const documentId = winner.document_id as string
     spentDocumentIds.add(documentId)
-    const context = poolById.get(winner.inbox_item_id)?.channel_context as
-      | { channel?: string; mail_mailbox?: string; mail_subject?: string; mail_from?: string }
-      | null
-      | undefined
     proposals.push({
-      mailProvenance:
-        context?.channel === 'mail_hunt'
-          ? {
-              mailbox: context.mail_mailbox,
-              subject: context.mail_subject,
-              from: context.mail_from,
-            }
-          : null,
       transaction_id: tx.id,
       document_id: documentId,
       inbox_item_id: winner.inbox_item_id,
