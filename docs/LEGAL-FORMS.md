@@ -41,6 +41,8 @@ export interface LegalFormProfile {
     defaultMethod: 'cash' | 'accrual'
     /** Regelverk label for the 5 000 kr accrual threshold. */
     simplifiedRegelverk: 'K1' | 'K2'
+    /** Which booking-template column the form reads: base (written for EF) or the `_ab` override. */
+    templateColumn: 'base' | 'ab'
   }
   equity: {
     /** Account the year's result closes to, and the carry at next year start. */
@@ -50,15 +52,14 @@ export interface LegalFormProfile {
     hasOwners: boolean
     /** Money settled with the owner or member: EF 2013/2018, AB 2893, förening 2890. */
     settlement: { withdrawal: string; contribution: string }
-    memberCapital: boolean
   }
   filings: {
+    /** The return the product prepares for the form; null when none is modelled (ideell: INK3 not built). */
     incomeReturn: 'INK2' | 'NE' | 'INK3' | null
     booksCurrentTax: boolean
     corporateTaxDispositions: boolean
     arsredovisning: boolean
     frameworks: ReadonlyArray<'K1' | 'K2' | 'K3'>
-    auditorAlwaysRequired: boolean
   }
   /** Swedish words that differ by law. Everything else in copy stays form-neutral. */
   glossary: { entity: string; owner: string; meeting: string }
@@ -69,7 +70,8 @@ export interface LegalFormProfile {
 - `lib/company/entity-type.ts` keeps `ENTITY_TYPES`, `parseEntityType`, `resolveCompanyEntityType` and the flag helpers. Its fact functions (`resultClosingAccounts`, `ownerSettlementAccount`, `preparesArsredovisning`, `fiscalYearLockedToCalendar`, `usesPersonnummerAsOrgNumber`, `defaultAccountingMethod`, `simplifiedYearEndRegelverk`, and the seven from #2652) become one-line readers of the profile and stay exported, so existing callers keep working.
 - `byEntityType` is not used outside `lib/company/forms/**`.
 - The registry is keyed by `(jurisdiction, code)` from the first day. `jurisdiction` is the literal type `'SE'` until a second country exists. No DB column, no API change, no migration now: the 2026-08-25 jurisdiction analysis owns that step.
-- Every profile's account numbers must exist in `lib/bookkeeping/bas-data` and in the chart that `seed_chart_of_accounts` produces for that form. A unit test asserts the first, a pg-real test the second.
+- Every profile's account numbers must exist in `lib/bookkeeping/bas-data`, and the closing and settlement accounts in the chart that `seed_chart_of_accounts` produces for that form. A unit test asserts the first, a pg-real test the second (the carry account is left to the engine's on-demand creation, as the AB seed does with 2098).
+- A field every form answers the same way is a constant, not a capability, and a unit test refuses it. Fields for a form that is not shipped (member capital, a mandatory revisor) arrive with that form.
 
 ## Rules for the code around it
 
