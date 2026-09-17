@@ -25,11 +25,23 @@ export function isPersonPayer(choice: PayerChoice | null | undefined): choice is
 /**
  * The owner's claims are grouped by name on Hem (there is no employee row for
  * the owner), so every writer that lets the name default must default to the
- * same string or one person shows up as two.
+ * same string or one person shows up as two. The constant is the AB/EF value;
+ * a caller with the form in reach uses ownerFallbackName(form) so a förening
+ * member is labelled "Medlem", not "Ägare".
  */
-import { isEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
+import { isEntityType, legalFormGlossary, ownerSettlementAccount } from '@/lib/company/entity-type'
 
 export const OWNER_FALLBACK_NAME = 'Ägare'
+
+/**
+ * The claimant label for "Jag, privat" when no name is typed: the form's
+ * glossary noun (AB and EF "Ägare", ideell förening "Medlem"). An unknown
+ * form (a dialog rendering before the company context loads) keeps the
+ * shared constant so the label never flips mid-render.
+ */
+export function ownerFallbackName(entityType: string | null | undefined): string {
+  return isEntityType(entityType) ? legalFormGlossary(entityType).owner : OWNER_FALLBACK_NAME
+}
 
 export type ExpenseLiabilityAccount = '2893' | '2820' | '2018' | '2890'
 

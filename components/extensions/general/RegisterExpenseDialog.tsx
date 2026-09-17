@@ -23,7 +23,8 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE, ISO_DATE_RE } from '@/lib/invariants'
-import { OWNER_FALLBACK_NAME, resolveExpenseLiabilityAccount, type ExpensePayer } from '@/lib/expenses/payer'
+import { ownerFallbackName, resolveExpenseLiabilityAccount, type ExpensePayer } from '@/lib/expenses/payer'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { InvoiceExtractionResult } from '@/types'
 
 // Who paid for the underlag out of their own pocket. The account rule (2893
@@ -90,7 +91,11 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   // amount is cost. The wizard asked for the seller's country; here the
   // currency is the signal, and the note under the preview says so.
   const isForeign = currency !== 'SEK'
-  const isEf = entityType === 'enskild_firma'
+  // A form whose org number is the owner's personnummer has no separate
+  // legal person to owe the owner: the money is an egen insättning, not a
+  // debt, so the help and the outcome line say so instead of naming a
+  // liability.
+  const ownerIsTheCompany = isEntityType(entityType) && usesPersonnummerAsOrgNumber(entityType)
 
   // Reset per open so a previous underlag's numbers never carry over.
   useEffect(() => {
@@ -111,7 +116,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   // gets submitted, whatever the extraction said.
   const vatAmount = isForeign ? 0 : parseAmount(vatInput)
   const net = roundOre(amount - vatAmount)
-  const claimantName = payer === 'owner' ? ownerName.trim() || OWNER_FALLBACK_NAME : employeeName
+  const claimantName = payer === 'owner' ? ownerName.trim() || ownerFallbackName(entityType) : employeeName
 
   const canSubmit =
     !isSubmitting &&
@@ -197,7 +202,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
           <DialogTitle>{t('expense_dialog_title')}</DialogTitle>
           <DialogDescription>
             {payer === 'owner'
-              ? isEf
+              ? ownerIsTheCompany
                 ? t('expense_dialog_help_owner_ef')
                 : t('expense_dialog_help_owner', { account: liabilityAccount })
               : t('expense_dialog_help_employee')}
@@ -281,7 +286,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
                 {vatAmount > 0 ? ` · 2641 D ${formatCurrency(vatAmount, currency)}` : ''}
                 {` · ${liabilityAccount} K ${formatCurrency(amount, currency)}`}
               </p>
-              {payer === 'owner' && isEf ? (
+              {payer === 'owner' && ownerIsTheCompany ? (
                 <p>{t('expense_outcome_ef')}</p>
               ) : (
                 claimantName && <p>{t('expense_outcome_att_gora', { name: claimantName })}</p>

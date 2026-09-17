@@ -65,6 +65,7 @@ import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { SidebarV2 } from './SidebarV2'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
@@ -529,15 +530,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return <Icon className={className} />
   }
 
-  const isEmployer = entityType === 'aktiebolag' || paysSalaries
+  // Payroll shows by default for every juridisk person (a company that is a
+  // legal person of its own employs people as a matter of course); a form
+  // whose org number is the owner's personnummer opts in through
+  // pays_salaries. #782
+  const isEmployer =
+    (isEntityType(entityType) && !usesPersonnummerAsOrgNumber(entityType)) || paysSalaries
 
   // One gate for both navigations: a surface hides for the same reason in
   // the sidebar tree (nav-v2.ts) and in the phone menu.
   const passesGates = (item: NavGateFlags) => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer, an
-    // aktiebolag, or any entity that has flagged pays_salaries. #782
+    // Payroll (employerOnly) is hidden until the company is an employer by
+    // form or has flagged pays_salaries. #782
     if (item.employerOnly && !isEmployer) return false
     // Dimension surfaces are hidden until the company opts in via the
     // bookkeeping settings toggle (company_settings.dimensions_enabled).

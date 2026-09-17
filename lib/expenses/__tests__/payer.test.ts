@@ -3,8 +3,23 @@ import {
   OWNER_FALLBACK_NAME,
   PAYER_ORDER,
   isPersonPayer,
+  ownerFallbackName,
   resolveExpenseLiabilityAccount,
 } from '../payer'
+
+describe('ownerFallbackName', () => {
+  it('is the form glossary noun: Ägare for an AB and an EF, Medlem for an ideell förening', () => {
+    expect(ownerFallbackName('aktiebolag')).toBe('Ägare')
+    expect(ownerFallbackName('enskild_firma')).toBe('Ägare')
+    expect(ownerFallbackName('ideell_forening')).toBe('Medlem')
+  })
+
+  it('keeps the shared constant while the form is not known', () => {
+    expect(ownerFallbackName(null)).toBe(OWNER_FALLBACK_NAME)
+    expect(ownerFallbackName(undefined)).toBe(OWNER_FALLBACK_NAME)
+    expect(ownerFallbackName('handelsbolag')).toBe(OWNER_FALLBACK_NAME)
+  })
+})
 
 describe('resolveExpenseLiabilityAccount', () => {
   it('an employee is always 2820, whatever the entity type', () => {

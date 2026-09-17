@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 
 /**
  * Byrå settings scope: settings opened from the cockpit carry ?ctx=byra
@@ -55,6 +56,11 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
   const t = useTranslations('settings_nav')
 
   const hasCompany = !!company
+  // Payroll follows the sidebar (DashboardNav): every juridisk person sees it
+  // by default; a form whose org number is the owner's personnummer opts in
+  // through pays_salaries. #782
+  const form = company?.entity_type
+  const payrollByDefault = isEntityType(form) && !usesPersonnummerAsOrgNumber(form)
   const hasBankingExtension = ENABLED_EXTENSION_IDS.has('enable-banking')
   const hasMcpExtension = ENABLED_EXTENSION_IDS.has('mcp-server')
   const hasWhatsAppExtension = ENABLED_EXTENSION_IDS.has('whatsapp-inbox')
@@ -75,10 +81,7 @@ export function useSettingsNavItems(): { items: SettingsNavItem[]; groups: Setti
     { id: 'company', href: '/settings/company', label: t('company'), group: 'company', show: hasCompany },
     { id: 'bookkeeping', href: '/settings/bookkeeping', label: t('bookkeeping'), group: 'accounting', show: hasCompany },
     { id: 'tax', href: '/settings/tax', label: t('tax'), group: 'accounting', show: hasCompany },
-    // Lön settings follow the sidebar: every aktiebolag, plus any company that
-    // has registered as an employer (pays_salaries): e.g. an enskild firma
-    // with staff. #782
-    { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && (company?.entity_type === 'aktiebolag' || !!company?.pays_salaries) },
+    { id: 'salary', href: '/settings/salary', label: t('salary'), group: 'accounting', show: hasCompany && (payrollByDefault || !!company?.pays_salaries) },
     { id: 'invoicing', href: '/settings/invoicing', label: t('invoicing'), group: 'sales', show: hasCompany },
     { id: 'templates', href: '/settings/templates', label: t('templates'), group: 'sales', show: hasCompany },
     { id: 'banking', href: '/settings/banking', label: t('banking'), group: 'tools', show: hasCompany && !isSandbox && hasBankingExtension },
