@@ -1358,8 +1358,8 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   CASH_ACCOUNT_DISABLE_UNRESOLVED: {
     httpStatus: 400,
-    message_sv: 'Kontot har obokförda eller oavstämda transaktioner och kan inte stängas av förrän de är hanterade.',
-    message_en: 'The account has unbooked or unreconciled transactions and cannot be disabled until they are handled.',
+    message_sv: 'Kontot har obokförda transaktioner och kan inte stängas av förrän de är bokförda eller ignorerade.',
+    message_en: 'The account has unbooked transactions and cannot be disabled until they are booked or ignored.',
   },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
