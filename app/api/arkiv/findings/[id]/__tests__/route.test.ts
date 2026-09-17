@@ -52,3 +52,17 @@ describe('POST /api/arkiv/findings/[id]', () => {
     expect(findCall('arkiv_findings', 'update')?.[0]).toMatchObject({ status: 'dismissed', resolution: 'dismissed' })
   })
 })
+
+describe('POST /api/arkiv/findings/[id], phase 9 notes', () => {
+  it('stores why a missing document was dismissed', async () => {
+    enqueue({ data: { id: ID, kind: 'document_expected', detail: { rule: 'loan' } } })
+    const { status, body } = await parseJsonResponse(await call({ resolution: 'dismissed', note: 'not_applicable' }))
+    expect(status).toBe(200)
+    expect(body).toEqual({ data: { finding_id: ID, status: 'dismissed' } })
+    expect(JSON.stringify(findCalls('arkiv_findings', 'update'))).toContain('"resolution_note":"not_applicable"')
+  })
+
+  it('refuses a note it does not know', async () => {
+    expect((await parseJsonResponse(await call({ resolution: 'dismissed', note: 'because' }))).status).toBe(400)
+  })
+})

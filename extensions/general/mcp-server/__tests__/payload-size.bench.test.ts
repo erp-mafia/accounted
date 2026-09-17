@@ -460,7 +460,9 @@ describe('tools/list payload size guard', () => {
     //  2026-09-16 (phase 8, schema on read): gnubok_ask_document joins the
     //     default catalog, the one write-free way for an agent to read a clause
     //     the record does not carry. Measured 61 684 on landing.
-    expect(approxTokens).toBeLessThan(61_800)
+    //  2026-09-17 (phase 9, the agent door): gnubok_resolve_missing joins the
+    //     default catalog so an agent can close what it gathered. Measured 62 012.
+    expect(approxTokens).toBeLessThan(62_200)
   })
 
   /**
