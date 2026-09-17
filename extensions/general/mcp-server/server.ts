@@ -9,6 +9,7 @@ import {
   isEntityType,
   parseEntityType,
   resolveCompanyEntityType,
+  resultClosingAccounts,
 } from '@/lib/company/entity-type'
 import { NextResponse, after } from 'next/server'
 import {
@@ -18497,7 +18498,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_run_year_end',
     keywords: ['bokslut', 'årsbokslut', 'årsavslut', 'stäng året'],
     title: 'Run Year-End Closing (Bokslut)',
-    description: 'Stage bokslut on an OPEN period (never lock first): zeroes class 3-8 into 2099, then locks, closes and seeds next period IB. High-risk, always staged.',
+    description: 'Stage bokslut on an OPEN period (never lock first): class 3-8 into the form\'s result account, then lock, close, seed next IB. High-risk, staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -18534,6 +18535,13 @@ export const tools: McpTool[] = [
         )
       }
 
+      // The closing account is the form's (AB 2099, förening 2069, EF 2010):
+      // the preview names the one executeYearEndClosing will post to, so
+      // the approval card never promises 2099 to a förening.
+      const { closing, closingName } = resultClosingAccounts(
+        await resolveCompanyEntityType(supabase, companyId),
+      )
+
       return stagePendingOperation(supabase, companyId, userId, 'run_year_end',
         `Bokslut: ${period.name}`,
         { fiscal_period_id: fiscalPeriodId },
@@ -18541,7 +18549,9 @@ export const tools: McpTool[] = [
           period_name: period.name,
           period_start: period.period_start,
           period_end: period.period_end,
-          will: 'zero result accounts into 2099, lock period, close period, create next period, generate opening balances',
+          closing_account: closing,
+          closing_account_name: closingName,
+          will: `zero result accounts into ${closing} ${closingName}, lock period, close period, create next period, generate opening balances`,
         },
         actor,
         {
