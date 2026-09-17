@@ -100,3 +100,7 @@ tokens (90 days at the time of writing), so rotate the secret before it lapses.
 Without the secret the run fails at its first step. The workflow can also be
 started from the Actions tab, for one package or both, with a dry-run option
 that packs and validates without publishing.
+
+## Gather what is missing
+
+Accounted's nightly check lists documents the bookkeeping expects but the archive lacks, as the resource `Accounted://arkiv/missing`. The skill in `skills/accounted-gather/SKILL.md` of the Accounted repository tells an assistant how to find those documents in the mail and drives it already has access to, upload them with the person's approval, and close each item with `gnubok_resolve_missing`. Install it as a custom skill in claude.ai or Claude Code next to this bridge.

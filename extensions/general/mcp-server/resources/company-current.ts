@@ -32,6 +32,7 @@ export const companyCurrentResource: McpResource = {
       lastInvoiceSentRes,
       lastBankSyncRes,
       upcomingDeadlinesRes,
+      activeInboxRes,
     ] = await Promise.all([
       supabase
         .from('companies')
@@ -156,6 +157,9 @@ export const companyCurrentResource: McpResource = {
         .gte('due_date', today)
         .order('due_date', { ascending: true })
         .limit(5),
+
+      // The forwarding address: a document mailed here walks the same pipe as an upload.
+      supabase.from('company_inboxes').select('local_part').eq('company_id', companyId).eq('status', 'active').maybeSingle(),
     ])
 
     if (companyRes.error || !companyRes.data) {
@@ -240,6 +244,12 @@ export const companyCurrentResource: McpResource = {
         last_bank_sync_at: lastBankSyncRes.data?.last_synced_at ?? null,
       },
       upcoming_deadlines: upcomingDeadlinesRes.data ?? [],
+      intake: {
+        email:
+          process.env.RESEND_INBOUND_DOMAIN && (activeInboxRes.data as { local_part?: string } | null)?.local_part
+            ? `${(activeInboxRes.data as { local_part: string }).local_part}@${process.env.RESEND_INBOUND_DOMAIN}`
+            : null,
+      },
     }
   },
 }

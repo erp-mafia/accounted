@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   accountingMethodFromText,
   agreementFindings,
+  expectedDocuments,
   duplicateDocuments,
   fiscalYearStartMonth,
   momsPeriodFromText,
@@ -167,5 +168,32 @@ describe('duplicateDocuments and stuckDocuments', () => {
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ key: 'document_stuck:x', severity: 'warning', detail: { step: 'read', file_name: 'scan.pdf' } })
     expect((out[0].detail.last_error as string).length).toBe(200)
+  })
+})
+
+describe('expectedDocuments', () => {
+  const line = (account_number: string, entry_date: string, debit = 4625, credit = 0) => ({ account_number, entry_date, debit, credit })
+  const loanAgreement = { id: 'a-1', kind: 'loan', title: 'Låneavtal Almi', status: 'active', starts_on: '2026-01-01', ends_on: null, amount: null, principal: 500000, notice_months: null, counterparty_party_id: null, counterparty_name: 'Almi' }
+
+  it('asks for a loan agreement after three months of interest and stays quiet once one is on file', () => {
+    const lines = [line('8410', '2026-07-31'), line('8410', '2026-08-31'), line('8410', '2026-09-30')]
+    const drafts = expectedDocuments(lines, [], '2026-10-01')
+    expect(drafts).toEqual([
+      expect.objectContaining({ kind: 'document_expected', key: 'document_expected:loan', subjectKind: 'company', severity: 'info' }),
+    ])
+    expect(drafts[0].detail).toMatchObject({ rule: 'loan', expected_type: 'agreement.loan', evidence: { cost_months: 3, cost_total: 13875, accounts: ['8410'] } })
+    expect(expectedDocuments(lines, [loanAgreement as never], '2026-10-01')).toEqual([])
+  })
+
+  it('needs months of evidence, not one transaction, and ignores what is older than six months', () => {
+    expect(expectedDocuments([line('8410', '2026-09-30')], [], '2026-10-01')).toEqual([])
+    expect(expectedDocuments([line('8410', '2025-09-30'), line('8410', '2025-10-31'), line('8410', '2025-11-30')], [], '2026-10-01')).toEqual([])
+  })
+
+  it('reads a moving loan balance as evidence too, and asks for a rental agreement from recurring rent', () => {
+    const amortisation = [line('2350', '2026-07-31', 10417), line('2350', '2026-08-31', 10417), line('2350', '2026-09-30', 10417)]
+    expect(expectedDocuments(amortisation, [], '2026-10-01').map((d) => d.key)).toEqual(['document_expected:loan'])
+    const rent = [line('5010', '2026-07-25', 12500), line('5010', '2026-08-25', 12500), line('5010', '2026-09-25', 12500)]
+    expect(expectedDocuments(rent, [], '2026-10-01').map((d) => d.key)).toEqual(['document_expected:rent'])
   })
 })

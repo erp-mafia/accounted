@@ -13,6 +13,8 @@ import {
   type LiveFact,
   type SettingsSnapshot,
   type StuckJob,
+  expectedDocuments,
+  type LedgerLine,
 } from './checks'
 
 const log = createLogger('arkiv/lint')
@@ -38,11 +40,18 @@ interface FindingRow {
 }
 
 export async function lintCompany(supabase: SupabaseClient, companyId: string, today: string): Promise<LintSummary> {
+  const facts = await loadLiveCompanyFacts(supabase, companyId)
+  const settings = await loadSettings(supabase, companyId)
+  const agreements = await loadAgreements(supabase, companyId)
+  const contents = await loadDocumentContents(supabase, companyId)
+  const jobs = await loadStuckJobs(supabase, companyId)
+  const ledger = await loadLedgerLines(supabase, companyId, today)
   const drafts = [
-    ...settingsMismatches(await loadLiveCompanyFacts(supabase, companyId), await loadSettings(supabase, companyId)),
-    ...agreementFindings(await loadAgreements(supabase, companyId), today),
-    ...duplicateDocuments(await loadDocumentContents(supabase, companyId)),
-    ...stuckDocuments(await loadStuckJobs(supabase, companyId)),
+    ...settingsMismatches(facts, settings),
+    ...agreementFindings(agreements, today),
+    ...duplicateDocuments(contents),
+    ...stuckDocuments(jobs),
+    ...expectedDocuments(ledger, agreements, today),
   ]
   const { opened, closed } = await fileFindings(supabase, companyId, drafts)
   const autonomy = await computeAutonomy(supabase, companyId, today)
@@ -161,6 +170,35 @@ async function loadLiveCompanyFacts(supabase: SupabaseClient, companyId: string)
     .limit(500)
   if (error) throw new Error(`facts fetch failed: ${error.message}`)
   return (data ?? []) as LiveFact[]
+}
+
+/**
+ * Posted lines on the accounts the expectation rules read, twelve months back.
+ * PostgREST compares account numbers as text, which is exact for four digits.
+ */
+async function loadLedgerLines(supabase: SupabaseClient, companyId: string, today: string): Promise<LedgerLine[]> {
+  const since = new Date(`${today}T00:00:00Z`)
+  since.setUTCFullYear(since.getUTCFullYear() - 1)
+  const { data, error } = await supabase
+    .from('journal_entry_lines')
+    .select('account_number, debit_amount, credit_amount, journal_entries!inner(entry_date, status, company_id)')
+    .eq('journal_entries.company_id', companyId)
+    .eq('journal_entries.status', 'posted')
+    .gte('journal_entries.entry_date', since.toISOString().slice(0, 10))
+    // Literal on purpose: the phantom-column guard can only check what it can read. run.test.ts pins it to EXPECTATION_RULES.
+    .or('and(account_number.gte.8410,account_number.lte.8419),and(account_number.gte.2350,account_number.lte.2359),and(account_number.gte.2390,account_number.lte.2399),and(account_number.gte.2840,account_number.lte.2849),and(account_number.gte.5010,account_number.lte.5019)')
+    .limit(5000)
+  if (error) throw new Error(`ledger fetch failed: ${error.message}`)
+  const rows = (data ?? []) as unknown as Array<{
+    account_number: string | number
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+    journal_entries: { entry_date: string } | Array<{ entry_date: string }>
+  }>
+  return rows.map((r) => {
+    const je = Array.isArray(r.journal_entries) ? r.journal_entries[0] : r.journal_entries
+    return { account_number: String(r.account_number), entry_date: je?.entry_date ?? '', debit: Number(r.debit_amount ?? 0), credit: Number(r.credit_amount ?? 0) }
+  })
 }
 
 async function loadAgreements(supabase: SupabaseClient, companyId: string): Promise<AgreementForLint[]> {

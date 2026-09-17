@@ -12,6 +12,7 @@ import { fieldKinds, jsonSchemaFor, schemaForType, type ExtractionSchemaDef } fr
 import { auditOneIn } from '@/lib/arkiv/lint/autonomy'
 import { actingFields } from './acting'
 import { eagerSchema } from './eager'
+import { captureArkivEvent } from '@/lib/arkiv/events'
 
 /**
  * Arkiv phase 3: the stored record of a document. A model run writes a
@@ -156,6 +157,7 @@ export async function recordHumanFields(supabase: SupabaseClient, documentId: st
       outcome: reviewFields.length ? 'review' : 'settled',
       detail: audit ? { fields: settled, audit } : { fields: settled },
     })
+    captureArkivEvent('arkiv_question_answered', { companyId: doc.company_id, userId, fields: settled.length, schema_type: current.schema_type })
     return await saveExtraction(supabase, documentId, {
       schemaType: current.schema_type,
       schemaVersion: current.schema_version,
