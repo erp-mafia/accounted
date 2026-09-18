@@ -396,19 +396,13 @@ export function InvoicePaymentAccountsSettings({
 
   /**
    * Show or hide one account in the invoice picker. Hiding is the reversible
-   * alternative to deleting a cash account that may carry bookkeeping. A
-   * hidden account cannot stay a currency default, so that is cleared first.
+   * alternative to deleting a cash account that may carry bookkeeping. The
+   * database drops the account's currency defaults in the same update
+   * (trg_mirror_invoice_payee_defaults), so one PATCH is the whole change.
    */
   async function setVisibleOnInvoices(account: CashAccount, visible: boolean) {
     setIsSaving(true)
     try {
-      if (!visible) {
-        for (const currency of shownCurrencies) {
-          if (defaultByCurrency.get(currency) === account.id) {
-            await setDefault(currency, null, { silent: true })
-          }
-        }
-      }
       const res = await fetch(`/api/cash-accounts/${account.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

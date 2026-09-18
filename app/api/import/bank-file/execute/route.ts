@@ -132,7 +132,9 @@ export const POST = withRouteContext(
       // ingest binds rows to the picked account only if that cash account
       // exists, and never creates one (PSD2 seeding owns that). A file is the
       // user's own account, so create it here, under the same 1920-1999 rule
-      // as POST /api/cash-accounts, in the file's currency.
+      // as POST /api/cash-accounts, in the file's currency. If that fails the
+      // import stops: rows imported without their account is the bug this
+      // guards against, not a degraded mode.
       if (settlement_account && CreateCashAccountSchema.shape.ledger_account.safeParse(settlement_account).success) {
         const { data: existing } = await supabase
           .from('cash_accounts')
@@ -147,15 +149,19 @@ export const POST = withRouteContext(
             name: `Bankkonto ${settlement_account}`,
             bank_name: ['generic-csv', 'camt053'].includes(format) ? null : (getFormat(format)?.name ?? null),
             currency: (transactions[0]?.currency || 'SEK').toUpperCase(),
-            source: 'file',
+            source: 'manual',
             enabled: true,
             is_primary: false,
           })
           if (createError) {
-            opLog.warn('cash account for the settlement account was not created; rows import unbound', {
+            opLog.error('cash account for the settlement account was not created', createError, {
               settlementAccount: settlement_account,
-              error: createError.message,
             })
+            await supabase
+              .from('bank_file_imports')
+              .update({ status: 'failed', error_message: `Kunde inte skapa bankkontot ${settlement_account}` })
+              .eq('id', importRecord.id)
+            return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_FAILED', opLog, { requestId })
           }
         }
       }

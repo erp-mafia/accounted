@@ -180,11 +180,33 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     expect(inserts[0][0]).toMatchObject({
       company_id: 'company-1',
       ledger_account: '1940',
-      source: 'file',
+      source: 'manual',
       currency: 'SEK',
     })
     const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
     expect(ingestOptions.settlementAccount).toBe('1940')
+  })
+
+  it('stops the import when the cash account cannot be created', async () => {
+    // Rows imported without their account is the bug, not a fallback.
+    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // cash_accounts lookup: missing
+    enqueue({ data: null, error: { message: 'duplicate key', code: '23505' } }) // cash_accounts insert
+    enqueue({ data: null }) // bank_file_imports marked failed
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1940' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(500)
+    expect(body.error.code).toBe('BANK_FILE_SETTLEMENT_ACCOUNT_FAILED')
+    expect(ingestMock).not.toHaveBeenCalled()
+    const failed = findCalls('bank_file_imports', 'update')
+    expect(failed.at(-1)?.[0]).toMatchObject({ status: 'failed' })
   })
 
   it('never creates an account outside the 1920-1999 range', async () => {
