@@ -4611,7 +4611,7 @@
     "delivery_recipient_statuses_label": "Status per recipient",
     "delivery_recipient_statuses_summary": "The overall status shows the most serious reported outcome. Each recipient's result is shown below.",
     "delivery_recipient_status_unknown": "No delivery report yet",
-    "delivery_status_unmatched_recipient_note": "The bounce does not point at any recipient above. The usual cause is forwarding or a filter on the recipient's side that rejected the message after the server had accepted it."
+    "delivery_status_unmatched_recipient_note": "This report does not point at any recipient above. For a bounce, the usual cause is forwarding or a filter on the recipient's side that rejected the message after the server had accepted it."
   },
   "invoice_credit": {
     "back": "Back",
