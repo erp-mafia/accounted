@@ -1,6 +1,7 @@
 import { readSIEImportStatus, SIE_IMPORT_STATUS_SCHEMA } from './sie-import-status'
 import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
 import {
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS_SV,
@@ -149,6 +150,8 @@ import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
+import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
+import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
 import type { SkillTier } from './skills'
 import {
   RECOMMENDED_WORKFLOW_LOADOUTS,
@@ -1153,6 +1156,7 @@ async function stagePendingOperation(
       actor_type: actor.type,
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
+      agent_metadata: await loadSkillProvenance(supabase, companyId, userId, actor),
       risk_level: riskLevel,
     })
     .select('*')
@@ -4650,22 +4654,46 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_get_task',
+    title: 'Get Accounting Task',
+    description: 'Start a scoped accounting task: returns instructions and ordered skills to load. Read-only; actions require separate tools and user approval.',
+    inputSchema: ACCOUNTING_TASK_INPUT_SCHEMA,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        company_id: { type: 'string' },
+        kind: { type: 'string' },
+        goal: { type: 'string' },
+        scope: { type: 'object' },
+        skills: { type: 'array', items: { type: 'string' } },
+        instructions: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['company_id', 'kind', 'goal', 'scope', 'skills', 'instructions'],
+      additionalProperties: false,
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, companyId, _userId, supabase) {
+      return getAccountingTask(args, companyId, supabase)
+    },
+  },
+
+  {
     name: 'gnubok_list_skills',
     title: 'List Domain Skills',
-    description: 'List domain-knowledge skills for this company (entity type, VAT, payroll). Workflow guides + loaded specialty atoms. Pass include_all=true to see hidden skills. Call gnubok_load_skill(slug) for any body.',
+    description: 'List applicable workflows and company skills. include_all reveals unselected/inapplicable skills. Load bodies with gnubok_load_skill.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        tag: { type: 'string', description: 'Optional filter by tag (e.g. "vat", "monthly", "yearly", "payroll", or the tier name "workflow"/"horizontal"/"vertical"/"modifier").' },
+        tag: { type: 'string', description: 'Filter by tag, e.g. vat or monthly.' },
         tier: {
           type: 'string',
-          enum: ['workflow', 'horizontal', 'vertical', 'modifier'],
-          description: 'Optional filter by tier. workflow = static guides, horizontal = regulatory atoms (Swedish VAT/payroll/…), vertical = industry atoms (konsult-IT, e-handel…), modifier = cross-cutting atoms (holding-AB…).',
+          enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'],
+          description: 'Filter by tier: workflows, regulatory, industry, cross-cutting, community, or private.',
         },
         include_all: {
           type: 'boolean',
-          description: 'When true, ignore the company-context filter (entity_type, employees, vat_registered) and return all skills. Default false.',
+          description: 'Include unselected and inapplicable catalog skills. Default false.',
         },
       },
     },
@@ -4682,17 +4710,17 @@ export const tools: McpTool[] = [
               name: { type: 'string' },
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
-              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
+              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
             },
             required: ['slug', 'name', 'summary', 'tier'],
           },
         },
         count: { type: 'number' },
-        hidden_count: { type: 'number', description: 'Skills hidden by company-context filter. Re-call with include_all=true to see them.' },
+        hidden_count: { type: 'number', description: 'Inapplicable skills hidden.' },
         company_context: {
           type: 'object',
           additionalProperties: false,
-          description: 'Snapshot of the filter inputs used to compute the list: useful when debugging "why isn\'t skill X showing up?".',
+          description: 'Applicability filter inputs.',
           properties: {
             entity_type: { type: ['string', 'null'] },
             has_employees: { type: 'boolean' },
@@ -4731,7 +4759,8 @@ export const tools: McpTool[] = [
       const vatRegistered = Boolean(settings.data?.vat_registered)
       const hasEmployees = (employeeCount.count ?? 0) > 0
 
-      const all = await loadAllSkills(supabase)
+      const skillCompanyId = hasScope((args.__keyScopes ?? []) as ApiKeyScope[], 'agent:read') ? companyId : undefined
+      const all = await loadAllSkills(supabase, skillCompanyId, includeAll)
 
       // First pass: tier + tag filter (unchanged).
       const tagFiltered = all.filter((s) => {
@@ -4776,12 +4805,12 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_load_skill',
     title: 'Load Domain Skill',
-    description: 'Load a skill body by slug. Workflow slugs are flat (e.g. "month-end-close"); atom slugs match registry ids (e.g. "vertical/konsult-it", "modifier/holding-ab"). Call gnubok_list_skills to find slugs.',
+    description: 'Read the current Markdown for a skill from list_skills or get_task. Private own/<uuid> skills require company access.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        slug: { type: 'string', description: 'Skill slug: workflow slug ("month-end-close", "quarterly-vat-review", "year-end-close", "invoicing-rules", "payroll-monthly") or atom id ("vertical/konsult-it", "modifier/holding-ab", "horizontal/swedish-vat", …).' },
+        slug: { type: 'string', description: 'Slug returned by list_skills or get_task. own/<uuid> requires company access.' },
       },
       required: ['slug'],
     },
@@ -4793,7 +4822,7 @@ export const tools: McpTool[] = [
         name: { type: 'string' },
         summary: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
-        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
+        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
         body: { type: 'string', description: 'Full skill content as Markdown' },
       },
       required: ['slug', 'name', 'body', 'tier'],
@@ -4802,7 +4831,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
       if (!slug) throw new Error('slug is required')
-      const skill = await findSkill(slug, supabase)
+      const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
         const all = await loadAllSkills(supabase)
         const available = all.map((s) => s.slug).join(', ')
@@ -4812,7 +4841,7 @@ export const tools: McpTool[] = [
       // actually pull (mcp.skill_loaded). Without this, "which atom was
       // loaded" is unanswerable and atom effectiveness can't be measured.
       if (actor) {
-        emitSkillLoaded({ slug: skill.slug, tier: skill.tier, actor, userId, companyId })
+        await emitSkillLoaded({ slug: skill.slug, tier: skill.tier, bodyHash: skillBodyHash(skill.body), version: skill.version, actor, userId, companyId })
       }
       // Workflow-tier skills are the closed-form processes (month-end-close,
       // year-end-close, payroll-monthly). Loading one is a strong signal the
@@ -5085,7 +5114,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_agent_briefing',
     title: 'Get Agent Briefing',
-    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, atoms (gnubok_load_skill for bodies), top-30 memories, dimensions, and recommended_tools: per-workflow loadouts to batch-load in one ToolSearch select:a,b,c call. Call once at session start.',
+    description: 'Start a company session: identity, accounting method, skills, memories, dimensions and recommended_tools. Fetch skill bodies with gnubok_load_skill; batch-load tool loadouts with ToolSearch select:a,b,c.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5117,22 +5146,22 @@ export const tools: McpTool[] = [
         user_name: {
           type: ['string', 'null'],
           description:
-            'Name of the person you are assisting: address them by it (their tilltalsnamn), not the owner in profile_summary. Null if unset.',
+            'The assisted person\'s first name, not necessarily the company owner.',
         },
         profile_summary: {
           type: ['string', 'null'],
-          description: 'Composer-generated one-paragraph summary of the company. Null if no agent profile exists yet (composer has not run).',
+          description: 'Company summary; null before profile creation.',
         },
         atoms: {
           type: 'array',
-          description: 'Atoms (horizontal/vertical/modifier skills) loaded for this company. Metadata only: call gnubok_load_skill(id) for the body.',
+          description: 'Active company skills. Fetch bodies with gnubok_load_skill(atom_id).',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               id: { type: 'string', description: 'Deprecated: read atom_id instead.' },
-              atom_id: { type: 'string', description: 'Atom id (e.g. "horizontal/swedish-vat", "vertical/konsult-it", "modifier/holding-ab"). Use as gnubok_load_skill slug.' },
-              tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier'] },
+              atom_id: { type: 'string', description: 'Loadable skill slug.' },
+              tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier', 'community', 'own'] },
               title: { type: 'string' },
               description: { type: 'string' },
             },
@@ -5158,18 +5187,18 @@ export const tools: McpTool[] = [
         dimensions: {
           type: 'object',
           description:
-            'Dimension registry snapshot (kostnadsställe/projekt): an enabled flag plus the registered dimensions with their codes, counts and top values. OMITTED when the company has none registered; presence means lines can be tagged via the dims bag on gnubok_create_voucher, and enabled=true means dims-bag values are validated against the registry.',
+            'Registered kostnadsställe/projekt codes and values; omitted if none. Tag voucher lines with dims. When enabled, values are registry-validated.',
         },
         ledger_context: {
           type: 'object',
           description:
-            'Digest of how this company books things: top-5 counterparty + top-3 supplier patterns, each with an evidence block (seen_12m, agree, share, last_booked) and the rolling window it was computed over. Evidence is historical frequency, NOT permission to auto-book: weigh seen count AND recency, never a ratio alone. OMITTED when not computable. Field-by-field detail, plus account usage, explicit rules, VAT profile and conventions, is in the Accounted://ledger/context resource.',
+            'Top counterparty/supplier patterns with evidence and rolling window. Historical frequency is NOT permission to auto-book: weigh count and recency. Omitted if unavailable. Full rules and evidence: Accounted://ledger/context.',
         },
         recommended_tools: {
           type: 'array',
           items: { type: 'object' },
           description:
-            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists its tools as {name, callable, blocked_by?, note?}: callable=false names the missing scope or a search-only write. Batch-load the callable names in one call (ToolSearch select:a,b,c).',
+            'Ordered workflow loadouts: {name, callable, blocked_by?, note?}. callable=false explains a missing scope or search-only write. Batch-load callable names with ToolSearch select:a,b,c.',
         },
         feedback_channel: {
           type: 'object',
@@ -5185,7 +5214,7 @@ export const tools: McpTool[] = [
         skatteverket_connection: {
           type: 'object',
           description:
-            'Present only when a Skatteverket connection exists. Carries status ("active" or "needs_reconsent") and the grant detail behind it. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
+            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work.',
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -5470,11 +5499,13 @@ export const tools: McpTool[] = [
         }
       }
 
-      const atomIds = [
+      const companySkills = await loadCompanySkillRows(supabase, companyId)
+      const atomIds = [...new Set([
         ...(profile?.horizontal_atoms ?? []),
         ...(profile?.vertical_atoms ?? []),
         ...(profile?.modifier_atoms ?? []),
-      ]
+        ...companySkills.flatMap((row) => row.atom_id ? [row.atom_id] : []),
+      ])]
 
       let atoms: Array<{ id: string; atom_id: string; tier: string; title: string; description: string }> = []
       if (atomIds.length > 0) {
@@ -5483,6 +5514,7 @@ export const tools: McpTool[] = [
           .select('id, tier, title, description')
           .in('id', atomIds)
           .eq('is_active', true)
+          .eq('mcp_exposed', true)
         if (atomErr) throw new Error(`Failed to load atom metadata: ${atomErr.message}`)
         atoms = ((atomRows ?? []) as Array<{
           id: string
@@ -5500,6 +5532,10 @@ export const tools: McpTool[] = [
         }))
       }
 
+      atoms.push(...companySkills.flatMap((row) => {
+        const skill = ownSkill(row)
+        return skill ? [{ id: skill.slug, atom_id: skill.slug, tier: skill.tier, title: skill.name, description: skill.summary }] : []
+      }))
       const ledgerDigest = await safeLedgerDigest
       const skvConnection = await safeSkvConnection
 
@@ -22748,26 +22784,31 @@ function checkAndEmitNextHintFollowed(
 }
 
 /**
- * Fire-and-forget telemetry for every successful gnubok_load_skill, all tiers.
+ * Await retrieval telemetry before returning a skill, so the next staged
+ * operation can observe it even on another serverless instance.
  * Unlike mcp.workflow_started (workflow tier only), this records WHICH skill
  * or atom body the agent pulled: the denominator for correlating a loaded
  * atom with downstream tool-error rates.
  */
-function emitSkillLoaded(payload: {
+async function emitSkillLoaded(payload: {
   slug: string
-  tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+  tier: SkillTier
+  bodyHash: string
+  version?: number
   actor: ActorContext
   userId: string
   companyId: string | null
-}): void {
+}): Promise<void> {
   if (!payload.companyId) return
   const companyId = payload.companyId
-  emitAfterResponse(() => eventBus
+  await eventBus
     .emit({
       type: 'mcp.skill_loaded',
       payload: {
         slug: payload.slug,
         tier: payload.tier,
+        bodyHash: payload.bodyHash,
+        version: payload.version,
         sessionId: payload.actor.sessionId ?? null,
         actorType: payload.actor.type,
         actorId: payload.actor.id ?? null,
@@ -22776,7 +22817,7 @@ function emitSkillLoaded(payload: {
         companyId,
       },
     })
-    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err)))
+    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
 }
 
 /** Fire-and-forget telemetry for workflow lifecycle. */
@@ -22917,6 +22958,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     if (!rl.ok) return rl.response!
   }
   const supabase = createServiceClientNoCookies()
+  // Keep the OAuth key's classification name stable: onboarding depends on it.
+  // Display identity comes from the server-stored provider, never a client header.
+  if (apiKeyId && apiKeyName === 'MCP-klient (OAuth)') {
+    const { data: key } = await supabase.from('api_keys').select('client').eq('id', apiKeyId).maybeSingle()
+    apiKeyName = oauthActorLabel(key?.client, apiKeyName)
+    if (typeof key?.client === 'string' && /^registered:[0-9a-f-]{36}$/i.test(key.client)) {
+      const { data: registration } = await supabase.from('oauth_client_registrations')
+        .select('client_name').eq('id', key.client.slice('registered:'.length)).maybeSingle()
+      if (registration?.client_name) apiKeyName = `${registration.client_name} (registered client)`
+    }
+  }
   // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
   // way for an agent to keep a stable identifier across tools/call invocations
   // in one conversation. We use it to correlate telemetry + drive the next-hint
@@ -23204,6 +23256,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // that, because all three public tools are in the default catalog and
       // an anonymous caller never needs the bridge to name them.
       if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
+      if (isAnonymous && toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')) return unauthorized()
 
       // The bridge reaches reads only. A write must be named directly so the
       // client sees its own annotations and its staging/approval contract
@@ -23277,7 +23330,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // Enforce scope: surface structured error so the agent can dispatch.
-      const requiredScope = TOOL_SCOPE_MAP[toolName]
+      const requiredScope = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
+        ? 'agent:read'
+        : TOOL_SCOPE_MAP[toolName]
       if (requiredScope && !hasScope(keyScopes, requiredScope)) {
         const scopeError = toToolError(
           new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),
@@ -23567,7 +23622,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // scopes: search filters to what the API key can actually invoke, the
         // briefing flags each recommended tool as callable or not. Inject
         // privately via __keyScopes.
-        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing') {
+        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing' || toolName === 'gnubok_list_skills') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
         if (toolName === 'gnubok_search_tools') {

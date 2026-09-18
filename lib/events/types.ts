@@ -343,7 +343,9 @@ export type CoreEvent =
   // make the model worse: measure, don't assume).
   | { type: 'mcp.skill_loaded'; payload: {
       slug: string                                  // e.g. 'modifier/holding-ab', 'month-end-close'
-      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+      tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'community' | 'own'
+      bodyHash?: string
+      version?: number
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
@@ -393,4 +395,3 @@ export type EventPayload<T extends CoreEventType> = Extract<CoreEvent, { type: T
 
 /** Handler function for a specific event type */
 export type EventHandler<T extends CoreEventType> = (payload: EventPayload<T>) => Promise<void> | void
-

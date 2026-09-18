@@ -278,7 +278,7 @@ export default function AttGoraSection({
   // "Gör i Claude" on every row an agent can clear, once a client is
   // connected. Off the live counts, so a confirmed match updates the prompt.
   const aiAction = (category: AiTaskCategory, count: number) =>
-    aiClients.length > 0 ? <AiTaskAction clients={aiClients} task={{ category, count }} /> : undefined
+    <AiTaskAction clients={aiClients} task={{ category, count }} />
 
   return (
     <section aria-label={t('att_gora_title')}>

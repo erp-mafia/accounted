@@ -704,6 +704,7 @@ export default function PendingOperationsPage() {
     return [
       operationLabel(op.operation_type, t),
       isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
+      op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: op.agent_metadata.skills_loaded.join(', ') }) : null,
       formatRelativeTime(op.created_at),
     ]
       .filter(Boolean)

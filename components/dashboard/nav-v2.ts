@@ -37,6 +37,7 @@ export interface NavGateFlags {
   hidden?: boolean
   comingSoon?: boolean
   betaBadge?: boolean
+  newBadge?: boolean
 }
 
 /**
@@ -66,6 +67,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     icon: Sparkles,
     sub: [{ href: '/agent-knowledge', labelKey: 'agent_knowledge' }],
   },
+  { href: '/skills', labelKey: 'skills', icon: BookOpen, newBadge: true },
 ]
 
 export const NAV_V2_COMPANY: NavV2Item[] = [

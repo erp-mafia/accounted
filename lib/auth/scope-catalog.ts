@@ -384,9 +384,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_reverse_journal_entry:           'bookkeeping:write',
   // Agent surface (Phase 6 MCP parity): briefing tool exposes company-specific
   // profile + memory so it's scoped; gnubok_list_skills / gnubok_load_skill
-  // stay unscoped (discovery + static Markdown bodies + globally-readable atom
-  // registry: no per-company data).
+  // keep public discovery unscoped. The dispatcher gates own/ bodies, and
+  // list_skills adds private company skills only with agent:read.
   gnubok_get_agent_briefing:              'agent:read',
+  gnubok_get_task:                        'agent:read',
   // Agent memory write (previously UNMAPPED → callable by any key). Mapping to
   // agent:write; existing non-revoked keys are grandfathered in the
   // 20260619140000 migration so this does not regress them.
@@ -431,7 +432,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // Deliberately UNSCOPED (available to any authenticated key):
   // gnubok_search_tools, gnubok_list_skills, gnubok_load_skill,
   // gnubok_feedback. Discovery + static skill bodies + feedback channel
-  // carry no per-company data; keeping them open is what lets an agent
+  // remain public; private bodies are gated at dispatch. This lets an agent
   // orient itself before its key's scopes are known.
 }
 

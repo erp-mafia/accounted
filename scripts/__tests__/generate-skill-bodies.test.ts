@@ -71,15 +71,22 @@ describe('buildMigrationSql', () => {
     expect(sql).toContain("'horizontal/swedish-vat',\n    1,")
   })
 
-  it('omits is_active / mcp_exposed from the upsert so manual flips survive re-seed', () => {
+  it('preserves the emergency kill switch and non-community curation on re-seed', () => {
     const sql = buildMigrationSql([atom({})], { 'horizontal/test': 1 })
     // The INSERT column list takes column defaults for these on first insert...
     const columnList = sql.match(/INSERT INTO public\.agent_atom_registry\s*\n\s*\(([^)]*)\)/)?.[1] ?? ''
-    expect(columnList).not.toContain('mcp_exposed')
+    expect(columnList).toContain('mcp_exposed')
     expect(columnList).not.toContain('is_active')
     // ...and the DO UPDATE SET must not overwrite them on conflict.
     const updateClause = sql.slice(sql.indexOf('DO UPDATE SET'))
-    expect(updateClause).not.toContain('mcp_exposed')
+    expect(updateClause).toContain("CASE WHEN EXCLUDED.tier = 'community' THEN EXCLUDED.mcp_exposed ELSE public.agent_atom_registry.mcp_exposed END")
     expect(updateClause).not.toContain('is_active')
+  })
+
+  it('disables removed community skills without deleting referenced registry rows', () => {
+    const sql = buildMigrationSql([atom({})], { 'horizontal/test': 1 }, ['community/withdrawn', 'horizontal/test-old'])
+    expect(sql).toContain("SET is_active = false, mcp_exposed = false WHERE id IN ('community/withdrawn')")
+    expect(sql).not.toContain('DELETE FROM')
+    expect(sql).not.toContain('horizontal/test-old')
   })
 })

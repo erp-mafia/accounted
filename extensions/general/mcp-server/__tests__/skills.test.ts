@@ -26,6 +26,7 @@ function makeSupabaseWithEmptyAtomRegistry(
   rows: unknown[] = [],
   overrides: { entityType?: string | null; vatRegistered?: boolean; employeeCount?: number } = {},
   refRow: unknown = null,
+  companySkillRows: unknown[] = [],
 ) {
   const entityType = overrides.entityType ?? 'AB'
   const vatRegistered = overrides.vatRegistered ?? true
@@ -33,6 +34,14 @@ function makeSupabaseWithEmptyAtomRegistry(
 
   return {
     from: vi.fn((table: string) => {
+      if (['company_skills', 'companies', 'agent_profiles'].includes(table)) {
+        const chain: Record<string, ReturnType<typeof vi.fn>> = {
+          select: vi.fn(() => chain), eq: vi.fn(() => chain), order: vi.fn(() => chain),
+          range: vi.fn().mockResolvedValue({ data: table === 'company_skills' ? companySkillRows : [], error: null }),
+          maybeSingle: vi.fn().mockResolvedValue({ data: table === 'agent_profiles' ? { vertical_atoms: ['vertical/konsult-it'], modifier_atoms: [] } : null, error: null }),
+        }
+        return chain
+      }
       if (table === 'company_settings') {
         return {
           select: vi.fn(() => ({
@@ -89,6 +98,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 
 /** Alias for the legacy workflow-only array. New code reads `workflowSkills`. */
 const skills = workflowSkills
@@ -105,6 +115,21 @@ async function parseResult(response: Response) {
   const json = await response.json()
   return json.result
 }
+
+describe('private skill discovery through the dispatcher', () => {
+  it.each([true, false])('includes company instructions only when agent:read is granted (%s)', async (allowed) => {
+    vi.clearAllMocks()
+    const row = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private workflow', description: 'Company-specific instructions', body: 'Private instructions.', share_status: 'private', atom_id: null, company_id: 'company-1', team_id: null }
+    const db = makeSupabaseWithEmptyAtomRegistry([], {}, null, [row])
+    vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(db as never)
+    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null })
+    const result = await parseResult(await handleMcpRequest(mcpRequest('tools/call', { name: 'accounted_list_skills', arguments: {} })))
+    expect(result.isError).not.toBe(true)
+    const skills = JSON.parse(result.content[0].text).skills as { slug: string }[]
+    expect(skills.some((skill) => skill.slug === `own/${row.id}`)).toBe(allowed)
+    if (!allowed) expect(db.from).not.toHaveBeenCalledWith('company_skills')
+  })
+})
 
 describe('Skills registry', () => {
   beforeEach(() => {

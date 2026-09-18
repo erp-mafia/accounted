@@ -76,7 +76,7 @@ function mockSupabase(opts: {
   /** Order-agnostic chainable query resolving to `data` when awaited. */
   const chainResolving = (data: unknown) => {
     const chain: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'in', 'order', 'limit']) {
+    for (const m of ['select', 'eq', 'in', 'order', 'limit', 'range']) {
       chain[m] = vi.fn(() => chain)
     }
     chain.then = (resolve: (v: unknown) => void) => resolve({ data, error: null })
@@ -85,6 +85,7 @@ function mockSupabase(opts: {
 
   return {
     from: vi.fn((table: string) => {
+      if (table === 'company_skills') return chainResolving([])
       if (table === 'profiles') {
         return {
           select: vi.fn(() => ({
@@ -132,10 +133,10 @@ function mockSupabase(opts: {
         return {
           select: vi.fn(() => ({
             in: vi.fn(() => ({
-              eq: vi.fn().mockResolvedValue({
+              eq: vi.fn(() => ({ eq: vi.fn().mockResolvedValue({
                 data: atomRows,
                 error: errors.atoms ? new Error(errors.atoms) : null,
-              }),
+              }) })),
             })),
           })),
         }

@@ -7,6 +7,8 @@
     "setup:extensions": "tsx scripts/generate-extension-registry.ts",
     "skills:generate": "tsx scripts/generate-skill-bodies.ts",
     "skills:check": "tsx scripts/generate-skill-bodies.ts --check",
+    "skills:sync-public": "tsx scripts/sync-public-skills.ts",
+    "skills:admin": "tsx scripts/skills-admin.ts",
     "apiskill:generate": "tsx --conditions react-server scripts/api-skill/generate.ts",
     "apiskill:check": "tsx --conditions react-server scripts/api-skill/generate.ts --check",
     "crontabs:generate": "tsx scripts/generate-crontabs.ts",

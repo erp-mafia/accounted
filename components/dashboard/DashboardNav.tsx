@@ -624,12 +624,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     (item) => item.href !== '/chat' || agentIdentity.isVerified,
   )
 
-  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }) => {
+  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean; newBadge?: boolean }) => {
     const baseClass =
       'rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
     if (item.comingSoon) return <span className={baseClass}>{tNav('badge_coming_soon')}</span>
     if (item.devBadge) return <span className={baseClass}>{tNav('badge_dev')}</span>
     if (item.betaBadge) return <span className={baseClass}>{tNav('badge_beta')}</span>
+    if (item.newBadge) return <span className={baseClass}>{tNav('badge_new')}</span>
     return null
   }
 

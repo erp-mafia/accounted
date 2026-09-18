@@ -28,7 +28,7 @@ const COMPANY_INDEPENDENT_TOOLS = new Set([
  * on any company-dependent tool. gnubok_list_skills filters skills by the
  * company's entity type, employees and VAT registration.
  */
-const OPTIONAL_COMPANY_TOOLS = new Set(['gnubok_list_skills'])
+const OPTIONAL_COMPANY_TOOLS = new Set(['gnubok_list_skills', 'gnubok_load_skill'])
 
 export function isOptionalCompanyTool(toolName: string): boolean {
   return OPTIONAL_COMPANY_TOOLS.has(toolName)

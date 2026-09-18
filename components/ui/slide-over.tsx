@@ -52,10 +52,12 @@ function SlideOverHeader({
   kicker,
   title,
   className,
+  closeLabel,
 }: {
   kicker?: React.ReactNode
   title: React.ReactNode
   className?: string
+  closeLabel?: string
 }) {
   return (
     <div className={cn('flex-shrink-0 border-b border-border px-6 py-4', className)}>
@@ -71,6 +73,7 @@ function SlideOverHeader({
           </DialogPrimitive.Title>
         </div>
         <DialogPrimitive.Close
+          aria-label={closeLabel}
           className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
         >
           <X className="h-4 w-4" />

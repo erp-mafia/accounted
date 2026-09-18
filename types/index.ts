@@ -2619,6 +2619,9 @@ export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {
+  skills_loaded?: string[]
+  skill_retrievals?: Array<{ slug: string; retrieved_at: string; body_hash?: string; version?: number }>
+  skills_provenance?: 'no_session' | 'unavailable' | 'recent_session' | 'recent_session_truncated'
   conversation_id?: string
   intent_id?: string
   model?: string

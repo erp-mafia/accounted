@@ -1,4 +1,5 @@
 'use client'
+import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { useState, useEffect, useMemo, useRef, useCallback, type ComponentProps } from 'react'
@@ -4260,7 +4261,13 @@ export default function TransactionsPage() {
   return (
     <div className="space-y-8">
       {/* Page header (concept scene 10): title + Importera split button */}
-      <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)} />
+      <TransactionStatusBar onOpenCreateDialog={() => setIsDialogOpen(true)}>
+        {mode === 'inbox' && <HandoffButton task={{ kind: 'bookkeep', scope: {
+          ...(periodBounds ? { date_from: periodBounds.start, date_to: periodBounds.end } : {}),
+          transaction_ids: inboxItems.filter((item) => item.source === 'bank' && (!(selectedIds.size || skvSelectedIds.size) || selectedIds.has(item.data.id))).map((item) => item.data.id),
+          tax_transaction_ids: inboxItems.filter((item) => item.source === 'skatteverket' && (!(selectedIds.size || skvSelectedIds.size) || skvSelectedIds.has(item.data.id))).map((item) => item.data.id),
+        } }} />}
+      </TransactionStatusBar>
 
 
       {skvNeedsReconnect && sourceFilter === 'skatteverket' ? (

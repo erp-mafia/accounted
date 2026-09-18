@@ -17,10 +17,13 @@
 
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
+import { discoverCommunitySkills } from './community-skills'
 
-export type Tier = 'horizontal' | 'vertical' | 'modifier'
+export type Tier = 'horizontal' | 'vertical' | 'modifier' | 'community'
 
 export interface DiscoveredAtom {
+  mcp_exposed?: boolean
+  reviewed_at?: string | null
   /** Stable id shaped as "<tier>/<slug>" (e.g. "horizontal/swedish-vat"). */
   id: string
   tier: Tier
@@ -212,6 +215,7 @@ export async function discoverAtoms(rootDir: string): Promise<DiscoveredAtom[]> 
     }
   }
 
+  rows.push(...await discoverCommunitySkills(rootDir))
   rows.sort((a, b) => a.id.localeCompare(b.id))
   return rows
 }

@@ -1,4 +1,4 @@
-import type { Skill } from './types'
+import type { Skill } from '../types'
 
 const body = `# Kreditfaktura (Credit Note) Process: Accounted
 

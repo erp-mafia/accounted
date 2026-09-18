@@ -1,4 +1,5 @@
 'use client'
+import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
@@ -113,6 +114,7 @@ export default function SalaryPage() {
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
       <div className="flex items-center gap-4">
+        <HandoffButton task={{ kind: 'payroll' }} />
         <Link href="/salary/employees" className={QUIET_LINK_CLASS}>
           {t('employees')}
         </Link>
