@@ -1,4 +1,6 @@
 import type { McpResource } from './types'
+import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { sumUsage, usageSince, USAGE_WINDOW_DAYS } from '@/lib/arkiv/usage'
 
 /**
  * Per-company working memory for agents. Read at session start so Claude
@@ -33,6 +35,7 @@ export const companyCurrentResource: McpResource = {
       lastBankSyncRes,
       upcomingDeadlinesRes,
       activeInboxRes,
+      usageRes,
     ] = await Promise.all([
       supabase
         .from('companies')
@@ -160,6 +163,9 @@ export const companyCurrentResource: McpResource = {
 
       // The forwarding address: a document mailed here walks the same pipe as an upload.
       supabase.from('company_inboxes').select('local_part').eq('company_id', companyId).eq('status', 'active').maybeSingle(),
+
+      // Arkiv phase 9e: the meter, read in the same batch; shown only inside the rollout.
+      supabase.from('arkiv_usage_daily').select('activity, units').eq('company_id', companyId).gte('day', usageSince(USAGE_WINDOW_DAYS)),
     ])
 
     if (companyRes.error || !companyRes.data) {
@@ -250,6 +256,9 @@ export const companyCurrentResource: McpResource = {
             ? `${(activeInboxRes.data as { local_part: string }).local_part}@${process.env.RESEND_INBOUND_DOMAIN}`
             : null,
       },
+      ...(isArkivEnabled(companyId)
+        ? { arkiv_usage_365d: sumUsage((usageRes.data ?? []) as Array<{ activity: string; units: number }>, usageSince(USAGE_WINDOW_DAYS), USAGE_WINDOW_DAYS) }
+        : {}),
     }
   },
 }

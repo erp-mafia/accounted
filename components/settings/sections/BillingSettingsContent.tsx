@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { ArkivUsageSection } from './ArkivUsageSection'
 import { useLocale, useTranslations } from 'next-intl'
 import { Check } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -78,6 +79,7 @@ export function BillingSettingsContent() {
   return (
     <>
       <BillingCoreContent />
+      <ArkivUsageSection />
       {/* Self-host only (renders null on hosted): connector status + manual
           entitlement sync. Sits below the billing states, which is why the
           core content is split out: it has several early returns. */}

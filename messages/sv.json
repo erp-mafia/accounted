@@ -378,7 +378,7 @@
     "banking": "Transaktioner hämtas automatiskt. {appName} kan bara läsa, aldrig flytta pengar.",
     "assistant": "Vad assistenten vet, minns och kan.",
     "api": "Anslut Claude, Cursor och andra AI-assistenter via MCP. Här skapar du också API-nycklar för egna integrationer.",
-    "whatsapp": "Koppla ditt mobilnummer och skicka kvitton som foto eller PDF direkt i WhatsApp."
+    "whatsapp": "Koppla ditt mobilnummer och skicka kvitton, fakturor och avtal som foto eller PDF direkt i WhatsApp."
   },
   "settings_nav": {
     "aria_label": "Inställningar",
@@ -2157,6 +2157,9 @@
     "blockers_load_retry": "Försök igen"
   },
   "settings_billing": {
+    "arkiv_usage_title": "Arkiv",
+    "arkiv_usage_line": "Senaste tolv månaderna: {documents, plural, one {1 dokument} other {# dokument}} inlästa, {pages, plural, one {1 sida} other {# sidor}} lästa, {asks, plural, =0 {inga frågor} one {1 fråga} other {# frågor}} till dokument.",
+    "arkiv_usage_note": "Ingår i abonnemanget. Räknas per rullande tolv månader.",
     "load_failed": "Abonnemangsuppgifterna kunde inte läsas in, så din status kan inte visas just nu.",
     "load_retry": "Försök igen",
     "team_agreement_status": "Ingår i {teamName}s avtal",
@@ -3515,11 +3518,11 @@
     "confirm": "Bekräfta bokföring"
   },
   "settings_whatsapp": {
-    "group_label": "WhatsApp-kvitton",
+    "group_label": "WhatsApp-dokument",
     "loading": "Hämtar status …",
     "load_failed": "Kunde inte läsa av WhatsApp-kopplingen.",
     "retry": "Försök igen",
-    "unlinked_intro": "Koppla ditt mobilnummer så kan du skicka kvitton som foto eller PDF direkt i WhatsApp. De landar i Underlag, färdiga att granska och bokföra.",
+    "unlinked_intro": "Koppla ditt mobilnummer så kan du skicka kvitton, fakturor, avtal och annan post som foto eller PDF direkt i WhatsApp. Kvitton och fakturor landar i Underlag, resten i Arkiv.",
     "connect_button": "Koppla WhatsApp",
     "mint_failed": "Kunde inte skapa någon kod. Försök igen om en stund.",
     "open_whatsapp": "Öppna WhatsApp",

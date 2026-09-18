@@ -66,7 +66,7 @@ export type TemplateId = (typeof TEMPLATE)[keyof typeof TEMPLATE]
 
 const SV = {
   m1Unlinked: () =>
-    'Hej! Det här är *Accounteds kvittomottagning*, en automatisk AI-tjänst.\n\n' +
+    'Hej! Det här är *Accounteds dokumentmottagning*, en automatisk AI-tjänst.\n\n' +
     'För att koppla ditt nummer: öppna Accounted, gå till *Inställningar -> WhatsApp* och skicka den 6-siffriga koden här.\n\n' +
     'Skriv *hjälp* för att nå en människa.',
 
@@ -78,8 +78,8 @@ const SV = {
       ? `Klart! Ditt nummer är kopplat till *${companyName}*.`
       : 'Klart! Ditt nummer är kopplat till *Accounted*.'
     const tips =
-      'Skicka kvitton hit som foto eller PDF så lägger jag dem i *Underlag* i Accounted. ' +
-      'Två tips: skicka som _dokument_ (gem-ikonen) för bästa skärpa, och en fil per kvitto. Flersidiga kvitton skickas som PDF.'
+      'Skicka kvitton, fakturor, avtal och annan post hit som foto eller PDF så lägger jag dem rätt i Accounted: kvitton och fakturor i *Underlag*, resten i *Arkiv*. ' +
+      'Två tips: skicka som _dokument_ (gem-ikonen) för bästa skärpa, och en fil per dokument. Flersidiga dokument skickas som PDF.'
     const outro =
       'Jag är en AI-assistent. Skriv *hjälp* för mänsklig support, *stopp* för att koppla från.'
     // Two real ways to route a receipt, and the old copy named only one,
@@ -100,7 +100,7 @@ const SV = {
   },
 
   m4AckEmpty: () =>
-    '*Kvitto mottaget.* Jag kunde inte läsa av beloppet, komplettera i appen under Underlag.',
+    '*Mottaget.* Inget belopp att läsa av, så jag läser dokumentet och lägger det där det hör hemma: kvitton i Underlag, annat i Arkiv.',
 
   m4Duplicate: () => 'Det kvittot finns redan i Underlag.',
 
@@ -183,10 +183,10 @@ const SV = {
     'Jag kan inte lyssna på röstmeddelanden ännu. Skicka kvittot som foto eller PDF, eller skriv en kort rad text.',
 
   m15Unsupported: () =>
-    'Jag kan bara ta emot bilder och PDF-dokument (bild max 5 MB). Skicka kvittot som foto eller PDF.',
+    'Jag kan ta emot bilder, PDF och Office-dokument (bild max 5 MB), inte ljud eller video. Skicka dokumentet som foto eller PDF.',
 
   m16Fallback: () =>
-    'Jag är en automatisk kvittomottagning och kan inte svara på frågor här i chatten. Skicka ett kvitto (foto/PDF) så tar jag hand om det, eller skriv *hjälp* för mänsklig support.',
+    'Jag är en automatisk dokumentmottagning och kan inte svara på frågor här i chatten. Skicka ett kvitto, en faktura eller ett avtal (foto/PDF) så tar jag hand om det, eller skriv *hjälp* för mänsklig support.',
 
   m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
     `Det blev många filer på kort tid, jag pausar mottagningen en stund. Försök igen om cirka ${minutes} minuter.`,
@@ -233,7 +233,7 @@ const SV = {
 
 const EN: typeof SV = {
   m1Unlinked: () =>
-    'Hi! This is *Accounted receipt intake*, an automated AI service.\n\n' +
+    'Hi! This is *Accounted document intake*, an automated AI service.\n\n' +
     'To link your number: open Accounted, go to *Settings -> WhatsApp* and send the 6-character code here.\n\n' +
     'Type *hjälp* to reach a human.',
 
@@ -245,8 +245,8 @@ const EN: typeof SV = {
       ? `Done! Your number is linked to *${companyName}*.`
       : 'Done! Your number is linked to *Accounted*.'
     const tips =
-      'Send receipts here as a photo or PDF and I will file them under *Underlag* in Accounted. ' +
-      'Two tips: send as a _document_ (the paperclip icon) for full sharpness, and one file per receipt. Multi-page receipts go as PDF.'
+      'Send receipts, invoices, agreements and other post here as a photo or PDF and I will file them where they belong in Accounted: receipts and invoices under *Underlag*, the rest in *Arkiv*. ' +
+      'Two tips: send as a _document_ (the paperclip icon) for full sharpness, and one file per document. Multi-page documents go as PDF.'
     const outro =
       'I am an AI assistant. Type *hjälp* for human support, *stopp* to disconnect.'
     const multi =
@@ -264,7 +264,7 @@ const EN: typeof SV = {
   },
 
   m4AckEmpty: () =>
-    '*Receipt received.* I could not read the amount, complete it in the app under Underlag.',
+    '*Received.* No amount to read, so I am reading the document and filing it where it belongs: receipts under Underlag, the rest in Arkiv.',
 
   m4Duplicate: () => 'That receipt is already in Underlag.',
 
@@ -340,10 +340,10 @@ const EN: typeof SV = {
     'I cannot listen to voice messages yet. Send the receipt as a photo or PDF, or write a short line of text.',
 
   m15Unsupported: () =>
-    'I can only receive images and PDF documents (image max 5 MB). Send the receipt as a photo or PDF.',
+    'I can receive images, PDFs and Office documents (image max 5 MB), not audio or video. Send the document as a photo or PDF.',
 
   m16Fallback: () =>
-    'I am an automated receipt intake and cannot answer questions here in the chat. Send a receipt (photo/PDF) and I will handle it, or type *hjälp* for human support.',
+    'I am an automated document intake and cannot answer questions here in the chat. Send a receipt, an invoice or an agreement (photo/PDF) and I will handle it, or type *hjälp* for human support.',
 
   m17RateLimited: ({ minutes = 10 }: LinkedTemplateArgs) =>
     `That was a lot of files in a short time, I am pausing intake for a bit. Try again in about ${minutes} minutes.`,

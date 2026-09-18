@@ -7,6 +7,7 @@ vi.mock('@/lib/ai', () => ({
   getAiService: () => ({ generateStructured }),
   getAiStatus: vi.fn(() => ({ configured: true })),
 }))
+vi.mock('@/lib/arkiv/usage', () => ({ recordArkivUsage: vi.fn(async () => undefined) }))
 vi.mock('@/lib/documents/provenance', () => ({
   recordActivity: vi.fn(async () => 'act-1'),
   softwareAgent: vi.fn(async () => 'agent-ask'),

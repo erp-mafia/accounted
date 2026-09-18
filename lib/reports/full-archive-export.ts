@@ -1283,6 +1283,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   arkiv_findings: 'nightly lint findings, recomputed from the archive and the settings; no bookkeeping content',
   arkiv_autonomy: 'audit tallies per document type, recomputed nightly from activities',
   arkiv_graph_snapshots: 'the last build of the company graph, recomputed from the ledger, the agreements, the documents and the facts; no content of its own',
+  arkiv_usage_daily: 'daily counts of what the pipeline read and answered for the company; operational, not räkenskapsinformation',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their
