@@ -1718,3 +1718,30 @@ describe('rcInputTotalsFromDeclaration', () => {
 // tests/pg/vat-declaration-totals-rpc.pg.test.ts: the shape detection and
 // exclusion now live inside the get_vat_declaration_totals RPC, so the
 // behavior is verified against real Postgres rather than a mocked client.
+
+describe('rutorFromTotals with a 26xx momsruta override', () => {
+  it('moves the balance to the chosen box and leaves the BAS box empty', () => {
+    const totals = new Map<string, { debit: number; credit: number }>([
+      // Fortnox layout: 2615 = EU-förvärv (override ruta 30), 2617 = tjänster
+      // utanför EU (override ruta 30, unknown to BAS), 2614 untouched.
+      ['2615', { debit: 0, credit: 1000 }],
+      ['2617', { debit: 0, credit: 250 }],
+      ['2614', { debit: 0, credit: 100 }],
+      ['2641', { debit: 1350, credit: 0 }],
+    ])
+    const dynamic = {
+      mappingByAccount: new Map([
+        ['2615', { box: 'ruta30' as const, side: 'credit' as const }],
+        ['2617', { box: 'ruta30' as const, side: 'credit' as const }],
+      ]),
+      explicitAccounts: new Set(['2615', '2617']),
+    }
+
+    const rutor = rutorFromTotals(totals, dynamic)
+
+    expect(rutor.ruta30).toBe(1350)
+    expect(rutor.ruta60).toBe(0)
+    expect(rutor.ruta48).toBe(1350)
+    expect(rutor.ruta49).toBe(0)
+  })
+})

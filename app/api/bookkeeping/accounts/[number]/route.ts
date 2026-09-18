@@ -8,6 +8,7 @@ import {
   defaultRateForVatTreatment,
   isVatTreatmentAllowedForAccountClass,
 } from '@/lib/vat/account-vat-treatment'
+import { isVatBoxAccount } from '@/lib/vat/account-vat-box'
 
 // DELETE hard-deletes an unused, non-system account; accounts referenced by
 // this company's journal entries must be deactivated instead (PUT is_active).
@@ -115,6 +116,12 @@ export const PUT = withRouteContext(
     ) {
       return NextResponse.json(
         { error: 'Momskoden kan inte användas för den här kontoklassen.' },
+        { status: 400 },
+      )
+    }
+    if (body.vat_box && !isVatBoxAccount(number)) {
+      return NextResponse.json(
+        { error: 'Momsruta kan bara väljas för momskonton (26xx, inte 2650).' },
         { status: 400 },
       )
     }

@@ -3,6 +3,7 @@ import {
   ACCOUNT_VAT_TREATMENTS,
   isVatTreatmentAllowedForAccountClass,
 } from '@/lib/vat/account-vat-treatment'
+import { ACCOUNT_VAT_BOXES, isVatBoxAccount } from '@/lib/vat/account-vat-box'
 
 // Commit-boundary re-validation for staged chart-of-accounts operations
 // (gnubok_create_account / gnubok_update_account). A staged
@@ -32,6 +33,9 @@ const defaultVatRate = z
   .optional()
 
 const defaultVatTreatment = z.enum(ACCOUNT_VAT_TREATMENTS).nullable().optional()
+
+// Momsruta override for 26xx VAT accounts (lib/vat/account-vat-box.ts).
+const vatBox = z.enum(ACCOUNT_VAT_BOXES).nullable().optional()
 
 /** Empty string / null → undefined, then bounded string. */
 const optString = (max: number) =>
@@ -98,12 +102,20 @@ export const CreateAccountParamsSchema = z
     default_vat_code: optString(32),
     default_vat_rate: defaultVatRate,
     default_vat_treatment: defaultVatTreatment,
+    vat_box: vatBox,
     sru_code: optString(16),
   })
   .superRefine((v, ctx) => {
     const conflict = accountClassTypeConflict(v.account_number, v.account_type)
     if (conflict) {
       ctx.addIssue({ code: 'custom', message: conflict, path: ['account_type'] })
+    }
+    if (v.vat_box && !isVatBoxAccount(v.account_number)) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'vat_box is only valid on 26xx VAT accounts (not 2650)',
+        path: ['vat_box'],
+      })
     }
     if (
       v.default_vat_treatment &&
@@ -127,9 +139,17 @@ export const UpdateAccountParamsSchema = z.object({
   default_vat_code: clearableString(32),
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
+  vat_box: vatBox,
   sru_code: clearableString(16),
   is_active: z.boolean().optional(),
 }).superRefine((v, ctx) => {
+  if (v.vat_box && !isVatBoxAccount(v.account_number)) {
+    ctx.addIssue({
+      code: 'custom',
+      message: 'vat_box is only valid on 26xx VAT accounts (not 2650)',
+      path: ['vat_box'],
+    })
+  }
   if (
     v.default_vat_treatment &&
     !isVatTreatmentAllowedForAccountClass(

@@ -377,6 +377,64 @@ describe('gnubok_update_account', () => {
     ).rejects.toThrow(/Nothing to update/)
   })
 
+  it('stages a momsruta override (vat_box) on a 26xx account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '2617',
+        account_name: 'Utgående moms tjänster utanför EU 25 %',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '2617', vat_box: '30', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { dry_run?: boolean; preview: { current: Record<string, unknown>; changes: Record<string, unknown> } }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.current.vat_box).toBeNull()
+    expect(result.preview.changes).toEqual({ vat_box: '30' })
+  })
+
+  it('refuses vat_box outside the set and on accounts that are not 26xx', async () => {
+    const current = (accountNumber: string) => ({
+      data: {
+        account_number: accountNumber,
+        account_name: 'x',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const bad = createQueuedMockSupabase()
+    bad.enqueue(current('2617'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '2617', vat_box: '49' },
+        'company-1', 'user-1', bad.supabase as never,
+      ),
+    ).rejects.toThrow(/vat_box must be one of/)
+
+    const wrongAccount = createQueuedMockSupabase()
+    wrongAccount.enqueue(current('4545'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '4545', vat_box: '60' },
+        'company-1', 'user-1', wrongAccount.supabase as never,
+      ),
+    ).rejects.toThrow(/26xx/)
+  })
+
   it('dry-run preview carries current values and the requested changes', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

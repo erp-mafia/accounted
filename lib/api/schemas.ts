@@ -8,6 +8,7 @@ import {
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
+import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -2864,6 +2865,11 @@ export const AccountVatTreatmentSchema = z.enum(ACCOUNT_VAT_TREATMENTS)
 
 const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
 
+// Momsruta override for 26xx VAT accounts; lib/vat/account-vat-box.ts is the
+// source of truth and the DB CHECK on chart_of_accounts.vat_box mirrors it.
+export const AccountVatBoxSchema = z.enum(ACCOUNT_VAT_BOXES)
+const vatBox = AccountVatBoxSchema.nullable().optional()
+
 export const CreateAccountSchema = z.object({
   account_number: accountNumber,
   account_name: z.string().min(1, 'Account name is required'),
@@ -2874,6 +2880,7 @@ export const CreateAccountSchema = z.object({
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
+  vat_box: vatBox,
   sru_code: z.string().nullable().optional(),
 })
 
@@ -2884,6 +2891,7 @@ export const UpdateAccountSchema = z.object({
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
+  vat_box: vatBox,
   sru_code: z.string().nullable().optional(),
 })
 

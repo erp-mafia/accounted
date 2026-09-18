@@ -35,6 +35,8 @@ import { useCompanySettings, useDimensions } from '@/lib/reference-data/hooks'
 import { fetchDimensions } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { AccountVatTreatmentSelect } from './AccountVatTreatmentSelect'
+import { AccountVatBoxSelect } from '@/components/bookkeeping/AccountVatBoxSelect'
+import { isVatBoxAccount, type AccountVatBox } from '@/lib/vat/account-vat-box'
 import {
   defaultRateForVatTreatment,
   type AccountVatTreatment,
@@ -75,6 +77,8 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
   const [defaultVatTreatment, setDefaultVatTreatment] = useState<AccountVatTreatment | 'none'>(
     account.default_vat_treatment ?? 'none',
   )
+  // Momsruta override for 26xx VAT accounts: 'bas' (null) = BAS mapping by number.
+  const [vatBox, setVatBox] = useState<AccountVatBox | 'bas'>(account.vat_box ?? 'bas')
   const [sruCode, setSruCode] = useState(account.sru_code || '')
   const [isActive, setIsActive] = useState(account.is_active)
   const [isSaving, setIsSaving] = useState(false)
@@ -253,6 +257,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           description: description || null,
           default_vat_rate: defaultVatRate === 'none' ? null : parseFloat(defaultVatRate),
           default_vat_treatment: defaultVatTreatment === 'none' ? null : defaultVatTreatment,
+          ...(isVatBoxAccount(account.account_number)
+            ? { vat_box: vatBox === 'bas' ? null : vatBox }
+            : {}),
           sru_code: sruCode || null,
           is_active: isActive,
         }),
@@ -322,6 +329,14 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
             }}
           />
 
+          {isVatBoxAccount(account.account_number) && (
+            <AccountVatBoxSelect
+              value={vatBox}
+              onValueChange={setVatBox}
+              accountNumber={account.account_number}
+              accountName={accountName}
+            />
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>Standard moms</Label>

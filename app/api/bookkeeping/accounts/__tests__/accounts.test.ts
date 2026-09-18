@@ -477,6 +477,51 @@ describe('PUT /api/bookkeeping/accounts/[number]', () => {
     expect(body.data.account_name).toBe('Nytt namn')
   })
 
+  it('forwards vat_box into the update on a 26xx account', async () => {
+    const { supabase, calls } = createCapturingSupabase([
+      { data: { account_number: '2617', vat_box: '30' } },
+    ])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/2617', {
+      method: 'PUT',
+      body: { vat_box: '30' },
+    })
+    const { status } = await parseJsonResponse(
+      await PUT(req, { params: Promise.resolve({ number: '2617' }) })
+    )
+    expect(status).toBe(200)
+    const updateArg = calls.find((c) => c.method === 'update')?.args[0] as { vat_box?: string | null }
+    expect(updateArg?.vat_box).toBe('30')
+  })
+
+  it('refuses vat_box on an account that is not a 26xx VAT account', async () => {
+    const { supabase, calls } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/4545', {
+      method: 'PUT',
+      body: { vat_box: '60' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: string }>(
+      await PUT(req, { params: Promise.resolve({ number: '4545' }) })
+    )
+    expect(status).toBe(400)
+    expect(body.error).toMatch(/26xx/)
+    expect(calls.find((c) => c.method === 'update')).toBeUndefined()
+  })
+
+  it('refuses a vat_box value outside the set', async () => {
+    const { supabase } = createCapturingSupabase([])
+    auth(supabase)
+    const req = createMockRequest('/api/bookkeeping/accounts/2617', {
+      method: 'PUT',
+      body: { vat_box: '49' },
+    })
+    const { status } = await parseJsonResponse(
+      await PUT(req, { params: Promise.resolve({ number: '2617' }) })
+    )
+    expect(status).toBe(400)
+  })
+
   it('forwards default_vat_rate into the update', async () => {
     const { supabase, calls } = createCapturingSupabase([
       { data: { account_number: '3740', default_vat_rate: 0 } },

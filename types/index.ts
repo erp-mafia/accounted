@@ -1915,6 +1915,8 @@ export interface BASAccount {
   // null = no default (line keeps its own rate). Öresavrundning (3740) = 0.
   default_vat_rate: number | null
   default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
+  // Momsruta override for 26xx VAT accounts; null = BAS mapping by number.
+  vat_box: import('@/lib/vat/account-vat-box').AccountVatBox | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean

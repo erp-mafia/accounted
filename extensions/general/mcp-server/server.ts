@@ -188,6 +188,7 @@ import {
   isAccountVatTreatment,
   isVatTreatmentAllowedForAccountClass,
 } from '@/lib/vat/account-vat-treatment'
+import { ACCOUNT_VAT_BOXES, isAccountVatBox, isVatBoxAccount } from '@/lib/vat/account-vat-box'
 import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/create-supplier'
 import { accountClassTypeConflict } from '@/lib/pending-operations/schemas/account'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -9554,13 +9555,13 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_account',
     keywords: ['kontoplan', 'ändra konto', 'baskonto'],
     title: 'Update Account (Kontoplan)',
-    description: 'Stage an edit to a kontoplan account: rename, description, default VAT, SRU code, or activate/deactivate via is_active. Find accounts with gnubok_list_accounts.',
+    description: 'Stage an edit to a kontoplan account (name, description, VAT, vat_box, SRU, is_active). Find accounts with gnubok_list_accounts.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        account_number: { type: 'string', description: '4-digit number.' },
+        account_number: { type: 'string' },
         account_name: { type: 'string' },
         description: { type: 'string' },
         default_vat_code: { type: 'string' },
@@ -9571,7 +9572,11 @@ export const tools: McpTool[] = [
           description: 'VAT return treatment.',
         },
         sru_code: { type: 'string' },
-        is_active: { type: 'boolean', description: 'false deactivates (hides from pickers, keeps history); true (re)activates.' },
+        vat_box: {
+          type: ['string', 'null'],
+          description: '26xx momsruta: 10-12, 30-32, 60-62, 48, none; null = BAS.',
+        },
+        is_active: { type: 'boolean', description: 'false deactivates.' },
         dry_run: { type: 'boolean' },
         idempotency_key: { type: 'string' },
       },
@@ -9586,7 +9591,7 @@ export const tools: McpTool[] = [
 
       const { data: current, error: fetchErr } = await supabase
         .from('chart_of_accounts')
-        .select('account_number, account_name, description, default_vat_code, default_vat_rate, default_vat_treatment, sru_code, is_active')
+        .select('account_number, account_name, description, default_vat_code, default_vat_rate, default_vat_treatment, vat_box, sru_code, is_active')
         .eq('company_id', companyId)
         .eq('account_number', accountNumber)
         .maybeSingle()
@@ -9607,10 +9612,17 @@ export const tools: McpTool[] = [
       if (vatTreatment && !isVatTreatmentAllowedForAccountClass(vatTreatment, accountClass)) {
         throw new Error('default_vat_treatment is not valid for this account class')
       }
+      const vatBox = args.vat_box
+      if (vatBox !== undefined && vatBox !== null && !isAccountVatBox(vatBox)) {
+        throw new Error(`vat_box must be one of ${ACCOUNT_VAT_BOXES.join(', ')}`)
+      }
+      if (vatBox && !isVatBoxAccount(accountNumber)) {
+        throw new Error('vat_box is only valid on 26xx VAT accounts (not 2650)')
+      }
 
       const params: Record<string, unknown> = { account_number: accountNumber }
       const changes: Record<string, unknown> = {}
-      for (const key of ['account_name', 'description', 'default_vat_code', 'default_vat_rate', 'default_vat_treatment', 'sru_code', 'is_active']) {
+      for (const key of ['account_name', 'description', 'default_vat_code', 'default_vat_rate', 'default_vat_treatment', 'vat_box', 'sru_code', 'is_active']) {
         if (args[key] !== undefined) {
           params[key] = args[key]
           changes[key] = args[key]
