@@ -394,6 +394,49 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
+  /**
+   * Show or hide one account in the invoice picker.
+   *
+   * The list added accounts and set `invoice_payee: true` on every save, but
+   * nothing ever set it back, so a duplicate added by mistake was stuck in the
+   * picker for good (support 2026-09-17: the same Lunar account added twice,
+   * once by the bank connection and once by hand). Deleting the row is the
+   * wrong instrument, a cash account can carry bookkeeping and
+   * /api/cash-accounts/[id] deliberately offers PATCH only. Hiding is the
+   * reversible move, and the list already renders the hidden state.
+   *
+   * A hidden account cannot stay the default for a currency: invoices would
+   * print details this page says are not in use. Clear the default first.
+   */
+  async function setVisibleOnInvoices(account: CashAccount, visible: boolean) {
+    setIsSaving(true)
+    try {
+      if (!visible) {
+        for (const currency of shownCurrencies) {
+          if (defaultByCurrency.get(currency) === account.id) {
+            await setDefault(currency, null, { silent: true })
+          }
+        }
+      }
+      const res = await fetch(`/api/cash-accounts/${account.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_payee: visible }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      await afterWrite(
+        visible
+          ? t('shown_account', { account: accountLabel(account) })
+          : t('hidden_account', { account: accountLabel(account) }),
+      )
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   async function handleDefaultChange(currency: Currency, value: string) {
     setIsSaving(true)
     try {
@@ -592,6 +635,16 @@ export function InvoicePaymentAccountsSettings({
                     >
                       {isEditing ? t('cancel') : t('edit')}
                     </button>
+                    {!isEditing && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleOnInvoices(account, !account.invoice_payee)}
+                        disabled={isSaving}
+                        className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground disabled:opacity-50"
+                      >
+                        {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
+                      </button>
+                    )}
                   </SettingsRowEnd>
                 </SettingsRow>
                 <SettingsReveal open={isEditing}>
