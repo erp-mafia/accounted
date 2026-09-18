@@ -148,6 +148,17 @@ describe('createPayslipLine', () => {
 })
 
 describe('updatePayslipLine', () => {
+  it('validates one-off tax against the merged line before a sparse update', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, one_off_tax_percent: 34 } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID, salaryRunId: RUN_ID, lineId: LINE_ID,
+      patch: { is_net_deduction: true }, dryRun: true,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
   it('returns SALARY_LINE_NOT_FOUND when the line belongs to a different run', async () => {
     mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
     mock.enqueue({

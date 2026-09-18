@@ -8,6 +8,7 @@
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
+import { VacationBalanceSchema } from '@/lib/salary/vacation-balance'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
   employee: 'Anställd',
@@ -139,7 +140,8 @@ export function buildPayslipData(params: {
     totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
     ytdGross: sre.ytd_gross as number,
     ytdTax: sre.ytd_tax as number,
-    ytdNet: sre.ytd_net as number,
+    ytdNet: sre.ytd_net as number | null,
+    vacationBalance: sre.vacation_balance == null ? null : VacationBalanceSchema.parse(sre.vacation_balance),
     bankAccount,
     breakdownSteps,
   }

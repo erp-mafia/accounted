@@ -23,6 +23,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { OpeningBalancesFieldsSchema } from '@/lib/api/schemas'
+import { VacationBalanceSchema } from '@/lib/salary/vacation-balance'
 import { getOpeningBalances, setOpeningBalancesBulk } from '@/lib/salary/opening-balances'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -32,12 +33,13 @@ const OpeningBalancesResponse = z.object({
   cutover_date: z.string(),
   ytd_gross: z.number(),
   ytd_tax: z.number(),
-  ytd_net: z.number(),
+  ytd_net: z.number().nullable(),
+  vacation_balance: VacationBalanceSchema.nullable().optional(),
   vacation_paid_days_remaining: z.number(),
   vacation_days_taken_this_year: z.number(),
   vacation_saved_days_by_year: z.record(z.string(), z.number()),
-  opening_semester_liability: z.number(),
-  opening_semester_liability_avgifter: z.number(),
+  opening_semester_liability: z.number().nullable(),
+  opening_semester_liability_avgifter: z.number().nullable(),
   karens_periods_adjustment: z.number(),
   locked: z.boolean(),
   locked_by_run_id: z.string().uuid().nullable(),

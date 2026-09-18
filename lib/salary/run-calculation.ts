@@ -26,16 +26,20 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { calculateSalary } from './calculation-engine'
+import { calculateSalary, monthlyBaseSalary } from './calculation-engine'
+import { SalaryCalculationPolicySchema } from './calculation-policy'
 import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
+import { assertVacationLineProvenance, isAutomaticVacationLine } from './calculated-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
 import { getLineItemAccount } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
+import { computeRunVacationBalances } from './run-vacation-balances'
+import type { VacationBalance } from './vacation-balance'
 import { dailyDivisor, hourlyDivisor } from './work-schedule'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
@@ -154,13 +158,14 @@ export async function runSalaryCalculation(
   //     company without a settings row keeps the default (off).
   const { data: companySettings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('salary_net_rounding')
+    .select('salary_net_rounding, salary_calculation_policy')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) {
     return { ok: false, code: 'DATABASE_ERROR', details: settingsError }
   }
   const roundNetToWholeKrona = companySettings?.salary_net_rounding === true
+  const calculationPolicy = SalaryCalculationPolicySchema.parse(companySettings?.salary_calculation_policy ?? {})
 
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
@@ -190,6 +195,11 @@ export async function runSalaryCalculation(
     const emp = sre.employee
     if (!emp) continue
     const name = `${emp.first_name} ${emp.last_name}`
+    try {
+      assertVacationLineProvenance(sre.line_items || [])
+    } catch (error) {
+      validationErrors.push(`${name}: ${error instanceof Error ? error.message : 'Ogiltig semesterersättningsrad'}`)
+    }
 
     // A per-run monthly salary of 0 is allowed: it represents an intentional
     // nollkörning (the user edited this month's salary down to 0). Only a
@@ -277,7 +287,8 @@ export async function runSalaryCalculation(
   //     adjustment that reaches sjuklön) is worse than failing the
   //     calculation, and matches how this function treats every other query
   //     error.
-  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
+  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number | null }>
+  let vacationByEmployee: Map<string, VacationBalance>
   try {
     const openingRows = await loadOpeningBalances(supabase, companyId, rosterEmployeeIds)
     for (const opening of openingRows) {
@@ -293,6 +304,10 @@ export async function runSalaryCalculation(
       periodMonth: run.period_month as number,
       employeeIds: rosterEmployeeIds,
       openingRows,
+    })
+    vacationByEmployee = await computeRunVacationBalances(supabase, {
+      companyId, runId: id, run: run as Parameters<typeof computeRunVacationBalances>[1]['run'],
+      current: runEmployees, openings: openingRows,
     })
   } catch (err) {
     return {
@@ -365,12 +380,16 @@ export async function runSalaryCalculation(
       supabase,
       companyId,
       employeeId: emp.id,
-      monthlySalary: sre.monthly_salary || 0,
+      monthlySalary: roundOre((sre.monthly_salary || 0) * emp.employment_degree / 100),
       payrollConfig: config,
       periodStart: deviation.start,
       periodEnd: deviation.end,
       karensPeriodsAdjustment: karensAdjustmentApplies ? opening.karensPeriodsAdjustment : 0,
       dailyDivisor: dailyDivisor(emp.workdays_per_week),
+      hoursPerDay: (emp.hours_per_week ?? 40) / (emp.workdays_per_week ?? 5),
+      hoursPerWeek: emp.hours_per_week ?? 40,
+      workdaysPerWeek: emp.workdays_per_week ?? 5,
+      calculationPolicy,
     })
 
     // 8b. For hourly employees, derive worked hours from the calendar.
@@ -438,14 +457,18 @@ export async function runSalaryCalculation(
     // so this update is display-only: it keeps the row consistent after the
     // user edits this month's salary on the draft.
     if (emp.salary_type === 'monthly') {
-      const baseAmount =
-        Math.round((sre.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
-      await supabase
+      const baseAmount = monthlyBaseSalary({
+        monthlySalary: sre.monthly_salary || 0, employmentDegree: emp.employment_degree,
+        employmentStart: emp.employment_start, employmentEnd: emp.employment_end,
+        periodStart, periodEnd, calculationPolicy,
+      })
+      const { error: baseError } = await supabase
         .from('salary_line_items')
         .update({ amount: baseAmount })
         .eq('salary_run_employee_id', sre.id)
         .eq('company_id', companyId)
         .eq('item_type', 'monthly_salary')
+      if (baseError) return { ok: false, code: 'DATABASE_ERROR', details: baseError }
     }
 
     const employeeName = `${emp.first_name} ${emp.last_name}`
@@ -680,12 +703,13 @@ export async function runSalaryCalculation(
         if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
         if (li.source_recurring_line_id) return false
-        if (li.item_type === 'semesterersattning') return false
+        if (isAutomaticVacationLine(li)) return false
         if (li.item_type === 'oresavrundning') return false
         return true
       })
       .map((li: Record<string, unknown>) => ({
         itemType: li.item_type as SalaryLineItemType,
+        oneOffTaxPercent: li.one_off_tax_percent as number | null | undefined,
         amount: li.amount as number,
         isTaxable: li.is_taxable as boolean,
         isAvgiftBasis: li.is_avgift_basis as boolean,
@@ -772,6 +796,7 @@ export async function runSalaryCalculation(
         employmentStart: emp.employment_start,
         employmentEnd: emp.employment_end,
         roundNetToWholeKrona,
+        calculationPolicy,
       },
       config,
       taxRates.map((r) => ({ ...r })),
@@ -787,6 +812,11 @@ export async function runSalaryCalculation(
         (sum: number, li: Record<string, unknown>) => sum + ((li.quantity as number) || 0),
         0,
       )
+
+    // Keep raw engine tax/net for the calculation trace, but snapshots and
+    // run totals must use the same effective withholding as payslips/bank.
+    const effectiveTax = sre.tax_withheld_override ?? result.taxWithheld
+    const effectiveNet = roundOre(result.netSalary + result.taxWithheld - effectiveTax)
 
     // 8g. Write the per-employee row. Mirrors calendar-derived hours into the
     //     hours_worked snapshot column so downstream code (reports, storno via
@@ -821,22 +851,26 @@ export async function runSalaryCalculation(
         vacation_days_taken: vacationDays,
         calculation_breakdown: { steps: result.steps },
         ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
-        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld),
-        ytd_net: roundOre((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary),
+        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + effectiveTax),
+        ytd_net: ytdByEmployee.get(sre.employee_id)?.net === null ? null : roundOre((ytdByEmployee.get(sre.employee_id)?.net ?? 0) + effectiveNet),
+        vacation_balance: vacationByEmployee.get(sre.employee_id) ?? null,
       })
       .eq('id', sre.id)
+      .eq('company_id', companyId)
 
     if (empUpdateError) {
       return { ok: false, code: 'DATABASE_ERROR', details: empUpdateError }
     }
 
-    // 8h. Replace any existing 'semesterersattning' line item (the engine
-    //     derives it on every calculate).
+    // 8h. Replace only engine-owned rows. Preserve manually entered variable
+    //     vacation compensation and final settlements on every recalculation.
     const { error: delSemErr } = await supabase
       .from('salary_line_items')
       .delete()
       .eq('salary_run_employee_id', sre.id)
+      .eq('company_id', companyId)
       .eq('item_type', 'semesterersattning')
+      .eq('calculation_source', 'vacation_compensation')
     if (delSemErr) {
       return { ok: false, code: 'DATABASE_ERROR', details: delSemErr }
     }
@@ -845,6 +879,7 @@ export async function runSalaryCalculation(
         salary_run_employee_id: sre.id,
         company_id: companyId,
         item_type: 'semesterersattning',
+        calculation_source: 'vacation_compensation',
         description: 'Semesterersättning',
         quantity: 1,
         amount: Math.round(result.vacationCompensation * 100) / 100,
@@ -874,7 +909,7 @@ export async function runSalaryCalculation(
     if (delRoundErr) {
       return { ok: false, code: 'DATABASE_ERROR', details: delRoundErr }
     }
-    if (result.netRounding > 0) {
+    if (result.netRounding !== 0) {
       const { error: insRoundErr } = await supabase.from('salary_line_items').insert({
         salary_run_employee_id: sre.id,
         company_id: companyId,
@@ -896,8 +931,8 @@ export async function runSalaryCalculation(
     }
 
     totalGross += result.grossSalary
-    totalTax += result.taxWithheld
-    totalNet += result.netSalary
+    totalTax += effectiveTax
+    totalNet += effectiveNet
     totalAvgifter += result.avgifterAmount
     totalVacationAccrual += result.vacationAccrual
     totalEmployerCost += result.totalEmployerCost
@@ -913,7 +948,7 @@ export async function runSalaryCalculation(
       total_avgifter: Math.round(totalAvgifter * 100) / 100,
       total_vacation_accrual: Math.round(totalVacationAccrual * 100) / 100,
       total_employer_cost: Math.round(totalEmployerCost * 100) / 100,
-      calculation_params: serializePayrollConfig(config),
+      calculation_params: { ...serializePayrollConfig(config), salary_calculation_policy: calculationPolicy },
     })
     .eq('id', id)
     // Defense-in-depth: scope the write to the company explicitly. The

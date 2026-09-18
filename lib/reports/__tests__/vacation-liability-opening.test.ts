@@ -35,6 +35,13 @@ beforeEach(() => {
 })
 
 describe('generateVacationLiability with opening balances', () => {
+  it('refuses a complete liability report when the historical liability is unknown', async () => {
+    mock.enqueue({ data: [EMPLOYEE] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [{ employee_id: EMPLOYEE_ID, cutover_date: '2026-08-01', opening_semester_liability: null, opening_semester_liability_avgifter: null }] })
+    await expect(generateVacationLiability(supabase, COMPANY_ID, 2026)).rejects.toThrow('Historiskt underlag')
+  })
   it('adds opening SEK terms and starts days from the imported balance', async () => {
     mock.enqueue({ data: [EMPLOYEE] }) // employees page
     mock.enqueue({

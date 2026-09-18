@@ -19,6 +19,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { VacationBalanceSchema, type VacationBalance } from './vacation-balance'
 import {
   getVacationYearBounds,
   getVacationYearStart,
@@ -26,6 +27,7 @@ import {
 } from './vacation-year'
 
 export interface VacationBalanceRow {
+  vacation_balance?: VacationBalance | null
   id: string
   employee_id: string
   vacation_year_start: string
@@ -89,7 +91,7 @@ export async function syncVacationLedgerForEmployees(
 
     const { data: openings, error: openErr } = await supabase
       .from('employee_opening_balances')
-      .select('employee_id, cutover_date, vacation_paid_days_remaining, vacation_days_taken_this_year, vacation_saved_days_by_year')
+      .select('employee_id, cutover_date, vacation_paid_days_remaining, vacation_days_taken_this_year, vacation_saved_days_by_year, vacation_balance')
       .eq('company_id', companyId)
       .in('employee_id', employeeIds)
     if (openErr) return { ok: false, message: openErr.message }
@@ -100,6 +102,7 @@ export async function syncVacationLedgerForEmployees(
         vacation_paid_days_remaining: number
         vacation_days_taken_this_year: number | null
         vacation_saved_days_by_year: Record<string, number> | null
+        vacation_balance?: VacationBalance | null
       }>).map((o) => [o.employee_id, o]),
     )
 
@@ -115,7 +118,7 @@ export async function syncVacationLedgerForEmployees(
     // Booked vacation days per employee, bucketed later per year bounds.
     const { data: bookedRows, error: bookedErr } = await supabase
       .from('salary_run_employees')
-      .select('employee_id, vacation_days_taken, salary_run:salary_runs!inner(period_year, period_month, status)')
+      .select('employee_id, vacation_days_taken, vacation_balance, salary_run:salary_runs!inner(period_year, period_month, status)')
       .eq('company_id', companyId)
       .eq('salary_run.status', 'booked')
       .in('employee_id', employeeIds)
@@ -123,6 +126,7 @@ export async function syncVacationLedgerForEmployees(
     const booked = ((bookedRows ?? []) as unknown as Array<{
       employee_id: string
       vacation_days_taken: number
+      vacation_balance?: VacationBalance | null
       salary_run: { period_year: number; period_month: number; status: string } | null
     }>).filter((r) => r.salary_run?.status === 'booked')
 
@@ -147,6 +151,25 @@ export async function syncVacationLedgerForEmployees(
       if (!employee) continue
 
       const opening = openingByEmployee.get(employeeId)
+      if (opening?.vacation_balance) {
+        const initial = VacationBalanceSchema.parse(opening.vacation_balance)
+        if (initial.year_start !== currentYearStart) {
+          return { ok: false, message: 'Kategoriserat ingångssaldo kräver separat semesterårsavslut innan ett nytt år öppnas.' }
+        }
+        if (initial.as_of_date > asOfDate) continue
+        const snapshots = booked.filter(row => row.employee_id === employeeId && row.vacation_balance)
+          .map(row => VacationBalanceSchema.parse(row.vacation_balance))
+          .filter(balance => balance.year_start === initial.year_start && balance.as_of_date <= asOfDate && balance.as_of_date >= initial.as_of_date)
+          .sort((a, b) => b.as_of_date.localeCompare(a.as_of_date))
+        const latest = snapshots[0] ?? initial
+        // Entitled/taken here form a cutover-relative pair. The independently
+        // stored annual entitlement must not be mistaken for earned PAID days.
+        upserts.push({ company_id: companyId, employee_id: employeeId, vacation_year_start: initial.year_start,
+          entitled_days: initial.paid + initial.extra_paid, accrued_days: 0,
+          taken_days: initial.paid + initial.extra_paid - latest.paid - latest.extra_paid,
+          saved_days: latest.saved_by_year, forced_payout_days: 0, status: 'open', vacation_balance: latest })
+        continue
+      }
       const cutoverInYear = (yearStart: string): boolean =>
         !!opening &&
         opening.cutover_date >= yearStart &&

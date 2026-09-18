@@ -75,8 +75,8 @@ describe('non-default schedule: 4-day week (divisor 17.33)', () => {
       }),
     )
     const day2 = result.lineItems.find((li) => li.item_type === 'sick_day2_14')!
-    // Day 2 net deduction = dailyRate - dailyRate x 80% = 20% of 1731.1.
-    expect(Math.abs(day2.amount)).toBeCloseTo(1731.1 - 1731.1 * 0.8, 1)
+    // Both days receive 80% sick pay before the separate karens deduction.
+    expect(Math.abs(day2.amount)).toBeCloseTo(2 * (1731.1 - 1731.1 * 0.8), 1)
     const unpaid = result.lineItems.find((li) => li.item_type === 'unpaid_leave')!
     expect(unpaid.amount).toBe(-1731.1)
   })

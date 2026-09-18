@@ -1,5 +1,11 @@
 # Decision Log
 
+[2026-09-18] Cutover balances use their own vacation cutoff and explicit categories, not duplicated allocations. Unknown net/liability remain null. Source holds block new withdrawals; categorized year-close stops until carryover policy and monetary bases are reconciled.
+
+[2026-09-18] Leave cutoff and one-off rounding are explicit compatibility options, not inferred from expected totals. YTD and run totals honor effective tax overrides, matching payslips and bank amounts.
+
+[2026-09-18] Payroll repair: explicit company policies, not customer-specific formulas. Mark automatic vacation rows with provenance so manual payments survive. One-off tax uses verified input percentages; uncertain source data and recovery balances stay release blockers.
+
 One line per decision, at most 300 characters: `[YYYY-MM-DD] <decision>: <why>`. Details belong in the PR body. Appended by agents and humans when a non-obvious choice is made (approach picked over an alternative, dependency declined, action stopped by a CLAUDE.md rule). Read before re-litigating a past decision.
 
 Entries dated before 2026-08-01 were archived on 2026-09-13 to keep this file readable. Read them with `git show c36bc125a:DECISIONS.md`; code comments that cite a July date refer to that archive.

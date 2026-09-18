@@ -15,6 +15,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { validateVacationEntitlement } from './vacation-entitlement'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 import { getCompanyEntityType } from '@/lib/company/context'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
@@ -101,6 +102,8 @@ export async function createEmployee(
   }
 
   const fields = pickWritable(rest)
+  const vacationError = validateVacationEntitlement(fields)
+  if (vacationError) return { ok: false, code: 'VALIDATION_ERROR', details: { message: vacationError } }
   if (!fields.first_name || !fields.last_name || !fields.employment_start) {
     return {
       ok: false,
@@ -228,6 +231,8 @@ export async function updateEmployee(
   // Merged-state validation (same rules as the internal PATCH route).
   const merged = { ...(existing as Record<string, unknown>), ...updates }
   const issues: string[] = []
+  const vacationError = validateVacationEntitlement(merged)
+  if (vacationError) issues.push(vacationError)
   if (merged.salary_type === 'monthly' && (!merged.monthly_salary || (merged.monthly_salary as number) <= 0)) {
     issues.push('Månadslön krävs och måste vara större än 0 för månadslöneform')
   }

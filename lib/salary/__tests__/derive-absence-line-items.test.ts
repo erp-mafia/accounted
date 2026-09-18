@@ -6,6 +6,7 @@ import {
   type DeriveInput,
 } from '../derive-absence-line-items'
 import type { PayrollConfig } from '../payroll-config'
+import { SalaryCalculationPolicySchema } from '../calculation-policy'
 
 const config: PayrollConfig = {
   configYear: 2026,
@@ -100,6 +101,81 @@ describe('buildSjukloneperioder', () => {
 })
 
 describe('deriveAbsenceLineItems: sick', () => {
+  it('keeps historical leave cutoffs explicit without discarding prior-month context', () => {
+    const july = days(['27', '28', '29', '30', '31'].map(d => [`2037-07-${d}`, 'parental']))
+    const august = days(['03', '04', '05', '06', '07'].map(d => [`2037-08-${d}`, 'parental']))
+    const input = baseInput({ monthlySalary: 63000, periodStart: '2037-07-01', periodEnd: '2037-07-31',
+      periodDays: july, contextDays: august,
+      calculationPolicy: SalaryCalculationPolicySchema.parse({ long_leave: 'calendar_after_five_workdays' }) })
+    expect(deriveAbsenceLineItems(input).lineItems[0].amount).toBe(-10356.15)
+    expect(deriveAbsenceLineItems({ ...input, calculationPolicy: SalaryCalculationPolicySchema.parse({
+      long_leave: 'calendar_after_five_workdays', leave_context: 'through_deviation_end',
+    }) }).lineItems[0].amount).toBe(-15000)
+    const june = days(['22', '23', '24', '25', '26', '29', '30'].map(d => [`2037-06-${d}`, 'parental']))
+    const earlyJuly = days(['01', '02', '03'].map(d => [`2037-07-${d}`, 'parental']))
+    expect(deriveAbsenceLineItems({ ...input, periodDays: earlyJuly, contextDays: june,
+      calculationPolicy: SalaryCalculationPolicySchema.parse({ long_leave: 'calendar_after_five_workdays', leave_context: 'through_deviation_end' }),
+    }).lineItems[0].amount).toBe(-6213.69)
+  })
+
+  it('keeps documented partial illness continuous through vacation and changing extent', () => {
+    const lookback = Array.from({ length: 30 }, (_, i) => `2037-06-${String(i + 1).padStart(2, '0')}`)
+    const periodDays: AbsenceDay[] = Array.from({ length: 31 }, (_, i) => ({
+      absence_date: `2037-07-${String(i + 1).padStart(2, '0')}`, absence_type: 'sick', hours: i < 4 ? 6 : 1,
+    }))
+    const result = deriveAbsenceLineItems(baseInput({ monthlySalary: 48000, periodDays, lookbackSickDates: lookback,
+      lookbackSickDays: lookback.map(date => ({ absence_date: date, absence_type: 'sick', hours: 6 })),
+      periodStart: '2037-07-01', periodEnd: '2037-07-31',
+      calculationPolicy: SalaryCalculationPolicySchema.parse({ long_leave: 'calendar_after_five_workdays' }),
+    }))
+    expect(result.lineItems.find(line => line.item_type === 'sick_day15_plus')?.amount).toBe(-10060.26)
+    expect(result.lineItems.some(line => line.item_type === 'sick_karens')).toBe(false)
+  })
+  it('separates a long FK episode and a new employer-paid episode in one month', () => {
+    const prior = Array.from({ length: 30 }, (_, i) => `2037-06-${String(i + 1).padStart(2, '0')}`)
+      .filter(d => new Date(d).getUTCDay() % 6 !== 0)
+    const result = deriveAbsenceLineItems(baseInput({ monthlySalary: 48000,
+      periodStart: '2037-07-01', periodEnd: '2037-07-31',
+      calculationPolicy: SalaryCalculationPolicySchema.parse({ long_leave: 'calendar_after_five_workdays', sick_rate: 'annual_hourly' }),
+      lookbackSickDates: prior,
+      lookbackSickDays: prior.map(absence_date => ({ absence_date, absence_type: 'sick', hours: 3 })),
+      periodDays: [...['01', '02', '03', '06', '07', '08', '09', '10'], ...['27', '28', '29', '30', '31']]
+        .map(d => ({ absence_date: `2037-07-${d}`, absence_type: 'sick', hours: 3 })),
+    }))
+    expect(result.lineItems.find(li => li.item_type === 'sick_day15_plus')!.amount).toBe(-5917.8)
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(-830.7)
+    expect(result.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-1772.31)
+  })
+  it.each(['vab', 'parental', 'unpaid_leave'] as const)('weights partial %s by hours, without changing reported date counts', (absence_type) => {
+    const full = deriveAbsenceLineItems(baseInput({ periodDays: [{ absence_date: '2026-07-01', absence_type, hours: 8 }] }))
+    const half = deriveAbsenceLineItems(baseInput({ periodDays: [{ absence_date: '2026-07-01', absence_type, hours: 4 }] }))
+    expect(half.lineItems[0].quantity).toBe(.5)
+    expect(half.lineItems[0].amount).toBeCloseTo(full.lineItems[0].amount / 2, 1)
+    expect(half.aggregated).toEqual(full.aggregated)
+  })
+
+  it('caps first-day karens at sick pay, never deducting more than the lost hours', () => {
+    const result = deriveAbsenceLineItems(baseInput({ periodDays: [{ absence_date: '2026-07-01', absence_type: 'sick', hours: 1 }] }))
+    expect(result.lineItems.reduce((s, li) => s + li.amount, 0)).toBeCloseTo(-178.57, 2)
+  })
+
+  it('carries unconsumed karens across the month boundary', () => {
+    const june = deriveAbsenceLineItems(baseInput({ periodDays: [{ absence_date: '2026-06-30', absence_type: 'sick', hours: 1 }] }))
+    const july = deriveAbsenceLineItems(baseInput({
+      periodDays: [{ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }],
+      lookbackSickDates: ['2026-06-30'],
+      lookbackSickDays: [{ absence_date: '2026-06-30', absence_type: 'sick', hours: 1 }],
+    }))
+    const karens = [...june.lineItems, ...july.lineItems].filter(li => li.item_type === 'sick_karens').reduce((s, li) => s + li.amount, 0)
+    expect(karens).toBe(-1107.69)
+  })
+
+  it('rejects absence exceeding the known schedule rather than over-deducting', () => {
+    expect(() => deriveAbsenceLineItems(baseInput({ hoursPerDay: 6.4,
+      periodDays: [{ absence_date: '2026-07-01', absence_type: 'vab', hours: 8 }],
+    }))).toThrow('arbetsschemat')
+  })
+
   it('emits karensavdrag for a single sick day', () => {
     const result = deriveAbsenceLineItems(
       baseInput({ periodDays: days([['2026-04-06', 'sick']]) }),
@@ -108,7 +184,7 @@ describe('deriveAbsenceLineItems: sick', () => {
     expect(karens).toBeDefined()
     expect(karens!.quantity).toBe(1)
     expect(karens!.amount).toBeLessThan(0)
-    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')).toBeUndefined()
+    expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.quantity).toBe(1)
     expect(result.aggregated.sickDays).toBe(1)
   })
 
@@ -128,7 +204,7 @@ describe('deriveAbsenceLineItems: sick', () => {
     const day2_14 = result.lineItems.find(li => li.item_type === 'sick_day2_14')
     expect(karens).toBeDefined()
     expect(day2_14).toBeDefined()
-    expect(day2_14!.quantity).toBe(4) // days 2-5 of segment
+    expect(day2_14!.quantity).toBe(5) // day one also receives sick pay
     expect(result.flagFkReporting).toBe(false)
   })
 

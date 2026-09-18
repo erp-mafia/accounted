@@ -3177,6 +3177,12 @@ describe('CreateEmployeeSchema bank details', () => {
     expect(result.success).toBe(true)
   })
 
+  it('allows zero vacation days only with explicitly disabled tracking', () => {
+    expect(CreateEmployeeSchema.safeParse({ ...baseEmployee, vacation_days_per_year: 0, vacation_rule: 'none' }).success).toBe(true)
+    expect(CreateEmployeeSchema.safeParse({ ...baseEmployee, vacation_days_per_year: 0 }).success).toBe(false)
+    expect(CreateEmployeeSchema.safeParse({ ...baseEmployee, vacation_days_per_year: 1, vacation_rule: 'none' }).success).toBe(false)
+  })
+
   it('accepts a valid clearing + account pair', () => {
     const result = CreateEmployeeSchema.safeParse({
       ...baseEmployee,

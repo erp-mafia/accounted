@@ -23,6 +23,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { effectiveNetPayout } from './payment/effective-net'
+import type { VacationBalance } from './vacation-balance'
 
 /**
  * Run statuses whose amounts count toward an employee's YTD.
@@ -42,7 +44,7 @@ export const YTD_COUNTED_STATUSES = ['approved', 'paid', 'booked'] as const
 export interface YtdTotals {
   gross: number
   tax: number
-  net: number
+  net: number | null
 }
 
 /** The subset of `employee_opening_balances` that YTD needs. */
@@ -51,7 +53,7 @@ export interface OpeningBalanceYtdRow {
   cutover_date: string
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  ytd_net: number | null
 }
 
 interface ComputePriorYtdArgs {
@@ -73,6 +75,7 @@ interface ComputePriorYtdArgs {
  * the sjuklön calculation reads (not YTD's business, but the same row).
  */
 export interface OpeningBalanceRow extends OpeningBalanceYtdRow {
+  vacation_balance?: VacationBalance | null
   karens_periods_adjustment: number
 }
 
@@ -94,7 +97,7 @@ export async function loadOpeningBalances(
   return (await fetchAllRows(({ from, to }) =>
     supabase
       .from('employee_opening_balances')
-      .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment')
+      .select('employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, karens_periods_adjustment, vacation_balance')
       .eq('company_id', companyId)
       .in('employee_id', employeeIds)
       .order('id')
@@ -112,6 +115,7 @@ interface PriorRunRow {
   employee_id: string
   gross_salary: number
   tax_withheld: number
+  tax_withheld_override?: number | null
   net_salary: number
   salary_run: { period_year: number; period_month: number }
 }
@@ -142,7 +146,7 @@ export async function computePriorYtd(
     supabase
       .from('salary_run_employees')
       .select(
-        'employee_id, gross_salary, tax_withheld, net_salary, salary_run:salary_runs!inner(period_year, period_month, status)',
+        'employee_id, gross_salary, tax_withheld, tax_withheld_override, net_salary, salary_run:salary_runs!inner(period_year, period_month, status)',
       )
       .eq('company_id', companyId)
       .in('employee_id', employeeIds)
@@ -170,8 +174,8 @@ export async function computePriorYtd(
     }
     const current = ytdByEmployee.get(prior.employee_id) || { gross: 0, tax: 0, net: 0 }
     current.gross += prior.gross_salary
-    current.tax += prior.tax_withheld
-    current.net += prior.net_salary
+    current.tax += prior.tax_withheld_override ?? prior.tax_withheld
+    if (current.net !== null) current.net += effectiveNetPayout(prior)
     ytdByEmployee.set(prior.employee_id, current)
   }
 
@@ -185,7 +189,7 @@ export async function computePriorYtd(
     const current = ytdByEmployee.get(row.employee_id) || { gross: 0, tax: 0, net: 0 }
     current.gross = roundOre(current.gross + (row.ytd_gross || 0))
     current.tax = roundOre(current.tax + (row.ytd_tax || 0))
-    current.net = roundOre(current.net + (row.ytd_net || 0))
+    current.net = row.ytd_net === null || current.net === null ? null : roundOre(current.net + (row.ytd_net || 0))
     ytdByEmployee.set(row.employee_id, current)
   }
 
@@ -198,10 +202,11 @@ interface RosterYtdRow {
   employee_id: string
   gross_salary: number
   tax_withheld: number
+  tax_withheld_override?: number | null
   net_salary: number
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  ytd_net: number | null
 }
 
 export type RefreshRunYtdResult =
@@ -237,7 +242,7 @@ export async function refreshRunYtd(
       supabase
         .from('salary_run_employees')
         .select(
-          'id, employee_id, gross_salary, tax_withheld, net_salary, ytd_gross, ytd_tax, ytd_net',
+          'id, employee_id, gross_salary, tax_withheld, tax_withheld_override, net_salary, ytd_gross, ytd_tax, ytd_net',
         )
         .eq('salary_run_id', salaryRunId)
         .eq('company_id', companyId)
@@ -261,13 +266,13 @@ export async function refreshRunYtd(
     const carried = prior.get(row.employee_id) || { gross: 0, tax: 0, net: 0 }
     const next = {
       ytd_gross: roundOre(carried.gross + row.gross_salary),
-      ytd_tax: roundOre(carried.tax + row.tax_withheld),
-      ytd_net: roundOre(carried.net + row.net_salary),
+      ytd_tax: roundOre(carried.tax + (row.tax_withheld_override ?? row.tax_withheld)),
+      ytd_net: carried.net === null ? null : roundOre(carried.net + effectiveNetPayout(row)),
     }
     if (
       next.ytd_gross === roundOre(row.ytd_gross) &&
       next.ytd_tax === roundOre(row.ytd_tax) &&
-      next.ytd_net === roundOre(row.ytd_net)
+      next.ytd_net === (row.ytd_net === null ? null : roundOre(row.ytd_net))
     ) {
       continue
     }

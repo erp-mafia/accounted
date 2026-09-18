@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { validateVacationEntitlement } from '@/lib/salary/vacation-entitlement'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -63,6 +64,8 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Merged validation: combine existing + updates to check full integrity
     const merged = { ...existing, ...body }
     const mergedErrors: string[] = []
+    const vacationError = validateVacationEntitlement(merged)
+    if (vacationError) mergedErrors.push(vacationError)
 
     if (merged.salary_type === 'monthly' && (!merged.monthly_salary || merged.monthly_salary <= 0)) {
       mergedErrors.push('Månadslön krävs och måste vara större än 0 för månadslöneform')

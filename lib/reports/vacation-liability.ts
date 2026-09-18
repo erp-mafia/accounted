@@ -123,12 +123,13 @@ export async function generateVacationLiability(
     }>).map((r) => [r.employee_id, r]),
   )
 
-  const { data: openingRows } = await supabase
+  const { data: openingRows, error: openingError } = await supabase
     .from('employee_opening_balances')
     .select(
       'employee_id, cutover_date, vacation_paid_days_remaining, vacation_saved_days_by_year, opening_semester_liability, opening_semester_liability_avgifter',
     )
     .eq('company_id', companyId)
+  if (openingError) throw new Error(openingError.message)
   const openingByEmployee = new Map<
     string,
     {
@@ -143,11 +144,15 @@ export async function generateVacationLiability(
     cutover_date: string
     vacation_paid_days_remaining: number
     vacation_saved_days_by_year: Record<string, number> | null
-    opening_semester_liability: number
-    opening_semester_liability_avgifter: number
+    opening_semester_liability: number | null
+    opening_semester_liability_avgifter: number | null
   }>) {
     const cutoverYear = Number(opening.cutover_date.slice(0, 4))
     if (year < cutoverYear) continue
+    if (employees.some(employee => employee.id === opening.employee_id) &&
+      (opening.opening_semester_liability === null || opening.opening_semester_liability_avgifter === null)) {
+      throw new Error('Historiskt underlag för semesterlöneskuld saknas. Rapporten kan inte redovisa ett fullständigt belopp.')
+    }
     const savedDays = Object.values(opening.vacation_saved_days_by_year ?? {}).reduce(
       (sum, days) => sum + (Number(days) || 0),
       0,

@@ -18,6 +18,7 @@
  */
 
 import { z } from 'zod'
+import { validateVacationEntitlement } from '@/lib/salary/vacation-entitlement'
 import { ok, noContent } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
@@ -366,6 +367,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           : `${issue.message}.`,
     })
     const mergedJamkning = { ...(existing as Record<string, unknown>), ...updates } as JamkningFields
+    const vacationError = validateVacationEntitlement({ ...(existing as Record<string, unknown>), ...updates })
+    if (vacationError) return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+      requestId: ctx.requestId, details: { field: 'vacation_days_per_year', message: vacationError },
+    })
     if (touchesJamkning(updates)) {
       const [issue] = validateJamkning(mergedJamkning)
       if (issue) {
@@ -510,4 +515,3 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     return noContent({ requestId: ctx.requestId })
   },
 )
-

@@ -10,6 +10,7 @@ import {
 import { calculateVacationPay } from '../absence-calculator'
 import { recurringLineFlags } from '../recurring-lines'
 import { roundOre } from '@/lib/money'
+import { SalaryCalculationPolicySchema } from '../calculation-policy'
 import type { PayrollConfig } from '../payroll-config'
 import type { TaxTableRate } from '../tax-tables'
 
@@ -76,6 +77,9 @@ const config2026: PayrollConfig = {
 }
 
 const emptyTaxRates: TaxTableRate[] = []
+const zeroIncomeTaxRates: TaxTableRate[] = [
+  { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 2000, kind: 'amount', taxAmount: 0 },
+]
 
 function makeBasicInput(overrides = {}) {
   return {
@@ -104,6 +108,85 @@ function makeBasicInput(overrides = {}) {
 }
 
 describe('calculateSalary', () => {
+  it('uses nearest one-off tax rounding only under the explicit historical policy', () => {
+    const line = { itemType: 'semesterersattning', amount: 1001.99, oneOffTaxPercent: 32,
+      isTaxable: true, isAvgiftBasis: true, isVacationBasis: false,
+      isGrossDeduction: false, isNetDeduction: false }
+    const input = makeBasicInput({ monthlySalary: 0, taxTableNumber: 33, lineItems: [line] })
+    expect(calculateSalary(input, config2026, zeroIncomeTaxRates).taxWithheld).toBe(320)
+    expect(calculateSalary({ ...input, calculationPolicy: SalaryCalculationPolicySchema.parse({ one_off_tax_rounding: 'nearest' }) },
+      config2026, zeroIncomeTaxRates).taxWithheld).toBe(321)
+  })
+  it('keeps one-off compensation outside the regular monthly tax band', () => {
+    const line = { itemType: 'semesterersattning', amount: 2500, oneOffTaxPercent: 20,
+      isTaxable: true, isAvgiftBasis: true, isVacationBasis: false,
+      isGrossDeduction: false, isNetDeduction: false }
+    const result = calculateSalary(makeBasicInput({ monthlySalary: 0, taxTableNumber: 33, lineItems: [line] }), config2026, zeroIncomeTaxRates)
+    expect(result.grossSalary).toBe(2500)
+    expect(result.taxWithheld).toBe(500)
+    expect(result.netSalary).toBe(2000)
+  })
+
+  it('valid employee percentage decisions also govern one-off payments', () => {
+    const result = calculateSalary(makeBasicInput({ monthlySalary: 0, taxTableNumber: 33,
+      jamkningPercentage: 15, jamkningValidFrom: '2026-01-01', jamkningValidTo: '2026-12-31',
+      lineItems: [{ itemType: 'semesterersattning', amount: 2500, oneOffTaxPercent: 20,
+        isTaxable: true, isAvgiftBasis: true, isVacationBasis: false, isGrossDeduction: false, isNetDeduction: false }],
+    }), config2026, emptyTaxRates)
+    expect(result.taxWithheld).toBe(375)
+  })
+
+  it('groups equal one-off rates before whole-krona truncation', () => {
+    const line = { itemType: 'bonus', amount: 2, oneOffTaxPercent: 34,
+      isTaxable: true, isAvgiftBasis: true, isVacationBasis: false, isGrossDeduction: false, isNetDeduction: false }
+    const result = calculateSalary(makeBasicInput({ monthlySalary: 0, taxTableNumber: 33, lineItems: [line, line] }), config2026, zeroIncomeTaxRates)
+    expect(result.taxWithheld).toBe(1)
+  })
+
+  it('does not apply one-off rates to benefits or deductions', () => {
+    expect(() => calculateSalary(makeBasicInput({ lineItems: [{ itemType: 'benefit_car', amount: 2500, oneOffTaxPercent: 20,
+      isTaxable: true, isAvgiftBasis: true, isVacationBasis: false, isGrossDeduction: false, isNetDeduction: false }],
+    }), config2026, emptyTaxRates)).toThrow('Engångsskatt')
+  })
+
+  it.each(['parental_leave', 'vab', 'sick_karens', 'sick_day2_14', 'sick_day15_plus', 'unpaid_leave', 'vacation'])(
+    'counts signed %s once even with legacy gross-deduction flags', (itemType) => {
+      const result = calculateSalary(makeBasicInput({ lineItems: [{
+        itemType, amount: -2000, isTaxable: true, isAvgiftBasis: true,
+        isVacationBasis: false, isGrossDeduction: true, isNetDeduction: false,
+      }] }), config2026, emptyTaxRates)
+      expect(result.grossSalary).toBe(38000)
+      expect(result.grossDeductions).toBe(0)
+      expect(result.taxWithheld).toBe(11400)
+    },
+  )
+
+  it.each(['other', 'correction', 'semesterersattning'])('pays signed taxable %s additions', (itemType) => {
+    const line = { itemType, amount: 1500, isTaxable: true, isAvgiftBasis: true,
+      isVacationBasis: false, isGrossDeduction: false, isNetDeduction: false }
+    const result = calculateSalary(makeBasicInput({ lineItems: [line, { ...line, amount: -300 }] }), config2026, emptyTaxRates)
+    expect(result.grossSalary).toBe(41200)
+    expect(result.netSalary).toBe(28840)
+  })
+
+  it('does not turn informational or deduction rows into cash additions', () => {
+    const line = { itemType: 'other', amount: -1500, isTaxable: true, isAvgiftBasis: true,
+      isVacationBasis: false, isGrossDeduction: true, isNetDeduction: false }
+    const result = calculateSalary(makeBasicInput({ lineItems: [line,
+      { ...line, amount: 9999, isTaxable: false, isGrossDeduction: false },
+    ] }), config2026, emptyTaxRates)
+    expect(result.grossSalary).toBe(38500)
+  })
+
+  it('never earns additional vacation compensation on a manual vacation payment', () => {
+    const result = calculateSalary(makeBasicInput({ vacationRule: 'semesterersattning',
+      lineItems: [{ itemType: 'semesterersattning', amount: 2500, isTaxable: true, isAvgiftBasis: true,
+        isVacationBasis: true, isGrossDeduction: false, isNetDeduction: false }],
+    }), config2026, emptyTaxRates)
+    expect(result.vacationCompensation).toBe(4800)
+    expect(result.grossSalary).toBe(47300)
+  })
+
   it('calculates basic monthly salary correctly', () => {
     const result = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
 
@@ -1452,6 +1535,14 @@ describe('calculateSalary: shift premiums (OB-tillägg och övertid)', () => {
 })
 
 describe('öresavrundning (roundNetToWholeKrona)', () => {
+  it.each([[40000.49, 40000, -.49], [40000.5, 40001, .5]])('supports nearest-krona company policy for %s', (salary, expected, rounding) => {
+    const result = calculateSalary(makeBasicInput({ monthlySalary: salary, fSkattStatus: 'f_skatt',
+      roundNetToWholeKrona: true, calculationPolicy: SalaryCalculationPolicySchema.parse({ net_rounding: 'nearest' }),
+    }), config2026, emptyTaxRates)
+    expect(result.netSalary).toBe(expected)
+    expect(result.netRounding).toBe(rounding)
+    expect(result.grossSalary).toBe(salary)
+  })
   const r2 = (x: number) => Math.round(x * 100) / 100
 
   const bonus = (amount: number) => ({

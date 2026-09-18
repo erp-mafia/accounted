@@ -21,17 +21,19 @@ import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
+import type { VacationBalance } from '@/lib/salary/vacation-balance'
 
 interface OpeningBalancesData {
   cutover_date: string
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  ytd_net: number | null
+  vacation_balance?: VacationBalance | null
   vacation_paid_days_remaining: number
   vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
-  opening_semester_liability: number
-  opening_semester_liability_avgifter: number
+  opening_semester_liability: number | null
+  opening_semester_liability_avgifter: number | null
   karens_periods_adjustment: number
   locked: boolean
   locked_by_run_id: string | null
@@ -77,6 +79,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const [saving, setSaving] = useState(false)
   const [locked, setLocked] = useState(false)
   const [hasRow, setHasRow] = useState(false)
+  const [vacationBalance, setVacationBalance] = useState<VacationBalance | null>(null)
   // Collapsed by default: this is a one-time form for switching payroll
   // system, and 14 empty input rows on every employee is clutter. Opens by
   // itself once balances exist, so stored values are never hidden.
@@ -121,17 +124,18 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             cutoverDate: data.cutover_date,
             ytdGross: String(data.ytd_gross),
             ytdTax: String(data.ytd_tax),
-            ytdNet: String(data.ytd_net),
+            ytdNet: data.ytd_net === null ? '' : String(data.ytd_net),
             daysRemaining: String(data.vacation_paid_days_remaining),
             daysTaken: String(data.vacation_days_taken_this_year ?? 0),
             savedByYear: Object.fromEntries(
               Object.entries(data.vacation_saved_days_by_year ?? {}).map(([y, d]) => [y, String(d)]),
             ),
-            liability: String(data.opening_semester_liability),
-            liabilityAvgifter: String(data.opening_semester_liability_avgifter),
+            liability: data.opening_semester_liability === null ? '' : String(data.opening_semester_liability),
+            liabilityAvgifter: data.opening_semester_liability_avgifter === null ? '' : String(data.opening_semester_liability_avgifter),
             karens: String(data.karens_periods_adjustment),
           }
           setHasRow(true)
+          setVacationBalance(data.vacation_balance ?? null)
           setLocked(data.locked)
           setCutoverDate(values.cutoverDate)
           setYtdGross(values.ytdGross)
@@ -184,12 +188,13 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         cutover_date: cutoverDate,
         ytd_gross: parseFloat(ytdGross) || 0,
         ytd_tax: parseFloat(ytdTax) || 0,
-        ytd_net: parseFloat(ytdNet) || 0,
+        ytd_net: ytdNet.trim() === '' ? null : parseFloat(ytdNet),
+        vacation_balance: vacationBalance,
         vacation_paid_days_remaining: parseFloat(daysRemaining) || 0,
         vacation_days_taken_this_year: parseFloat(daysTaken) || 0,
         vacation_saved_days_by_year: saved,
-        opening_semester_liability: parseFloat(liability) || 0,
-        opening_semester_liability_avgifter: parseFloat(liabilityAvgifter) || 0,
+        opening_semester_liability: liability.trim() === '' ? null : parseFloat(liability),
+        opening_semester_liability_avgifter: liabilityAvgifter.trim() === '' ? null : parseFloat(liabilityAvgifter),
         karens_periods_adjustment: parseInt(karens, 10) || 0,
       }),
     })
@@ -314,7 +319,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         <SettingsGroup label={t('opening_balances_vacation_heading')} className="pt-6">
           <SettingsRow label={t('opening_balances_days_remaining')} htmlFor="ob-days-remaining" align="baseline">
             <SettingsInput id="ob-days-remaining" type="number" min={0} max={40} step={0.5} value={daysRemaining}
-              onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+              onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly || vacationBalance !== null} className={FIELD_CLASS} />
           </SettingsRow>
           <SettingsRow
             label={t('opening_balances_days_taken')}
@@ -323,7 +328,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             align="baseline"
           >
             <SettingsInput id="ob-days-taken" type="number" min={0} max={40} step={0.5} value={daysTaken}
-              onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+              onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly || vacationBalance !== null} className={FIELD_CLASS} />
           </SettingsRow>
           <SettingsRow label={t('opening_balances_liability')} htmlFor="ob-liability" align="baseline">
             <SettingsInput id="ob-liability" type="number" min={0} value={liability}
@@ -356,7 +361,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
                 step={0.5}
                 value={savedByYear[year] ?? ''}
                 onChange={(e) => setSavedByYear((prev) => ({ ...prev, [year]: e.target.value }))}
-                disabled={readOnly}
+                disabled={readOnly || vacationBalance !== null}
                 className={FIELD_CLASS}
               />
             </SettingsRow>

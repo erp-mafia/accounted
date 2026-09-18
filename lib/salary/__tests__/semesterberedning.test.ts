@@ -104,6 +104,12 @@ function queuePreview(over: {
 }
 
 describe('previewVacationYearClose: beredning math', () => {
+  it('does not silently roll extra-paid or unpaid categories through the legacy year-close', async () => {
+    queuePreview({ ledger: [{ employee_id: EMPLOYEE_ID, vacation_balance: { paid: 8, extra_paid: 2 } }] })
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(false)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
   it('rolls only days above the 20-day floor and flags the rest', async () => {
     queuePreview({
       ledger: [
