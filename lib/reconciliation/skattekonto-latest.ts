@@ -15,6 +15,14 @@ export const SKATTEKONTO_RECONCILIATION_LATEST_KEY = 'skattekonto_reconciliation
 /** extension_data key of the user's drift tolerance (SEK); mirrors the extension's setting. */
 export const SKATTEKONTO_DRIFT_TOLERANCE_KEY = 'skattekonto_drift_tolerance'
 
+/**
+ * extension_data key holding the ISO timestamp of the last successful
+ * skattekonto sync (written by the extension's sync, which imports this
+ * constant). Core reads it to tell "no fresh data in a week" apart from "the
+ * hourly BankID session expired again", which is the resting state.
+ */
+export const SKATTEKONTO_LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
+
 /** Default tolerance when none is configured; mirrors the extension's DEFAULT_TOLERANCE_SEK. */
 export const DEFAULT_SKATTEKONTO_TOLERANCE_SEK = 1
 

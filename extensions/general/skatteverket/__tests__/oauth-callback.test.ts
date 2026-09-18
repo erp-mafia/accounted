@@ -20,7 +20,8 @@ vi.mock('../lib/token-store', () => ({
   deleteTokens: vi.fn().mockResolvedValue(undefined),
   getTokenHealth: vi.fn().mockResolvedValue(null),
   markNeedsReconsent: vi.fn().mockResolvedValue(undefined),
-  RECONSENT_ERROR_CODES: ['SESSION_EXPIRED', 'REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'],
+  // Terminal codes only: ordinary session expiry never latches (#2567).
+  RECONSENT_ERROR_CODES: ['REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'],
 }))
 
 vi.mock('../lib/post-connect-refresh', () => ({

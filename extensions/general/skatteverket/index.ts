@@ -55,7 +55,7 @@ import {
 import { currentSkvEnvironment, resolveReadAuth } from './lib/resolve-auth'
 import { probeCompanyGrants } from './lib/grant-probe'
 import { formatRedovisare } from '@/lib/skatteverket/format'
-import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
+import { isSkvSessionRefreshable, isTerminalReconsentState } from '@/lib/skatteverket/session-lifetime'
 import { createUtseOmbudDeepLink, OMBUD_ROLE_KEYS, OmbudApiError } from './lib/ombud-client'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import type {
@@ -805,14 +805,17 @@ export const skatteverketExtension: Extension = {
 
         // Persisted health, written by the crons when they hit a terminal
         // auth state. Lets the settings panel prompt for re-consent
-        // proactively instead of only after a live failure.
+        // proactively instead of only after a live failure. A row latched
+        // with SESSION_EXPIRED before #2567 is not such a state: it is the
+        // hourly BankID expiry that `expired` + `canRefresh` above already
+        // report, so it must not raise the reconnect copy on its own.
         const health = await getTokenHealth(ctx.supabase, ctx.userId, ctx.companyId)
 
         return NextResponse.json({
           connected: true,
           expired,
           canRefresh,
-          needsReconsent: health?.status === 'needs_reconsent',
+          needsReconsent: isTerminalReconsentState(health?.status, health?.last_error_code),
           lastErrorCode: health?.last_error_code ?? null,
           scope: tokens.scope,
           expiresAt: new Date(tokens.expires_at).toISOString(),

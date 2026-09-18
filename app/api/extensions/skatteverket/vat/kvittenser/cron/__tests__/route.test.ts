@@ -37,12 +37,9 @@ vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
-  RECONSENT_ERROR_CODES: [
-    'SESSION_EXPIRED',
-    'REFRESH_EXHAUSTED',
-    'MISSING_SCOPE',
-    'TOKEN_CORRUPTED',
-  ] as const,
+  // Mirrors the real RECONSENT_ERROR_CODES: terminal codes only, ordinary
+  // session expiry deliberately absent (#2567).
+  RECONSENT_ERROR_CODES: ['REFRESH_EXHAUSTED', 'MISSING_SCOPE', 'TOKEN_CORRUPTED'] as const,
   markNeedsReconsent: vi.fn().mockResolvedValue(undefined),
 }))
 
@@ -276,7 +273,7 @@ describe('VAT kvittenser cron', () => {
     expect(mockSkvRequest).not.toHaveBeenCalled()
   })
 
-  it('flags reconsent codes as expired_token and marks the connection', async () => {
+  it('quiet-buckets an expired session WITHOUT latching a health fault (#2567)', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockSkvRequest.mockRejectedValueOnce(
       new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'),
@@ -287,7 +284,21 @@ describe('VAT kvittenser cron', () => {
 
     expect(body.expired).toBe(1)
     expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'SESSION_EXPIRED' })
-    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'SESSION_EXPIRED')
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
+  })
+
+  it('still flags a terminal reconsent code and marks the connection', async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockSkvRequest.mockRejectedValueOnce(
+      new SkatteverketAuthError('Behörighet saknas.', 'MISSING_SCOPE'),
+    )
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.expired).toBe(1)
+    expect(body.results[0]).toMatchObject({ status: 'expired_token', error: 'MISSING_SCOPE' })
+    expect(mockMarkNeedsReconsent).toHaveBeenCalledWith(expect.anything(), 'user-1', 'comp-1', 'MISSING_SCOPE')
   })
 
   it('records error for generic failures without aborting the run', async () => {
@@ -377,7 +388,7 @@ describe('VAT kvittenser cron', () => {
   it('a throwing markNeedsReconsent does not abort the remaining companies', async () => {
     mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
     mockSkvRequest
-      .mockRejectedValueOnce(new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'))
+      .mockRejectedValueOnce(new SkatteverketAuthError('Behörighet saknas.', 'MISSING_SCOPE'))
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -392,7 +403,7 @@ describe('VAT kvittenser cron', () => {
     expect(body.results[0]).toMatchObject({
       companyId: 'comp-1',
       status: 'expired_token',
-      error: 'SESSION_EXPIRED',
+      error: 'MISSING_SCOPE',
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
     expect(warnSpy).toHaveBeenCalledTimes(1)

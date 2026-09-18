@@ -443,6 +443,29 @@ describe('refresh-token dead-session classification', () => {
     }
   })
 
+  it('never calls Skatteverket for a session past the refresh window (#2567)', async () => {
+    // The dominant nightly case: the token died hours ago, so the stored row
+    // already proves the answer. Asking SKV anyway spent one doomed call per
+    // connected company (150+ on prod) to be told what we knew.
+    const { getTokens } = await import('../lib/token-store')
+    const { refreshAccessToken } = await import('../lib/oauth')
+    const deadSession = { ...expiredTokens, expires_at: Date.now() - 20 * 60 * 60 * 1000 }
+    vi.mocked(getTokens).mockResolvedValueOnce(deadSession).mockResolvedValueOnce(deadSession)
+    vi.mocked(refreshAccessToken).mockClear()
+    mockFetchStatus(200)
+
+    try {
+      await skvRequest(fakeSupabase, 'user-dead-session', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('SESSION_EXPIRED')
+      expect((e as SkatteverketAuthError).message).toMatch(/Sessionen har gått ut/)
+    }
+    expect(refreshAccessToken).not.toHaveBeenCalled()
+    expect(global.fetch).not.toHaveBeenCalled()
+  })
+
   it('re-throws other refresh failures untouched', async () => {
     const { getTokens } = await import('../lib/token-store')
     const { refreshAccessToken } = await import('../lib/oauth')

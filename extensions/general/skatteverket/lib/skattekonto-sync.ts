@@ -10,6 +10,7 @@ import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
 import {
+  SKATTEKONTO_LAST_SYNCED_AT_KEY as LAST_SYNCED_AT_KEY,
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
@@ -26,7 +27,9 @@ import type {
 const log = createLogger('skattekonto-sync')
 
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
-const LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
+// LAST_SYNCED_AT_KEY is defined in core (lib/reconciliation/skattekonto-latest)
+// because core reads it too: the skv notice tells stale data apart from the
+// hourly session expiry by it.
 const SKIPPED_ROWS_KEY = 'skattekonto_skipped_rows'
 
 /**
