@@ -4,7 +4,7 @@ import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
-import { searchDocumentPages } from '@/lib/documents/read/search'
+import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
 import { ArkivProposeFactParamsSchema } from '@/lib/pending-operations/schemas/arkiv-propose-fact'
 import type { McpTool, McpToolAnnotations, ActorContext } from './server'
 import { askDocument } from '@/lib/arkiv/ask'
@@ -352,86 +352,8 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       async execute(args, companyId, _userId, supabase) {
         assertEnabled(companyId)
-        const query = String(args.query ?? '').trim()
-        if (query.length < 2) throw new Error('query must be at least two characters')
-        const kinds = new Set<string>(Array.isArray(args.kinds) && args.kinds.length ? (args.kinds as string[]) : ['document', 'agreement', 'fact'])
-        const limit = Math.min(50, Math.max(1, Number(args.limit ?? 10)))
-        const items: Array<{
-          record_ref: string
-          kind: 'document' | 'agreement' | 'fact'
-          title: string
-          snippet: string | null
-          document_id: string | null
-          page: number | null
-        }> = []
-        const like = `%${query.replace(/[%_]/g, ' ')}%`
-        if (kinds.has('document')) {
-          const hits = await searchDocumentPages(supabase, companyId, query, limit)
-          for (const hit of hits) {
-            items.push({
-              record_ref: recordRef('document', hit.document_id),
-              kind: 'document',
-              title: hit.file_name,
-              snippet: hit.headline,
-              document_id: hit.document_id,
-              page: hit.page_no,
-            })
-          }
-        }
-        if (kinds.has('agreement')) {
-          const { data, error } = await supabase
-            .from('agreements')
-            .select('id, title, counterparty_name, kind, ends_on')
-            .eq('company_id', companyId)
-            .or(`title.ilike.${like},counterparty_name.ilike.${like}`)
-            .limit(limit)
-          if (error) throw dbError(error)
-          for (const a of (data ?? []) as Array<{ id: string; title: string; counterparty_name: string | null; kind: string; ends_on: string | null }>) {
-            items.push({
-              record_ref: recordRef('agreement', a.id),
-              kind: 'agreement',
-              title: a.title,
-              snippet: [a.kind, a.counterparty_name, a.ends_on ? `till ${a.ends_on}` : null].filter(Boolean).join(' · '),
-              document_id: null,
-              page: null,
-            })
-          }
-        }
-        if (kinds.has('fact')) {
-          // "momsperiod" is the Swedish label of vat_period: a query that names a predicate the way people do finds its facts.
-          const labelled = Object.values(PREDICATES)
-            .filter((p) => p.label.toLowerCase().includes(query.toLowerCase()))
-            .map((p) => p.predicate)
-          const factFilter = labelled.length
-            ? `value_text.ilike.${like},predicate.ilike.${like},predicate.in.(${labelled.join(',')})`
-            : `value_text.ilike.${like},predicate.ilike.${like}`
-          const { data, error } = await supabase
-            .from('company_facts')
-            .select('id, predicate, value_text, subject_kind, subject_id, source_document_id')
-            .eq('company_id', companyId)
-            .is('sys_to', null)
-            .neq('rank', 'deprecated')
-            .or(factFilter)
-            .limit(limit)
-          if (error) throw dbError(error)
-          for (const f of (data ?? []) as Array<{
-            id: string
-            predicate: string
-            value_text: string
-            subject_kind: FactSubjectKind
-            subject_id: string
-            source_document_id: string | null
-          }>) {
-            items.push({
-              record_ref: recordRef('fact', f.id),
-              kind: 'fact',
-              title: `${predicateDef(f.predicate)?.label ?? f.predicate}: ${f.value_text}`,
-              snippet: `${f.subject_kind}:${f.subject_id}`,
-              document_id: f.source_document_id,
-              page: null,
-            })
-          }
-        }
+        const kinds = Array.isArray(args.kinds) ? (args.kinds as unknown[]).filter(isSearchKind) : []
+        const items = await searchRecords(supabase, companyId, String(args.query ?? ''), { kinds, limit: Number(args.limit ?? SEARCH_LIMIT_DEFAULT) })
         return { items, count: items.length }
       },
     },

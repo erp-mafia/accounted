@@ -32,9 +32,10 @@ const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]'
  * The Arkiv table (canvas artboard Arkiv): the type picker and the search
  * on the left, the year picker far right, no attention line. Columns:
  * date, document, type, counterparty, amount, and what it is tied to.
- * `fixedType` pins the list to one group (the Myndighet page).
+ * `fixedType` pins the list to one group (the Myndighet page); `searchable`
+ * is off where the page has the Arkiv search above the table.
  */
-export function ArkivDocuments({ fixedType, refreshKey = 0 }: { fixedType?: string; refreshKey?: number }) {
+export function ArkivDocuments({ fixedType, refreshKey = 0, searchable = true }: { fixedType?: string; refreshKey?: number; searchable?: boolean }) {
   const t = useTranslations('arkiv')
   const router = useRouter()
   const [type, setType] = useState(fixedType ?? 'all')
@@ -111,7 +112,9 @@ export function ArkivDocuments({ fixedType, refreshKey = 0 }: { fixedType?: stri
             </SelectContent>
           </Select>
         )}
-        <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_documents')} containerClassName="w-72" />
+        {searchable && (
+          <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('search_documents')} containerClassName="w-72" />
+        )}
         <Select value={year} onValueChange={setYear}>
           <SelectTrigger className={`ml-auto ${PICKER_CLASS}`} aria-label={t('all_years')}>
             <SelectValue />

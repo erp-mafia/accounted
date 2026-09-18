@@ -9,15 +9,22 @@ import { Skeleton } from '@/components/ui/skeleton'
 import type { ArkivGraph as GraphData } from '@/app/api/arkiv/graph/route'
 import { ArkivGraph } from './ArkivGraph'
 import { ArkivDocuments } from './ArkivDocuments'
+import { ArkivSearch, SEARCH_MIN } from './ArkivSearch'
 import { UploadDrop } from './UploadDrop'
 
-/** /arkiv (canvas artboard Arkiv): the header with search and upload, the graph, then the table. */
+/**
+ * /arkiv (canvas artboard Arkiv): the header with search and upload, the
+ * search field, the graph, then the table. While a search is on, the hits
+ * stand where the graph and the table were.
+ */
 export function ArkivHome() {
   const t = useTranslations('arkiv')
   const [graph, setGraph] = useState<GraphData | null>(null)
   const [graphFailed, setGraphFailed] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [query, setQuery] = useState('')
+  const searching = query.trim().length >= SEARCH_MIN
 
   useEffect(() => {
     let cancelled = false
@@ -51,9 +58,10 @@ export function ArkivHome() {
           </div>
         }
       />
+      <ArkivSearch query={query} onQueryChange={setQuery} />
       {uploading && <UploadDrop onLanded={() => setRefreshKey((k) => k + 1)} />}
-      {graph ? <ArkivGraph graph={graph} /> : graphFailed ? null : <Skeleton className="h-64 w-full" />}
-      <ArkivDocuments refreshKey={refreshKey} />
+      {!searching && (graph ? <ArkivGraph graph={graph} /> : graphFailed ? null : <Skeleton className="h-64 w-full" />)}
+      {!searching && <ArkivDocuments refreshKey={refreshKey} searchable={false} />}
     </div>
   )
 }
