@@ -31,7 +31,7 @@ Every aktiebolag, handelsbolag, and ekonomisk förening is bokföringsskyldigt. 
 ### Löpande bokföring (BFL 5 kap)
 - Affärshändelser shall be bokförda in both grundbok (journal) and huvudbok (ledger)
 - Kontanta in/utbetalningar: senast nästa arbetsdag
-- Övriga affärshändelser: so snart det kan ske, which in practice means within the calendar month following the month the event occurred
+- Övriga affärshändelser: as soon as possible. Any permitted delay depends on BFNAR 2013:2 chapter 3 and its conditions; a next-calendar-month shortcut is not a general rule.
 - Every affärshändelse requires a verifikation
 
 ### Verifikationer (BFL 5 kap 6-7§)
@@ -46,12 +46,12 @@ A verifikation must contain:
 
 Verifikationer must be numbered in a systematisk serie without gaps. If a verifikation is corrected, the original must be preserved and the correction linked.
 
-### Rättelse (BFL 5 kap 5§)
-A rättelse of a bokföringspost must be documented so that both the original and the corrected post are visible, and it must be recorded when the rättelse was made and who made it. You can never silently overwrite. BFL permits two tracks:
-1. **Särskild rättelsepost** (storno + correcting verifikation referencing the original): always allowed, and the only track once the period is locked/closed or the bokföring has been relied upon (filed declarations, bokslut).
-2. **Rättelse in the same verifikat** (strike-and-replace of lines, or correcting the verifikation's text/date per BFL 5 kap 9 §): allowed while the period is open and unlocked, provided the original remains readable (struck lines stay visible) and who/when is recorded immutably. Fortnox and Visma implement this track; in Accounted it is the `correct_entry_metadata` / `correct_entry_lines_inline` RPC envelope logging to `journal_entry_rattelse_log`.
+### Rättelse: posted entry versus supporting document
+For computer-based bookkeeping, use a **separate correcting entry** for a posted bokföringspost (BFNAR 2013:2 points 2.17-2.18). Preserve the original, the correction linkage and who/when. BFL 5 kap. 9 § separately concerns correction of a verifikation; it does not make inline replacement of posted ledger lines lawful merely because the period is open or an audit log exists.
 
-A correction path that erases the original without a trace violates the law under both tracks.
+Accounted contains `correct_entry_metadata` / `correct_entry_lines_inline` RPCs. Their existence and audit logging are product behaviour, not a legal compliance finding. Prefer the separate-entry correction route; any use or redesign of an inline route requires a specific review of the changed fields against these distinct rules. Never silently overwrite or delete originals. A product-closed period does not eliminate the obligation to correct discovered errors through an appropriate supported process.
+
+Source: [BFN guidance on bookkeeping](https://www.bfn.se/wp-content/uploads/vl13-2-bokforing.pdf), points 2.17-2.18 and chapter 5.
 
 ### Arkivering (BFL 7 kap)
 - Räkenskapsinformation must be preserved for 7 years after the end of the calendar year the räkenskapsår ended

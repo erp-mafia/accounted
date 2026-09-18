@@ -3,76 +3,43 @@ id: modifier/single-shareholder-ab-fmb
 tier: modifier
 title: "Aktiebolag med en aktieägare (fåmansbolag)"
 description: >
-  Aktiebolag där en fysisk person äger > 50% av kapitalet (eller där < 4 personer
-  tillsammans äger > 50%) klassas som fåmansbolag och omfattas av 3:12-reglerna.
-  Den enskilda ägaren är samtidigt anställd ("verksam i betydande omfattning") och
-  styr själv balansen mellan lön och utdelning. Avgörande för ekonomin men trivialt
-  i löpande bokföring: modifern flaggar för agenten att 3:12, gränsbelopp, K10
-  och löneunderlagsregeln måste vara med i rådgivningen.
+  Owner-managed Swedish AB: distinguish company money, salary, benefits, owner
+  funding and dividends. Establish qualified-share status and the applicable
+  income-year rules before using 3:12 or preparing the owner's K10.
 trigger_signals:
   ownership: "single_shareholder"
-  bas_account_patterns: ["2898", "2899", "2091", "2098", "2099"]
-version: 1
+  bas_account_patterns: ["2893", "2898", "2091", "2098", "2099"]
+version: 2
 ---
 
-> **POC test content.** Replace with deep research material before relying on
-> this for production-quality advice.
+# Owner-managed AB
 
-# Single-shareholder AB (fåmansbolag)
+## Establish the actual relationship
 
-## When this applies
+A single owner does not by itself establish employment, salary payments or qualified shares. Assess ownership/voting control, activity by the owner and related persons, and the applicable fåmansföretag rules. Qualified-share dividends and gains are governed principally by **IL 57 kap.**, not chapter 53.
 
-The active company is an aktiebolag where one natural person owns > 50% of
-the shares. This is the most common form among Accounted's AB users. The owner
-is typically also a full-time anställd in the company and "verksam i betydande
-omfattning", which triggers 3:12-reglerna (53 kap. IL).
+Use [[horizontal/swedish-tax-planning]] for the detailed, income-year-specific 3:12 calculation; [[horizontal/swedish-payroll]] only when actual remuneration or employer obligations require it; and [[horizontal/swedish-financial-reporting]] for company reporting. Keep the owner's K10 separate from the AB's INK2.
 
-This modifier composes with:
-- [[horizontal/swedish-tax-planning]]: for 3:12, gränsbelopp, löneunderlag detail
-- [[horizontal/swedish-payroll]]: for owner-as-employee salary mechanics
-- [[horizontal/swedish-year-end-closing]]: for resultatdisposition (lön vs. utdelning)
-- [[horizontal/swedish-financial-reporting]]: för K2/K3-årsredovisning
+## Salary, dividends and the 2026 reform
 
-## Implications
+- Salary and dividends are different legal events. A dividend requires distributable funds, the ABL prudence assessment and a valid corporate resolution; a tax allowance is not permission to withdraw company cash.
+- For income year 2026 (return filed in 2027), do not reuse the old simplified/main-rule choice or former minimum-salary and 4% ownership tests. The reformed wage-based allowance has its own calculation and a remaining cap linked to the owner's/related person's cash remuneration. Load the current tax-planning reference and verify against Skatteverket before calculating.
+- Establish ownership at the beginning of the income year before assigning that year's gränsbelopp. Incorporating during the year does not create an automatic formation-year allowance.
+- Dividends within the applicable allowance on qualified shares are generally taxed at 20%. A dividend taxed in the tjänst category is not thereby salary subject to employer contributions. Do not apply payroll charges merely because of that tax category.
+- K10 reporting depends on the owner's actual qualified-share transactions. Skatteverket recommends filing K10 also in years without dividends or disposals to preserve the calculation of saved allowance; distinguish that recommendation from an unconditional annual filing duty.
 
-1. **Lön vs. utdelning**: ägaren styr själv. Under gränsbeloppet beskattas
-   utdelning som kapital (20%). Över gränsbeloppet beskattas det överskjutande
-   som tjänsteinkomst (kommunal + statlig + arbetsgivaravgifter, högsta marginalskatt).
-   Lön ger socialförsäkringsrätt och pension; utdelning gör det inte.
-2. **Löneunderlagsregeln** (3:12-reglernas favorit): genom att ägaren tar ut
-   minst en viss årslön (cirka 6 IBB + 5% av total löneunderlag, max 9,6 IBB)
-   adderas en stor del av bolagets totala lönesumma till gränsbeloppet.
-3. **K10**: ägaren ska lämna K10-blankett varje år där gränsbelopp,
-   sparade utdelningsutrymmen och utdelningen själv redovisas.
-4. **2026-års 3:12-reform**: vissa parametrar är reviderade (löneunderlag,
-   förenklingsregel). Verifiera mot aktuell version av swedish-tax-planning innan
-   konkret rådgivning.
+## Funding, expenditure and distributions
 
-## BAS-konton
+- Match each owner's payment to the company purchase and actual personal outlay. BAS 2893 is the usual candidate for a short-term liability to a related person; verify the company's chart. Reimbursement clears that liability, not a second expense.
+- Distinguish a shareholder loan from a shareholder contribution. A contribution is not automatically repayable debt; classification follows the agreement and corporate evidence.
+- Use 2898 for a resolved but unpaid dividend where the company's chart agrees. Neither 2091 nor a positive bank balance proves that a proposed distribution is lawful.
+- Preserve company-bank movements even where the purpose is private. Assess remuneration, reimbursement or another evidenced treatment and the loan restrictions in **ABL 21 kap.**; do not silently exclude the bank row or invent an owner receivable.
+- Reconcile the company's equity and capital history separately from cash. Where ABL 25 kap. 13 § may apply, assess the need for a kontrollbalansräkning immediately; a later contribution does not by itself establish that earlier corporate duties were satisfied.
 
-| Konto | Användning |
-|-------|------------|
-| 2091  | Balanserad vinst eller förlust (utdelningsutrymme efter bokslut) |
-| 2098  | Vinst eller förlust föregående år (innan resultatdisposition) |
-| 2099  | Årets resultat (innan bokslutsdisposition) |
-| 2898  | Outtagen vinstutdelning till delägare |
-| 2899  | Övriga skulder till delägare (t.ex. revers från ägartillskott) |
-| 7210  | Lön till företagsledare (ofta separat från andra löner för K10-spår) |
-| 7510  | Arbetsgivaravgifter på 7210 |
+## Sources
 
-## Regulatoriska kantfall
+- [Skatteverket: changed rules for income year 2026](https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/andradereglerinforinkomstdeklarationen2027.4.4a54dc8b19aa6175a152359.html)
+- [Skatteverket: K10 and the recommendation to file without a dividend](https://www.skatteverket.se/foretag/drivaforetag/foretagsformer/famansforetag/raknautskattenpadinutdelning.4.b1014b415f3321c0de27ce.html)
+- [Aktiebolagslagen: chapters 17, 18, 21 and 25](https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/aktiebolagslag-2005551_sfs-2005-551/)
 
-- **Förbjudet lån från bolaget** (21 kap. ABL): ägaren får inte låna pengar
-  av bolaget. Bryts förbudet beskattas hela lånet som tjänsteinkomst (53 kap. IL).
-- **Stoppregler för uthyrning av bostad till eget bolag**: marknadshyra och
-  saklig grund krävs.
-- **Karens vid avstämning av karensbolag**: när bolaget vilar måste det vila
-  i 5 hela kalenderår innan ägaren kan ta ut ackumulerade gränsbelopp som
-  kapitalinkomst utan tjänstebeskattning.
-- **Närståendetransaktioner**: utdelning till barn/make beräknas mot ägarens
-  K10, inte mottagarens.
-
-## References
-
-- Planned reference (not yet authored): a step-by-step K10 walkthrough example.
-- Planned reference (not yet authored): the 2026 reformed löneunderlag parameters.
+Recheck rule applicability for the income year. Do not extrapolate transition rules for dormant companies or related-person transactions from a generic owner-managed-company label.

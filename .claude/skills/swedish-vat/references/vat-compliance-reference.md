@@ -66,7 +66,7 @@ Faktureringsmetoden (accrual) required for omsättning > 3 million SEK. Boksluts
 
 ### 2.1 Omvänd skattskyldighet (reverse charge)
 
-Buyer self-assesses both output and input VAT. Applies in two contexts:
+The buyer self-assesses output VAT and separately deducts input VAT only to the extent permitted by the purchase's actual taxable use and evidence. Registration alone does not establish full deduction; output and deductible input may differ. Do not silently net them. See [Skatteverket's return-field guidance](https://www.skatteverket.se/foretag/moms/deklareramoms/fyllaimomsdeklarationen.4.3a2a542410ab40a421c80004214.html). Applies in two contexts:
 
 **EU cross-border:** Intra-community goods acquisitions, B2B service purchases under main rule, purchases from non-EU suppliers.
 

@@ -20,12 +20,21 @@ One staged operation, one approval, five effects (lib/core/bookkeeping/year-end-
 1. Revalues open foreign-currency items at the closing rate (3960/7960)
 2. Posts the closing entry INTO the period (class 3-8 zeroed against 2099)
 3. Locks the period
-4. Closes the period (irreversible per BFL)
+4. Closes the period (irreversible in this product workflow; not a claim that the law forbids later corrections)
 5. Creates or reuses the next period and posts its opening balances (class 1-2), then moves 2099 to 2098 in the new year
 
 Consequence: **the period must be OPEN and UNLOCKED when you run it.** The closing entry is a journal entry dated on balansdagen; a period locked beforehand refuses it ("Cannot write to locked/closed fiscal period"), and \`gnubok_year_end_readiness\` / \`gnubok_run_year_end\` now refuse a pre-locked period up front (\`period_locked\` / PERIOD_LOCK_ALREADY_LOCKED). There is no separate lock, close or opening-balance step afterwards: those tools answer "already locked" / "already closed" once year-end has run.
 
 ## Workflow
+
+## Tax provisions to compute (AB)
+
+Before the irreversible year-end run, reconcile taxable profit, review the tax computation and post the required closing tax entries. The final result transferred to 2099 must already include current tax:
+
+- **Bolagsskatt 20.6 %** of skattemässigt resultat (since 2021). Posted to 8910 → 2510.
+- **Periodiseringsfond:** max 25 % of överskott **before this year's avsättning** (IL 30 kap.). 6-year mandatory reversal; oldest fond reversed first to avoid statutory return.
+- **Räkenskapsenlig avskrivning:** must be applied consistently: switching method requires Skatteverket approval.
+
 
 ### Step 1: Bokslutstransaktioner (accrual entries)
 
@@ -36,6 +45,7 @@ Before running year-end, post any year-end adjusting entries via the web app:
 - **Periodiseringsfond** (AB only, max 25 % of överskott av näringsverksamhet **before** this year's avsättning per IL 30 kap.; 6-year mandatory reversal, oldest fond reversed first)
 - **Överavskrivning** (2150/8850: bokföringsmässig avskrivning beyond skattemässig)
 - **Lagervärdering** (lägsta värdets princip)
+- **Current tax**: finish the AB tax computation and required tax entries before sealing the year
 - **Skuld till företagaren / egenavgifter** (enskild firma)
 
 These are not staged via MCP today: direct in web UI. The skill is to remind the user.
@@ -56,7 +66,7 @@ Open foreign-currency receivables/payables (1510/2440 in EUR/USD/etc.) are reval
 
 \`gnubok_year_end_readiness({ fiscal_period_id })\`. Resolve every blocker before going on: \`unbooked_transactions\` (the common one), \`draft_entries\`, \`unexplained_voucher_gap\`, \`sequence_mismatch\`, \`trial_balance_unbalanced\`, \`kontantmetod_cutoff_required\`, \`period_locked\` (unlock it: year-end locks the period itself), and the period-state kinds. **Do NOT call \`gnubok_lock_period\` here.** A lock is not a pre-flight for bokslut; it only freezes a period you are not about to close.
 
-### Step 5: Run year-end (the only write)
+### Step 5: Run year-end (after all adjusting and tax entries)
 
 \`gnubok_run_year_end({ fiscal_period_id })\` on the open, unlocked period: stages a high-risk operation. Surface the irreversibility, then approve with \`confirmed=true\`. After approval:
 
@@ -72,14 +82,6 @@ Open foreign-currency receivables/payables (1510/2440 in EUR/USD/etc.) are reval
 
 Nothing else to call. \`gnubok_set_opening_balances\`, \`gnubok_close_period\` and \`gnubok_lock_period\` are for the manual or legacy flow only (a period closed in another system, or a partial run that needs finishing by hand); after \`gnubok_run_year_end\` they refuse with "already closed" / "already locked".
 
-## Tax provisions to compute (AB)
-
-After year-end JE but before filing INK2:
-
-- **Bolagsskatt 20.6 %** of skattemässigt resultat (since 2021). Posted to 8910 → 2510.
-- **Periodiseringsfond:** max 25 % of överskott **before this year's avsättning** (IL 30 kap.). 6-year mandatory reversal; oldest fond reversed first to avoid statutory return.
-- **Räkenskapsenlig avskrivning:** must be applied consistently: switching method requires Skatteverket approval.
-
 ## Tax provisions (Enskild firma)
 
 - **Egenavgifter** (28.97 % normal, 10.21 % age 66+): reserves for next year's tax.
@@ -91,8 +93,8 @@ These compute with \`gnubok_get_kpi_report\` for inputs but the actual tax JE is
 ## Critical rules
 
 - **Year-end is forever.** Once \`gnubok_run_year_end\` is approved, the period is closed and there is no rollback. \`gnubok_unlock_period\` cannot unlock a closed period: only one that is locked but not closed.
-- **Run order matters.** bokslutstransaktioner → readiness → run_year_end on the OPEN period → verify. Locking first is the one ordering that fails.
-- **K2 vs K3:** affects många bokslutsposter: start-up costs, leasing, immateriella tillgångar. The skill assumes K2 unless told otherwise.
+- **Run order matters.** bokslutstransaktioner including current tax → readiness → run_year_end on the OPEN period → verify. Locking first is the one ordering that fails.
+- **K2 vs K3:** establish the framework and its applicable fiscal-year version before valuation. Size alone does not establish K2 eligibility; assess the revised scope for years beginning after 31 December 2025.
 - **Revisionsplikt:** AB with > 3 M SEK omsättning, > 1.5 M SEK BR-omslutning, > 3 employees (any 2 of 3, two consecutive years) need auditor: book the audit before close.
 
 ## Common errors

@@ -3,7 +3,7 @@ id: vertical/software-saas-ai
 tier: vertical
 title: "Software, SaaS & AI-produktbolag (SNI 58.21-63.12)"
 description: >
-  Swedish bookkeeping for software, SaaS and AI product companies (SNI 58.21, 58.29, 62.01, 62.03, 63.11, 63.12). Use whenever a Swedish AB or EF has recurring digital product revenue, US/EU cloud and LLM vendors in the supplier ledger (AWS, OpenAI, Anthropic, Stripe, GitHub), runs personaloptioner or KPO programs, books förutbetalda intäkter for annual prepay (2979), capitalizes development costs under K3 chapter 18, files OSS-deklaration, or operates under a US Delaware parent with a Swedish opco. Trigger on indirect cues: GL containing 1010 plus 2089 plus 4531/4535, 3:12-reformen 2026, K2-vs-K3 choice for SaaS, omvänd betalningsskyldighet on API costs, EU AI Act conformity, transfer pricing for cost-plus dev shops. Distinct from konsult-it (hourly billing): prefer this skill when subscription/usage-based digital product revenue dominates.
+  Swedish bookkeeping for software, SaaS and AI product companies (SNI 58.21, 58.29, 62.01, 62.03, 63.11, 63.12). Use whenever a Swedish AB or EF has recurring digital product revenue, US/EU cloud and LLM vendors in the supplier ledger (AWS, OpenAI, Anthropic, Stripe, GitHub), runs personaloptioner or KPO programs, books förutbetalda intäkter for annual prepay (2979), capitalizes development costs under K3 chapter 18, files OSS-deklaration, or operates under a US Delaware parent with a Swedish opco. Trigger on indirect cues: GL containing 1010 plus 2089 plus 4535/4531, 3:12-reformen 2026, K2-vs-K3 choice for SaaS, omvänd betalningsskyldighet on API costs, EU AI Act conformity, transfer pricing for cost-plus dev shops. Distinct from konsult-it (hourly billing): prefer this skill when subscription/usage-based digital product revenue dominates.
 sni_prefixes: ["58.21", "58.29", "62.01", "62.03", "63.11", "63.12"]
 trigger_signals:
   text_patterns:
@@ -30,8 +30,8 @@ trigger_signals:
     - "2979"
     - "3305"
     - "3308"
-    - "4531"
     - "4535"
+    - "4531"
     - "6540"
     - "6570"
 estimated_tokens: 11500
@@ -40,9 +40,15 @@ version: 1
 
 # software-saas-ai
 
+## Kontoval och avdragsrätt
+
+BAS 4535 gäller tjänster från annat EU-land; 4531 gäller tjänster från land utanför EU vid 25 procent moms. Leverantörerna nedan är exempel på juridiska motparter, inte ett besked om varje fakturas etablering. Kontrollera avtal, fakturans leverantör och faktisk leverans. Kontobaser och 2614 ska rapporteras separat; 2645/ruta 48 förutsätter avdragsrätt och kan vara lägre än utgående moms. Exemplen med lika momsbelopp förutsätter full avdragsrätt.
+
+Källa: [BAS kontoplan 2026](https://www.bas.se/wp-content/uploads/2026/04/BAS_kontoplan_2026_v2.pdf) och [Skatteverkets momsdeklaration](https://www.skatteverket.se/foretag/moms/deklareramoms/fyllaimomsdeklarationen.4.3a2a542410ab40a421c80004214.html).
+
 ## 1. När detta atom aktiveras
 
-Bolag med SNI 58.21/58.29/62.01/62.03/63.11/63.12 vars huvudsakliga intäkt är återkommande digital produktförsäljning (SaaS, mjukvara, API, AI-applikation). Trigga också om GL innehåller 1010 + 2089 + (4531 eller 4535) + 2979 i kombination, eller om leverantörsregistret matchar AWS EMEA SARL, Google Cloud EMEA, OpenAI, Anthropic, Stripe, Vercel, GitHub. Ej för IT-konsulttjänst på timme: använd konsult-it.
+Bolag med SNI 58.21/58.29/62.01/62.03/63.11/63.12 vars huvudsakliga intäkt är återkommande digital produktförsäljning (SaaS, mjukvara, API, AI-applikation). Trigga också om GL innehåller 1010 + 2089 + (4535 eller 4531) + 2979 i kombination, eller om leverantörsregistret matchar AWS EMEA SARL, Google Cloud EMEA, OpenAI, Anthropic, Stripe, Vercel, GitHub. Ej för IT-konsulttjänst på timme: använd konsult-it.
 
 ## 2. Arbetsflödesmönster
 
@@ -73,8 +79,8 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 | **3001** | Försäljning inom Sverige, 25% moms | SaaS-intäkt B2B/B2C inom Sverige. Inte 3041 (existerar ej) |
 | **3305** | Försäljning tjänster till land utanför EU | Export digitala tjänster, ingen svensk moms (ML 2023:200 6 kap 33 §) |
 | **3308** | Försäljning tjänster till annat EU-land | B2B EU, omvänd hos köparen, rapporteras i periodisk sammanställning |
-| **4531** | Inköp av tjänster från annat EU-land, 25% | AWS EMEA SARL (LU), Google Cloud EMEA (IE), Azure Ireland |
-| **4535** | Inköp av tjänster från land utanför EU, 25% | OpenAI, Anthropic, Lambda Labs, RunPod, Modal, Cohere, Together AI |
+| **4535** | Inköp av tjänster från annat EU-land, 25% | AWS EMEA SARL (LU), Google Cloud EMEA (IE), Azure Ireland |
+| **4531** | Inköp av tjänster från land utanför EU, 25% | OpenAI, Anthropic, Lambda Labs, RunPod, Modal, Cohere, Together AI |
 | **4545** | Import av varor 25% | Endast vid hårdvaruimport (GPU). Inte 4541 (existerar ej) |
 | **5410** | Förbrukningsinventarier | Datorer under halvt PBB, periferi |
 | **6230** | Datakommunikation | Fiber, internet |
@@ -142,24 +148,24 @@ Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2025.1/409
 
 | Leverantör | Etablering | Konto inköp | Utg moms | Ing moms |
 |---|---|---|---|---|
-| AWS EMEA SARL | Luxemburg (EU) | 4531 | 2614 | 2645 (avdrag) |
-| Google Cloud EMEA Ltd | Irland (EU) | 4531 | 2614 | 2645 |
-| Microsoft Azure (Microsoft Ireland Operations) | Irland (EU) | 4531 | 2614 | 2645 |
-| OpenAI LLC | USA (utanför EU) | 4535 | 2614 | 2645 |
-| Anthropic PBC | USA (utanför EU) | 4535 | 2614 | 2645 |
-| Mistral AI | Frankrike (EU) | 4531 | 2614 | 2645 |
-| Cohere | Kanada (utanför EU) | 4535 | 2614 | 2645 |
-| Lambda Labs, RunPod, Modal, Together AI | USA | 4535 | 2614 | 2645 |
-| GitHub Inc | USA | 4535 | 2614 | 2645 |
-| Vercel Inc | USA | 4535 | 2614 | 2645 |
+| AWS EMEA SARL | Luxemburg (EU) | 4535 | 2614 | 2645 (avdrag) |
+| Google Cloud EMEA Ltd | Irland (EU) | 4535 | 2614 | 2645 |
+| Microsoft Azure (Microsoft Ireland Operations) | Irland (EU) | 4535 | 2614 | 2645 |
+| OpenAI LLC | USA (utanför EU) | 4531 | 2614 | 2645 |
+| Anthropic PBC | USA (utanför EU) | 4531 | 2614 | 2645 |
+| Mistral AI | Frankrike (EU) | 4535 | 2614 | 2645 |
+| Cohere | Kanada (utanför EU) | 4531 | 2614 | 2645 |
+| Lambda Labs, RunPod, Modal, Together AI | USA | 4531 | 2614 | 2645 |
+| GitHub Inc | USA | 4531 | 2614 | 2645 |
+| Vercel Inc | USA | 4531 | 2614 | 2645 |
 
 VIES-validering av EU-leverantörers VAT-nummer ska göras periodiskt och dokumenteras (screenshot/timestamp). Stripe, Adyen, Paddle: betalningstjänst undantagen från moms (ML 10 kap 3 §, finansiell tjänst). Avgift bokas brutto på 6570 utan momsberäkning.
 
 **Periodisering API-kostnader.** Matcha mot intäkt månadsvis. Vid betydande månads-end-cutoff: upplupna kostnader 2990 baserat på dashboard-rapporter (AWS Cost Explorer, OpenAI Usage). Verifikatet ska referera till underliggande rapport, faktura kommer 3-10 dagar in i nästa månad.
 
 **Momsdeklaration ruta-rapportering (verifierat oförändrat 2025-2026):**
-- Inköp tjänster annat EU-land (4531): beskattningsunderlag i **ruta 21**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
-- Inköp tjänster utanför EU (4535): beskattningsunderlag i **ruta 22**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
+- Inköp tjänster annat EU-land (4535): beskattningsunderlag i **ruta 21**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
+- Inköp tjänster utanför EU (4531): beskattningsunderlag i **ruta 22**, utgående moms 25% i **ruta 30**, ingående avdrag i **ruta 48**
 - Försäljning tjänster B2B annat EU-land (3308): **ruta 39** plus periodisk sammanställning
 - Försäljning tjänster export utanför EU (3305): **ruta 40**
 
@@ -329,7 +335,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Rätt.** Omvänd betalningsskyldighet ska tillämpas eftersom OpenAI LLC är etablerad utanför EU och tillhandahåller B2B-tjänst till svensk beskattningsbar person:
 ```
-4535 Inköp tjänster från land utanför EU 25%   1 000 D
+4531 Inköp tjänster från land utanför EU 25%   1 000 D
 2645 Beräknad ingående moms på förvärv         250 D
   1930 Bank                                      1 000 K
   2614 Utgående moms omv betaln.skyld 25%          250 K
@@ -337,7 +343,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Lagrum.** ML 2023:200 6 kap 33 § (huvudregel B2B-tjänst, omsatt i köparens land); ML 2023:200 16 kap (omvänd betalningsskyldighet); art. 196 EU:s momsdirektiv 2006/112/EG.
 
-**Momsdeklaration.** Beskattningsunderlag i **ruta 22**, utg moms 25% i **ruta 30**, ing moms-avdrag i **ruta 48**. (Ruta 21 plus 30 är korrekt för EU-inköp 4531, fel ruta för 4535 utanför EU.)
+**Momsdeklaration.** Beskattningsunderlag i **ruta 22**, utg moms 25% i **ruta 30**, ing moms-avdrag i **ruta 48**. (Ruta 21 plus 30 är korrekt för EU-inköp 4535, fel ruta för 4531 utanför EU.)
 
 **Anmärkning.** Äldre referens till "ML 5 kap 5 §" gäller gamla mervärdesskattelagen (1994:200). Ny ML 2023:200 har bestämmelsen i 6 kap 33 § (plats för tillhandahållande) och 16 kap (vem är betalningsskyldig).
 
@@ -380,7 +386,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 ## 7. Modifier: ai-heavy
 
-Aktiveras när **API-leverantörer (OpenAI, Anthropic, Mistral, Cohere, Lambda Labs, RunPod, Modal, Together AI) över 15% av total kostnad** ELLER **konto 4535 över 15% av totala kostnader**.
+Aktiveras när **API-leverantörer (OpenAI, Anthropic, Mistral, Cohere, Lambda Labs, RunPod, Modal, Together AI) över 15% av total kostnad** ELLER **konto 4531 över 15% av totala kostnader**.
 
 **Token-baserad kostnadsallokering.** API-kostnader allokeras per kund/produkt baserat på faktisk token-konsumtion från leverantörens usage-API:
 - OpenAI: organization.usage endpoint
@@ -391,14 +397,14 @@ Lagra kund-ID i request metadata och avstäm månadsvis. Allokering bokas via in
 
 **COGS-attribution per kund.** Möjliggör verklig bruttomarginalsanalys per kund/plan, kritiskt för pricing och churn-modellering. Den månatliga matchningen API-cost mot intäkt sker via:
 1. Periodiserad intäkt månadsvis från 2979 till 3001/3305/3308
-2. Faktisk API-kostnad månadsvis på 4535
+2. Faktisk API-kostnad månadsvis på 4531
 3. Bruttomarginal per kund = intäkt minus allokerad API-kostnad minus Stripe-avgift (6570)
 
-**Omvänd betalningsskyldighet bulk-hantering.** Vid många små API-fakturor (t.ex. OpenAI weekly invoicing): batch-bokning per månad mot 4535 plus spegelposter 2614/2645 acceptabelt om underliggande fakturasummering bifogas verifikatet. Verifieringsspår per faktura krävs för Skatteverkets revision.
+**Omvänd betalningsskyldighet bulk-hantering.** Vid många små API-fakturor (t.ex. OpenAI weekly invoicing): batch-bokning per månad mot 4531 plus spegelposter 2614/2645 acceptabelt om underliggande fakturasummering bifogas verifikatet. Verifieringsspår per faktura krävs för Skatteverkets revision.
 
 **AI Act conformity-kostnader.** För high-risk AI-system (Annex III): notified body-avgifter, riskhanteringssystem (art. 9), data governance-dokumentation (art. 10), teknisk dokumentation (art. 11), kvalitetsledningssystem (art. 17), post-market monitoring (art. 72). Bedömning aktivering vs opex:
 - Aktivering tillåten under K3 18.12 endast om kostnader är direkt hänförliga till specifik AI-systemvariant under utveckling och övriga sex kriterier uppfylls
 - Övergripande compliance-infrastruktur, governance, AI-litterati (art. 4): kostnadsförs (typiskt 6540, 7610 personalutbildning, 6550 konsultarvoden)
 - K2-bolag: alltid kostnadsföring
 
-**GPU-compute spend.** Stora månatliga GPU-kostnader (Lambda Labs, RunPod, Modal, Together AI) på 4535 plus 2614/2645. Reserved capacity / committed spend ska periodiseras enligt avtalsperioden: förskottsbetalning bokas mot 1790 (övriga förutbetalda kostnader) och resolveras månadsvis till 6540 eller 4535 beroende på behandling i momshänseende.
+**GPU-compute spend.** Stora månatliga GPU-kostnader (Lambda Labs, RunPod, Modal, Together AI) på 4531 plus 2614/2645. Reserved capacity / committed spend ska periodiseras enligt avtalsperioden: förskottsbetalning bokas mot 1790 (övriga förutbetalda kostnader) och resolveras månadsvis till 6540 eller 4531 beroende på behandling i momshänseende.

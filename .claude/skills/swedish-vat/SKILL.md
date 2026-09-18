@@ -61,7 +61,7 @@ Always read the full reference before answering ANY question about:
 ## Critical error patterns to flag
 
 1. **2611 vs 2614**: Reverse charge output VAT must go to 2614 (Ruta 30), never 2611 (Ruta 10)
-2. **One-sided reverse charge**: Both output AND input VAT must be booked; silent netting is prohibited
+2. **Reverse charge and deduction**: Report output VAT separately from input VAT that is actually deductible. Full deduction is not automatic; restricted deduction can make the two amounts unequal. Never silently net the tax legs.
 3. **Import double-counting**: Since 2015, VAT-registered businesses report import VAT to Skatteverket only, not Tullverket
 4. **Representation**: VAT deductible on 300 SEK base; income tax deduction abolished for meals since 2017
 5. **Period-end clearing**: All 261x-264x must clear to 2650; residual balances cause reconciliation failures

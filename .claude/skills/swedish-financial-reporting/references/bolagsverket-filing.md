@@ -32,25 +32,22 @@ Filed with **Länsstyrelsen** (not Bolagsverket) within **6 months**.
 
 ## 2. Filing deadlines
 
-Core rule (ÅRL 8:3 §): årsredovisning must reach Bolagsverket **within 7 months** from räkenskapsårets slut. Bolagsverket has **no legal authority to grant extensions**.
+For AB, **ÅRL 8 kap. 3 § requires the annual report to reach Bolagsverket within one month after the meeting adopts the income statement and balance sheet**. AGM timing and late-fee thresholds are separate rules, not alternative filing dates.
 
-### Calendar year AB (Dec 31 FY end)
-Deadline: **July 31** of following year.
-
-### Brutet räkenskapsår
-7-month rule applies from whatever date FY ends:
-- FY ending Jun 30 → deadline Jan 31
-- FY ending Aug 31 → deadline Mar 31
+- Hold the ordinary AGM within six months after year-end (ABL 7 kap. 10 §).
+- Calculate the filing date from the actual adoption date. For example, adoption on 30 June means receipt by 30 July, not 31 July. Earlier adoption brings the deadline forward.
+- ÅRL 8 kap. 6 § normally makes seven months after year-end the first late-fee threshold. Do not replace the earlier adoption-based duty with this threshold.
+- Apply the same distinction for a non-calendar financial year. Check statutory date-calculation/holiday rules and the authority calendar rather than adding a fixed number of days.
 
 ### Internal timeline
-- Prepare årsredovisning within ~4.5 months
-- If revisor: ready at least 6 weeks before AGM for audit
-- AGM within 6 months from FY end
-- File within 1 month after AGM
-- Total max 7 months
+
+Prepare and sign the annual report before adoption. If audited, allow the statutory audit lead times. Retain the adoption resolution, fastställelseintyg and actual filing receipt. A software export or upload awaiting signature is not completion.
 
 ### Continued AGM (fortsatt bolagsstämma)
-If properly reported, filing deadline extends to **9 months**.
+
+A qualifying, notified continued meeting can affect the late-fee timing under ÅRL 8 kap. 6 §. It is not a blanket nine-month filing extension: check the statutory conditions, actual adoption and the continuing one-month filing duty.
+
+Sources: [ÅRL 8 kap. 3 and 6 §§](https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/arsredovisningslag-19951554_sfs-1995-1554/), [ABL 7 kap. 10 §](https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/aktiebolagslag-2005551_sfs-2005-551/), [lag (1930:173) on statutory time](https://www.riksdagen.se/sv/dokument-och-lagar/dokument/svensk-forfattningssamling/lag-1930173-om-berakning-av-lagstadgad-tid_sfs-1930-173/).
 
 ---
 
@@ -62,9 +59,9 @@ Legal reference: ÅRL 8:5-6 §§. Three fees at escalating intervals.
 
 | | Privat AB & ekon. förening | Publikt AB |
 |---|---|---|
-| Avgift 1 (day 1 late) | 7,500 SEK | 15,000 SEK |
-| Avgift 2 (+2 months) | 7,500 SEK | 15,000 SEK |
-| Avgift 3 (+2 more months) | 15,000 SEK | 30,000 SEK |
+| Avgift 1 (ÅRL 8:6 threshold) | 7,500 SEK | 15,000 SEK |
+| Avgift 2 (two months after first fee notice was sent) | 7,500 SEK | 15,000 SEK |
+| Avgift 3 (two months after second fee notice was sent) | 15,000 SEK | 30,000 SEK |
 | **Total max** | **30,000 SEK** | **60,000 SEK** |
 
 ### Legacy amounts (FY beginning before 2025-01-01)
@@ -77,15 +74,12 @@ Förseningsavgifter are **ej skattemässigt avdragsgilla**. Unpaid amounts sent 
 
 ## 4. Escalation and tvångslikvidation
 
-Timeline from FY end:
+Keep separate clocks rather than assuming every fee follows a fixed year-end offset:
 
-| Time | Event |
-|---|---|
-| 7 months + 1 day | Förseningsavgift 1 |
-| 9 months | Förseningsavgift 2 |
-| 11 months | Förseningsavgift 3 AND Bolagsverket can issue **föreläggande om likvidation** (ABL 25:11 §) |
-| After föreläggande | Company must rectify within set deadline or Bolagsverket decides on **tvångslikvidation** and appoints likvidator |
-| 15 months | Board members and VD risk **personligt betalningsansvar** for company debts |
+- First fee: the ÅRL 8:6 threshold, normally seven months after year-end, subject to the statutory exceptions.
+- Second and third fees: the notice-linked intervals in ÅRL 8:6 a; retain the authority notices before calculating dates.
+- Failure to file the required documents within eleven months can trigger compulsory-liquidation action under ABL 25:11. This is separate from the fee-notice timetable.
+- ÅRL 8:12 separately addresses potential personal liability for obligations arising after fifteen months, with its statutory conditions and exceptions. Do not treat a fee calculation as a liability assessment.
 
 Additionally:
 - Failure to prepare årsredovisning within 6 months can constitute **bokföringsbrott** (BrB) regardless of filing
@@ -145,8 +139,8 @@ Thresholds unchanged since 2010. SOU 2021:60 recommended raising them but no leg
 
 | Entity type | Must file ÅR? | Filed with | Deadline | Revisionsberättelse? | Digital? |
 |---|---|---|---|---|---|
-| Privat AB | Always | Bolagsverket | 7 months | If revisor exists | Yes (K2/K3) |
-| Publikt AB | Always | Bolagsverket | 7 months | Always | Yes (K2/K3) |
-| Ekon. förening (FY 2025+) | All | Bolagsverket | 7 months | Yes (always has revisor) | Not yet |
+| Privat AB | Always | Bolagsverket | Within one month after adoption | If revisor exists | Yes (K2/K3) |
+| Publikt AB | Always | Bolagsverket | Within one month after adoption | Always | Yes (K2/K3) |
+| Ekon. förening (FY 2025+) | All | Bolagsverket | Within one month after adoption (ÅRL 8:3) | Yes (always has revisor) | Not yet |
 | HB (jur. person partner) | Yes | Bolagsverket | **6 months** | If revisionsplikt | Not yet |
 | Stiftelse | Yes | **Länsstyrelsen** | **6 months** | Most have revisionsplikt | Not yet |

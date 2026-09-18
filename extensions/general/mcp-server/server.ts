@@ -4728,6 +4728,9 @@ export const tools: McpTool[] = [
           ])
         : [{ data: null }, { count: 0 }]
       const entityType = (settings.data?.entity_type as string | undefined) ?? null
+      // Company settings use the long Swedish name; workflow metadata uses AB.
+      // Preserve the source value in company_context while matching the same entity.
+      const skillEntityType = entityType === 'aktiebolag' ? 'AB' : entityType
       const vatRegistered = Boolean(settings.data?.vat_registered)
       const hasEmployees = (employeeCount.count ?? 0) > 0
 
@@ -4748,7 +4751,7 @@ export const tools: McpTool[] = [
         : tagFiltered.filter((s) => {
             if (!s.applicability) return true
             const a = s.applicability
-            if (a.entity_type && a.entity_type !== 'both' && entityType && entityType !== a.entity_type) return false
+            if (a.entity_type && a.entity_type !== 'both' && skillEntityType && skillEntityType !== a.entity_type) return false
             if (a.requires?.includes('employees') && !hasEmployees) return false
             if (a.requires?.includes('vat_registered') && !vatRegistered) return false
             return true

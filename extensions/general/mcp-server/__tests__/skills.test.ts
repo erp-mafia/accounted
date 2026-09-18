@@ -344,6 +344,20 @@ describe('gnubok_list_skills tool', () => {
     expect(result.skills.find((s) => s.slug === 'vertical/konsult-it')?.tier).toBe('vertical')
   })
 
+  it.each(['AB', 'aktiebolag'])('shows AB year-end for company entity type %s without rewriting context', async (entityType) => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType, employeeCount: 0 })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string }>
+      count: number
+      company_context: { entity_type: string }
+    }
+    expect(result.skills.map((s) => s.slug)).toContain('year-end-close')
+    expect(result.skills.map((s) => s.slug)).not.toContain('payroll-monthly')
+    expect(result.count).toBe(result.skills.length)
+    expect(result.company_context.entity_type).toBe(entityType)
+  })
+
   it('applicability filter hides AB-only skills for EF companies', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
     const supabase = makeSupabaseWithEmptyAtomRegistry([], { entityType: 'EF', employeeCount: 0, vatRegistered: true })
@@ -579,7 +593,7 @@ describe('Skills via MCP protocol', () => {
     expect(result.contents).toHaveLength(1)
     expect(result.contents[0].uri).toBe('Accounted://skill/quarterly-vat-review')
     expect(result.contents[0].mimeType).toBe('text/markdown')
-    expect(result.contents[0].text).toContain('# Quarterly VAT Review')
+    expect(result.contents[0].text).toBe(skills.find((s) => s.slug === 'quarterly-vat-review')!.body)
   })
 
   it('resources/read returns Resource not found for unknown skill slug', async () => {

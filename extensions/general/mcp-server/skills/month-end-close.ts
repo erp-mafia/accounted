@@ -24,9 +24,11 @@ Goal: zero uncategorized business transactions inside the period.
 1. Call \`gnubok_list_uncategorized_transactions\` to see what's outstanding.
 2. For each, call \`gnubok_suggest_categories\` (batches of up to 20) to get high-confidence proposals.
 3. Stage categorizations via \`gnubok_categorize_transaction\` (or, for income that matches an invoice, \`gnubok_match_transaction_to_invoice\`).
-4. The user approves each in the web app: staging is non-negotiable for legal compliance (BFL 5 kap.).
+4. Review and approve the exact staged preview through the supported approval surface. Staging is an Accounted control; BFL requires complete, traceable accounting, not this particular UI.
 
-If a transaction is genuinely private, mark it as \`category: 'private'\`: no journal entry will be created.
+Reconcile issued and received invoices, credits, unpaid receivables/payables, owner-paid purchases, advances and non-cash adjustments too. Under faktureringsmetoden, absence of a bank payment does not justify omitting a known invoice.
+
+A genuinely personal-account import with no company event may be excluded. A real movement in an AB's bank account must remain accounted for even if its purpose is private: establish the lawful treatment (for example remuneration, reimbursement or another evidenced event), including shareholder-loan restrictions. Do not use \`category: 'private'\` to silently remove company cash movements.
 
 ### Step 2: Reconcile bank
 
@@ -42,15 +44,15 @@ If the company files VAT monthly (beskattningsunderlag > 40M SEK, or voluntarily
 
 If quarterly or annual filer: skip: VAT happens on its own cadence (see the quarterly-vat-review skill).
 
-### Step 5: Lock the period
+### Step 5: Review the requested lock scope
 
-Stage the lock via \`gnubok_lock_period(fiscal_period_id)\`. The tool refuses if any business transactions remain unbooked. After user approval, no new entries can be posted into the period: late corrections must use \`gnubok_unlock_period\` (also high-risk, also staged).
+A monthly review does not automatically authorize locking the entire fiscal year. Verify the scope of \`fiscal_period_id\` and the deployed lock tool before proposing a lock. Keep the period open for remaining adjustments and an intended year-end run. For an explicitly requested and reviewed fiscal-period lock, stage \`gnubok_lock_period(fiscal_period_id)\`. The tool refuses if any business transactions remain unbooked. After user approval, no new entries can be posted into the period: late corrections must use \`gnubok_unlock_period\` (also high-risk, also staged).
 
 ## Critical rules
 
 - **Never delete journal entries.** Use \`gnubok_uncategorize_transaction\` (storno reversal) to undo. DB triggers enforce this: direct deletes will fail.
 - **Posted entries are immutable.** Once a JE is posted, even amounts are locked. Use \`correctEntry\` (web app) for corrections.
-- **Money math:** \`Math.round(x * 100) / 100\`, never \`toFixed()\`. The categorize tool handles this; if you compute manually, follow the same pattern.
+- **Money math:** use the project money/rounding helpers for software and decimal arithmetic for independent controls. Do not introduce a second rounding convention.
 - **Locking ≠ closing.** Locking blocks new entries; closing (after year-end) is irreversible. This skill stops at locking.
 
 ## Common errors

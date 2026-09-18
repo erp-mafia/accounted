@@ -90,12 +90,12 @@ Every verifikation must have an underlag (kvitto, faktura, bankutdrag, avtal, et
 ### Multiple verification series
 BFL allows multiple verification series (e.g., "A" for supplier invoices, "B" for customer invoices, "K" for bank). Each series must have unbroken numbering within the räkenskapsår. This is common in practice and your software should support it.
 
-### Rättelser (5 kap 5§ and 5 kap 9§)
-- The original post must remain visible (no silent overwriting), and it must be recorded when the rättelse was made and who made it
-- Two permitted tracks:
-  1. **Särskild rättelsepost**: a correcting verifikation with a link/reference to the original. Always allowed; the only track once the period is locked/closed or the bokföring has been relied upon (filed declarations, bokslut)
-  2. **Rättelse in the same verifikat**: strike-and-replace of lines with the struck originals kept readable, or correction of the verifikation's text/date (5 kap 9 §). Allowed in open, unlocked periods with an immutable who/when trail. This is the track Fortnox/Visma expose as "ändra verifikat"
-- When rättelse happens through a särskild rättelsepost, it must be easy to become aware of the rättelse when inspecting the corrected post ("utan svårighet gå att få kännedom om rättelsen")
+### Rättelser (BFL 5 kap. 5 and 9 §§; BFNAR 2013:2 2.17-2.18)
+For computer-based bookkeeping, use a **separate correcting entry** for a posted bokföringspost (BFNAR 2013:2 points 2.17-2.18). Preserve the original, the correction linkage and who/when. BFL 5 kap. 9 § separately concerns correction of a verifikation; it does not make inline replacement of posted ledger lines lawful merely because the period is open or an audit log exists.
+
+Accounted contains `correct_entry_metadata` / `correct_entry_lines_inline` RPCs. Their existence and audit logging are product behaviour, not a legal compliance finding. Prefer the separate-entry correction route; any use or redesign of an inline route requires a specific review of the changed fields against these distinct rules. Never silently overwrite or delete originals. A product-closed period does not eliminate the obligation to correct discovered errors through an appropriate supported process.
+
+Source: [BFN guidance on bookkeeping](https://www.bfn.se/wp-content/uploads/vl13-2-bokforing.pdf), points 2.17-2.18 and chapter 5.
 
 ## 5. Avslutning av bokföringen (BFL 6 kap)
 
@@ -110,7 +110,7 @@ BFL allows multiple verification series (e.g., "A" for supplier invoices, "B" fo
 - Consists of: förvaltningsberättelse, resultaträkning, balansräkning, noter
 - Larger companies also: kassaflödesanalys
 - Must be upprättat within: 6 months for AB, 7 months for ekonomisk förening
-- AB must file with Bolagsverket within 7 months, or face förseningsavgift
+- AB must file with Bolagsverket within one month after adoption (ÅRL 8:3). Seven months after year-end is normally the first late-fee threshold (ÅRL 8:6), not permission to miss an earlier adoption-based deadline.
 
 ## 6. Arkivering (BFL 7 kap)
 

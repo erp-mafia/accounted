@@ -21,4 +21,4 @@ Prepare the momsdeklaration underlag from the ledger and reconcile it before any
 
 - Never compute or assert a ruta mapping from memory; it must come from the loaded skills and the product's report.
 - Every write stages a pending operation; the user approves before anything is booked.
-- Never work around a locked period; a locked VAT period means the correction goes in the current one, per the loaded skill's procedure.
+- Separate bookkeeping corrections from return corrections. An error in an already-filed VAT return requires a complete corrected return for the original reporting period; a ledger lock is not permission to move it into the current return. Verify the supported bookkeeping correction route separately. Source: https://www.skatteverket.se/foretag/moms/deklareramoms/rattaenmomsdeklaration.4.3684199413c956649b552c4.html

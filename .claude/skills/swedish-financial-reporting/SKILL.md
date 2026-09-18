@@ -33,11 +33,11 @@ For questions spanning multiple areas (e.g. "what's the full timeline from boksl
 - Nettoomsättning > 3 MSEK
 
 ### Key deadlines (calendar year AB, FY ending Dec 31)
-- Årsredovisning to Bolagsverket: **7 months** (July 31)
-- INK2 to Skatteverket: **~7 months** (August 1, or next weekday)
-- Förseningsavgift 1: day 1 after deadline
-- Förseningsavgift 2: +2 months
-- Förseningsavgift 3 + likvidationshotbrev: +2 more months (11 months total)
+- Årsredovisning to Bolagsverket: **within one month after adoption** (ÅRL 8:3); 30 June adoption means receipt by 30 July. Seven months after year-end is normally the late-fee threshold, not a substitute deadline.
+- INK2 to Skatteverket: use the authority deadline for the exact financial-year-end cohort; do not reuse an August date from a different reporting year.
+- Förseningsavgift 1: assess the separate ÅRL 8:6 threshold, normally seven months after year-end, not automatically the day after an earlier adoption-based deadline
+- Förseningsavgift 2: two months after the first fee notice was sent (ÅRL 8:6 a)
+- Förseningsavgift 3: two months after the second fee notice was sent; the eleven-month liquidation rule is a separate clock (ÅRL 8:6 a, ABL 25:11).
 
 ### Förseningsavgifter (FY beginning 2025-01-01+)
 - Privat AB: 7,500 + 7,500 + 15,000 = **30,000 SEK**

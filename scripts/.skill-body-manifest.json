@@ -1,15 +1,15 @@
 {
   "horizontal/swedish-accounting-compliance": {
-    "hash": "f63d1bbcda84007716ebcfb805f6399cc51875d4139097281c56b76942e62544",
-    "version": 5
+    "hash": "91bfa3496ecce87989e7aa927908573473c0b730e39aaf15360331ac493c16be",
+    "version": 6
   },
   "horizontal/swedish-accounting-compliance/bas-kontoplan": {
     "hash": "0d1b05466568344be0afd4b360d582db23331ae4f1b4b05681cc92c50d099bdb",
     "version": 2
   },
   "horizontal/swedish-accounting-compliance/bfl-bfnar": {
-    "hash": "78744006a40cbaeb4b45510cd95b47b65e13f5c523503ed420a7187cd858c8b2",
-    "version": 3
+    "hash": "d3cec12cc8003ea9e221a07b0431b623178500feb5de7cb43b48e26f59f49964",
+    "version": 4
   },
   "horizontal/swedish-accounting-compliance/changes-2025-2026": {
     "hash": "ffc4c5d618bb8840f43fd48c8d4a3e464768e84abdaeb49da016e0051b260964",
@@ -76,16 +76,16 @@
     "version": 3
   },
   "horizontal/swedish-financial-reporting": {
-    "hash": "4fc9d925de42b6a1c4658b960f269f97cf7035cd2041658d17e1883480d9be4b",
-    "version": 3
+    "hash": "cfe1f175bfcb0a4712fff5ff9df2192211ed52fdb719fd588c13556d524db407",
+    "version": 4
   },
   "horizontal/swedish-financial-reporting/arsredovisning-structure": {
     "hash": "ae4789f2e72d8b372aafdf0ff0a0211a871b1dd62be76be836fe3cb66d6fe276",
     "version": 1
   },
   "horizontal/swedish-financial-reporting/bolagsverket-filing": {
-    "hash": "893fd5c00be8f4c8c4a2cfc4058c071b7821f290f9527240cfba6bccb1760cdc",
-    "version": 1
+    "hash": "1ef6042de8cd3c1994eb4ef85319960986ee2fe480bc4f2399d4442399492006",
+    "version": 2
   },
   "horizontal/swedish-financial-reporting/ink2-form-logic": {
     "hash": "66b2a41ee2217089af8022c3ca36894a4df727536769ea84f77facb337ebe1d1",
@@ -232,12 +232,12 @@
     "version": 1
   },
   "horizontal/swedish-vat": {
-    "hash": "adb1b84256e9a17c8c54741530f529f9d0afa645c1f3ff2c77d13d44053544dc",
-    "version": 4
+    "hash": "b16d0970ada85cd3a7f95beb9c32dbf54af665720beec1c34ecf72ea43d8620d",
+    "version": 5
   },
   "horizontal/swedish-vat/vat-compliance-reference": {
-    "hash": "4fa3e4b047b15d3630a7cff41b1a96091daff32bcaa13410f2c4b964b57d0771",
-    "version": 2
+    "hash": "8d6962cdacd61ced9ccba2e9e5c30394f960ca52912f0d81b0fd92c6fabb68c2",
+    "version": 3
   },
   "horizontal/swedish-year-end-closing": {
     "hash": "ec90a8ecb3b36379350c7d7ae4e93bb50197d41a38a4c2091538320e59fc83b9",
@@ -264,8 +264,8 @@
     "version": 2
   },
   "horizontal/swedish-year-end-closing/reporting-and-filing": {
-    "hash": "80673a4262cab034451d4daf69ce629cc8a5a1544240cea66afe858fef7526e8",
-    "version": 2
+    "hash": "f0d11dcb7bc4b75bb4d104860dd0b5b5fb801ed6ba64ec82986b1ca46bf3cb16",
+    "version": 3
   },
   "horizontal/swedish-year-end-closing/tax-calculations": {
     "hash": "522dcbc3dcb223482c7fc0cff307e921efcbbc19fa849b99d5e540fbb366e8f6",
@@ -328,8 +328,8 @@
     "version": 2
   },
   "modifier/single-shareholder-ab-fmb": {
-    "hash": "ccf0cb583c7f4ae58801f1e1bc58f2ed78c1d78febd979d882c565534b3e167d",
-    "version": 4
+    "hash": "050081fe6c29e7040fdb80d2e56e5bcb7f66f5f67c8ce92c90c8c10d0fd5e0c0",
+    "version": 5
   },
   "vertical/bygg-hantverk": {
     "hash": "fe046e23d98a4ff6ae35df0e0023ccf9168aa8dc63376b569402a026bb6d9f4a",
@@ -428,7 +428,7 @@
     "version": 3
   },
   "vertical/software-saas-ai": {
-    "hash": "a5a8a9a73230e5d0e18c30fe3a3a8a428e21df409deecd782c6683cb9c42f334",
-    "version": 2
+    "hash": "91c1bf1ae7b91d23400a78a87d04d2541e810a479781d4a214f5b1eabd270818",
+    "version": 3
   }
 }
