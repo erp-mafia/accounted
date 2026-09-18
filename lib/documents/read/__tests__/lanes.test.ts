@@ -32,13 +32,13 @@ describe('readPlanFor', () => {
   })
 
   it('reads voucher-tied history for its text layer only, once', () => {
-    expect(readPlanFor({ lane: 'history_tied', inRollout: true, docType: null, pagesRead: false })).toEqual({ lane: 'history_tied', allowModel: false, maxModelPages: null, tier: 'cheap' })
+    expect(readPlanFor({ lane: 'history_tied', inRollout: true, docType: null, pagesRead: false })).toEqual({ lane: 'history_tied', allowModel: false, maxModelPages: null, tier: 'extraction' })
     expect(readPlanFor({ lane: 'history_tied', inRollout: true, docType: 'agreement.loan', pagesRead: true })).toBeNull()
   })
 
   it('reads loose history one model page deep, then in full only for an acting type', () => {
-    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: null, pagesRead: false })).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'cheap' })
-    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: 'agreement.rental', pagesRead: true })).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: null, tier: 'cheap' })
+    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: null, pagesRead: false })).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'extraction' })
+    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: 'agreement.rental', pagesRead: true })).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: null, tier: 'extraction' })
     expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: 'receipt', pagesRead: true })).toBeNull()
     expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: null, pagesRead: true })).toBeNull()
   })
@@ -56,14 +56,14 @@ describe('needsReadOnDemand', () => {
 })
 
 describe('historyReaderTier', () => {
-  it('is the cheap tier unless the environment puts the extraction tier back', () => {
+  it('is the extraction tier unless the environment moves history to the cheap one', () => {
     delete process.env.ARKIV_HISTORY_READER_TIER
-    expect(historyReaderTier()).toBe('cheap')
-    process.env.ARKIV_HISTORY_READER_TIER = 'extraction'
     expect(historyReaderTier()).toBe('extraction')
-    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: null, pagesRead: false })).toMatchObject({ tier: 'extraction' })
-    process.env.ARKIV_HISTORY_READER_TIER = 'nonsense'
+    process.env.ARKIV_HISTORY_READER_TIER = 'cheap'
     expect(historyReaderTier()).toBe('cheap')
+    expect(readPlanFor({ lane: 'history_loose', inRollout: true, docType: null, pagesRead: false })).toMatchObject({ tier: 'cheap' })
+    process.env.ARKIV_HISTORY_READER_TIER = 'nonsense'
+    expect(historyReaderTier()).toBe('extraction')
     delete process.env.ARKIV_HISTORY_READER_TIER
     // Live documents never carry a tier: the extraction tier reads what arrived today.
     expect(readPlanFor({ lane: 'live', inRollout: true, docType: null, pagesRead: false })).not.toHaveProperty('tier')

@@ -52,13 +52,14 @@ export interface ReadPlan {
 /**
  * The model that reads history. Benchmarked 2026-09-18 on the trial set (21
  * pages: six receipt and letter photos, fifteen scanned agreement pages):
- * Haiku 4.5 recovered 28 of 29 checked facts against Sonnet 4.6's 29 at a
- * third of the price, Nova 2 Lite 22 with organisation numbers dropped. So
- * the cheap tier reads history; ARKIV_HISTORY_READER_TIER=extraction puts
- * Sonnet back on it.
+ * Sonnet 4.6 recovered every one of 29 checked facts, Haiku 4.5 28 at a
+ * third of the price, Nova 2 Lite 22 with organisation numbers dropped.
+ * The founder chose accuracy first, so history reads with the extraction
+ * tier like everything else; ARKIV_HISTORY_READER_TIER=cheap moves it to
+ * Haiku when the volume makes that worth it.
  */
 export function historyReaderTier(): AiTier {
-  return process.env.ARKIV_HISTORY_READER_TIER === 'extraction' ? 'extraction' : 'cheap'
+  return process.env.ARKIV_HISTORY_READER_TIER === 'cheap' ? 'cheap' : 'extraction'
 }
 
 export interface PlanInput {

@@ -34,12 +34,12 @@ afterEach(() => {
 describe('planForDocument', () => {
   it('follows the lanes: live in full, tied history text only, loose history one page, an acting type in full on the second pass', () => {
     expect(planForDocument({ ...base, created_at: daysAgo(2) }, now)).toEqual({ lane: 'live', allowModel: true, maxModelPages: null })
-    expect(planForDocument({ ...base, created_at: daysAgo(90), journal_entry_id: 'je' }, now)).toEqual({ lane: 'history_tied', allowModel: false, maxModelPages: null, tier: 'cheap' })
-    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'cheap' })
-    expect(planForDocument({ ...base, created_at: daysAgo(90), pages_read_at: 'x', read_error: 'partial:budget', doc_type: 'agreement.loan' }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: null, tier: 'cheap' })
+    expect(planForDocument({ ...base, created_at: daysAgo(90), journal_entry_id: 'je' }, now)).toEqual({ lane: 'history_tied', allowModel: false, maxModelPages: null, tier: 'extraction' })
+    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: 1, tier: 'extraction' })
+    expect(planForDocument({ ...base, created_at: daysAgo(90), pages_read_at: 'x', read_error: 'partial:budget', doc_type: 'agreement.loan' }, now)).toEqual({ lane: 'history_loose', allowModel: true, maxModelPages: null, tier: 'extraction' })
     expect(planForDocument({ ...base, created_at: daysAgo(90), pages_read_at: 'x', read_error: 'partial:budget', doc_type: 'receipt' }, now)).toBeNull()
     process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: false, maxModelPages: 1, tier: 'cheap' })
+    expect(planForDocument({ ...base, created_at: daysAgo(90) }, now)).toEqual({ lane: 'history_loose', allowModel: false, maxModelPages: 1, tier: 'extraction' })
   })
 })
 
@@ -68,8 +68,8 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     expect(counts).toEqual({ processed: 3, read: 3, skipped: 0, errors: 0 })
     expect(onRead.mock.calls.map((c) => (c as unknown as [{ id: string }, { pages: number }])[0].id)).toEqual(['tied', 'loose', 'new'])
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
-      { allowModel: false, maxModelPages: null, tier: 'cheap' },
-      { allowModel: true, maxModelPages: 1, tier: 'cheap' },
+      { allowModel: false, maxModelPages: null, tier: 'extraction' },
+      { allowModel: true, maxModelPages: 1, tier: 'extraction' },
       { allowModel: true, maxModelPages: null },
     ])
   })
@@ -89,7 +89,7 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     for (let i = 0; i < 3; i++) enqueue({}) // one read: delete, insert, stamp
     expect(await readUnreadDocuments(supabase, 10, { now, budgetPagesPerDay: 4 })).toEqual({ processed: 1, read: 1, skipped: 0, errors: 0 })
     expect(readDocumentBytes).toHaveBeenCalledTimes(1)
-    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null, tier: 'cheap' })
+    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null, tier: 'extraction' })
     expect(findCalls('arkiv_usage_daily', 'eq')).toEqual([
       ['company_id', 'co-1'],
       ['activity', 'pages_vision'],
@@ -110,8 +110,8 @@ describe('readUnreadDocuments, the lanes and the budget', () => {
     for (let i = 0; i < 6; i++) enqueue({})
     expect(await readUnreadDocuments(supabase, 10, { now })).toMatchObject({ processed: 2, read: 2 })
     expect(asMock(readDocumentBytes).mock.calls.map((c) => c[2])).toEqual([
-      { allowModel: true, maxModelPages: null, tier: 'cheap' },
-      { allowModel: true, maxModelPages: 1, tier: 'cheap' },
+      { allowModel: true, maxModelPages: null, tier: 'extraction' },
+      { allowModel: true, maxModelPages: 1, tier: 'extraction' },
     ])
   })
 })
