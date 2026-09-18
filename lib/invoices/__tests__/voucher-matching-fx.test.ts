@@ -931,12 +931,17 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
   })
 
-  it('keeps the refusal on kontantmetoden (no receivable to true up)', async () => {
+  it('accepts a SEK-booked voucher on kontantmetoden (migration 20260918120000)', async () => {
+    // The bank row carries slightly less than the invoice's booked SEK value,
+    // the everyday spread between the bank's rate and Riksbankens. On
+    // kontantmetoden that is not a delbetalning and not a kursdifferens: with
+    // no receivable there is nothing to true up, so the link settles the full
+    // remaining and the RPC writes no residual verifikat.
     const cashVoucher = entry('je-cash-sek', 20, 'Inbetalning', [
       {
         id: 'l-cash-bank',
         account_number: '1930',
-        debit_amount: 11500,
+        debit_amount: 11450,
         credit_amount: 0,
         currency: 'SEK',
       },
@@ -944,7 +949,7 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
         id: 'l-cash-rev',
         account_number: '3001',
         debit_amount: 0,
-        credit_amount: 11500,
+        credit_amount: 11450,
         currency: 'SEK',
       },
     ])
@@ -958,6 +963,38 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
       'company-1',
       eurInvoice() as never,
       'je-cash-sek'
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('still refuses the wrong voucher on kontantmetoden', async () => {
+    const wrongVoucher = entry('je-cash-wrong', 21, 'Inbetalning', [
+      {
+        id: 'l-wrong-bank',
+        account_number: '1930',
+        debit_amount: 1000,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-wrong-rev',
+        account_number: '3001',
+        debit_amount: 0,
+        credit_amount: 1000,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({
+      accountingMethod: 'cash',
+      entries: [wrongVoucher],
+    })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-cash-wrong'
     )
 
     expect(result.ok).toBe(false)

@@ -31,6 +31,17 @@ const MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
+// 20260918120000 opens the same fallback to kontantmetoden and keeps the
+// residual verifikat accrual-only. Replayed straight after the migration
+// above so the suite exercises the pair exactly as prod runs them.
+const CASH_MIGRATION_SQL = readFileSync(
+  path.join(
+    process.cwd(),
+    'supabase/migrations/20260918120000_link_voucher_fx_fallback_cash_method.sql',
+  ),
+  'utf8',
+)
+
 let seq = 0
 function nextSeq(): number {
   return (Date.now() % 1_000_000) * 1000 + seq++
@@ -43,6 +54,7 @@ async function withFxMigration(fn: (client: PoolClient) => Promise<void>): Promi
   try {
     await client.query('BEGIN')
     await client.query(MIGRATION_SQL)
+    await client.query(CASH_MIGRATION_SQL)
     await fn(client)
   } finally {
     await client.query('ROLLBACK').catch(() => {})
@@ -615,7 +627,11 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
     })
   })
 
-  it('refuses the SEK fallback on kontantmetoden (no receivable to true up)', async () => {
+  it('settles a foreign invoice on kontantmetoden without writing a residual', async () => {
+    // The fallback was accrual-only until 20260918120000. On kontantmetoden
+    // there is no receivable, so there is no kursdifferens to true up
+    // (ML 8 kap 21-23 §): the link marks the invoice paid against the verifikat
+    // that already holds the money and books nothing new.
     await withFxMigration(async (client) => {
       const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
       await client.query(
@@ -631,20 +647,71 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
         totalSek: 11500,
         exchangeRate: 11.5,
       })
-      // Cash method matches the 19xx debit.
+      // Cash method matches the 19xx debit. 11 450 against a booked value of
+      // 11 500 is the ordinary spread between the bank's rate and Riksbankens.
       const voucherId = await seedVoucher(client, {
         userId,
         companyId,
         fiscalPeriodId,
         debitAccount: '1930',
         creditAccount: '3001',
-        sekAmount: 11500,
+        sekAmount: 11450,
+      })
+
+      const result = await callLinkInvoice(client, { invoiceId, voucherId, userId, companyId })
+
+      expect(result.ok).toBe(true)
+
+      const { rows } = await client.query(
+        `SELECT status, paid_amount, remaining_amount FROM public.invoices WHERE id = $1`,
+        [invoiceId],
+      )
+      expect(rows[0].status).toBe('paid')
+      expect(Number(rows[0].paid_amount)).toBe(1000)
+      expect(Number(rows[0].remaining_amount)).toBe(0)
+
+      // No residual verifikat: the linked voucher stays the only entry.
+      const { rows: entries } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM public.journal_entries
+         WHERE company_id = $1 AND id <> $2`,
+        [companyId, voucherId],
+      )
+      expect(entries[0].n).toBe(0)
+    })
+  })
+
+  it('still refuses on kontantmetoden when the voucher is the wrong one', async () => {
+    // The widened gate must not widen the deviation band: 1 000 kr against a
+    // 1 000 EUR remainder is a different voucher, not an FX difference.
+    await withFxMigration(async (client) => {
+      const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
+      await client.query(
+        `INSERT INTO public.company_settings (user_id, company_id, accounting_method)
+         VALUES ($1, $2, 'cash')`,
+        [userId, companyId],
+      )
+      const { invoiceId } = await seedCustomerInvoice(client, {
+        userId,
+        companyId,
+        currency: 'EUR',
+        total: 1000,
+        totalSek: 11500,
+        exchangeRate: 11.5,
+      })
+      const voucherId = await seedVoucher(client, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        debitAccount: '1930',
+        creditAccount: '3001',
+        sekAmount: 1000,
       })
 
       const result = await callLinkInvoice(client, { invoiceId, voucherId, userId, companyId })
 
       expect(result.ok).toBe(false)
       expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+      expect(result.details?.reason).toBe('fx_deviation_too_large')
     })
   })
 
