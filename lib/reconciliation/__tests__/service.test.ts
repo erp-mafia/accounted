@@ -217,6 +217,52 @@ describe('listReconciliationAccounts', () => {
     expect(accounts.map((a) => a.kind)).toEqual(['bank'])
   })
 
+  it('reads a quiet but freshly synced connection as current, not stale', async () => {
+    // #2717: a company whose bank has had no new lines for weeks still has a
+    // healthy connection. Staleness follows bank_connections.last_synced_at
+    // (what the sync cron writes on success), not the newest transaction.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
+    enqueue({ data: [] }) // latest sign-offs (none)
+    enqueue({ data: [] }) // bank names for logos
+    enqueue({ data: { created_at: '2026-08-01T06:00:00Z' } }) // newest transaction: 19 days old
+    enqueue({ data: { last_synced_at: '2026-08-20T04:00:00Z' } }) // connection synced this morning
+    skattekontoStatusMock.mockResolvedValue(null)
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {
+      today: '2026-08-20',
+      withStatus: false,
+    })
+
+    expect(accounts[0].source).toMatchObject({
+      type: 'psd2',
+      synced_at: '2026-08-20T04:00:00Z',
+      stale: false,
+    })
+  })
+
+  it('keeps a file-imported account on its transaction timestamp', async () => {
+    // No connection to ask, so the newest transaction stays the only signal
+    // and an account nothing has touched for weeks still reads stale.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [cashAccount(ID_A, { source: 'file', bank_connection_id: null })] })
+    enqueue({ data: [] }) // latest sign-offs (none)
+    // No connection ids, so the bank_name read for logos never happens.
+    enqueue({ data: { created_at: '2026-08-01T06:00:00Z' } })
+    skattekontoStatusMock.mockResolvedValue(null)
+
+    const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {
+      today: '2026-08-20',
+      withStatus: false,
+    })
+
+    expect(accounts[0].source).toMatchObject({
+      type: 'bank_file',
+      synced_at: '2026-08-01T06:00:00Z',
+      stale: true,
+    })
+  })
+
   it('computes the bank status through the existing engine with the account scope and maps it to the common shape', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true, currency: 'SEK' })] })

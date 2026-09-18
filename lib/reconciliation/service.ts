@@ -64,20 +64,48 @@ function defaultWindow(today: string): { from: string; to: string } {
   return { from: `${today.slice(0, 4)}-01-01`, to: today }
 }
 
+/**
+ * When this account last had contact with the bank: the later of the newest
+ * transaction and the connection's own `last_synced_at`.
+ *
+ * `bank_connections.last_synced_at` is the honest source for a PSD2 account.
+ * The sync cron and "Synka nu" move it only on a successful fetch (migration
+ * 20260902150000), while `transactions.created_at` moves only when the bank
+ * actually had something new. Reading the transaction alone marks a quiet
+ * account stale: a week without new lines prints "uppgifterna är äldre än sju
+ * dagar" on the reconciliation page while the bank chip on the transactions
+ * page, which reads `last_synced_at` directly, shows the same connection as
+ * healthy. Accounts with no connection (bank file, manual) keep the
+ * transaction timestamp as their only signal.
+ */
 async function latestBankSyncAt(
   supabase: SupabaseClient,
   companyId: string,
-  cashAccountId: string,
+  account: Pick<CashAccountRow, 'id' | 'bank_connection_id'>,
 ): Promise<string | null> {
   const { data } = await supabase
     .from('transactions')
     .select('created_at')
     .eq('company_id', companyId)
-    .eq('cash_account_id', cashAccountId)
+    .eq('cash_account_id', account.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  return (data?.created_at as string | undefined) ?? null
+  const lastTransactionAt = (data?.created_at as string | undefined) ?? null
+
+  if (!account.bank_connection_id) return lastTransactionAt
+
+  const { data: connection } = await supabase
+    .from('bank_connections')
+    .select('last_synced_at')
+    .eq('id', account.bank_connection_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const lastSyncedAt = (connection?.last_synced_at as string | undefined) ?? null
+
+  if (!lastSyncedAt) return lastTransactionAt
+  if (!lastTransactionAt) return lastSyncedAt
+  return lastSyncedAt > lastTransactionAt ? lastSyncedAt : lastTransactionAt
 }
 
 /** Bridge lines for the bank kind, mirroring the #1737 status card. */
@@ -149,7 +177,7 @@ async function bankStatus(
     account.id,
     Boolean(account.is_primary),
   )
-  const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
+  const syncedAt = await latestBankSyncAt(supabase, companyId, account)
   const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
   // The bank-reported (booked) balance, mirrored from the last PSD2 balance
   // refresh. Point-in-time and dated by balance_updated_at, NOT by any
@@ -308,7 +336,7 @@ export async function listReconciliationAccounts(
         }
       }
       try {
-        syncedAt = await latestBankSyncAt(supabase, companyId, a.id)
+        syncedAt = await latestBankSyncAt(supabase, companyId, a)
       } catch {
         syncedAt = null
       }
