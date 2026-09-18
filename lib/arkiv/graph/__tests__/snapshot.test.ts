@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-vi.mock('../build', () => ({ buildCompanyGraph: vi.fn() }))
+vi.mock('../build', () => ({ buildCompanyGraph: vi.fn(), GRAPH_VERSION: 2 }))
 
 import { buildCompanyGraph } from '../build'
 import { getCompanyGraph, markCompanyGraphStale, refreshCompanyGraph } from '../snapshot'
@@ -20,7 +20,7 @@ beforeEach(() => {
 
 describe('company graph snapshot', () => {
   it('serves a fresh snapshot without building', async () => {
-    enqueue({ data: { graph: { nodes: [], links: [], computed_at: 'x' }, computed_at: new Date().toISOString(), stale: false } })
+    enqueue({ data: { graph: { version: 2, nodes: [], links: [], computed_at: 'x' }, computed_at: new Date().toISOString(), stale: false } })
     const g = await getCompanyGraph(supabase, 'c')
     expect(g).toMatchObject({ nodes: [] })
     expect(buildCompanyGraph).not.toHaveBeenCalled()
@@ -35,10 +35,17 @@ describe('company graph snapshot', () => {
     enqueue({ data: { graph: {}, computed_at: new Date().toISOString(), stale: true } })
     enqueue({})
     await getCompanyGraph(supabase, 'c')
-    enqueue({ data: { graph: {}, computed_at: '2026-01-01T00:00:00Z', stale: false } })
+    enqueue({ data: { graph: { version: 2 }, computed_at: '2026-01-01T00:00:00Z', stale: false } })
     enqueue({})
     await getCompanyGraph(supabase, 'c')
     expect(buildCompanyGraph).toHaveBeenCalledTimes(3)
+  })
+
+  it('rebuilds a snapshot an older builder drew, however fresh', async () => {
+    enqueue({ data: { graph: { version: 1, nodes: [] }, computed_at: new Date().toISOString(), stale: false } })
+    enqueue({})
+    expect(await getCompanyGraph(supabase, 'c')).toBe(built)
+    expect(buildCompanyGraph).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the graph when the save fails, and marks stale without ever throwing', async () => {

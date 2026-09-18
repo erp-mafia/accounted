@@ -132,4 +132,24 @@ describe('buildCompanyGraph', () => {
     // The payroll tie is by the accounts the runs booked, not a hard-coded 7010.
     expect(g.links.find((l) => l.source === 'person:e-1' && l.target === 'account:7010')).toBeUndefined()
   })
+
+  it('draws a bank-side counterpart with no party as a merchant node, folded across the bank spellings, and meets a party by name', async () => {
+    enqueueAll({
+      accounts: [{ account_number: '8410', account_name: 'Räntekostnader' }, { account_number: '6540', account_name: 'IT-tjänster' }],
+      lines: [line('8410', '2026-08-31', 'je-a1', 2331), line('1930', '2026-08-31', 'je-a1', 0, 2331), line('8410', '2026-07-31', 'je-a2', 2331), line('1930', '2026-07-31', 'je-a2', 0, 2331), line('6540', '2026-09-03', 'je-c', 1985), line('1930', '2026-09-03', 'je-c', 0, 1985)],
+      parties: [{ id: 'p-anthropic', display_name: 'Anthropic, PBC', kind: 'company' }],
+      bookedTx: [
+        { id: 't-a1', journal_entry_id: 'je-a1', original_description: 'ALMI FÖRETAG Autogiro', description: null, merchant_name: null, date: '2026-08-31' },
+        { id: 't-a2', journal_entry_id: 'je-a2', original_description: 'ALMI FÖRETAG', description: null, merchant_name: null, date: '2026-07-31' },
+        { id: 't-c', journal_entry_id: 'je-c', original_description: 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO', description: null, merchant_name: null, date: '2026-09-03' },
+      ],
+    })
+    const g = await buildCompanyGraph(supabase, CO, TODAY)
+    const almi = g.nodes.find((n) => n.ref === 'merchant:almi-företag')
+    expect(almi).toMatchObject({ kind: 'merchant', cluster: 'party', label: 'Almi Företag', meta: expect.objectContaining({ last_seen: '2026-08-31', active: true, payments: 2 }) })
+    expect(g.links).toEqual(expect.arrayContaining([expect.objectContaining({ source: 'merchant:almi-företag', target: 'account:8410', kind: 'posting', evidence: expect.objectContaining({ amount: 4662, entries: 2 }) })]))
+    // The card text "ANTHROPIC* ..." and the party "Anthropic, PBC" clean to the same key: one counterpart, the party.
+    expect(g.nodes.find((n) => n.ref === 'party:p-anthropic')?.meta).toMatchObject({ last_seen: '2026-09-03', active: true })
+    expect(g.nodes.find((n) => n.ref.startsWith('merchant:anthropic'))).toBeUndefined()
+  })
 })

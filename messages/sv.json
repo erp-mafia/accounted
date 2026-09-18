@@ -10134,6 +10134,7 @@
     "brain_open": "Öppna",
     "brain_no_links": "Inga kopplingar ännu.",
     "brain_payments": "{count, plural, one {1 betalning} other {# betalningar}}",
+    "brain_bank_only": "Känd från banken, ingen motpart registrerad ännu",
     "brain_entries": "{count, plural, one {1 verifikat} other {# verifikat}}",
     "brain_truncated": "Ett urval: källorna var större än vad grafen läser.",
     "brain_no_webgl": "Den här vyn behöver WebGL. Öppna sidan i en datorwebbläsare med grafik påslagen; tabellen nedan är samma innehåll.",

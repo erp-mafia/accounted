@@ -4,6 +4,7 @@ import type { CompanyGraph } from '../types'
 
 const graph: CompanyGraph = {
   company: { ref: 'company:c', name: 'X' },
+  version: 2,
   computed_at: '2026-10-01T00:00:00Z',
   period: { from: '2025-10-01', to: '2026-10-01' },
   months: [],

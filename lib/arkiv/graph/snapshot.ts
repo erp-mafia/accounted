@@ -1,13 +1,14 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { buildCompanyGraph } from './build'
+import { buildCompanyGraph, GRAPH_VERSION } from './build'
 import type { CompanyGraph } from './types'
 
 /**
  * One snapshot per company, so the page and the agent read the same picture
  * at the same instant and serving it costs one row. The nightly lint rebuilds
  * it; the pipeline marks it stale when a document lands; a read older than
- * MAX_AGE_HOURS, or marked stale, rebuilds on the way out.
+ * MAX_AGE_HOURS, marked stale, or drawn by an older builder, rebuilds on the
+ * way out.
  */
 const log = createLogger('arkiv/graph')
 export const MAX_AGE_HOURS = 24
@@ -32,7 +33,7 @@ export async function getCompanyGraph(supabase: SupabaseClient, companyId: strin
   if (error) throw new Error(`graph snapshot fetch failed: ${error.message}`)
   const row = data as SnapshotRow | null
   const maxAge = (opts.maxAgeHours ?? MAX_AGE_HOURS) * 3600 * 1000
-  const fresh = row && !row.stale && Date.now() - new Date(row.computed_at).getTime() < maxAge
+  const fresh = row && !row.stale && row.graph?.version === GRAPH_VERSION && Date.now() - new Date(row.computed_at).getTime() < maxAge
   if (fresh) return row.graph
   return refreshCompanyGraph(supabase, companyId, opts.today)
 }

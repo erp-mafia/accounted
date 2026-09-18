@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { merchantKey, merchantLabel } from './merchant-key'
 import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
 
 /**
@@ -15,6 +16,8 @@ import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type
 const MONTHS = 12
 const UPCOMING_DAYS = 90
 const TOP_PARTIES = 20
+/** Bump when the rules that draw the graph change, so stored snapshots are rebuilt instead of served. */
+export const GRAPH_VERSION = 2
 const LINE_CAP = 20000
 const TX_CAP = 5000
 /**
@@ -263,17 +266,35 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   const aliasParty = new Map(((aliases.data ?? []) as Array<{ alias_key: string; party_id: string }>).map((a) => [a.alias_key, a.party_id]))
   const bookedRows = (bookedTx.data ?? []) as Array<{ id: string; journal_entry_id: string | null; original_description: string | null; description: string | null; merchant_name: string | null; date: string }>
   if (bookedRows.length >= TX_CAP) truncated = true
+  // Without an alias, a party whose name cleans to the same key as the bank text is the same counterpart;
+  // and a bank text with no party at all becomes a merchant node of its own, folded by its key.
+  const partyByKey = new Map<string, string>()
+  for (const p of partyRows) {
+    const key = merchantKey(p.display_name)
+    if (key && !partyByKey.has(key)) partyByKey.set(key, p.id)
+  }
+  const merchants = new Map<string, { label: string; entries: Set<string> }>()
   for (const tx of bookedRows) {
     if (!tx.journal_entry_id || entryParty.has(tx.journal_entry_id)) continue
+    let done = false
     for (const raw of [tx.original_description, tx.merchant_name, tx.description]) {
       if (!raw) continue
-      const party = aliasParty.get(normalizeCounterpartyName(raw))
+      const party = aliasParty.get(normalizeCounterpartyName(raw)) ?? partyByKey.get(merchantKey(raw))
       if (party) {
         entryParty.set(tx.journal_entry_id, party)
         if ((entryDate.get(tx.journal_entry_id) ?? '') < tx.date) entryDate.set(tx.journal_entry_id, tx.date)
+        done = true
         break
       }
     }
+    if (done) continue
+    const raw = tx.merchant_name || tx.original_description || tx.description
+    const key = merchantKey(raw)
+    if (!key) continue
+    const m = merchants.get(key) ?? { label: merchantLabel(raw), entries: new Set<string>() }
+    m.entries.add(tx.journal_entry_id)
+    merchants.set(key, m)
+    if ((entryDate.get(tx.journal_entry_id) ?? '') < tx.date) entryDate.set(tx.journal_entry_id, tx.date)
   }
   const partyFlow = new Map<string, number>()
   const partyLast = new Map<string, string>()
@@ -293,9 +314,36 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   const agreementRows = (agreements.data ?? []) as Array<{ id: string; title: string; kind: string; status: string; ends_on: string | null; amount: number | null; period: string | null; principal: number | null; counterparty_party_id: string | null; counterparty_name: string | null; source_document_id: string | null }>
   const referencedParties = new Set(agreementRows.map((a) => a.counterparty_party_id).filter((x): x is string => !!x))
   const documentedParties = new Set(((documentLinks.data ?? []) as unknown as Array<{ target_kind: string; party_id: string | null }>).filter((l) => l.target_kind === 'party').map((l) => l.party_id).filter((x): x is string => !!x))
-  const ranked = [...partyRows].sort((a, b) => (partyFlow.get(b.id) ?? 0) - (partyFlow.get(a.id) ?? 0))
+  const merchantStats = [...merchants].map(([key, m]) => {
+    const perAccount = new Map<string, { amount: number; count: number }>()
+    let flow = 0
+    let last = ''
+    for (const entryId of m.entries) {
+      const per = entryAccounts.get(entryId)
+      if (!per) continue
+      const when = entryDate.get(entryId) ?? ''
+      if (when > last) last = when
+      for (const [account, amount] of per) {
+        flow += amount
+        const cur = perAccount.get(account) ?? { amount: 0, count: 0 }
+        perAccount.set(account, { amount: cur.amount + amount, count: cur.count + 1 })
+      }
+    }
+    return { key, label: m.label, flow, last, entries: m.entries.size, perAccount }
+  }).filter((m) => m.flow > 0)
+  // Parties and merchants share the same room, ranked by flow; a party an agreement names is always drawn.
+  const ranked = [
+    ...partyRows.map((p) => ({ party: p.id, merchant: null as string | null, flow: partyFlow.get(p.id) ?? 0, forced: referencedParties.has(p.id) })),
+    ...merchantStats.map((m) => ({ party: null as string | null, merchant: m.key, flow: m.flow, forced: false })),
+  ].sort((a, b) => b.flow - a.flow)
   const kept = new Set<string>()
-  for (const p of ranked) if (kept.size < TOP_PARTIES && ((partyFlow.get(p.id) ?? 0) > 0 || referencedParties.has(p.id))) kept.add(p.id)
+  const keptMerchants = new Set<string>()
+  for (const c of ranked) {
+    if (kept.size + keptMerchants.size >= TOP_PARTIES) break
+    if (!(c.flow > 0 || c.forced)) continue
+    if (c.party) kept.add(c.party)
+    else if (c.merchant) keptMerchants.add(c.merchant)
+  }
   for (const p of referencedParties) kept.add(p)
   for (const id of kept) {
     const p = partyById.get(id)
@@ -310,14 +358,20 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
       meta: { party_kind: p.kind, flow: round2(partyFlow.get(id) ?? 0), last_seen: lastSeen, active: lastSeen ? lastSeen >= isoDaysAhead(today, -ACTIVE_DAYS) : referencedParties.has(id), documented: documentedParties.has(id) },
     })
   }
-  const foldedParties = partyRows.filter((p) => !kept.has(p.id))
-  if (foldedParties.length) {
-    add({ ref: 'parties:others', cluster: 'party', kind: 'parties_folded', label: `Övriga motparter, ${foldedParties.length} st`, weight: foldedParties.length, meta: { count: foldedParties.length } })
-  }
   for (const [key, flow] of partyAccountFlow) {
     const [party, account] = key.split('|')
     if (!kept.has(party)) continue
     link(`party:${party}`, `account:${account}`, 'posting', { kind: 'derived', amount: round2(flow.amount), entries: flow.count, source: 'invoices and supplier invoices booked in the period' })
+  }
+  // Merchants: the bank text is the node until the resolver makes a party of it.
+  for (const m of merchantStats.filter((x) => keptMerchants.has(x.key))) {
+    const ref = `merchant:${m.key.replace(/[^a-z0-9åäö]+/g, '-')}`
+    add({ ref, cluster: 'party', kind: 'merchant', label: m.label, weight: round2(m.flow), meta: { flow: round2(m.flow), last_seen: m.last || null, active: !!m.last && m.last >= isoDaysAhead(today, -ACTIVE_DAYS), documented: false, payments: m.entries, bank_text: m.key } })
+    for (const [account, v] of m.perAccount) link(ref, `account:${account}`, 'posting', { kind: 'derived', amount: round2(v.amount), entries: v.count, source: 'bank transactions booked in the period, matched on the bank text' })
+  }
+  const foldedParties = partyRows.filter((p) => !kept.has(p.id)).length + (merchantStats.length - keptMerchants.size)
+  if (foldedParties > 0) {
+    add({ ref: 'parties:others', cluster: 'party', kind: 'parties_folded', label: `Övriga motparter, ${foldedParties} st`, weight: foldedParties, meta: { count: foldedParties } })
   }
 
   // Authorities: static nodes, linked by what they said and what they take.
@@ -463,6 +517,7 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   const clusters = (Object.keys(CLUSTER_LABELS) as ClusterId[]).map((id) => ({ id, label: CLUSTER_LABELS[id], count: all.filter((n) => n.cluster === id).length }))
   return {
     company: { ref: `company:${companyId}`, name: (company.data as { name: string } | null)?.name ?? '' },
+    version: GRAPH_VERSION,
     computed_at: new Date().toISOString(),
     period: { from, to: today },
     months,

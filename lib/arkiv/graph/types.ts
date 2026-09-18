@@ -13,6 +13,8 @@ export type ClusterId = 'ledger' | 'party' | 'agreement' | 'document' | 'fact' |
 export type NodeKind =
   | 'account'
   | 'party'
+  /** A counterparty known only from the bank text so far: no party row yet (the resolver is opt-in). */
+  | 'merchant'
   | 'parties_folded'
   | 'agreement'
   | 'expected'
@@ -47,6 +49,8 @@ export interface GraphLink {
 
 export interface CompanyGraph {
   company: { ref: string; name: string }
+  /** Which builder drew it; a snapshot from an older builder is rebuilt on the next read, so a deploy never serves yesterday's rules. */
+  version: number
   computed_at: string
   /** The twelve months the ledger side covers. */
   period: { from: string; to: string }

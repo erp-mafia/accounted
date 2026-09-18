@@ -10134,6 +10134,7 @@
     "brain_open": "Open",
     "brain_no_links": "No connections yet.",
     "brain_payments": "{count, plural, one {1 payment} other {# payments}}",
+    "brain_bank_only": "Known from the bank only, no counterparty record yet",
     "brain_entries": "{count, plural, one {1 voucher} other {# vouchers}}",
     "brain_truncated": "A sample: the sources were larger than the graph reads.",
     "brain_no_webgl": "This view needs WebGL. Open the page in a desktop browser with graphics enabled; the table below holds the same content.",

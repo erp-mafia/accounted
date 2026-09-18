@@ -65,6 +65,8 @@ export function hrefFor(node: GraphNode, graph: CompanyGraph): string | null {
     }
     case 'parties_folded':
       return '/parties'
+    case 'merchant':
+      return '/transactions'
     default:
       return null
   }
@@ -73,7 +75,7 @@ export function hrefFor(node: GraphNode, graph: CompanyGraph): string | null {
 /** A weight becomes a sphere size: logarithmic, so a 500 000 kr loan and a 349 kr receipt both fit the same picture. */
 const sizeOf = (weight: number) => Math.max(1.6, Math.min(9, 1.6 + Math.log10(1 + Math.max(0, weight)) * 1.3))
 
-const isInactive = (n: GraphNode) => n.kind === 'party' && n.meta.active === false
+const isInactive = (n: GraphNode) => (n.kind === 'party' || n.kind === 'merchant') && n.meta.active === false
 
 function supportsWebGL(): boolean {
   try {
@@ -473,6 +475,8 @@ function metaLines(node: GraphNode, t: ReturnType<typeof useTranslations<'arkiv'
   if (typeof m.count === 'number') out.push(t('brain_count', { count: m.count as number }))
   if (typeof m.doc_type === 'string') out.push(String(m.doc_type))
   if (m.documented === true) out.push(t('brain_documented'))
+  if (typeof m.payments === 'number' && node.kind === 'merchant') out.push(t('brain_payments', { count: m.payments as number }))
+  if (node.kind === 'merchant') out.push(t('brain_bank_only'))
   return out
 }
 
