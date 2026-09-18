@@ -54,6 +54,7 @@
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
     "@vercel/speed-insights": "^2.0.0",
+    "3d-force-graph": "1.80.0",
     "ai": "6.0.259",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -85,6 +86,7 @@
     "stripe": "^22.3.1",
     "swr": "^2.4.2",
     "tailwind-merge": "^3.6.0",
+    "three": "0.186.0",
     "web-push": "^3.6.7",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
@@ -99,6 +101,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/three": "0.186.0",
     "@types/web-push": "^3.6.4",
     "dotenv": "^17.4.2",
     "eslint": "^9",

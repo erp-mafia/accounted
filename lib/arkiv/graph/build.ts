@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
+import { merchantKey, merchantLabel } from './merchant-key'
 import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
 
 /**
@@ -14,7 +16,36 @@ import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type
 const MONTHS = 12
 const UPCOMING_DAYS = 90
 const TOP_PARTIES = 20
+/** Bump when the rules that draw the graph change, so stored snapshots are rebuilt instead of served. */
+export const GRAPH_VERSION = 2
 const LINE_CAP = 20000
+const TX_CAP = 5000
+/**
+ * What a registration drives. A fact from Skatteverket or Bolagsverket is the
+ * reason certain accounts move and certain deadlines exist; drawing that as a
+ * link is what lets a person (or an agent) walk from "momsregistrerad" to the
+ * VAT accounts and the next VAT return without knowing the accounting.
+ */
+const FACT_RULES: Record<string, { authority: 'skatteverket' | 'bolagsverket'; why: string; accounts?: RegExp; deadlines?: RegExp }> = {
+  vat_registered: { authority: 'skatteverket', why: 'VAT registration: the VAT accounts move and VAT returns fall due', accounts: /^26\d\d$/, deadlines: /moms|vat|periodisk/i },
+  vat_period: { authority: 'skatteverket', why: 'the VAT period sets when VAT returns fall due', accounts: /^26\d\d$/, deadlines: /moms|vat/i },
+  vat_method: { authority: 'skatteverket', why: 'the VAT method decides when VAT is reported', accounts: /^26\d\d$/ },
+  employer_registered: { authority: 'skatteverket', why: 'employer registration: payroll taxes are booked and the employer declaration falls due', accounts: /^(27\d\d|75\d\d)$/, deadlines: /arbetsgivar|agi/i },
+  f_skatt: { authority: 'skatteverket', why: 'F-skatt: preliminary tax is paid in instalments', deadlines: /f_skatt|skatteinbetalning|preliminär/i },
+  fiscal_year: { authority: 'bolagsverket', why: 'the fiscal year sets when the annual report is due', deadlines: /arsredovisning|årsredovisning|annual|bolagsverket|inkomstdeklaration/i },
+  org_number: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  legal_name: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  registered_office: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  share_capital: { authority: 'bolagsverket', why: 'registered with Bolagsverket', accounts: /^2081$/ },
+  share_count: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  board: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  signatories_rule: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  auditor: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  registration_date: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+  business_description: { authority: 'bolagsverket', why: 'registered with Bolagsverket' },
+}
+/** A counterparty paid within this many days is active; older ones are drawn faded and say so. */
+const ACTIVE_DAYS = 90
 const DOC_CAP = 5000
 
 const AUTHORITY_DOC_TYPES: Record<string, 'bolagsverket' | 'skatteverket'> = {
@@ -108,6 +139,16 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     .eq('company_id', companyId)
     .in('id', matchedTxIds.length ? matchedTxIds : [NONE])
     .limit(3000)
+  // Counterparties known from the bank side: the alias a person or the resolver tied to a party,
+  // and every booked transaction of the period, so a loan paid straight from the account has a party too.
+  const aliases = await supabase.from('counterparty_aliases').select('alias_key, party_id').eq('company_id', companyId).not('party_id', 'is', null).limit(5000)
+  const bookedTx = await supabase
+    .from('transactions')
+    .select('id, journal_entry_id, original_description, description, merchant_name, date')
+    .eq('company_id', companyId)
+    .not('journal_entry_id', 'is', null)
+    .gte('date', from)
+    .limit(TX_CAP)
   const facts = await supabase
     .from('company_facts')
     .select('id, predicate, value_text, valid_from, source_document_id')
@@ -136,9 +177,10 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     .select('id, first_name, last_name, employment_type, employment_end')
     .eq('company_id', companyId)
     .limit(500)
+  const runEmployees = await supabase.from('salary_run_employees').select('salary_run_id, employee_id, gross_salary').eq('company_id', companyId).limit(5000)
   const deadlines = await supabase
     .from('deadlines')
-    .select('id, title, due_date, deadline_type, status')
+    .select('id, title, due_date, deadline_type, tax_deadline_type, status')
     .eq('company_id', companyId)
     .gte('due_date', today)
     .lte('due_date', horizon)
@@ -152,7 +194,7 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     .eq('status', 'open')
     .limit(50)
 
-  for (const r of [company, accounts, lines, parties, customers, suppliers, invoices, supplierInvoices, agreements, obligations, transactions, facts, documents, documentLinks, employees, deadlines, expected]) {
+  for (const r of [company, accounts, lines, parties, customers, suppliers, invoices, supplierInvoices, agreements, obligations, transactions, aliases, bookedTx, facts, documents, documentLinks, employees, runEmployees, deadlines, expected]) {
     if (r.error) throw new Error(`graph read failed: ${r.error.message}`)
   }
 
@@ -183,6 +225,7 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   const movement = new Map<string, number>()
   const entryAccounts = new Map<string, Map<string, number>>() // journal_entry_id -> account -> amount
   const entrySource = new Map<string, { source_type: string; source_id: string | null }>()
+  const entryDate = new Map<string, string>()
   for (const l of lineRows) {
     const je = Array.isArray(l.journal_entries) ? l.journal_entries[0] : l.journal_entries
     const account = String(l.account_number)
@@ -195,7 +238,10 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     if (!entryAccounts.has(l.journal_entry_id)) entryAccounts.set(l.journal_entry_id, new Map())
     const per = entryAccounts.get(l.journal_entry_id) as Map<string, number>
     per.set(account, (per.get(account) ?? 0) + amount)
-    if (je) entrySource.set(l.journal_entry_id, { source_type: je.source_type, source_id: je.source_id })
+    if (je) {
+      entrySource.set(l.journal_entry_id, { source_type: je.source_type, source_id: je.source_id })
+      if (je.entry_date && (entryDate.get(l.journal_entry_id) ?? '') < je.entry_date) entryDate.set(l.journal_entry_id, je.entry_date)
+    }
   }
   for (const [account, total] of movement) {
     add({ ref: `account:${account}`, cluster: 'ledger', kind: 'account', label: `${account} ${accountName.get(account) ?? ''}`.trim(), weight: round2(total), meta: { account, movement: round2(total) } })
@@ -216,11 +262,48 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     if (!party) continue
     for (const entryId of [si.registration_journal_entry_id, si.payment_journal_entry_id]) if (entryId) entryParty.set(entryId, party)
   }
+  // The bank side: a booked transaction whose counterparty alias names a party ties its verifikat to that party.
+  const aliasParty = new Map(((aliases.data ?? []) as Array<{ alias_key: string; party_id: string }>).map((a) => [a.alias_key, a.party_id]))
+  const bookedRows = (bookedTx.data ?? []) as Array<{ id: string; journal_entry_id: string | null; original_description: string | null; description: string | null; merchant_name: string | null; date: string }>
+  if (bookedRows.length >= TX_CAP) truncated = true
+  // Without an alias, a party whose name cleans to the same key as the bank text is the same counterpart;
+  // and a bank text with no party at all becomes a merchant node of its own, folded by its key.
+  const partyByKey = new Map<string, string>()
+  for (const p of partyRows) {
+    const key = merchantKey(p.display_name)
+    if (key && !partyByKey.has(key)) partyByKey.set(key, p.id)
+  }
+  const merchants = new Map<string, { label: string; entries: Set<string> }>()
+  for (const tx of bookedRows) {
+    if (!tx.journal_entry_id || entryParty.has(tx.journal_entry_id)) continue
+    let done = false
+    for (const raw of [tx.original_description, tx.merchant_name, tx.description]) {
+      if (!raw) continue
+      const party = aliasParty.get(normalizeCounterpartyName(raw)) ?? partyByKey.get(merchantKey(raw))
+      if (party) {
+        entryParty.set(tx.journal_entry_id, party)
+        if ((entryDate.get(tx.journal_entry_id) ?? '') < tx.date) entryDate.set(tx.journal_entry_id, tx.date)
+        done = true
+        break
+      }
+    }
+    if (done) continue
+    const raw = tx.merchant_name || tx.original_description || tx.description
+    const key = merchantKey(raw)
+    if (!key) continue
+    const m = merchants.get(key) ?? { label: merchantLabel(raw), entries: new Set<string>() }
+    m.entries.add(tx.journal_entry_id)
+    merchants.set(key, m)
+    if ((entryDate.get(tx.journal_entry_id) ?? '') < tx.date) entryDate.set(tx.journal_entry_id, tx.date)
+  }
   const partyFlow = new Map<string, number>()
+  const partyLast = new Map<string, string>()
   const partyAccountFlow = new Map<string, { amount: number; count: number }>()
   for (const [entryId, party] of entryParty) {
     const per = entryAccounts.get(entryId)
     if (!per) continue
+    const when = entryDate.get(entryId)
+    if (when && (partyLast.get(party) ?? '') < when) partyLast.set(party, when)
     for (const [account, amount] of per) {
       partyFlow.set(party, (partyFlow.get(party) ?? 0) + amount)
       const key = `${party}|${account}`
@@ -230,23 +313,65 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   }
   const agreementRows = (agreements.data ?? []) as Array<{ id: string; title: string; kind: string; status: string; ends_on: string | null; amount: number | null; period: string | null; principal: number | null; counterparty_party_id: string | null; counterparty_name: string | null; source_document_id: string | null }>
   const referencedParties = new Set(agreementRows.map((a) => a.counterparty_party_id).filter((x): x is string => !!x))
-  const ranked = [...partyRows].sort((a, b) => (partyFlow.get(b.id) ?? 0) - (partyFlow.get(a.id) ?? 0))
+  const documentedParties = new Set(((documentLinks.data ?? []) as unknown as Array<{ target_kind: string; party_id: string | null }>).filter((l) => l.target_kind === 'party').map((l) => l.party_id).filter((x): x is string => !!x))
+  const merchantStats = [...merchants].map(([key, m]) => {
+    const perAccount = new Map<string, { amount: number; count: number }>()
+    let flow = 0
+    let last = ''
+    for (const entryId of m.entries) {
+      const per = entryAccounts.get(entryId)
+      if (!per) continue
+      const when = entryDate.get(entryId) ?? ''
+      if (when > last) last = when
+      for (const [account, amount] of per) {
+        flow += amount
+        const cur = perAccount.get(account) ?? { amount: 0, count: 0 }
+        perAccount.set(account, { amount: cur.amount + amount, count: cur.count + 1 })
+      }
+    }
+    return { key, label: m.label, flow, last, entries: m.entries.size, perAccount }
+  }).filter((m) => m.flow > 0)
+  // Parties and merchants share the same room, ranked by flow; a party an agreement names is always drawn.
+  const ranked = [
+    ...partyRows.map((p) => ({ party: p.id, merchant: null as string | null, flow: partyFlow.get(p.id) ?? 0, forced: referencedParties.has(p.id) })),
+    ...merchantStats.map((m) => ({ party: null as string | null, merchant: m.key, flow: m.flow, forced: false })),
+  ].sort((a, b) => b.flow - a.flow)
   const kept = new Set<string>()
-  for (const p of ranked) if (kept.size < TOP_PARTIES && ((partyFlow.get(p.id) ?? 0) > 0 || referencedParties.has(p.id))) kept.add(p.id)
+  const keptMerchants = new Set<string>()
+  for (const c of ranked) {
+    if (kept.size + keptMerchants.size >= TOP_PARTIES) break
+    if (!(c.flow > 0 || c.forced)) continue
+    if (c.party) kept.add(c.party)
+    else if (c.merchant) keptMerchants.add(c.merchant)
+  }
   for (const p of referencedParties) kept.add(p)
   for (const id of kept) {
     const p = partyById.get(id)
     if (!p) continue
-    add({ ref: `party:${id}`, cluster: 'party', kind: 'party', label: p.display_name, weight: round2(partyFlow.get(id) ?? 0), meta: { party_kind: p.kind, flow: round2(partyFlow.get(id) ?? 0) } })
-  }
-  const foldedParties = partyRows.filter((p) => !kept.has(p.id))
-  if (foldedParties.length) {
-    add({ ref: 'parties:others', cluster: 'party', kind: 'parties_folded', label: `Övriga motparter, ${foldedParties.length} st`, weight: foldedParties.length, meta: { count: foldedParties.length } })
+    const lastSeen = partyLast.get(id) ?? null
+    add({
+      ref: `party:${id}`,
+      cluster: 'party',
+      kind: 'party',
+      label: p.display_name,
+      weight: round2(partyFlow.get(id) ?? 0),
+      meta: { party_kind: p.kind, flow: round2(partyFlow.get(id) ?? 0), last_seen: lastSeen, active: lastSeen ? lastSeen >= isoDaysAhead(today, -ACTIVE_DAYS) : referencedParties.has(id), documented: documentedParties.has(id) },
+    })
   }
   for (const [key, flow] of partyAccountFlow) {
     const [party, account] = key.split('|')
     if (!kept.has(party)) continue
     link(`party:${party}`, `account:${account}`, 'posting', { kind: 'derived', amount: round2(flow.amount), entries: flow.count, source: 'invoices and supplier invoices booked in the period' })
+  }
+  // Merchants: the bank text is the node until the resolver makes a party of it.
+  for (const m of merchantStats.filter((x) => keptMerchants.has(x.key))) {
+    const ref = `merchant:${m.key.replace(/[^a-z0-9åäö]+/g, '-')}`
+    add({ ref, cluster: 'party', kind: 'merchant', label: m.label, weight: round2(m.flow), meta: { flow: round2(m.flow), last_seen: m.last || null, active: !!m.last && m.last >= isoDaysAhead(today, -ACTIVE_DAYS), documented: false, payments: m.entries, bank_text: m.key } })
+    for (const [account, v] of m.perAccount) link(ref, `account:${account}`, 'posting', { kind: 'derived', amount: round2(v.amount), entries: v.count, source: 'bank transactions booked in the period, matched on the bank text' })
+  }
+  const foldedParties = partyRows.filter((p) => !kept.has(p.id)).length + (merchantStats.length - keptMerchants.size)
+  if (foldedParties > 0) {
+    add({ ref: 'parties:others', cluster: 'party', kind: 'parties_folded', label: `Övriga motparter, ${foldedParties} st`, weight: foldedParties, meta: { count: foldedParties } })
   }
 
   // Authorities: static nodes, linked by what they said and what they take.
@@ -294,12 +419,20 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
     if (a.counterparty_party_id) link(`agreement:${a.id}`, `party:${a.counterparty_party_id}`, 'party', { kind: 'fk' })
     if (a.source_document_id) link(`agreement:${a.id}`, `document:${a.source_document_id}`, 'source', { kind: 'fk' })
   }
+  const factRules = new Map<string, (typeof FACT_RULES)[string]>()
   for (const f of factRows) {
     add({ ref: `fact:${f.id}`, cluster: 'fact', kind: 'fact', label: `${f.predicate}: ${f.value_text.slice(0, 60)}`, weight: 2, meta: { predicate: f.predicate, value: f.value_text.slice(0, 200), valid_from: f.valid_from } })
     if (f.source_document_id) {
       link(`fact:${f.id}`, `document:${f.source_document_id}`, 'source', { kind: 'fk' })
       const authority = AUTHORITY_DOC_TYPES[docById.get(f.source_document_id)?.doc_type ?? '']
       if (authority) link(`authority:${authority}`, `fact:${f.id}`, 'authority', { kind: 'derived', via: 'source document type' })
+    }
+    // A registration is not just a fact about the company: it is why certain accounts move and certain deadlines exist.
+    const rule = FACT_RULES[f.predicate]
+    if (rule) {
+      link(`authority:${rule.authority}`, `fact:${f.id}`, 'authority', { kind: 'rule', via: rule.why })
+      for (const account of movement.keys()) if (rule.accounts?.test(account)) link(`fact:${f.id}`, `account:${account}`, 'link', { kind: 'rule', via: rule.why, movement: round2(movement.get(account) ?? 0) })
+      factRules.set(f.id, rule)
     }
   }
   for (const d of docRows) {
@@ -337,15 +470,42 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
 
   // People: the payroll, with owners and board marked; the salary account is what ties them to the books.
   const employeeRows = ((employees.data ?? []) as Array<{ id: string; first_name: string; last_name: string; employment_type: string; employment_end: string | null }>).filter((e) => !e.employment_end || e.employment_end >= today)
+  // Which verifikat each salary run booked: the run is the source of its salary, employer-contribution, pension and vacation entries.
+  const runEntries = new Map<string, string[]>()
+  for (const [entryId, src] of entrySource) {
+    if (src.source_type === 'salary_payment' && src.source_id) runEntries.set(src.source_id, [...(runEntries.get(src.source_id) ?? []), entryId])
+  }
+  const personAccount = new Map<string, { amount: number; runs: Set<string> }>()
+  for (const r of (runEmployees.data ?? []) as Array<{ salary_run_id: string; employee_id: string; gross_salary: number | string | null }>) {
+    for (const entryId of runEntries.get(r.salary_run_id) ?? []) {
+      for (const account of entryAccounts.get(entryId)?.keys() ?? []) {
+        if (!/^7\d\d\d$/.test(account)) continue
+        const key = `${r.employee_id}|${account}`
+        const cur = personAccount.get(key) ?? { amount: 0, runs: new Set<string>() }
+        if (!cur.runs.has(r.salary_run_id)) cur.amount += Number(r.gross_salary ?? 0)
+        cur.runs.add(r.salary_run_id)
+        personAccount.set(key, cur)
+      }
+    }
+  }
   for (const e of employeeRows) {
     add({ ref: `person:${e.id}`, cluster: 'person', kind: 'person', label: `${e.first_name} ${e.last_name}`.trim(), weight: 2, meta: { role: e.employment_type } })
-    if (movement.has('7010') && e.employment_type === 'employee') link(`person:${e.id}`, 'account:7010', 'role', { kind: 'derived', via: 'salary account has movement' })
+    let tied = false
+    for (const [key, v] of personAccount) {
+      const [employee, account] = key.split('|')
+      if (employee !== e.id) continue
+      link(`person:${e.id}`, `account:${account}`, 'role', { kind: 'derived', amount: round2(v.amount), payments: v.runs.size, source: 'salary runs booked in the period' })
+      tied = true
+    }
+    if (!tied && movement.has('7010') && e.employment_type === 'employee') link(`person:${e.id}`, 'account:7010', 'role', { kind: 'derived', via: 'salary account has movement' })
   }
 
   // Deadlines and what the books say is missing.
-  for (const d of (deadlines.data ?? []) as Array<{ id: string; title: string; due_date: string; deadline_type: string; status: string }>) {
-    add({ ref: `deadline:${d.id}`, cluster: 'upcoming', kind: 'deadline', label: `${d.title}, ${d.due_date}`, weight: 2, meta: { due_date: d.due_date, deadline_type: d.deadline_type, status: d.status } })
+  for (const d of (deadlines.data ?? []) as Array<{ id: string; title: string; due_date: string; deadline_type: string; tax_deadline_type?: string | null; status: string }>) {
+    add({ ref: `deadline:${d.id}`, cluster: 'upcoming', kind: 'deadline', label: `${d.title}, ${d.due_date}`, weight: 2, meta: { due_date: d.due_date, deadline_type: d.deadline_type, tax_deadline_type: d.tax_deadline_type ?? null, status: d.status } })
     link(/bolagsverket|annual|arsredovisning/i.test(d.deadline_type) ? 'authority:bolagsverket' : 'authority:skatteverket', `deadline:${d.id}`, 'authority', { kind: 'derived', via: 'deadline type' })
+    const kindText = `${d.deadline_type} ${d.tax_deadline_type ?? ''} ${d.title}`
+    for (const [factId, rule] of factRules) if (rule.deadlines?.test(kindText)) link(`fact:${factId}`, `deadline:${d.id}`, 'upcoming', { kind: 'rule', via: rule.why })
   }
   for (const x of (expected.data ?? []) as Array<{ id: string; detail: Record<string, unknown> }>) {
     const rule = String(x.detail.rule ?? 'document')
@@ -357,6 +517,7 @@ export async function buildCompanyGraph(supabase: SupabaseClient, companyId: str
   const clusters = (Object.keys(CLUSTER_LABELS) as ClusterId[]).map((id) => ({ id, label: CLUSTER_LABELS[id], count: all.filter((n) => n.cluster === id).length }))
   return {
     company: { ref: `company:${companyId}`, name: (company.data as { name: string } | null)?.name ?? '' },
+    version: GRAPH_VERSION,
     computed_at: new Date().toISOString(),
     period: { from, to: today },
     months,
