@@ -272,6 +272,11 @@ export function InvoicePaymentAccountsSettings({
     // derive the same values here so sibling forms (the invoice editor's
     // bank-details check) see the payee without another settings round trip.
     const map: Partial<Record<Currency, InvoicePaymentAccount>> = { ...(settings.invoice_payment_accounts ?? {}) }
+    // A default the database dropped (hiding an account does that) leaves
+    // the map too; entries that never had a default stay as legacy values.
+    for (const prev of defaults) {
+      if (!fresh.defaults.some((row) => row.currency === prev.currency)) delete map[prev.currency]
+    }
     for (const row of fresh.defaults) {
       const account = fresh.accounts.find((a) => a.id === row.cash_account_id)
       if (account) map[row.currency] = cashAccountPayee(account)

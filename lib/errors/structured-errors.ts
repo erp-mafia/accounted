@@ -2477,6 +2477,11 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte skapa importpost.',
     message_en: 'Failed to create the bank file import record.',
   },
+  BANK_FILE_SETTLEMENT_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot måste vara ett konto i intervallet 1920-1999.',
+    message_en: 'The bank account must be an account in the 1920-1999 range.',
+  },
   BANK_FILE_SETTLEMENT_ACCOUNT_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunde inte skapa bankkontot för importen. Inga transaktioner lästes in.',

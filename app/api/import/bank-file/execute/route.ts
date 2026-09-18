@@ -71,6 +71,15 @@ export const POST = withRouteContext(
     if (!transactions || transactions.length === 0) {
       return errorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', log, { requestId })
     }
+    // Same 1920-1999 rule as POST /api/cash-accounts. Checked before anything
+    // is written: an out-of-range account must never bind rows nor import them
+    // unbound.
+    if (settlement_account && !CreateCashAccountSchema.shape.ledger_account.safeParse(settlement_account).success) {
+      return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_INVALID', log, {
+        requestId,
+        details: { settlement_account },
+      })
+    }
 
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
 
@@ -131,11 +140,10 @@ export const POST = withRouteContext(
 
       // ingest binds rows to the picked account only if that cash account
       // exists, and never creates one (PSD2 seeding owns that). A file is the
-      // user's own account, so create it here, under the same 1920-1999 rule
-      // as POST /api/cash-accounts, in the file's currency. If that fails the
-      // import stops: rows imported without their account is the bug this
-      // guards against, not a degraded mode.
-      if (settlement_account && CreateCashAccountSchema.shape.ledger_account.safeParse(settlement_account).success) {
+      // user's own account, so create it here, in the file's currency. If that
+      // fails the import stops: rows imported without their account is the bug
+      // this guards against, not a degraded mode.
+      if (settlement_account) {
         const { data: existing } = await supabase
           .from('cash_accounts')
           .select('id')

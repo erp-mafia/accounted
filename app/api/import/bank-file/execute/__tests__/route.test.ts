@@ -209,19 +209,18 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     expect(failed.at(-1)?.[0]).toMatchObject({ status: 'failed' })
   })
 
-  it('never creates an account outside the 1920-1999 range', async () => {
-    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
-    enqueue({ data: null }) // sie_imports overlap: none
-    enqueue({ data: null }) // status update
-    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
-
+  it('rejects an account outside the 1920-1999 range before writing anything', async () => {
     const request = createMockRequest('/api/import/bank-file/execute', {
       method: 'POST',
       body: makeBody({ settlement_account: '1510' }),
     })
     const response = await POST(request, emptyParams)
 
-    expect(response.status).toBe(200)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BANK_FILE_SETTLEMENT_ACCOUNT_INVALID')
+    expect(ingestMock).not.toHaveBeenCalled()
+    expect(findCalls('bank_file_imports', 'upsert')).toHaveLength(0)
     expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 
