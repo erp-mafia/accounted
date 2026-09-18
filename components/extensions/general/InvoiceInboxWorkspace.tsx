@@ -6,6 +6,9 @@ import { useTranslations } from 'next-intl'
 import { InboxPipeline, type InboxPipeStage } from '@/components/extensions/general/InboxPipeline'
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
+import { questionForDocument, questionsFrom, type ArkivQuestion, type ReviewData } from '@/lib/arkiv/questions'
+import { QuestionCard, decisionDocumentFor } from '@/components/arkiv/QuestionCard'
+import { DocumentDecision, type DecisionDocument } from '@/components/arkiv/DocumentDecision'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -42,8 +45,7 @@ import {
   ChevronRight,
   Sparkles,
   Maximize2,
-  Globe,
-} from 'lucide-react'
+  Globe, HelpCircle } from 'lucide-react'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateLong, formatDateTime } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -442,6 +444,24 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // from "the list is empty": with no list at all we know nothing about the
   // inbox and must not render an authoritative "Inkorgen är tom".
   const [routedToArkiv, setRoutedToArkiv] = useState<InboxItem[]>([])
+  // The questions Arkiv has about documents in this queue (phase 9d): asked in the
+  // rail with one tap, so a person never has to go to Granska for them. Empty
+  // outside the Arkiv rollout (the route is 404 there).
+  const [arkivQuestions, setArkivQuestions] = useState<ArkivQuestion[]>([])
+  const [arkivDecision, setArkivDecision] = useState<DecisionDocument | null>(null)
+  const fetchArkivQuestions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/arkiv/review')
+      if (!res.ok) return
+      const { data } = (await res.json()) as { data: ReviewData }
+      setArkivQuestions(questionsFrom(data, null))
+    } catch {
+      // A missing question list is not an inbox failure.
+    }
+  }, [])
+  useEffect(() => {
+    void fetchArkivQuestions()
+  }, [fetchArkivQuestions])
   const [itemsLoadFailed, setItemsLoadFailed] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   // List filter + search (client-side over the already-fetched items list).
@@ -1914,6 +1934,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     <InboxRow
                       key={item.id}
                       item={item}
+                      hasQuestion={!!item.document_id && !!questionForDocument(arkivQuestions, item.document_id)}
                       selected={item.id === selectedId}
                       onClick={() => handleSelect(item.id)}
                       isChecked={selectedIds.has(item.id)}
@@ -2069,6 +2090,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               item={selected}
               docMime={docMime}
               accountingMethod={accountingMethod}
+              arkivQuestion={selected.document_id ? questionForDocument(arkivQuestions, selected.document_id) : null}
+              onArkivMore={(q) => setArkivDecision(decisionDocumentFor(q))}
               onDelete={() => handleDelete(selected.id)}
               onBookDirect={() => setBookDirectOpen(true)}
               onCreateSupplierInvoice={() => setCreateSupplierInvoiceOpen(true)}
@@ -2177,6 +2200,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         }}
       />
     )}
+    <DocumentDecision
+      doc={arkivDecision}
+      onClose={() => setArkivDecision(null)}
+      onSaved={(message) => {
+        toast({ title: message })
+        setArkivDecision(null)
+        void fetchArkivQuestions()
+        void fetchItems()
+      }}
+      onFailed={() => toast({ title: 'Det gick inte att spara', variant: 'destructive' })}
+    />
     <BulkBookInboxDialog
       open={bulkBookOpen}
       onOpenChange={setBulkBookOpen}
@@ -2367,6 +2401,7 @@ function InboxAddressBar({
 
 function InboxRow({
   item,
+  hasQuestion = false,
   selected,
   onClick,
   isChecked,
@@ -2374,6 +2409,8 @@ function InboxRow({
   anyChecked,
 }: {
   item: InboxItem
+  /** Arkiv has a question about this document; the rail asks it. */
+  hasQuestion?: boolean
   selected: boolean
   onClick: () => void
   isChecked: boolean
@@ -2383,6 +2420,7 @@ function InboxRow({
   anyChecked: boolean
 }) {
   const t = useTranslations('inbox_workspace')
+  const tArkiv = useTranslations('arkiv')
   // Radix' onCheckedChange carries no mouse event: the preceding click records
   // whether shift was held, for range selection.
   const shiftHeld = useRef(false)
@@ -2473,6 +2511,9 @@ function InboxRow({
               ? (item.fileName ?? 'Nytt dokument')
               : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
           </span>
+          {hasQuestion && (
+            <HelpCircle className="h-3 w-3 text-attn shrink-0" aria-label={tArkiv('question_nub')} />
+          )}
           {isErrored && (
             <AlertTriangle className="h-3 w-3 text-destructive shrink-0" aria-label="Fel vid bearbetning" />
           )}
@@ -2991,10 +3032,15 @@ function FieldsRail({
   onFieldsUpdated,
   onRetryRequested,
   onBookedLocally,
+  arkivQuestion = null,
+  onArkivMore,
 }: {
   item: InboxItem
   docMime: string | null
   accountingMethod: AccountingMethod
+  /** The question Arkiv has about this document, asked at the top of the rail. */
+  arkivQuestion?: ArkivQuestion | null
+  onArkivMore?: (question: ArkivQuestion) => void
   onDelete: () => void
   onBookDirect: () => void
   onCreateSupplierInvoice: () => void
@@ -3009,6 +3055,7 @@ function FieldsRail({
   onRetryRequested: () => Promise<void>
 }) {
   const { toast } = useToast()
+  const tArkivRail = useTranslations('arkiv')
   const hasAi = useCapability(CAPABILITY.ai)
   const { appName } = useBranding()
   const data = item.extracted_data
@@ -3122,6 +3169,12 @@ function FieldsRail({
 
   return (
     <div className="flex flex-col h-full">
+      {arkivQuestion && (
+        <div className="border-b px-4 pb-1 pt-2">
+          <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground/80">{tArkivRail('question_rail_title')}</div>
+          <QuestionCard question={arkivQuestion} compact onMore={onArkivMore} />
+        </div>
+      )}
       {/* Email metadata */}
       {item.source === 'email' && (item.email_from || item.email_subject) && (
         <div className="border-b px-4 py-3 text-xs space-y-1">
