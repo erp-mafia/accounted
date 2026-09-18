@@ -24,6 +24,7 @@ import type { z } from 'zod'
 import type { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { roundOre } from '@/lib/money'
+import { validateOneOffTaxLine } from './one-off-tax'
 import type { SalaryLineItemType } from '@/types'
 
 export type PayslipLineResult<T> =
@@ -31,6 +32,8 @@ export type PayslipLineResult<T> =
   | { ok: false; code: string; details?: Record<string, unknown> }
 
 export interface SalaryLineItemRow {
+  vacation_movements?: import('./vacation-balance').VacationMovement[]
+  one_off_tax_percent?: number | null
   id: string
   salary_run_employee_id: string
   company_id: string
@@ -63,7 +66,7 @@ export type PayslipLineTarget = { salaryRunEmployeeId: string } | { employeeId: 
 const LINE_COLUMNS =
   'id, salary_run_employee_id, company_id, item_type, description, quantity, unit_price, amount, ' +
   'is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, ' +
-  'account_number, sort_order, created_at, updated_at'
+  'account_number, sort_order, one_off_tax_percent, vacation_movements, created_at, updated_at'
 
 /**
  * Verify the run exists in this company and is still a draft.
@@ -169,6 +172,8 @@ export async function createPayslipLine(
   if (!sre.ok) return sre
 
   const input = args.input
+  const taxError = validateOneOffTaxLine(input)
+  if (taxError) return { ok: false, code: 'VALIDATION_ERROR', details: { message: taxError } }
   const accountNumber =
     input.account_number || getLineItemAccount(input.item_type as SalaryLineItemType)
 
@@ -180,6 +185,8 @@ export async function createPayslipLine(
     quantity: input.quantity ?? null,
     unit_price: input.unit_price ?? null,
     amount: roundOre(input.amount),
+    one_off_tax_percent: input.one_off_tax_percent ?? null,
+    vacation_movements: input.vacation_movements ?? [],
     is_taxable: input.is_taxable,
     is_avgift_basis: input.is_avgift_basis,
     is_vacation_basis: input.is_vacation_basis,
@@ -226,6 +233,8 @@ export async function updatePayslipLine(
   if (typeof updates.amount === 'number') {
     updates.amount = roundOre(updates.amount)
   }
+  const taxError = validateOneOffTaxLine({ ...existing.data, ...updates })
+  if (taxError) return { ok: false, code: 'VALIDATION_ERROR', details: { message: taxError } }
 
   if (args.dryRun) {
     return { ok: true, data: { ...existing.data, ...updates } as SalaryLineItemRow }

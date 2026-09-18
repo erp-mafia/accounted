@@ -298,7 +298,7 @@ export async function previewVacationYearClose(
 
   const { data: ledgerRows, error: ledgerErr } = await supabase
     .from('employee_vacation_balances')
-    .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, status')
+    .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, status, vacation_balance')
     .eq('company_id', companyId)
     .eq('vacation_year_start', closingYearStart)
   if (ledgerErr) {
@@ -307,6 +307,11 @@ export async function previewVacationYearClose(
   const ledgerByEmployee = new Map(
     ((ledgerRows ?? []) as unknown as VacationBalanceRow[]).map((r) => [r.employee_id, r]),
   )
+  if ([...ledgerByEmployee.values()].some(row => row.vacation_balance)) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: {
+      message: 'Kategoriserade migrerade semestersaldon kräver separat årsavstämning. Automatisk överföring av extra betalda, förskott och obetalda dagar är inte fastställd.',
+    } }
+  }
 
   const closingYear = Number(closingYearStart.slice(0, 4))
   // The rolled liability is paid out during the new vacation year: that is

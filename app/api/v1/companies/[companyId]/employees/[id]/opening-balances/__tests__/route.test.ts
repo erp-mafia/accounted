@@ -47,6 +47,7 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
   const tableCalls: string[] = []
+  const methodCalls: Array<{ table: string; method: string }> = []
   const buildChain = (table: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
@@ -57,13 +58,17 @@ function makeFlexibleSupabase(byTable: Record<string, TableResp | TableResp[]>) 
             resolve(next)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (..._args: unknown[]) => {
+          methodCalls.push({ table, method: String(prop) })
+          return buildChain(table)
+        }
       },
     }
     return new Proxy({}, handler)
   }
   return {
     tableCalls,
+    methodCalls,
     from: vi.fn((table: string) => {
       tableCalls.push(table)
       return buildChain(table)
@@ -385,7 +390,7 @@ describe('PUT /employees/:id/opening-balances', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(supabaseMock.tableCalls).not.toContain('employee_opening_balances')
+    expect(supabaseMock.methodCalls.filter(call => ['insert', 'update', 'upsert', 'delete'].includes(call.method))).toEqual([])
   })
 
   it('forces test keys into dry-run on this PUT too', async () => {
@@ -417,7 +422,7 @@ describe('PUT /employees/:id/opening-balances', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(supabaseMock.tableCalls).not.toContain('employee_opening_balances')
+    expect(supabaseMock.methodCalls.filter(call => ['insert', 'update', 'upsert', 'delete'].includes(call.method))).toEqual([])
   })
 })
 

@@ -27,6 +27,7 @@
  */
 
 import { z } from 'zod'
+import { SalaryCalculationPolicySchema, type SalaryCalculationPolicy } from '@/lib/salary/calculation-policy'
 import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -57,6 +58,7 @@ interface SalarySettingsRow {
   preferred_payment_format: PaymentFormat | null
   salary_default_bank: DefaultBank | null
   salary_net_rounding: boolean | null
+  salary_calculation_policy?: SalaryCalculationPolicy
   default_voucher_series_per_source_type: VoucherSeriesMap | null
 }
 
@@ -82,6 +84,7 @@ const SalarySettingsResource = z.object({
   preferred_payment_format: z.enum(['pain001', 'bg_lb']),
   salary_default_bank: z.enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other']).nullable(),
   salary_net_rounding: z.boolean(),
+  salary_calculation_policy: SalaryCalculationPolicySchema,
   salary_voucher_series: z.string().regex(VOUCHER_SERIES_RE),
 })
 
@@ -98,6 +101,7 @@ const V1PatchSalarySettingsSchema = z
     preferred_payment_format: UpdateSettingsSchema.shape.preferred_payment_format,
     salary_default_bank: UpdateSettingsSchema.shape.salary_default_bank,
     salary_net_rounding: UpdateSettingsSchema.shape.salary_net_rounding,
+    salary_calculation_policy: UpdateSettingsSchema.shape.salary_calculation_policy,
     salary_voucher_series: z
       .string()
       .regex(VOUCHER_SERIES_RE, 'Voucher series must be a single uppercase letter A-Z.')
@@ -120,6 +124,7 @@ function toSalarySettingsResource(
       row?.preferred_payment_format ?? SALARY_SETTINGS_DEFAULTS.preferred_payment_format,
     salary_default_bank: row?.salary_default_bank ?? SALARY_SETTINGS_DEFAULTS.salary_default_bank,
     salary_net_rounding: row?.salary_net_rounding ?? SALARY_SETTINGS_DEFAULTS.salary_net_rounding,
+    salary_calculation_policy: SalaryCalculationPolicySchema.parse(row?.salary_calculation_policy ?? {}),
     // null row => 'A': the same fallback the salary-run engine applies when
     // there is no settings row to read.
     salary_voucher_series: resolveDefaultSeriesForSource(row, 'salary_payment'),
@@ -165,6 +170,7 @@ function mergeSalarySettings(
 ): SalarySettingsRow {
   const seriesMap = nextVoucherSeriesMap(current, changes.salary_voucher_series)
   return {
+    salary_calculation_policy: changes.salary_calculation_policy ?? current?.salary_calculation_policy,
     salary_pay_day: pick(changes.salary_pay_day, current?.salary_pay_day, SALARY_SETTINGS_DEFAULTS.salary_pay_day),
     salary_deviation_period: pick(
       changes.salary_deviation_period,
@@ -288,7 +294,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // inline literals.
     const { data, error } = await ctx.supabase
       .from('company_settings')
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
 
@@ -333,7 +339,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // insert. Literal projection for the schema guard (see GET).
     const { data: current, error: fetchErr } = await ctx.supabase
       .from('company_settings')
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
 
@@ -365,10 +371,11 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
           preferred_payment_format: changes.preferred_payment_format,
           salary_default_bank: changes.salary_default_bank,
           salary_net_rounding: changes.salary_net_rounding,
+          salary_calculation_policy: changes.salary_calculation_policy,
           default_voucher_series_per_source_type: nextVoucherSeriesMap(existing, changes.salary_voucher_series),
         })
         .eq('company_id', ctx.companyId!)
-        .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type')
+        .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
         .maybeSingle()
 
       if (error) {
@@ -411,9 +418,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
         preferred_payment_format: changes.preferred_payment_format,
         salary_default_bank: changes.salary_default_bank,
         salary_net_rounding: changes.salary_net_rounding,
+        salary_calculation_policy: changes.salary_calculation_policy,
         default_voucher_series_per_source_type: seriesMap,
       })
-      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type')
+      .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
       .maybeSingle()
 
     if (error) {
@@ -424,7 +432,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string }> }>(
       if ((error as { code?: string }).code === '23505') {
         const { data: raced, error: racedErr } = await ctx.supabase
           .from('company_settings')
-          .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type')
+          .select('salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type')
           .eq('company_id', ctx.companyId!)
           .maybeSingle()
         if (racedErr) {

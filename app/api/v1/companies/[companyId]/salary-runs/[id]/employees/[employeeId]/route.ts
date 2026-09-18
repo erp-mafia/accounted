@@ -33,6 +33,7 @@ const PayslipLineItem = z.object({
   is_avgift_basis: z.boolean(),
   is_vacation_basis: z.boolean(),
   is_gross_deduction: z.boolean(),
+  one_off_tax_percent: z.number().nullable().optional(),
   is_net_deduction: z.boolean(),
   account_number: z.string().nullable(),
   sort_order: z.number(),
@@ -75,7 +76,8 @@ const PayslipDetail = z.object({
   vacation_days_taken: z.number(),
   ytd_gross: z.number(),
   ytd_tax: z.number(),
-  ytd_net: z.number(),
+  ytd_net: z.number().nullable(),
+  vacation_balance: z.record(z.string(), z.unknown()).nullable().optional(),
   /** Step-by-step engine breakdown; null until :calculate has run. */
   calculation_breakdown: z.unknown().nullable(),
   line_items: z.array(PayslipLineItem),
@@ -89,9 +91,9 @@ const PAYSLIP_DETAIL_COLUMNS =
   'net_deductions, net_salary, avgifter_rate, avgifter_basis, avgifter_amount, avgifter_basis_override, ' +
   'avgifter_amount_override, avgifter_category, override_reason, vacation_accrual, vacation_accrual_avgifter, ' +
   'tax_table_number, tax_column, tax_table_year, sick_days, vab_days, parental_days, vacation_days_taken, ' +
-  'ytd_gross, ytd_tax, ytd_net, calculation_breakdown, created_at, updated_at, ' +
+  'ytd_gross, ytd_tax, ytd_net, vacation_balance, calculation_breakdown, created_at, updated_at, ' +
   'employee:employees(first_name, last_name, personnummer), ' +
-  'line_items:salary_line_items(id, item_type, description, quantity, unit_price, amount, is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, account_number, sort_order)'
+  'line_items:salary_line_items(id, item_type, description, quantity, unit_price, amount, is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, one_off_tax_percent, account_number, sort_order)'
 
 registerEndpoint({
   operation: 'salary-runs.employees.get',

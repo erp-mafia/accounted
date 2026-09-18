@@ -35,6 +35,7 @@ const LineItemResponse = z.object({
   is_avgift_basis: z.boolean(),
   is_vacation_basis: z.boolean(),
   is_gross_deduction: z.boolean(),
+  one_off_tax_percent: z.number().nullable().optional(),
   is_net_deduction: z.boolean(),
   account_number: z.string().nullable(),
   sort_order: z.number(),

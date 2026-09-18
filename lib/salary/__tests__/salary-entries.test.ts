@@ -261,6 +261,16 @@ describe('salary entries: öresavrundning', () => {
     assertBalanced(salary)
   })
 
+  it('credits 3740 for downward nearest-krona rounding and keeps the entry balanced', async () => {
+    const run = makeRun([makeEmployee({ gross_salary: 30000.3, tax_withheld: 7000,
+      net_salary: 23000, line_items: [roundingItem(-.3)] })])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000.3)
+    expect(linesOn(salary, '3740')[0].credit_amount).toBe(.3)
+    assertBalanced(salary)
+  })
+
   it('keeps the base remainder correct next to other line items', async () => {
     const run = makeRun([
       makeEmployee({

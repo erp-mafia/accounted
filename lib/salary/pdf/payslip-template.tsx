@@ -1,6 +1,7 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import { pdfNumberText, pdfText } from '@/lib/pdf/number-text'
 import { getBranding } from '@/lib/branding/service'
+import type { VacationBalance } from '../vacation-balance'
 
 /**
  * Pay slip PDF template (Lönespecifikation).
@@ -233,7 +234,8 @@ export interface PayslipData {
   // YTD
   ytdGross: number
   ytdTax: number
-  ytdNet: number
+  ytdNet: number | null
+  vacationBalance?: VacationBalance | null
 
   // Bank
   bankAccount?: string // masked
@@ -385,9 +387,30 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
           <View style={styles.ytdRow}>
             <Text style={styles.ytdLabel}>Netto</Text>
-            <Text style={styles.ytdValue}>{fmt(data.ytdNet)}</Text>
+            <Text style={styles.ytdValue}>{data.ytdNet === null ? 'Underlag saknas' : fmt(data.ytdNet)}</Text>
           </View>
         </View>
+
+        {data.vacationBalance && (
+          <View style={styles.ytdSection} wrap={false}>
+            <Text style={[styles.sectionTitle, { fontSize: 9 }]}>Semester, kvarvarande dagar per {data.vacationBalance.as_of_date}</Text>
+            {!data.vacationBalance.tracking ? <Text>Ingen daguppföljning</Text> : <>
+              {([
+                ['Semesterrätt per år', data.vacationBalance.annual_entitlement],
+                ['Betalda', data.vacationBalance.paid],
+                ['Extra betalda', data.vacationBalance.extra_paid],
+                ['Obetalda', data.vacationBalance.unpaid],
+                ['Förskott', data.vacationBalance.advance],
+                ...Object.entries(data.vacationBalance.saved_by_year).sort().map(([year, count]) => [`Sparade från ${year}`, count]),
+              ] as Array<[string, number]>).map(([label, count]) => <View key={label} style={styles.ytdRow}>
+                <Text style={styles.ytdLabel}>{label}</Text><Text style={styles.ytdValue}>{fmt(count)}</Text>
+              </View>)}
+              {data.vacationBalance.withdrawals_blocked
+                ? <Text>Saldo kräver källavstämning. Nya uttag är spärrade.</Text>
+                : data.vacationBalance.review_notes.length > 0 && <Text>Saldo enligt migrerat underlag. Avstämningsnotering finns.</Text>}
+            </>}
+          </View>
+        )}
 
         {/* Calculation breakdown (optional detail page) */}
         {data.breakdownSteps && data.breakdownSteps.length > 0 && (

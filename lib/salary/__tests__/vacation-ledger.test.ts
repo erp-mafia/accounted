@@ -61,7 +61,7 @@ describe('syncVacationLedgerForEmployees', () => {
 
   const queueBase = (over: {
     basis?: string
-    booked?: Array<{ employee_id: string; vacation_days_taken: number; salary_run: { period_year: number; period_month: number; status: string } }>
+    booked?: Array<{ employee_id: string; vacation_days_taken: number; vacation_balance?: Record<string, unknown>; salary_run: { period_year: number; period_month: number; status: string } }>
     openRows?: Array<Record<string, unknown>>
     opening?: Array<Record<string, unknown>>
     savedLegacy?: number
@@ -105,6 +105,15 @@ describe('syncVacationLedgerForEmployees', () => {
     expect(row.taken_days).toBe(5)
     // Calendar basis: sammanfallande year, accrued stays 0.
     expect(row.accrued_days).toBe(0)
+  })
+  it('does not subtract historical vacation again from a categorized closing snapshot', async () => {
+    const balance = { as_of_date: '2026-07-31', year_start: '2026-01-01', annual_entitlement: 25, tracking: true,
+      withdrawals_blocked: false, paid: 8, extra_paid: 2, unpaid: 10, advance: 7, saved_by_year: { '2025': 3.5 }, source_reference: 'Synthetic closing balance', review_notes: [] }
+    queueBase({ opening: [{ employee_id: EMPLOYEE_ID, cutover_date: '2026-08-01', vacation_balance: balance }],
+      booked: [{ employee_id: EMPLOYEE_ID, vacation_days_taken: 20, vacation_balance: balance,
+        salary_run: { period_year: 2026, period_month: 8, status: 'booked' } }] })
+    expect(await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-08-31')).toEqual({ ok: true })
+    expect(upserted![0]).toMatchObject({ entitled_days: 10, taken_days: 0, saved_days: { '2025': 3.5 }, vacation_balance: balance })
   })
 
   it('pro-rates entitled days for a mid-intjänandeår hire (Semesterlagen 7 §)', async () => {

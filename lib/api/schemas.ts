@@ -1,4 +1,6 @@
 import { z } from 'zod'
+import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
+import { validateVacationEntitlement } from '@/lib/salary/vacation-entitlement'
 
 import { ENTITY_TYPES } from '@/lib/company/entity-type'
 import { normaliseSwish, isValidSwish } from '@/lib/payments/swish'
@@ -18,6 +20,7 @@ import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
+import { VacationBalanceSchema, VacationMovementSchema } from '@/lib/salary/vacation-balance'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
@@ -2781,6 +2784,7 @@ export const UpdateSettingsSchema = z.object({
   // Öresavrundning: round each net payout up to whole kronor (banks that
   // reject öre in salary payment files). Diff books on 3740.
   salary_net_rounding: z.boolean().optional(),
+  salary_calculation_policy: SalaryCalculationPolicySchema.optional(),
   // Avvikelseperiod (migration 20260918120000): which month's absence and
   // worked days a new run reads. Snapshotted onto each run at creation.
   salary_deviation_period: z.enum(['same_month', 'previous_month']).optional(),
@@ -3322,7 +3326,7 @@ const EmployeeSchemaBase = z.object({
   clearing_number: z.string().max(10).optional(),
   bank_account_number: z.string().max(20).optional(),
   vacation_rule: VacationRuleSchema.default('procentregeln'),
-  vacation_days_per_year: z.number().int().min(25).max(40).default(25),
+  vacation_days_per_year: z.union([z.literal(0), z.number().int().min(25).max(40)]).default(25),
   semestertillagg_rate: z.number().min(0).max(0.05).default(0.0043),
   // Kollektivavtal semesterlön rate as a fraction (0.135 = 13.5 %); null =
   // statutory 12 % (14.4 % at 30 days). Bounds mirror the DB CHECK and
@@ -3351,6 +3355,8 @@ const EmployeeSchemaBase = z.object({
 })
 
 export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) => {
+  const vacationError = validateVacationEntitlement(data)
+  if (vacationError) ctx.addIssue({ code: z.ZodIssueCode.custom, message: vacationError, path: ['vacation_days_per_year'] })
   // Salary amount required based on salary_type
   if (data.salary_type === 'monthly' && (data.monthly_salary === undefined || data.monthly_salary === null || data.monthly_salary <= 0)) {
     ctx.addIssue({
@@ -3449,7 +3455,7 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   is_sidoinkomst: z.boolean(),
   f_skatt_status: FSkattStatusSchema,
   vacation_rule: VacationRuleSchema,
-  vacation_days_per_year: z.number().int().min(25).max(40),
+  vacation_days_per_year: z.union([z.literal(0), z.number().int().min(25).max(40)]),
   semestertillagg_rate: z.number().min(0).max(0.05),
   vacation_pay_rate: z.number().min(0.12).max(0.3).nullable(),
   vaxa_stod_eligible: z.boolean(),
@@ -3738,6 +3744,8 @@ export const AddEmployeeToRunSchema = z.object({
 })
 
 export const CreateSalaryLineItemSchema = z.object({
+  vacation_movements: z.array(VacationMovementSchema).max(366).optional(),
+  one_off_tax_percent: z.number().min(0).max(100).nullable().optional(),
   salary_run_employee_id: uuid,
   // 'oresavrundning' is derived-only: the calculator writes it from the
   // engine's netRounding and the booking excludes it from the gross
@@ -3808,7 +3816,8 @@ const openingBalancesShape = {
   cutover_date: isoDate,
   ytd_gross: z.number().min(0).default(0),
   ytd_tax: z.number().min(0).default(0),
-  ytd_net: z.number().min(0).default(0),
+  ytd_net: z.number().min(0).nullable().default(null),
+  vacation_balance: VacationBalanceSchema.nullable().optional(),
   vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
   // Paid days already taken in the CURRENT vacation year under the previous
   // system. The ledger's cutover-year row derives entitled = remaining +
@@ -3818,8 +3827,8 @@ const openingBalancesShape = {
   vacation_saved_days_by_year: z
     .record(fiscalYearSchema, z.number().min(0).max(40))
     .default({}),
-  opening_semester_liability: z.number().min(0).default(0),
-  opening_semester_liability_avgifter: z.number().min(0).default(0),
+  opening_semester_liability: z.number().min(0).nullable().default(null),
+  opening_semester_liability_avgifter: z.number().min(0).nullable().default(null),
   karens_periods_adjustment: z.number().int().min(0).max(10).default(0),
 }
 
@@ -4546,4 +4555,3 @@ export const PartyAliasActionSchema = z
     name: z.string().trim().min(1).max(200).optional(),
   })
   .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
-

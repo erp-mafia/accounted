@@ -151,7 +151,7 @@ const SAMPLE_ROW = {
 }
 
 const SALARY_SETTINGS_SELECT =
-  'salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, default_voucher_series_per_source_type'
+  'salary_pay_day, salary_deviation_period, preferred_payment_format, salary_default_bank, salary_net_rounding, salary_calculation_policy, default_voucher_series_per_source_type'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -206,6 +206,7 @@ describe('GET /api/v1/companies/:companyId/salary/settings', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 25,
       salary_deviation_period: 'previous_month',
@@ -232,6 +233,7 @@ describe('GET /api/v1/companies/:companyId/salary/settings', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 25,
       salary_deviation_period: 'same_month',
@@ -483,6 +485,7 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 27,
       salary_deviation_period: 'previous_month',
@@ -609,6 +612,7 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 25,
       salary_deviation_period: 'same_month',
@@ -637,6 +641,7 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     const body = await res.json()
     expect(body.data.dry_run).toBe(true)
     expect(body.data.preview).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 27,
       salary_deviation_period: 'same_month',
@@ -678,6 +683,7 @@ describe('PATCH /api/v1/companies/:companyId/salary/settings', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data).toEqual({
+      salary_calculation_policy: { partial_month: 'workdays', net_rounding: 'up', sick_rate: 'daily_divisor', long_leave: 'workdays', leave_context: 'all_registered', one_off_tax_rounding: 'truncate' },
       company_id: COMPANY_ID,
       salary_pay_day: 27,
       salary_deviation_period: 'previous_month',

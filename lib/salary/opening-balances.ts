@@ -15,6 +15,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
+import { VacationBalanceSchema, type VacationBalance } from './vacation-balance'
 
 export type OpeningBalancesResult<T> =
   | { ok: true; data: T }
@@ -25,12 +26,13 @@ export interface OpeningBalancesInput {
   cutover_date: string
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  ytd_net: number | null
+  vacation_balance?: VacationBalance | null
   vacation_paid_days_remaining: number
   vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
-  opening_semester_liability: number
-  opening_semester_liability_avgifter: number
+  opening_semester_liability: number | null
+  opening_semester_liability_avgifter: number | null
   karens_periods_adjustment: number
 }
 
@@ -45,7 +47,7 @@ export interface OpeningBalancesRow extends OpeningBalancesInput {
 const ROW_COLUMNS =
   'id, employee_id, cutover_date, ytd_gross, ytd_tax, ytd_net, ' +
   'vacation_paid_days_remaining, vacation_days_taken_this_year, ' +
-  'vacation_saved_days_by_year, ' +
+  'vacation_saved_days_by_year, vacation_balance, ' +
   'opening_semester_liability, opening_semester_liability_avgifter, ' +
   'karens_periods_adjustment, created_at, updated_at'
 
@@ -189,6 +191,10 @@ export async function setOpeningBalancesBulk(
 
   const itemErrors: BulkItemError[] = []
   args.items.forEach((item, index) => {
+    if (item.vacation_balance != null && !VacationBalanceSchema.safeParse(item.vacation_balance).success) {
+      itemErrors.push({ index, employee_id: item.employee_id, code: 'VALIDATION_ERROR', message: 'Ogiltigt kategoriserat semestersaldo.' })
+      return
+    }
     const employee = employeeById.get(item.employee_id)
     if (!employee) {
       itemErrors.push({
@@ -208,7 +214,17 @@ export async function setOpeningBalancesBulk(
       })
       return
     }
-    if (employee.employment_start > item.cutover_date) {
+    // A mid-month starter has a zero monetary opening at that month's
+    // beginning, not next month's beginning (which would mask their first
+    // in-system salary in subsequent YTD). Vacation grants still begin on
+    // employment_start; this never changes employment or salary proration.
+    const initialZeroOpening = item.cutover_date === `${employee.employment_start.slice(0, 7)}-01` &&
+      item.ytd_gross === 0 && item.ytd_tax === 0 && item.ytd_net === 0 &&
+      item.opening_semester_liability === 0 && item.opening_semester_liability_avgifter === 0 &&
+      item.karens_periods_adjustment === 0 && item.vacation_days_taken_this_year === 0 &&
+      Object.values(item.vacation_saved_days_by_year).every(days => days === 0) &&
+      !!item.vacation_balance && item.vacation_balance.as_of_date >= employee.employment_start
+    if (employee.employment_start > item.cutover_date && !initialZeroOpening) {
       itemErrors.push({
         index,
         employee_id: item.employee_id,
@@ -242,42 +258,23 @@ export async function setOpeningBalancesBulk(
     cutover_date: item.cutover_date,
     ytd_gross: roundOre(item.ytd_gross),
     ytd_tax: roundOre(item.ytd_tax),
-    ytd_net: roundOre(item.ytd_net),
+    ytd_net: item.ytd_net === null ? null : roundOre(item.ytd_net),
+    vacation_balance: item.vacation_balance ?? null,
     vacation_paid_days_remaining: item.vacation_paid_days_remaining,
     vacation_days_taken_this_year: item.vacation_days_taken_this_year,
     vacation_saved_days_by_year: item.vacation_saved_days_by_year,
-    opening_semester_liability: roundOre(item.opening_semester_liability),
-    opening_semester_liability_avgifter: roundOre(item.opening_semester_liability_avgifter),
+    opening_semester_liability: item.opening_semester_liability === null ? null : roundOre(item.opening_semester_liability),
+    opening_semester_liability_avgifter: item.opening_semester_liability_avgifter === null ? null : roundOre(item.opening_semester_liability_avgifter),
     karens_periods_adjustment: item.karens_periods_adjustment,
     updated_by: args.userId,
   }))
-
-  if (args.dryRun) {
-    return {
-      ok: true,
-      data: {
-        count: rows.length,
-        rows: rows.map((r) =>
-          toRow(
-            {
-              id: null as unknown as string,
-              ...r,
-              created_at: null as unknown as string,
-              updated_at: null as unknown as string,
-            },
-            locks.data,
-          ),
-        ),
-      },
-    }
-  }
 
   // created_by is an audit column: it must survive a re-upsert of an
   // existing row, so carry the stored value forward and only stamp the
   // caller on genuinely new rows.
   const { data: existingRows, error: existingErr } = await supabase
     .from('employee_opening_balances')
-    .select('employee_id, created_by')
+    .select('employee_id, created_by, vacation_balance')
     .eq('company_id', args.companyId)
     .in('employee_id', employeeIds)
   if (existingErr) {
@@ -288,6 +285,28 @@ export async function setOpeningBalancesBulk(
       (r) => [r.employee_id, r.created_by],
     ),
   )
+
+  // Older clients do not know about categorized balances. Omitting the
+  // field must not erase them, nor silently apply an incompatible flat edit.
+  for (const [index, row] of rows.entries()) {
+    const previous = (existingRows ?? []).find(existing => existing.employee_id === row.employee_id)
+    const snapshot = args.items[index].vacation_balance === undefined ? previous?.vacation_balance : row.vacation_balance
+    if (snapshot) {
+      const balance = VacationBalanceSchema.parse(snapshot)
+      const savedKeys = new Set([...Object.keys(row.vacation_saved_days_by_year), ...Object.keys(balance.saved_by_year)])
+      if (row.vacation_paid_days_remaining !== balance.paid + balance.extra_paid ||
+        [...savedKeys].some(year => (row.vacation_saved_days_by_year[year] ?? 0) !== (balance.saved_by_year[year] ?? 0))) {
+        return { ok: false, code: 'VALIDATION_ERROR', details: { message: 'Dagsaldot måste stämma med det kategoriserade semestersaldot.' } }
+      }
+      row.vacation_balance = balance
+    }
+  }
+
+  if (args.dryRun) {
+    return { ok: true, data: { count: rows.length, rows: rows.map(row => toRow({
+      ...row, id: null, created_at: null, updated_at: null,
+    }, locks.data)) } }
+  }
 
   // Single multi-row upsert on the natural key: atomic by construction.
   const { data: upserted, error } = await supabase
@@ -304,7 +323,7 @@ export async function setOpeningBalancesBulk(
   if (error) {
     // The DB lock trigger is the all-paths backstop for the race where a run
     // books between our pre-flight and the write.
-    if (error.code === '23514' || error.message?.includes('låsta')) {
+    if (error.message?.includes('låsta')) {
       return { ok: false, code: 'OPENING_BALANCES_LOCKED', details: { message: error.message } }
     }
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message } }

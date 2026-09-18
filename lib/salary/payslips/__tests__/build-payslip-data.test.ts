@@ -45,6 +45,14 @@ function sre(overrides: Record<string, unknown> = {}) {
 }
 
 describe('buildPayslipData', () => {
+  it('retains unknown YTD net and dated vacation categories in the native PDF data', () => {
+    const balance = { as_of_date: '2026-07-31', year_start: '2026-01-01', annual_entitlement: 25, tracking: true, withdrawals_blocked: false,
+      paid: 8, extra_paid: 2, unpaid: 10, advance: 7, saved_by_year: { '2025': 3.5 }, source_reference: 'Closing statement', review_notes: [] }
+    const data = buildPayslipData({ run, sre: sre({ ytd_net: null, vacation_balance: balance }), employee, company: { name: 'Bolaget', org_number: null } })
+    expect(data.ytdNet).toBeNull()
+    expect(data.vacationBalance).toEqual(balance)
+    expect(data.netSalary).toBe(27000)
+  })
   it('assembles the payslip without overrides', () => {
     const data = buildPayslipData({ run, sre: sre(), employee, company: { name: 'Bolaget AB', org_number: '5560000000' } })
 

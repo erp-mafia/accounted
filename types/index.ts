@@ -619,6 +619,7 @@ export interface CompanySettings {
   // Öresavrundning (migration 20260813143000): round each net payout up to
   // whole kronor; the 0-99 öre diff books on 3740 via a derived line item.
   salary_net_rounding: boolean
+  salary_calculation_policy?: import('@/lib/salary/calculation-policy').SalaryCalculationPolicy
   // Avvikelseperiod (migration 20260918120000): the month a new salary run
   // reads absence and worked days from. 'previous_month' is the common
   // Swedish setup (innevarande månads lön, föregående månads avvikelser).
@@ -4330,7 +4331,8 @@ export interface SalaryRunEmployee {
   calculation_breakdown: Record<string, unknown> | null
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  ytd_net: number | null
+  vacation_balance?: import('@/lib/salary/vacation-balance').VacationBalance | null
   created_at: string
   updated_at: string
   // Relations
@@ -4339,6 +4341,9 @@ export interface SalaryRunEmployee {
 }
 
 export interface SalaryLineItem {
+  vacation_movements?: import('@/lib/salary/vacation-balance').VacationMovement[]
+  calculation_source?: 'vacation_compensation' | null
+  one_off_tax_percent?: number | null
   id: string
   salary_run_employee_id: string
   company_id: string

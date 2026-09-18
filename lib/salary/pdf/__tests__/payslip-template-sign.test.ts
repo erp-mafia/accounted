@@ -40,6 +40,15 @@ function payslip(over: Partial<PayslipData> = {}): PayslipData {
 const RENDER_TIMEOUT = 30_000
 
 describe('PayslipPDF sign rendering (issue #1982)', () => {
+  it('renders the actual dated categories and unknown accumulator, not a fabricated zero', async () => {
+    const text = pdfTextStrings(await renderToBuffer(PayslipPDF({ data: payslip({ ytdNet: null,
+      vacationBalance: { as_of_date: '2026-07-31', year_start: '2026-01-01', annual_entitlement: 25,
+        tracking: true, withdrawals_blocked: true, paid: 8, extra_paid: 2, unpaid: 10, advance: 7,
+        saved_by_year: { '2025': 3.5 }, source_reference: 'Synthetic closing statement', review_notes: [] },
+    }) }))).join('\n')
+    for (const label of ['Underlag saknas', '2026-07-31', 'Extra betalda', 'Obetalda', 'Förskott', 'Sparade från 2025', 'Nya uttag är spärrade']) expect(text).toContain(label)
+    expect(text).toContain('3,50')
+  }, RENDER_TIMEOUT)
   it('prints the tax deduction and a negative line with an ASCII minus the bundled font can draw', async () => {
     const text = pdfTextStrings(await renderToBuffer(PayslipPDF({ data: payslip() }))).join('\n')
 
