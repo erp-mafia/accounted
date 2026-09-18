@@ -260,7 +260,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
 
     async extractFromDocument(req: ExtractFromDocumentRequest): Promise<ExtractFromDocumentResult> {
       if (!cfg.configured) return { ok: false, skipped: 'ai_unconfigured' }
-      const model = modelFor('extraction')
+      const model = modelFor(req.tier ?? 'extraction')
       // The system prompt is byte-stable per deploy and a few KB: marking it
       // ephemeral lets the backend reuse the prompt cache on rapid sequential
       // extractions (a user uploading a stack of receipts within minutes).

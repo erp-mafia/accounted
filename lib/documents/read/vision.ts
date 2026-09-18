@@ -1,4 +1,5 @@
 import { getAiService } from '@/lib/ai'
+import type { AiTier } from '@/lib/ai/types'
 import type { AiDocumentInput, AiImageMediaType } from '@/lib/ai'
 import type { ReadPage } from './types'
 
@@ -11,13 +12,14 @@ const TRANSCRIBE_SYSTEM =
 
 export type VisionOutcome = { ok: true; text: string } | { ok: false; skipped: 'ai_unconfigured' | 'ai_no_vision' }
 
-export async function transcribeWithModel(document: AiDocumentInput): Promise<VisionOutcome> {
+export async function transcribeWithModel(document: AiDocumentInput, opts: { tier?: AiTier } = {}): Promise<VisionOutcome> {
   const ai = getAiService()
   const result = await ai.extractFromDocument({
     document,
     system: TRANSCRIBE_SYSTEM,
     instruction: 'Transcribe this page.',
     maxTokens: 6000,
+    ...(opts.tier ? { tier: opts.tier } : {}),
   })
   if (!result.ok) {
     return { ok: false, skipped: result.skipped === 'ai_no_vision' ? 'ai_no_vision' : 'ai_unconfigured' }
@@ -25,8 +27,8 @@ export async function transcribeWithModel(document: AiDocumentInput): Promise<Vi
   return { ok: true, text: result.text.trim() }
 }
 
-export async function readImageWithModel(bytes: Buffer, mediaType: AiImageMediaType): Promise<{ ok: true; pages: ReadPage[] } | { ok: false; skipped: 'ai_unconfigured' | 'ai_no_vision' }> {
-  const out = await transcribeWithModel({ kind: 'image', data: bytes, mediaType })
+export async function readImageWithModel(bytes: Buffer, mediaType: AiImageMediaType, opts: { tier?: AiTier } = {}): Promise<{ ok: true; pages: ReadPage[] } | { ok: false; skipped: 'ai_unconfigured' | 'ai_no_vision' }> {
+  const out = await transcribeWithModel({ kind: 'image', data: bytes, mediaType }, opts)
   if (!out.ok) return out
   return { ok: true, pages: out.text ? [{ pageNo: 1, text: out.text, reader: 'claude_vision', hasTextLayer: false }] : [] }
 }

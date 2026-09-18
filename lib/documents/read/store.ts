@@ -1,11 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AiTier } from '@/lib/ai/types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { getAiStatus } from '@/lib/ai'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { readDocumentBytes } from './router'
-import { readLaneFor, readPlanFor, isActingType, type ReadPlan } from './lanes'
+import { historyReaderTier, readLaneFor, readPlanFor, isActingType, type ReadPlan } from './lanes'
 import { readerForMime, type ReadOutcome } from './types'
 
 const log = createLogger('documents/read')
@@ -45,7 +46,7 @@ const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'parti
 export async function readAndStoreDocument(
   supabase: SupabaseClient,
   doc: ReadableDocumentRow,
-  opts: { allowModel?: boolean; maxModelPages?: number | null } = {},
+  opts: { allowModel?: boolean; maxModelPages?: number | null; tier?: AiTier } = {},
 ): Promise<StoreOutcome> {
   const allowModel = opts.allowModel ?? isArkivEnabled(doc.company_id)
   if (!doc.company_id) return stamp(supabase, doc.id, { status: 'skipped', reason: 'no_company' }, null)
@@ -61,7 +62,7 @@ export async function readAndStoreDocument(
 
   let outcome: ReadOutcome
   try {
-    outcome = await readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null })
+    outcome = await readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) })
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
     log.warn('read failed', { doc: doc.id, mime: doc.mime_type, reason })
@@ -109,7 +110,7 @@ export function planForDocument(doc: ReadableDocumentRow, now = new Date()): Rea
 export async function readDocumentByPlan(supabase: SupabaseClient, doc: ReadableDocumentRow, now = new Date()): Promise<{ plan: ReadPlan | null; outcome: StoreOutcome | null }> {
   const plan = planForDocument(doc, now)
   if (!plan) return { plan: null, outcome: null }
-  return { plan, outcome: await readAndStoreDocument(supabase, doc, { allowModel: plan.allowModel, maxModelPages: plan.maxModelPages }) }
+  return { plan, outcome: await readAndStoreDocument(supabase, doc, { allowModel: plan.allowModel, maxModelPages: plan.maxModelPages, tier: plan.tier }) }
 }
 
 async function stamp(supabase: SupabaseClient, documentId: string, outcome: StoreOutcome, pageCount: number | null): Promise<StoreOutcome> {
@@ -188,10 +189,11 @@ export async function readUnreadDocuments(
     if (taken >= room) break
     if (!doc.company_id || !isArkivEnabled(doc.company_id)) continue
     const lane = readLaneFor(doc, now)
-    let plan: { allowModel: boolean; maxModelPages: number | null } | null = null
+    const tier = historyReaderTier()
+    let plan: { allowModel: boolean; maxModelPages: number | null; tier?: AiTier } | null = null
     if (lane === 'live') plan = { allowModel: true, maxModelPages: null }
-    else if (lane === 'history_loose') plan = !doc.doc_type ? { allowModel: true, maxModelPages: 1 } : isActingType(doc.doc_type) ? { allowModel: true, maxModelPages: null } : null
-    else if ((await roomToday(doc.company_id)) > 0) plan = { allowModel: true, maxModelPages: null }
+    else if (lane === 'history_loose') plan = !doc.doc_type ? { allowModel: true, maxModelPages: 1, tier } : isActingType(doc.doc_type) ? { allowModel: true, maxModelPages: null, tier } : null
+    else if ((await roomToday(doc.company_id)) > 0) plan = { allowModel: true, maxModelPages: null, tier }
     if (!plan) continue
     taken++
     const out = await readAndStoreDocument(supabase, doc, plan)

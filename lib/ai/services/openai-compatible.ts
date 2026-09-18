@@ -215,7 +215,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
 
     async extractFromDocument(req: ExtractFromDocumentRequest): Promise<ExtractFromDocumentResult> {
       if (!cfg.configured) return { ok: false, skipped: 'ai_unconfigured' }
-      const model = modelFor('extraction')
+      const model = modelFor(req.tier ?? 'extraction')
       const built = await buildUserContent(req.document, req.instruction)
       if (!built.ok) return { ok: false, skipped: built.skipped }
       const messages: ModelMessage[] = [{ role: 'user', content: built.content }]
