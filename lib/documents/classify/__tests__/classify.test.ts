@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const generateStructured = vi.fn()
+vi.mock('@/lib/arkiv/graph/snapshot', () => ({ markCompanyGraphStale: vi.fn() }))
 vi.mock('@/lib/ai', () => ({
   getAiService: () => ({ generateStructured }),
   getAiStatus: vi.fn(() => ({ configured: true })),

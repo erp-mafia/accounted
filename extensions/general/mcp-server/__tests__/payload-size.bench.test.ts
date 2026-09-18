@@ -462,7 +462,9 @@ describe('tools/list payload size guard', () => {
     //     the record does not carry. Measured 61 684 on landing.
     //  2026-09-17 (phase 9, the agent door): gnubok_resolve_missing joins the
     //     default catalog so an agent can close what it gathered. Measured 62 012.
-    expect(approxTokens).toBeLessThan(62_200)
+    //  2026-09-17 (phase 9b, the graph): gnubok_get_neighbourhood joins the default
+    //     catalog so an agent can walk the company graph. Measured 62 392.
+    expect(approxTokens).toBeLessThan(62_600)
   })
 
   /**

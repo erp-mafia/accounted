@@ -7,6 +7,7 @@ const { supabase: mockSupabase, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/auth/cron', () => ({ verifyCronSecret: vi.fn(() => null) }))
 vi.mock('@/lib/supabase/service-client', () => ({ createServiceRoleClient: vi.fn(() => mockSupabase) }))
 vi.mock('@/lib/arkiv/lint/run', () => ({ lintCompanies: vi.fn() }))
+vi.mock('@/lib/arkiv/graph/snapshot', () => ({ markCompanyGraphStale: vi.fn(), refreshStaleGraphs: vi.fn(async () => ({ refreshed: 0, failed: 0 })) }))
 
 import { GET } from '../route'
 import { verifyCronSecret } from '@/lib/auth/cron'
@@ -40,7 +41,7 @@ describe('GET /api/arkiv/lint/cron', () => {
     })
     const { status, body } = await parseJsonResponse(await call())
     expect(status).toBe(200)
-    expect(body).toEqual({ ok: true, companies: 2, findings: 3, opened: 1, closed: 2, failed: 1 })
+    expect(body).toEqual({ ok: true, companies: 2, findings: 3, opened: 1, closed: 2, failed: 1, graphs: { refreshed: 0, failed: 0 } })
     expect(lintCompanies).toHaveBeenCalledWith(mockSupabase, ['co-1', 'co-2'], expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/))
   })
 
