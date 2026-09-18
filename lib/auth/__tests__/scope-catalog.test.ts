@@ -42,6 +42,16 @@ describe('SCOPE_GROUPS', () => {
   })
 })
 
+describe('SIE intake scopes', () => {
+  it('lets a read key stage and preflight a file, and keeps the ledger write behind bookkeeping:write', () => {
+    expect(TOOL_SCOPE_MAP.gnubok_sie_preflight).toBe('reports:read')
+    expect(TOOL_SCOPE_MAP.gnubok_create_sie_upload).toBe('reports:read')
+    expect(TOOL_SCOPE_MAP.gnubok_sie_import_status).toBe('reports:read')
+    expect(TOOL_SCOPE_MAP.gnubok_import_sie).toBe('bookkeeping:write')
+    expect(TOOL_SCOPE_MAP.gnubok_undo_sie_import).toBe('bookkeeping:write')
+  })
+})
+
 describe('TOOL_COUNT_BY_SCOPE', () => {
   it('has an entry for every scope and none for anything else', () => {
     expect(Object.keys(TOOL_COUNT_BY_SCOPE).sort()).toEqual([...ALL_SCOPES].sort())

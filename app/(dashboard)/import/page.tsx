@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import SIEJobProgress from '@/components/import/SIEJobProgress'
 import { uploadSIEFile } from '@/lib/import/sie-job-client'
+import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
 import { fetchAccounts } from '@/lib/reference-data/fetchers'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -1098,9 +1099,11 @@ function SIEImportWizard({
       const data = await res.json()
 
       if (!res.ok) {
-        const msg = getErrorMessage(data)
-        setError(msg)
-        toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
+        // The route's sentence, its details and the reference for support.
+        // The theater's last narration line is not the failing step.
+        const failure = describeImportResponseFailure({ status: res.status, body: data })
+        setError(formatImportFailure(failure))
+        toast({ title: 'Import avbröts', description: failure.message, variant: 'destructive' })
         return
       }
       showJob(data.data.importId)

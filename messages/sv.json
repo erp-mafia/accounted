@@ -8282,7 +8282,7 @@
         "completed": "Import klar",
         "undoing": "Ångrar import med storno",
         "undone": "Import ångrad",
-        "failed": "Importen kunde inte starta"
+        "failed": "Importen misslyckades"
       }
     },
     "title": "Importera / exportera",

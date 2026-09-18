@@ -59,6 +59,8 @@ import {
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
   requireFlowInitiator,
@@ -1444,14 +1446,17 @@ export const arcimMigrationExtension: Extension = {
           // Validate all accounts are mapped (same as manual upload)
           const unmapped = mappings.filter((m: import('@/lib/import/types').AccountMapping) => !m.targetAccount)
           if (unmapped.length > 0) {
-            return NextResponse.json({
-              error: 'validation',
-              message: `${unmapped.length} account(s) are not mapped`,
-              unmappedAccounts: unmapped.map((m: import('@/lib/import/types').AccountMapping) => ({
-                account: m.sourceAccount,
-                name: m.sourceName,
-              })),
-            }, { status: 400 })
+            // The structured envelope: the wizard used to print the legacy
+            // tag "validation" as the whole message.
+            return errorResponseFromCode('SIE_IMPORT_UNMAPPED_ACCOUNTS', moduleLog, {
+              requestId: ctx?.requestId,
+              details: {
+                unmappedAccounts: unmapped.map((m: import('@/lib/import/types').AccountMapping) => ({
+                  account: m.sourceAccount,
+                  name: m.sourceName,
+                })),
+              },
+            })
           }
 
           const job = await submitSIEJob(supabase,companyId,user.id,rawContent,mappings,{
@@ -1464,6 +1469,11 @@ export const arcimMigrationExtension: Extension = {
             warnings:artifactScan.flagged ? [formatSieArtifactWarning(artifactScan)] : [],
             statusUrl:'/api/import/sie/'+job.id}, {status:202})
         } catch (error) {
+          // The validator's sentence names the voucher or account that
+          // refused the file; wrapped as SIE_IMPORT_UNEXPECTED it reached the
+          // wizard as "Importens resultat kunde inte bekräftas" with the
+          // reason buried in details.reason.
+          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }

@@ -8282,7 +8282,7 @@
         "completed": "Import complete",
         "undoing": "Reversing imported vouchers",
         "undone": "Import undone",
-        "failed": "Import could not start"
+        "failed": "Import failed"
       }
     },
     "title": "Import / export",

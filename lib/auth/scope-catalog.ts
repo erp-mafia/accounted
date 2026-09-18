@@ -359,9 +359,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_export_sie:                      'reports:read',
   gnubok_audit_package:                   'reports:read',
   gnubok_import_sie:                      'bookkeeping:write',
-  // Byte-exact SIE upload URL feeding gnubok_import_sie (same write intent).
   gnubok_sie_import_status:              'reports:read',
-  gnubok_create_sie_upload:               'bookkeeping:write',
+  // Preflight is analysis, not a ledger write, and the byte-exact upload URL
+  // only stages a file for it (documents bucket, 50 MB cap, two-hour TTL,
+  // per-company pending prefix). A read key can therefore check a file
+  // before anyone holds a write key; the ledger write stays the staged
+  // gnubok_import_sie (Easy Online Stores evaluation, 2026-09-16).
+  gnubok_sie_preflight:                   'reports:read',
+  gnubok_create_sie_upload:               'reports:read',
   // Rot/rut begäran om utbetalning (records a payout request on generate)
   gnubok_generate_rot_rut_file:           'invoices:write',
   // Supplier CRUD

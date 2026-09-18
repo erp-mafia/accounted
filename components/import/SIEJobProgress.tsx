@@ -6,6 +6,7 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { fetchSIEJob } from '@/lib/import/sie-job-client'
+import { describeSIEJobFailure, formatImportFailureReference } from '@/lib/import/import-failure'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
 import type { ImportResult } from '@/lib/import/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -52,6 +53,11 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
     finally {setBusy(false)}
   }
   const terminal = job && ['completed','undone','failed'].includes(job.job_state)
+  // The job's own reason, its per-voucher errors and the import reference,
+  // whenever the row carries a reason or ended in failed/paused.
+  const failure = job && (job.error_message || ['failed','paused'].includes(job.job_state))
+    ? describeSIEJobFailure(job) : null
+  const reference = failure ? formatImportFailureReference(failure) : null
   const canResume = job && ['paused', 'reconciling'].includes(job.job_state)
   const progressText = !job ? t('loading')
     : job.job_state === 'queued' && job.chunks_total === 0 ? t('waitingDetails')
@@ -68,7 +74,14 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
       {job && job.chunks_total > 0 && <Progress value={100*job.chunks_done/job.chunks_total}/>}
     </div>
     {!terminal && <p className="text-sm text-muted-foreground">{t('durable')}</p>}
-    {(error || job?.error_message) && <p role="alert" className="text-sm text-destructive">{error ?? job?.error_message}</p>}
+    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+    {!error && failure && <div role="alert" className="space-y-1 text-sm text-destructive">
+      <p>{failure.message}</p>
+      {failure.details.length > 0 && <ul className="list-disc space-y-0.5 pl-5">
+        {failure.details.map((line, i) => <li key={i}>{line}</li>)}
+      </ul>}
+      {reference && <p className="text-xs text-muted-foreground">{reference}</p>}
+    </div>}
     {job?.job_result?.repairOutcome === 'stopped' && <p className="text-sm text-muted-foreground">
       {t('repairStoppedDetails',{reversed:Number(job.job_result.reversed),cancelled:Number(job.job_result.cancelled)})}
     </p>}

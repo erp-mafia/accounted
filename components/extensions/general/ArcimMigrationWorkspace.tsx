@@ -1,6 +1,7 @@
 'use client'
 
-import { uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -3336,17 +3337,26 @@ export default function ArcimMigrationWorkspace({
           })
 
           if (!res.ok) {
+            // The envelope's sentence, the details the route attached (the
+            // voucher that failed validation, the accounts without a target)
+            // and the reference for support: never the fallback text alone.
             const data = await res.json().catch(() => ({}))
-            const err = apiError(data, `SIE import HTTP ${res.status}`)
-            throw err instanceof UserFacingError
-              ? new UserFacingError(`${yearLabel}${err.message}`)
-              : err
+            const failure = describeImportResponseFailure({ status: res.status, body: data })
+            throw new UserFacingError(`${yearLabel}${formatImportFailure(failure)}`)
           }
 
           const submitted = await res.json() as {importId:string}
-          const result = await waitForSIEJob(submitted.importId,job => {
-            setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
-          })
+          let result: ImportResult
+          try {
+            result = await waitForSIEJob(submitted.importId,job => {
+              setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
+            })
+          } catch (err) {
+            // The job's own reason is already user-facing; displayError must
+            // not route it through the Swedish-pattern heuristic.
+            if (err instanceof SIEJobFailedError) throw new UserFacingError(`${yearLabel}${err.message}`)
+            throw err
+          }
           setSieImportResults(prev => [...prev, result])
           // The import creates accounts and a räkenskapsår: every cached
           // picker must see them.

@@ -22,7 +22,7 @@ vi.mock('@/lib/import/sie-import', () => ({
 
 }))
 
-vi.mock('@/lib/import/sie-jobs', () => ({submitSIEJob: vi.fn()}))
+vi.mock('@/lib/import/sie-jobs', async (load) => ({...await load<typeof import('@/lib/import/sie-jobs')>(), submitSIEJob: vi.fn()}))
 vi.mock('next/server', async (load) => ({...await load<typeof import('next/server')>(), after:vi.fn()}))
 vi.mock('@/lib/import/sie-job-worker', () => ({runSIEWorker:vi.fn()}))
 
