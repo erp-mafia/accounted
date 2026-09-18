@@ -214,7 +214,13 @@ export default function BankFileConfirmStep({
           onClick={() => onExecute({
             skip_duplicates: true,
             auto_categorize: false,
-            settlement_account: selectedAccount !== '1930' ? selectedAccount : undefined,
+            // Always name the account the user picked, 1930 included. Sending
+            // undefined for 1930 read as "the default needs no saying", but
+            // ingest resolves cash_account_id FROM this field: with nothing to
+            // resolve, every row imported unbound, and booking then fell back
+            // to 1930 whatever the user chose. Reading two files into two
+            // accounts put both on 1930 (support 2026-09-17).
+            settlement_account: selectedAccount,
           })}
           disabled={isLoading}
         >

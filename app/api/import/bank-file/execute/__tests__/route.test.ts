@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -156,6 +156,52 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
     // "undo this import" action can scope its bulk delete exactly.
     expect(ingestOptions.bankFileImportId).toBe('import-1')
     expect(sweepMock).not.toHaveBeenCalled()
+  })
+
+  it('creates the picked settlement account when the company has no such cash account', async () => {
+    // Without a cash_accounts row for the chosen ledger account, ingest leaves
+    // every row unbound and booking falls back to 1930 whatever the user
+    // picked (support 2026-09-17: two files, two accounts, both on 1930).
+    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // cash_accounts lookup: missing
+    enqueue({ data: { id: 'ca-new' } }) // cash_accounts insert
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1940' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    const inserts = findCalls('cash_accounts', 'insert')
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0][0]).toMatchObject({
+      company_id: 'company-1',
+      ledger_account: '1940',
+      source: 'file',
+    })
+    const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+    expect(ingestOptions.settlementAccount).toBe('1940')
+  })
+
+  it('leaves an existing cash account alone', async () => {
+    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: { id: 'ca-1' } }) // cash_accounts lookup: found
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1930' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 
   it('never sweeps for a viewer (raw insert only)', async () => {

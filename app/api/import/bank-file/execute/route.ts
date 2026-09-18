@@ -127,6 +127,42 @@ export const POST = withRouteContext(
         sieOverlap = data ?? null
       }
 
+      // The account the user picked has to EXIST as a cash account, or ingest
+      // silently leaves every row unbound (cash_account_id NULL) and booking
+      // falls back to 1930 whatever was chosen. Picking 1940 for a second file
+      // then put both files on 1930 (support 2026-09-17). ingest deliberately
+      // never creates one, to stay out of upsertFromPsd2's seed promotion;
+      // here we know the account came from a file the user is importing right
+      // now, so creating it is the honest move. Existing rows are left alone,
+      // including PSD2-owned ones.
+      if (settlement_account) {
+        const { data: existing } = await supabase
+          .from('cash_accounts')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('ledger_account', settlement_account)
+          .maybeSingle()
+        if (!existing) {
+          const { error: createError } = await supabase.from('cash_accounts').insert({
+            company_id: companyId,
+            ledger_account: settlement_account,
+            name: `Bankkonto ${settlement_account}`,
+            currency: 'SEK',
+            source: 'file',
+            enabled: true,
+            is_primary: false,
+          })
+          if (createError) {
+            // Not fatal: the import still runs, the rows just stay unbound as
+            // they did before. Logged so the pattern is visible if it recurs.
+            opLog.warn('could not create the cash account for the chosen settlement account', {
+              settlementAccount: settlement_account,
+              error: createError.message,
+            })
+          }
+        }
+      }
+
       const ingestOptions: IngestOptions = {
         // Stamp every inserted row with this batch so the owner/admin
         // "undo this import" action can scope its bulk delete exactly.
