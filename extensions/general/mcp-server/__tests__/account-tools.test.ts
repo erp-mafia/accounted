@@ -492,3 +492,64 @@ describe('gnubok_update_account', () => {
     expect(result.preview.changes).toEqual({ default_vat_treatment: null })
   })
 })
+
+describe('gnubok_list_accounts: compact detail and paging', () => {
+  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // in one answer. Both options are opt-in so every existing caller keeps the
+  // rows it had; `total` rides along on every answer.
+  const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const rows = [
+    { account_number: '1930', account_name: 'Företagskonto', account_class: 1, is_active: true, default_vat_treatment: null },
+    { account_number: '2617', account_name: 'Utgående moms tjänster utanför EU 25 %', account_class: 2, is_active: true, default_vat_treatment: null },
+    { account_number: '4545', account_name: 'Import av varor 25 %', account_class: 4, is_active: true, default_vat_treatment: 'import_goods' },
+  ]
+  type Page = { accounts: { account_number: string }[]; count: number; total: number }
+
+  it('compact selects only what an agent needs to pick or check a konto, and reports total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ detail: 'compact' }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(findCall('chart_of_accounts', 'select')).toEqual([
+      'account_number, account_name, account_class, is_active, default_vat_treatment',
+    ])
+    expect(result).toEqual({ accounts: rows, count: 3, total: 3 })
+  })
+
+  it('full detail keeps the previous columns and adds total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as Page
+    expect(findCall('chart_of_accounts', 'select')).toEqual([
+      'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description',
+    ])
+    expect(result.count).toBe(3)
+    expect(result.total).toBe(3)
+  })
+
+  it('limit and offset page the result in account_number order and keep total', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 1, offset: 1 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result.accounts.map((a) => a.account_number)).toEqual(['2617'])
+    expect(result.count).toBe(1)
+    expect(result.total).toBe(3)
+  })
+
+  it('an offset past the end is an empty page with the total intact', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 50, offset: 10 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result).toEqual({ accounts: [], count: 0, total: 3 })
+  })
+
+  it('rejects a non-positive limit and a negative offset before any query', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    await expect(
+      listAccounts.execute({ limit: 0 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/limit must be a positive integer/)
+    await expect(
+      listAccounts.execute({ offset: -1 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/offset must be a non-negative integer/)
+    expect(calls).toHaveLength(0)
+  })
+})

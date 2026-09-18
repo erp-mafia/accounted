@@ -280,4 +280,22 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
       spy.mockRestore()
     }
   })
+  it('routes a bridged read to the API key default company when company_id is omitted', async () => {
+    // Easy Online Stores brief 2026-09-16, F6: a bridged gnubok_sie_import_status
+    // without company_id reached Postgres as uuid "undefined". The company
+    // half was never the bug (the dispatcher resolves the key default before
+    // execute); this pins that so the tool-side fix cannot be mistaken for it.
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', { tool: 'gnubok_sie_import_status', arguments: {} }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(false)
+    expect(payload).toMatchObject({ kind: 'list', count: 0 })
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_sie_import_status')
+    expect((event as unknown as { companyId: string }).companyId).toBe('11111111-1111-4111-8111-111111111111')
+  })
 })
