@@ -218,15 +218,13 @@ describe('listReconciliationAccounts', () => {
   })
 
   it('reads a quiet but freshly synced connection as current, not stale', async () => {
-    // #2717: a company whose bank has had no new lines for weeks still has a
-    // healthy connection. Staleness follows bank_connections.last_synced_at
-    // (what the sync cron writes on success), not the newest transaction.
+    // A quiet bank and a healthy connection: staleness follows the
+    // connection's last_synced_at, read in the same query as the bank names.
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [cashAccount(ID_A, { is_primary: true })] })
     enqueue({ data: [] }) // latest sign-offs (none)
-    enqueue({ data: [] }) // bank names for logos
+    enqueue({ data: [{ id: 'conn-1', bank_name: 'Lunar', last_synced_at: '2026-08-20T04:00:00Z' }] }) // synced this morning
     enqueue({ data: { created_at: '2026-08-01T06:00:00Z' } }) // newest transaction: 19 days old
-    enqueue({ data: { last_synced_at: '2026-08-20T04:00:00Z' } }) // connection synced this morning
     skattekontoStatusMock.mockResolvedValue(null)
 
     const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {

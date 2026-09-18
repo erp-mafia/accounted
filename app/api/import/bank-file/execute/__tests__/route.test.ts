@@ -159,9 +159,8 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
   })
 
   it('creates the picked settlement account when the company has no such cash account', async () => {
-    // Without a cash_accounts row for the chosen ledger account, ingest leaves
-    // every row unbound and booking falls back to 1930 whatever the user
-    // picked (support 2026-09-17: two files, two accounts, both on 1930).
+    // Without a cash_accounts row for the chosen ledger account, ingest
+    // imports every row unbound and booking falls back to 1930.
     enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
     enqueue({ data: null }) // sie_imports overlap: none
     enqueue({ data: null }) // cash_accounts lookup: missing
@@ -182,9 +181,26 @@ describe('POST /api/import/bank-file/execute (SIE overlap)', () => {
       company_id: 'company-1',
       ledger_account: '1940',
       source: 'file',
+      currency: 'SEK',
     })
     const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
     expect(ingestOptions.settlementAccount).toBe('1940')
+  })
+
+  it('never creates an account outside the 1920-1999 range', async () => {
+    enqueue({ data: { id: 'import-1' } }) // bank_file_imports upsert
+    enqueue({ data: null }) // sie_imports overlap: none
+    enqueue({ data: null }) // status update
+    enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+    const request = createMockRequest('/api/import/bank-file/execute', {
+      method: 'POST',
+      body: makeBody({ settlement_account: '1510' }),
+    })
+    const response = await POST(request, emptyParams)
+
+    expect(response.status).toBe(200)
+    expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
   })
 
   it('leaves an existing cash account alone', async () => {

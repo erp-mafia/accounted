@@ -395,18 +395,9 @@ export function InvoicePaymentAccountsSettings({
   }
 
   /**
-   * Show or hide one account in the invoice picker.
-   *
-   * The list added accounts and set `invoice_payee: true` on every save, but
-   * nothing ever set it back, so a duplicate added by mistake was stuck in the
-   * picker for good (support 2026-09-17: the same Lunar account added twice,
-   * once by the bank connection and once by hand). Deleting the row is the
-   * wrong instrument, a cash account can carry bookkeeping and
-   * /api/cash-accounts/[id] deliberately offers PATCH only. Hiding is the
-   * reversible move, and the list already renders the hidden state.
-   *
-   * A hidden account cannot stay the default for a currency: invoices would
-   * print details this page says are not in use. Clear the default first.
+   * Show or hide one account in the invoice picker. Hiding is the reversible
+   * alternative to deleting a cash account that may carry bookkeeping. A
+   * hidden account cannot stay a currency default, so that is cleared first.
    */
   async function setVisibleOnInvoices(account: CashAccount, visible: boolean) {
     setIsSaving(true)
@@ -425,6 +416,7 @@ export function InvoicePaymentAccountsSettings({
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      cancelEdit()
       await afterWrite(
         visible
           ? t('shown_account', { account: accountLabel(account) })
@@ -635,16 +627,6 @@ export function InvoicePaymentAccountsSettings({
                     >
                       {isEditing ? t('cancel') : t('edit')}
                     </button>
-                    {!isEditing && (
-                      <button
-                        type="button"
-                        onClick={() => setVisibleOnInvoices(account, !account.invoice_payee)}
-                        disabled={isSaving}
-                        className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground disabled:opacity-50"
-                      >
-                        {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
-                      </button>
-                    )}
                   </SettingsRowEnd>
                 </SettingsRow>
                 <SettingsReveal open={isEditing}>
@@ -660,13 +642,23 @@ export function InvoicePaymentAccountsSettings({
                         <SettingsRowNote>{account.currency} · {account.ledger_account}</SettingsRowNote>
                       </SettingsRow>
                       {renderPayeeFields(account.currency, `payee-${account.id}`, account.iban ? account.iban.replace(/\s/g, '').toUpperCase() : null)}
-                      <div className="flex justify-end gap-2 px-1 py-3">
-                        <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
-                          {t('cancel')}
-                        </Button>
-                        <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
-                          {isSaving ? t('saving') : t('save_account')}
-                        </Button>
+                      <div className="flex items-center justify-between gap-2 px-1 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setVisibleOnInvoices(account, !account.invoice_payee)}
+                          disabled={isSaving}
+                          className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground disabled:opacity-50"
+                        >
+                          {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
+                        </button>
+                        <div className="flex gap-2">
+                          <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                            {t('cancel')}
+                          </Button>
+                          <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
+                            {isSaving ? t('saving') : t('save_account')}
+                          </Button>
+                        </div>
                       </div>
                     </>
                   )}

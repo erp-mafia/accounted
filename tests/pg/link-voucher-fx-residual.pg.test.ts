@@ -31,9 +31,8 @@ const MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
-// 20260918120000 opens the same fallback to kontantmetoden and keeps the
-// residual verifikat accrual-only. Replayed straight after the migration
-// above so the suite exercises the pair exactly as prod runs them.
+// 20260918120000 opens the fallback to kontantmetoden; replayed after the
+// migration above so the suite runs the pair as prod does.
 const CASH_MIGRATION_SQL = readFileSync(
   path.join(
     process.cwd(),

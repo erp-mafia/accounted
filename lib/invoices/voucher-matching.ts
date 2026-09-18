@@ -593,21 +593,10 @@ export async function validateVoucherForInvoiceLink(
     // SEK-booked settlement fallback, mirroring the RPC gate byte-for-byte:
     // zero readable lines, every unreadable line SEK-booked, a sane invoice
     // exchange_rate, and the voucher's SEK total within 10% of remaining *
-    // rate. The RPC then settles the FULL remaining; on accrual it also books
-    // the FX residual to 7960/3960 as its own verifikat. Here the validation
-    // outcome only has to agree, so the staging path stops refusing what the
-    // commit RPC accepts.
-    //
-    // Kontantmetoden takes the same road (support 2026-09-16: an EUR invoice
-    // paid in full, booked from the bank row, that no door would mark paid).
-    // It was excluded when the fallback landed on the grounds that no
-    // receivable was booked, so there is no residual to true up. That is right
-    // about the residual and wrong about the link: with no 1510 there is no
-    // kursdifferens to book at all (ML 8 kap 21-23 §), the revenue is already
-    // in the books at the rate the money actually arrived, and what remains is
-    // to mark the invoice paid against the verifikat that holds it. The RPC
-    // therefore skips the residual entry on the cash branch and writes no new
-    // bookkeeping.
+    // rate. The RPC settles the full remaining; on accrual it also books the
+    // FX residual to 7960/3960. Kontantmetoden takes the same road since
+    // 20260918120000: with no receivable there is no residual to book, only
+    // an invoice to mark paid against the verifikat that holds the money.
     const exchangeRate = Number(invoice.exchange_rate)
     const fallbackEligible =
       readableCount === 0 &&

@@ -4,6 +4,8 @@ import { ensureInitialized } from '@/lib/init'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import type { RawTransaction } from '@/types'
 import { generateExternalId } from '@/lib/import/bank-file/parser'
+import { getFormat } from '@/lib/import/bank-file/formats'
+import { CreateCashAccountSchema } from '@/lib/api/schemas'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -127,15 +129,11 @@ export const POST = withRouteContext(
         sieOverlap = data ?? null
       }
 
-      // The account the user picked has to EXIST as a cash account, or ingest
-      // silently leaves every row unbound (cash_account_id NULL) and booking
-      // falls back to 1930 whatever was chosen. Picking 1940 for a second file
-      // then put both files on 1930 (support 2026-09-17). ingest deliberately
-      // never creates one, to stay out of upsertFromPsd2's seed promotion;
-      // here we know the account came from a file the user is importing right
-      // now, so creating it is the honest move. Existing rows are left alone,
-      // including PSD2-owned ones.
-      if (settlement_account) {
+      // ingest binds rows to the picked account only if that cash account
+      // exists, and never creates one (PSD2 seeding owns that). A file is the
+      // user's own account, so create it here, under the same 1920-1999 rule
+      // as POST /api/cash-accounts, in the file's currency.
+      if (settlement_account && CreateCashAccountSchema.shape.ledger_account.safeParse(settlement_account).success) {
         const { data: existing } = await supabase
           .from('cash_accounts')
           .select('id')
@@ -147,15 +145,14 @@ export const POST = withRouteContext(
             company_id: companyId,
             ledger_account: settlement_account,
             name: `Bankkonto ${settlement_account}`,
-            currency: 'SEK',
+            bank_name: ['generic-csv', 'camt053'].includes(format) ? null : (getFormat(format)?.name ?? null),
+            currency: (transactions[0]?.currency || 'SEK').toUpperCase(),
             source: 'file',
             enabled: true,
             is_primary: false,
           })
           if (createError) {
-            // Not fatal: the import still runs, the rows just stay unbound as
-            // they did before. Logged so the pattern is visible if it recurs.
-            opLog.warn('could not create the cash account for the chosen settlement account', {
+            opLog.warn('cash account for the settlement account was not created; rows import unbound', {
               settlementAccount: settlement_account,
               error: createError.message,
             })

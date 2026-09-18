@@ -1,31 +1,17 @@
 -- Let kontantmetoden reach the SEK-booked settlement fallback.
 --
--- 20260830140000 added the fallback that lets a plain-kronor verifikat settle
--- a currency invoice, and gated it to accrual with this reasoning: on
--- kontantmetoden no receivable was booked, so there is no residual to true up.
--- That is right about the residual and wrong about the link. The gate made the
--- whole door unreachable, so a sole trader on kontantmetoden with EUR invoices
--- paid straight into the bank had no way to mark them paid (support 2026-09-16:
--- three invoices, the bookkeeping already correct on 1931 against 3308, every
--- door refusing).
+-- 20260830140000 gated the fallback to accrual: kontantmetoden books no
+-- receivable, so there is no residual to true up. Right about the residual,
+-- wrong about the link, and the gate left a kontantmetod company with EUR
+-- invoices paid straight into the bank no way to mark them paid.
 --
--- Koppla befintlig verifikation creates no journal entry: it writes an
--- invoice_payments row against the verifikat that already holds the money and
--- advances paid_amount. On kontantmetoden that is also the only correct
--- answer, because with no 1510 there is no kursdifferens to book
--- (ML 8 kap 21-23 §) and the revenue already sits in the books at the rate the
--- money actually arrived.
---
--- Change, in link_invoice_to_voucher only (link_supplier_invoice_to_voucher
--- never had an accounting-method gate):
---   - the fallback gate accepts 'cash' as well as 'accrual';
---   - v_fx_settled, which drives the residual verifikat further down, stays
---     false on the cash branch, so that path settles the full remaining and
---     writes no new bookkeeping.
---
--- Everything else is byte-identical to 20260830140000: same deviation band,
--- same fail-closed ELSE, same tenant guards. No schema change, no trigger
--- touched.
+-- Koppla befintlig verifikation writes no journal entry, only an
+-- invoice_payments row against the verifikat that already holds the money.
+-- With no 1510 there is no kursdifferens to book (ML 8 kap 21-23 §), so on
+-- cash the gate now opens and v_fx_settled stays false: full remaining
+-- settled, nothing new written. link_supplier_invoice_to_voucher never had
+-- the gate and is not touched. Everything else is byte-identical to
+-- 20260830140000.
 
 CREATE OR REPLACE FUNCTION public.link_invoice_to_voucher(
   p_invoice_id uuid,
