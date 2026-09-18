@@ -49,4 +49,8 @@ export interface AccrualsProposal {
     period_end: string
   }
   proposals: AccrualProposal[]
+  /** Reasons a detector looked and declined to propose (Swedish, one per
+   *  detector). The UI shows them where the card would have been so a
+   *  missing proposal never reads as "nothing to do". */
+  notices: string[]
 }

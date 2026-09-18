@@ -21023,7 +21023,7 @@ export const tools: McpTool[] = [
     keywords: ['periodisering', 'upplupna kostnader', 'förutbetalda intäkter'],
     title: 'Propose Accruals (Periodiseringar)',
     description:
-      'Read-only proposal of periodiseringar (förutbetalda/upplupna kostnader); currently surfaces the vacation-liability change. No dedicated MCP poster: stage accrual entries via gnubok_create_voucher (or the web accruals form).',
+      'Read-only proposal of periodiseringar (förutbetalda/upplupna kostnader); today the vacation-liability change. `notices` says why one was withheld (2920 balance, no employees). Stage via gnubok_create_voucher or the web form.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
