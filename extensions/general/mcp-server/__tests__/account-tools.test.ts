@@ -498,32 +498,36 @@ describe('gnubok_list_accounts: compact detail and paging', () => {
   // in one answer. Both options are opt-in so every existing caller keeps the
   // rows it had; `total` rides along on every answer.
   const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const full = (n: string, name: string, cls: number, vat: string | null) => ({
+    account_number: n, account_name: name, account_class: cls, account_group: n.slice(0, 2), account_type: 'asset',
+    normal_balance: 'debit', is_active: true, description: null, default_vat_treatment: vat,
+  })
   const rows = [
-    { account_number: '1930', account_name: 'Företagskonto', account_class: 1, is_active: true, default_vat_treatment: null },
-    { account_number: '2617', account_name: 'Utgående moms tjänster utanför EU 25 %', account_class: 2, is_active: true, default_vat_treatment: null },
-    { account_number: '4545', account_name: 'Import av varor 25 %', account_class: 4, is_active: true, default_vat_treatment: 'import_goods' },
+    full('1930', 'Företagskonto', 1, null),
+    full('2617', 'Utgående moms tjänster utanför EU 25 %', 2, null),
+    full('4545', 'Import av varor 25 %', 4, 'import_goods'),
   ]
+  const compactRows = rows.map(({ account_number, account_name, account_class, is_active, default_vat_treatment }) =>
+    ({ account_number, account_name, account_class, is_active, default_vat_treatment }))
+  const SELECT = 'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, default_vat_treatment'
   type Page = { accounts: { account_number: string }[]; count: number; total: number }
 
   it('compact selects only what an agent needs to pick or check a konto, and reports total', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: rows })
     const result = (await listAccounts.execute({ detail: 'compact' }, 'company-1', 'user-1', supabase as never)) as Page
-    expect(findCall('chart_of_accounts', 'select')).toEqual([
-      'account_number, account_name, account_class, is_active, default_vat_treatment',
-    ])
-    expect(result).toEqual({ accounts: rows, count: 3, total: 3 })
+    // One literal select for both modes: compact is a projection, so the
+    // phantom-column scanner can still read every column name.
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: compactRows, count: 3, total: 3 })
   })
 
-  it('full detail keeps the previous columns and adds total', async () => {
+  it('full detail keeps the previous columns, gains default_vat_treatment, and adds total', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: rows })
     const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as Page
-    expect(findCall('chart_of_accounts', 'select')).toEqual([
-      'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description',
-    ])
-    expect(result.count).toBe(3)
-    expect(result.total).toBe(3)
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: rows, count: 3, total: 3 })
   })
 
   it('limit and offset page the result in account_number order and keep total', async () => {

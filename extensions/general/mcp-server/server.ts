@@ -9403,9 +9403,6 @@ export const tools: McpTool[] = [
         throw new Error('offset must be a non-negative integer')
       }
       const offset = (args.offset as number | undefined) ?? 0
-      const columns = compact
-        ? 'account_number, account_name, account_class, is_active, default_vat_treatment'
-        : 'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description'
 
       // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at
       // 1000 rows and a full BAS 2026 chart holds ~1290 accounts. Paging is on
@@ -9422,13 +9419,14 @@ export const tools: McpTool[] = [
         normal_balance: string
         is_active: boolean
         description: string | null
+        default_vat_treatment: string | null
       }
       let accounts: ChartAccountRow[]
       try {
         accounts = await fetchAllRows<ChartAccountRow>(({ from, to }) => {
           let query = supabase
             .from('chart_of_accounts')
-            .select<string, ChartAccountRow>(columns)
+            .select('account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, default_vat_treatment')
             .eq('company_id', companyId)
           if (activeOnly) query = query.eq('is_active', true)
           if (accountClass !== undefined) query = query.eq('account_class', accountClass)
@@ -9440,7 +9438,13 @@ export const tools: McpTool[] = [
 
       const total = accounts.length
       const page = limit === undefined && offset === 0 ? accounts : accounts.slice(offset, limit === undefined ? undefined : offset + limit)
-      return { accounts: page, count: page.length, total }
+      // One literal select for both modes (the phantom-column scanner cannot
+      // read a dynamic column list); compact is a projection of the same rows.
+      const rows = compact
+        ? page.map(({ account_number, account_name, account_class, is_active, default_vat_treatment }) =>
+            ({ account_number, account_name, account_class, is_active, default_vat_treatment }))
+        : page
+      return { accounts: rows, count: rows.length, total }
     },
   },
 
