@@ -52,6 +52,7 @@ export function useSupplierInvoiceData() {
     setOreRounding,
     dimensionsEnabled: defaults.dimensionsEnabled,
     vatRegistered: defaults.vatRegistered,
+    autoApproveSupplierInvoices: defaults.autoApproveSupplierInvoices,
     periods,
     periodsLoaded: !periodsLoading,
   }

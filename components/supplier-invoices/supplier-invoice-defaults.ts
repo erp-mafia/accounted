@@ -15,6 +15,11 @@ export interface SupplierInvoiceDefaults {
    * registered-company behaviour.
    */
   vatRegistered: boolean
+  /**
+   * Opt-in auto-approval after register (payment attest). EF still auto-
+   * approves in the create flow even when this is false.
+   */
+  autoApproveSupplierInvoices: boolean
 }
 
 /**
@@ -38,5 +43,6 @@ export function deriveSupplierInvoiceDefaults(
     oreRounding: typeof settings?.ore_rounding === 'boolean' ? settings.ore_rounding : true,
     dimensionsEnabled: settings?.dimensions_enabled === true,
     vatRegistered: settings?.vat_registered !== false,
+    autoApproveSupplierInvoices: settings?.auto_approve_supplier_invoices === true,
   }
 }
