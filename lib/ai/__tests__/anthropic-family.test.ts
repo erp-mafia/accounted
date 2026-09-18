@@ -141,6 +141,12 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-sonnet-4-6')
   })
 
+  it('reads with the cheap tier when the caller asks for it', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await svc.extractFromDocument({ document: { kind: 'text', text: 'x' }, system: SYSTEM, instruction: INSTRUCTION, maxTokens: 1, tier: 'cheap' })
+    expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-haiku-4-5-20251001-v1:0')
+  })
+
   it('skips without a call when the deployment has no credentials', async () => {
     delete process.env.AWS_ACCESS_KEY_ID
     delete process.env.AWS_SECRET_ACCESS_KEY

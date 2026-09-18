@@ -1,3 +1,5 @@
+import type { AiTier } from '@/lib/ai/types'
+
 /**
  * Arkiv reading layer (dev_docs/arkiv_plan.md, phase 1): every document gets
  * page text, read locally when a text layer exists and by the model otherwise.
@@ -45,6 +47,8 @@ export interface ReadOptions {
   allowModel: boolean
   /** Pages the model may transcribe in this pass; null or absent is every page that needs it. Text layers are never capped. */
   maxModelPages?: number | null
+  /** The model tier that transcribes; the extraction tier when absent. History lanes pass the cheap tier. */
+  tier?: AiTier
 }
 
 /** MIME types the reading layer understands. Kept in one place so the upload allowlist and the router agree. */

@@ -66,6 +66,17 @@ describe('readDocumentBytes', () => {
     expect(out.ok && out.pages.map((p) => p.pageNo)).toEqual([1])
   })
 
+  it('hands the tier to the model for scanned pages and photos', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1], pageCount: 1, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('x'))
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Sida' })
+    await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true, tier: 'cheap' })
+    expect(transcribeWithModel).toHaveBeenCalledWith(expect.objectContaining({ kind: 'pdf' }), { tier: 'cheap' })
+    mock(readImageWithModel).mockResolvedValue({ ok: true, pages: [{ pageNo: 1, text: 'Kvitto', reader: 'claude_vision', hasTextLayer: false }] })
+    await readDocumentBytes(Buffer.from('img'), 'image/jpeg', { allowModel: true })
+    expect(readImageWithModel).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { tier: undefined })
+  })
+
   it('keeps the text pages when the model is unconfigured for the scanned ones', async () => {
     mock(readPdfTextLayer).mockResolvedValue({
       pages: [{ pageNo: 1, text: 'Sida 1', reader: 'pdf_text', hasTextLayer: true }],

@@ -12,6 +12,8 @@
  *
  * Pure decisions; the store applies them, the runner and the cron ask.
  */
+import type { AiTier } from '@/lib/ai/types'
+
 export type ReadLane = 'live' | 'history_tied' | 'history_loose'
 
 export const HISTORY_AGE_DAYS = 30
@@ -43,6 +45,20 @@ export interface ReadPlan {
   allowModel: boolean
   /** How many pages the model may transcribe in this pass; null is every page it has to. */
   maxModelPages: number | null
+  /** The model tier that transcribes; absent for live documents (the extraction tier), the history reader for the rest. */
+  tier?: AiTier
+}
+
+/**
+ * The model that reads history. Benchmarked 2026-09-18 on the trial set (21
+ * pages: six receipt and letter photos, fifteen scanned agreement pages):
+ * Haiku 4.5 recovered 28 of 29 checked facts against Sonnet 4.6's 29 at a
+ * third of the price, Nova 2 Lite 22 with organisation numbers dropped. So
+ * the cheap tier reads history; ARKIV_HISTORY_READER_TIER=extraction puts
+ * Sonnet back on it.
+ */
+export function historyReaderTier(): AiTier {
+  return process.env.ARKIV_HISTORY_READER_TIER === 'extraction' ? 'extraction' : 'cheap'
 }
 
 export interface PlanInput {
@@ -57,9 +73,10 @@ export interface PlanInput {
 export function readPlanFor(input: PlanInput): ReadPlan | null {
   const { lane, inRollout, docType, pagesRead } = input
   if (lane === 'live') return { lane, allowModel: inRollout, maxModelPages: null }
-  if (lane === 'history_tied') return pagesRead ? null : { lane, allowModel: false, maxModelPages: null }
-  if (!pagesRead) return { lane, allowModel: inRollout, maxModelPages: 1 }
-  if (isActingType(docType)) return { lane, allowModel: inRollout, maxModelPages: null }
+  const tier = historyReaderTier()
+  if (lane === 'history_tied') return pagesRead ? null : { lane, allowModel: false, maxModelPages: null, tier }
+  if (!pagesRead) return { lane, allowModel: inRollout, maxModelPages: 1, tier }
+  if (isActingType(docType)) return { lane, allowModel: inRollout, maxModelPages: null, tier }
   return null
 }
 

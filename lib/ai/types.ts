@@ -142,6 +142,8 @@ export interface ExtractFromDocumentRequest {
    * the caller's JSON extraction + Zod parse do the work (works everywhere).
    */
   jsonSchema?: Record<string, unknown>
+  /** Which model reads the document; the extraction tier unless the caller has a cheaper job (Arkiv reads history with the cheap tier). */
+  tier?: AiTier
 }
 
 export type ExtractionSkipReason =
