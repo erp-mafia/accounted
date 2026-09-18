@@ -679,3 +679,84 @@ describe('journeyReducer: a form Accounted has scoped but cannot create yet', ()
     expect(firma.step).toBe('name')
   })
 })
+
+describe('registry hint after a TIC miss (SCB knew the org number)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const hint = (overrides: Partial<import('@/lib/company-lookup/types').RegistryHint> = {}) => ({
+    source: 'scb' as const,
+    companyName: 'Segelsällskapet Gambit',
+    legalEntityType: 'Ideell förening',
+    address: { street: 'Hamnvägen 3', postalCode: '76140', city: 'Norrtälje' },
+    registration: { fTax: null, vat: null },
+    ...overrides,
+  })
+
+  it('settles the form, the name and the address, then asks what SCB does not know', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found', registry: hint() } },
+    )
+    expect(s.settings.entity_type).toBe('ideell_forening')
+    expect(s.settings.company_name).toBe('Segelsällskapet Gambit')
+    expect(s.settings.city).toBe('Norrtälje')
+    expect(s.settings.f_skatt).toBeUndefined()
+    expect(s.lookupRan).toBe(false)
+    expect(s.plannedForm).toBeNull()
+    expect(s.step).toBe('fskatt')
+  })
+
+  it('takes F-skatt from SCB when stated and asks for an address it lacks', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      {
+        type: 'LOOKUP_RESULT',
+        outcome: { status: 'not_found', registry: hint({ address: null, registration: { fTax: true, vat: null } }) },
+      },
+    )
+    expect(s.settings.f_skatt).toBe(true)
+    expect(s.step).toBe('address')
+  })
+
+  it('stops on the planned form when SCB names one Accounted cannot create yet', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '769600-0000' },
+      {
+        type: 'LOOKUP_RESULT',
+        outcome: { status: 'not_found', registry: hint({ companyName: 'Brf Hamnen', legalEntityType: 'Bostadsrättsförening' }) },
+      },
+    )
+    expect(s.step).toBe('planned')
+    expect(s.plannedForm).toBe('bostadsrattsforening')
+    expect(s.settings.entity_type).toBeUndefined()
+    expect(s.settings.company_name).toBe('Brf Hamnen')
+  })
+
+  it('stops on ideell förening while its creation flag is off', () => {
+    vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found', registry: hint() } },
+    )
+    expect(s.step).toBe('planned')
+    expect(s.plannedForm).toBe('ideell_forening')
+  })
+
+  it('a miss without a hint still goes to the not-found stop', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+    )
+    expect(s.step).toBe('notfound')
+  })
+})

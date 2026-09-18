@@ -282,12 +282,9 @@
 .jny-filter { max-width: 340px; }
 .jny-filter input { font-size: 17px; letter-spacing: 0.01em; }
 
-/* ── form picker: the "kommer snart" group (non-selectable rows) ───── */
-.jny-planned { margin-top: 22px; text-align: center; }
-.jny-planned .jny-rowlist { max-height: none; -webkit-mask-image: none; mask-image: none; list-style: none; padding-left: 4px; }
-.jny-rowplanned { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; padding: 9px 14px; color: hsl(var(--muted-foreground)); }
-.jny-rowplanned .jny-rname { font-size: 14px; }
-.jny-rowplanned .jny-rorg { font-size: 11.5px; white-space: nowrap; }
+/* ── form picker: the quiet line for the forms the lookup normally settles ── */
+.jny-more { margin-top: 18px; font-size: 12.5px; color: hsl(var(--muted-foreground)); }
+.jny-more .jny-btn-quiet { font-size: inherit; padding: 0; text-decoration: underline; text-underline-offset: 3px; }
 
 /* ── done scene: profile card + notes ────────────────────────────── */
 .jny-card {

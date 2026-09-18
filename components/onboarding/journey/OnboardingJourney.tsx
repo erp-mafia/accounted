@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useId, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createCompanyFromOnboarding } from '@/lib/company/actions'
@@ -39,7 +39,6 @@ import {
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
 import {
-  ENTITY_TYPES,
   ENTITY_TYPE_LABELS_SV,
   creatableEntityTypes,
   fiscalYearLockedToCalendar,
@@ -48,18 +47,29 @@ import {
   plannedLegalForms,
   usesPersonnummerAsOrgNumber,
 } from '@/lib/company/entity-type'
+import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
-/** The picker leads with these (AB first, as before); every other creatable form follows in registry order. */
+/** The two chips every picker shows (AB first, as before). */
 const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
 
-/** The selectable cards: the forms this deployment can create right now. */
-function pickerForms(): EntityType[] {
+/**
+ * The picker stays two chips. Any other creatable form is reached through
+ * the quiet line under them, and becomes a chip only when the org number
+ * itself points at it (an 8-series number after every lookup missed): the
+ * lookup normally settles those forms before the picker is reached.
+ */
+function pickerForms(orgNumber: string | null | undefined): { chips: EntityType[]; viaLine: EntityType[] } {
   const creatable = creatableEntityTypes()
-  return [
-    ...FORM_PICKER_FIRST.filter((form) => creatable.includes(form)),
-    ...creatable.filter((form) => !FORM_PICKER_FIRST.includes(form)),
-  ]
+  const suggested = suggestedFormForOrgNumber(orgNumber)
+  const others = creatable.filter((form) => !FORM_PICKER_FIRST.includes(form))
+  return {
+    chips: [
+      ...FORM_PICKER_FIRST.filter((form) => creatable.includes(form)),
+      ...others.filter((form) => form === suggested),
+    ],
+    viaLine: others.filter((form) => form !== suggested),
+  }
 }
 
 /** i18n key per legal form for the picker chips and the summary card. */
@@ -77,22 +87,6 @@ const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
   aktiebolag: null,
   enskild_firma: null,
   ideell_forening: 'journey_form_info_forening',
-}
-
-/**
- * The "kommer snart" rows under the picker: known forms whose creation flag
- * is off, then the forms that are scoped but not built. Non-selectable, so a
- * treasurer sees their form named instead of picking the nearest supported
- * one and getting the wrong equity chart.
- */
-function plannedFormRows(): { code: string; label: string }[] {
-  return [
-    ...ENTITY_TYPES.filter((form) => !isEntityTypeCreatable(form)).map((form) => ({
-      code: form,
-      label: ENTITY_TYPE_LABELS_SV[form],
-    })),
-    ...plannedLegalForms().map((planned) => ({ code: planned.code, label: planned.label })),
-  ]
 }
 
 /** Statutory label for a planned-form code the reducer stored, or null. */
@@ -786,10 +780,10 @@ export default function OnboardingJourney({
       }
 
       case 'form': {
-        const forms = pickerForms()
+        const { chips, viaLine } = pickerForms(s.org_number)
         const info = [
           t('journey_form_info'),
-          ...forms.map((form) => FORM_INFO_KEY[form]).filter((key) => key !== null).map((key) => t(key)),
+          ...chips.map((form) => FORM_INFO_KEY[form]).filter((key) => key !== null).map((key) => t(key)),
           t('journey_form_info_tail'),
         ].join(' ')
         const plannedLabel = plannedFormLabel(state.plannedForm)
@@ -800,11 +794,30 @@ export default function OnboardingJourney({
             attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
           >
             <ChipRow
-              options={forms.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
+              options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
               onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
               {...flyProps}
             />
-            <PlannedFormsGroup t={t} rows={plannedFormRows()} />
+            {/* One quiet line: the forms the lookup normally settles on its
+                own stay reachable without a third chip; with none creatable
+                the line says they are coming. */}
+            {viaLine.length > 0 ? (
+              viaLine.map((form) => (
+                <p key={form} className="jny-more">
+                  {t('journey_form_more_pre', { form: t(FORM_LABEL_KEY[form]) })}{' '}
+                  <button
+                    type="button"
+                    className="jny-btn-quiet"
+                    onClick={() => dispatch({ type: 'ENTITY_PICKED', entityType: form })}
+                  >
+                    {t('journey_form_more_link', { form: t(FORM_LABEL_KEY[form]).toLowerCase() })}
+                  </button>
+                  .
+                </p>
+              ))
+            ) : chips.length === FORM_PICKER_FIRST.length ? (
+              <p className="jny-more">{t('journey_form_more_soon')}</p>
+            ) : null}
           </Question>
         )
       }
@@ -1155,40 +1168,6 @@ function preserveQuestionAnswers(previous: { journey: JourneyState; orgInput: st
 /* ── small step components ─────────────────────────────────────── */
 
 type TFn = ReturnType<typeof useTranslations<'onboarding'>>
-
-/**
- * The forms Accounted has scoped but cannot create yet, folded under one
- * quiet toggle as non-selectable rows marked "Kommer snart". Nothing here
- * dispatches: the rows exist so the form is seen and named, not picked.
- */
-function PlannedFormsGroup({ t, rows }: { t: TFn; rows: { code: string; label: string }[] }) {
-  const [open, setOpen] = useState(false)
-  const listId = useId()
-  if (rows.length === 0) return null
-  return (
-    <div className="jny-planned">
-      <button
-        type="button"
-        className="jny-btn-quiet"
-        aria-expanded={open}
-        aria-controls={listId}
-        onClick={() => setOpen((v) => !v)}
-      >
-        {t('journey_form_planned_group')} &hellip;
-      </button>
-      {open ? (
-        <ul id={listId} className="jny-rowlist" aria-label={t('journey_form_planned_group')}>
-          {rows.map((row) => (
-            <li key={row.code} className="jny-rowplanned">
-              <span className="jny-rname">{row.label}</span>
-              <span className="jny-rorg">{t('journey_form_coming_soon')}</span>
-            </li>
-          ))}
-        </ul>
-      ) : null}
-    </div>
-  )
-}
 
 function NameInput({
   initial,

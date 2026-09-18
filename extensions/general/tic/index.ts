@@ -41,6 +41,12 @@ import {
   searchCompaniesForLookup,
 } from './lib/lookup'
 import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
+import type { RegistryHint } from '@/lib/company-lookup/types'
+import { createScbClient } from '@/lib/parties/scb/client'
+import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
+import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
+import { displayNameFromRegistry } from '@/lib/parties/registry-name'
+import { registrySummary } from '@/lib/parties/registry-summary'
 import {
   hasForeignCredential,
   isUnadoptedPendingAccount,
@@ -484,6 +490,41 @@ function handleTicError(
   return NextResponse.json({ error: fallbackMessage }, { status: 500 })
 }
 
+/**
+ * SCB's answer for an org number TIC did not know, as a RegistryHint: null
+ * when SCB is not configured here, the number is a personnummer (SCB only
+ * lists juridiska personer), SCB has no row, or the call failed. A failure
+ * is logged and never surfaced: the miss stands either way.
+ */
+async function registryHintFromScb(
+  orgNumber: string,
+  log: { warn: (msg: string, meta?: unknown) => void } | Console,
+): Promise<RegistryHint | null> {
+  if (!isScbConfigured() || !isLegalPersonOrgNumber(orgNumber)) return null
+  try {
+    const lookup = await createScbClient(scbConfigFromEnv()).lookupByOrgNumber(orgNumber)
+    if (!lookup.found) return null
+    const registry = registrySummary(
+      lookup.facts.map((f) => ({ ...f, source: 'registry_scb' as const, fetchedAt: lookup.fetchedAt })),
+    )
+    if (!registry?.legal_name) return null
+    const address = registry.contact.address
+    return {
+      source: 'scb',
+      companyName: displayNameFromRegistry(registry.legal_name),
+      legalEntityType: registry.legal_form,
+      address: address ? { street: address.street, postalCode: address.postal_code, city: address.city } : null,
+      registration: { fTax: registry.registrations.f_tax, vat: registry.registrations.vat },
+    }
+  } catch (error) {
+    log.warn('scb fallback after tic miss failed', {
+      orgNumber,
+      message: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  }
+}
+
 export const ticExtension: Extension = {
   id: 'tic',
   name: 'Bolagsuppgifter',
@@ -526,8 +567,14 @@ export const ticExtension: Extension = {
           const result = await lookupCompanyByOrgNumber(orgNumber)
 
           if (!result) {
+            // Bolagsverket does not list ideella föreningar (Skatteverket
+            // issues their org numbers), so a miss here is normal for them.
+            // SCB's företagsregister does list them: on a hit the miss
+            // carries a registry hint so the journey can settle the form
+            // and the name instead of showing "not found" and a picker.
+            const registry = await registryHintFromScb(cleanedOrgNumber, log)
             return NextResponse.json(
-              { error: 'Company not found' },
+              registry ? { error: 'Company not found', registry } : { error: 'Company not found' },
               { status: 404 }
             )
           }

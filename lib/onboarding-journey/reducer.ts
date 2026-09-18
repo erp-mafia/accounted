@@ -1,5 +1,10 @@
 import type { CompanySettings, EntityType, MomsPeriod } from '@/types'
-import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion } from '@/lib/company-lookup/types'
+import type {
+  CompanyLookupResult,
+  CompanySearchHit,
+  CompanySuggestion,
+  RegistryHint,
+} from '@/lib/company-lookup/types'
 import type {
   CompanyLookupOutcome,
   CompanySearchOutcome,
@@ -324,6 +329,35 @@ function applyLookupFound(state: JourneyState, lookup: CompanyLookupResult): Jou
   return go(enriched, nextCompanyStep(enriched))
 }
 
+/**
+ * The register answered where the provider missed (SCB, through the TIC
+ * route): the form and the name are settled, an address is taken when SCB
+ * has one, F-skatt only when SCB states it, and the journey skips the "not
+ * found" stop. `lookupRan` stays false on purpose so that what SCB does not
+ * know (moms, an address it lacks) is still asked.
+ */
+function applyRegistryHint(state: JourneyState, hint: RegistryHint): JourneyState {
+  const mapped = mapSetupEntityType(hint.legalEntityType)
+  const hasAddress = Boolean(hint.address?.street || hint.address?.postalCode || hint.address?.city)
+  const settings: Partial<CompanySettings> = {
+    ...state.settings,
+    entity_type: mapped ?? state.settings.entity_type,
+    company_name: hint.companyName || state.settings.company_name,
+    address_line1: hint.address?.street ?? state.settings.address_line1,
+    postal_code: hint.address?.postalCode ?? state.settings.postal_code,
+    city: hint.address?.city ?? state.settings.city,
+    ...(hint.registration.fTax === null ? {} : { f_skatt: hint.registration.fTax }),
+  }
+  const enriched = stay(state, {
+    settings,
+    lookupNote: 'none' as const,
+    addressAsked: state.addressAsked || hasAddress,
+    plannedForm: mapped ? null : plannedFormFor(hint.legalEntityType),
+  })
+  if (!settings.entity_type) return go(enriched, pickerStep(enriched))
+  return go(enriched, nextCompanyStep(enriched))
+}
+
 export function journeyReducer(state: JourneyState, action: JourneyAction): JourneyState {
   switch (action.type) {
     case 'RESTORE':
@@ -379,6 +413,7 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       }
 
       if (outcome.status === 'not_found') {
+        if (outcome.registry) return applyRegistryHint(cleared, outcome.registry)
         return go(cleared, 'notfound')
       }
 

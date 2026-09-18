@@ -1,5 +1,5 @@
 import { COMPANY_SEARCH_MIN_CHARS } from './types'
-import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion } from './types'
+import type { CompanyLookupResult, CompanySearchHit, CompanySuggestion, RegistryHint } from './types'
 import { normalizeOrgNumber } from './normalize-org-number'
 
 /**
@@ -21,7 +21,8 @@ import { normalizeOrgNumber } from './normalize-org-number'
  */
 export type CompanyLookupOutcome =
   | { status: 'found'; result: CompanyLookupResult }
-  | { status: 'not_found' }
+  /** `registry`: what SCB knew when TIC missed (see RegistryHint); absent on a plain miss. */
+  | { status: 'not_found'; registry?: RegistryHint }
   | { status: 'disabled' }
   | { status: 'error' }
   | { status: 'aborted' }
@@ -184,13 +185,15 @@ export async function fetchCompanySuggestions(
  *  handler's own 404 is a user-facing "not found". */
 async function mapFailure(
   res: Response,
-): Promise<{ status: 'not_found' } | { status: 'disabled' } | { status: 'error' }> {
+): Promise<
+  { status: 'not_found'; registry?: RegistryHint } | { status: 'disabled' } | { status: 'error' }
+> {
   // Non-ok: read the body (best-effort) to disambiguate.
-  let body: { error?: unknown; code?: unknown } = {}
+  let body: { error?: unknown; code?: unknown; registry?: unknown } = {}
   try {
     const parsed = (await res.json()) as unknown
     if (parsed && typeof parsed === 'object') {
-      body = parsed as { error?: unknown; code?: unknown }
+      body = parsed as { error?: unknown; code?: unknown; registry?: unknown }
     }
   } catch {
     // Non-JSON error body: fall through to status-only mapping.
@@ -198,14 +201,42 @@ async function mapFailure(
 
   if (res.status === 403) return { status: 'disabled' }
   if (res.status === 404) {
-    // TIC handler: { error: 'Company not found' }. Dispatcher: 'Extension
-    // not found' / 'Route not found'. Only the former is a user-facing miss.
-    return body.error === 'Company not found'
-      ? { status: 'not_found' }
-      : { status: 'disabled' }
+    // TIC handler: { error: 'Company not found' }, with a `registry` hint
+    // beside it when SCB knew the org number. Dispatcher: 'Extension not
+    // found' / 'Route not found'. Only the former is a user-facing miss.
+    if (body.error !== 'Company not found') return { status: 'disabled' }
+    const registry = registryHintOf(body.registry)
+    return registry ? { status: 'not_found', registry } : { status: 'not_found' }
   }
   if (res.status === 503 && body.code === 'EXTENSION_DISABLED') {
     return { status: 'disabled' }
   }
   return { status: 'error' }
+}
+
+/**
+ * The registry hint the TIC route puts beside a 404 when SCB knew the org
+ * number, or undefined when the body carries none or a malformed one: a
+ * hint is a convenience, never a reason to fail the miss.
+ */
+function registryHintOf(value: unknown): RegistryHint | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const v = value as Partial<RegistryHint>
+  if (v.source !== 'scb' || typeof v.companyName !== 'string' || v.companyName.length === 0) return undefined
+  const address =
+    v.address && typeof v.address === 'object'
+      ? {
+          street: typeof v.address.street === 'string' ? v.address.street : null,
+          postalCode: typeof v.address.postalCode === 'string' ? v.address.postalCode : null,
+          city: typeof v.address.city === 'string' ? v.address.city : null,
+        }
+      : null
+  const flag = (x: unknown): boolean | null => (typeof x === 'boolean' ? x : null)
+  return {
+    source: 'scb',
+    companyName: v.companyName,
+    legalEntityType: typeof v.legalEntityType === 'string' ? v.legalEntityType : null,
+    address,
+    registration: { fTax: flag(v.registration?.fTax), vat: flag(v.registration?.vat) },
+  }
 }
