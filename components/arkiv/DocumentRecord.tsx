@@ -33,9 +33,11 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   const [showAll, setShowAll] = useState(false)
   const [text, setText] = useState<DocumentTextView | null>(null)
   const [textOpen, setTextOpen] = useState(false)
+  const [reading, setReading] = useState(false)
 
-  const loadText = () =>
-    fetch(`/api/documents/${documentId}/text`)
+  const loadText = () => {
+    setReading(true)
+    return fetch(`/api/documents/${documentId}/text`)
       .then(async (res) => (res.ok ? ((await res.json()) as { data: DocumentTextView }).data : null))
       .then((data) => {
         if (data) {
@@ -44,6 +46,8 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         }
       })
       .catch(() => undefined)
+      .finally(() => setReading(false))
+  }
 
   useEffect(() => {
     if (initialPage) void loadText()
@@ -208,13 +212,22 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           )}
           <Section title={t('record_text')} help={t('record_text_help')}>
             {!text ? (
-              <button
-                type="button"
-                className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
-                onClick={() => void loadText()}
-              >
-                {t('record_text_show')}
-              </button>
+              <div className="space-y-1.5">
+                {view.read.state !== 'read' ? (
+                  <p className="text-[12.5px] text-muted-foreground">
+                    {t(`record_text_${view.read.state}` as never)}
+                    {view.read.lane === 'history_tied' ? ` ${t('record_text_lane_tied')}` : ''}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={reading}
+                  className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
+                  onClick={() => void loadText()}
+                >
+                  {reading ? t('record_text_reading') : view.read.state === 'read' ? t('record_text_show') : t('record_text_read_now')}
+                </button>
+              </div>
             ) : (
               <div className="space-y-4">
                 {(textOpen ? text.pages : text.pages.slice(0, 1)).map((p) => (

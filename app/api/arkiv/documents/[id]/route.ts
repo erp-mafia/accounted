@@ -7,6 +7,7 @@ import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { schemaForType } from '@/lib/documents/extract/schemas'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { needsReadOnDemand, readLaneFor, type ReadLane } from '@/lib/documents/read/lanes'
 
 /**
  * GET /api/arkiv/documents/[id]
@@ -22,6 +23,8 @@ export interface DocumentRecordView {
   page_count: number | null
   doc_type: string | null
   admission_state: string
+  /** How far the reading got (phase 9f): history the lanes left for a question says so. */
+  read: { state: 'read' | 'partial' | 'unread' | 'skipped'; lane: ReadLane }
   journal_entry: { id: string; voucher: string } | null
   classification: { summary: string | null; confidence: number | null; decided_by: string; signals: string[] } | null
   /** The rows of a receipt or invoice as the Underlag reader saw them; empty for anything else. */
@@ -43,7 +46,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const { id } = await params
   const { data: doc, error } = await ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id, extracted_data')
+    .select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id, journal_entry_line_id, pages_read_at, read_error, extracted_data')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -57,6 +60,9 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
     doc_type: string | null
     admission_state: string
     journal_entry_id: string | null
+    journal_entry_line_id: string | null
+    pages_read_at: string | null
+    read_error: string | null
     extracted_data: {
       lineItems?: Array<{ description?: string | null; quantity?: number | null; unitPrice?: number | null; lineTotal?: number | null; vatRate?: number | null }>
     } | null
@@ -115,6 +121,10 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
     page_count: d.page_count,
     doc_type: d.doc_type,
     admission_state: d.admission_state,
+    read: {
+      state: !d.pages_read_at ? 'unread' : d.read_error?.startsWith('partial:') ? 'partial' : d.read_error ? (needsReadOnDemand(d) ? 'unread' : 'skipped') : 'read',
+      lane: readLaneFor(d),
+    },
     journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
     line_items: (d.extracted_data?.lineItems ?? [])

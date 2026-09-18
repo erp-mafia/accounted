@@ -4,6 +4,7 @@ import { getAiService, getAiStatus } from '@/lib/ai'
 import { recordActivity, softwareAgent } from '@/lib/documents/provenance'
 import { captureArkivEvent } from '@/lib/arkiv/events'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
+import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { locateQuote, type PageText } from '@/lib/documents/extract/locate'
 import type { WordBox } from '@/lib/documents/read/types'
 
@@ -142,6 +143,8 @@ export async function askDocument(
       file_name: string
       page_count: number | null
     }
+    // History the lanes left unread or half read is read now: a question is what it waited for.
+    await ensureDocumentRead(supabase, input.companyId, input.documentId)
     const { data: rows, error: pagesError } = await supabase
       .from('document_pages')
       .select('page_no, text, words')

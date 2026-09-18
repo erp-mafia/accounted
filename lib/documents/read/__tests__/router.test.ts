@@ -56,6 +56,16 @@ describe('readDocumentBytes', () => {
     ])
   })
 
+  it('stops at the page cap and says so, keeping what it read', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3], pageCount: 3, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('x'))
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Sida' })
+    const out = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true, maxModelPages: 1 })
+    expect(transcribeWithModel).toHaveBeenCalledTimes(1)
+    expect(out).toMatchObject({ ok: true, reader: 'claude_vision', pageCount: 3, partial: 'budget' })
+    expect(out.ok && out.pages.map((p) => p.pageNo)).toEqual([1])
+  })
+
   it('keeps the text pages when the model is unconfigured for the scanned ones', async () => {
     mock(readPdfTextLayer).mockResolvedValue({
       pages: [{ pageNo: 1, text: 'Sida 1', reader: 'pdf_text', hasTextLayer: true }],
