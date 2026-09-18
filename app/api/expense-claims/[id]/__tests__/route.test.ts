@@ -66,10 +66,10 @@ describe('DELETE /api/expense-claims/:id', () => {
     expect(response.status).toBe(404)
   })
 
-  it('maps ALREADY_PAID and UNLINKED to 409', async () => {
+  it('maps ALREADY_PAID and ON_PAYSLIP to 409', async () => {
     deleteMock.mockResolvedValue({ ok: false, code: 'ALREADY_PAID' })
     expect((await del()).status).toBe(409)
-    deleteMock.mockResolvedValue({ ok: false, code: 'UNLINKED' })
+    deleteMock.mockResolvedValue({ ok: false, code: 'ON_PAYSLIP' })
     expect((await del()).status).toBe(409)
   })
 

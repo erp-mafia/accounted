@@ -36,7 +36,12 @@ vi.mock('@/lib/core/documents/supplier-invoice-underlag', () => ({
   reanchorOrphanedSupplierInvoiceDocuments: vi.fn().mockResolvedValue(0),
 }))
 
+vi.mock('@/lib/expenses/expense-claims-service', () => ({
+  discardExpenseClaimForDeletedVoucher: vi.fn().mockResolvedValue({ ok: true, deleted: true }),
+}))
+
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
+import { discardExpenseClaimForDeletedVoucher } from '@/lib/expenses/expense-claims-service'
 
 import { DELETE } from '../route'
 
@@ -104,5 +109,58 @@ describe('DELETE /api/bookkeeping/journal-entries/[id]', () => {
       'company-1',
       [],
     )
+  })
+
+  // The utlägg register lives outside the GL and its FK is ON DELETE SET NULL,
+  // so without this the row survives the voucher with no way to remove it.
+  it('discards the utlägg whose verifikat was deleted', async () => {
+    enqueue({ data: { id: 'je-1', source_type: 'expense_claim', source_id: 'claim-1' } })
+    enqueue({ data: [] })
+    enqueue({ data: { deleted: true, voucher_series: 'A', voucher_number: 44 } })
+
+    const { status } = await parseJsonResponse(await run())
+
+    expect(status).toBe(200)
+    expect(discardExpenseClaimForDeletedVoucher).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'claim-1',
+    )
+  })
+
+  it('leaves other source types alone', async () => {
+    enqueue({ data: { id: 'je-1', source_type: 'supplier_invoice', source_id: 'si-1' } })
+    enqueue({ data: [] })
+    enqueue({ data: { deleted: true, voucher_series: 'A', voucher_number: 7 } })
+
+    await parseJsonResponse(await run())
+
+    expect(discardExpenseClaimForDeletedVoucher).not.toHaveBeenCalled()
+  })
+
+  it('does not touch the utlägg when the RPC refused the delete', async () => {
+    enqueue({ data: { id: 'je-1', source_type: 'expense_claim', source_id: 'claim-1' } })
+    enqueue({ data: [] })
+    enqueue({ error: { message: 'Kan bara radera det sista verifikatet i serien.' } })
+
+    const { status } = await parseJsonResponse(await run())
+
+    expect(status).toBe(400)
+    expect(discardExpenseClaimForDeletedVoucher).not.toHaveBeenCalled()
+  })
+
+  it('still answers 200 when the claim is kept because it is already paid', async () => {
+    vi.mocked(discardExpenseClaimForDeletedVoucher).mockResolvedValueOnce({
+      ok: false,
+      code: 'ALREADY_PAID',
+    })
+    enqueue({ data: { id: 'je-1', source_type: 'expense_claim', source_id: 'claim-1' } })
+    enqueue({ data: [] })
+    enqueue({ data: { deleted: true, voucher_series: 'A', voucher_number: 44 } })
+
+    const { status } = await parseJsonResponse(await run())
+
+    // The voucher is already gone; refusing the response would misreport it.
+    expect(status).toBe(200)
   })
 })

@@ -10,6 +10,7 @@ import { CreateJournalEntrySchema } from '@/lib/api/schemas'
 import { updateDraftEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
+import { discardExpenseClaimForDeletedVoucher } from '@/lib/expenses/expense-claims-service'
 
 const logger = createLogger('journal-entries')
 
@@ -88,6 +89,44 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       await syncInvoiceStatusFromPaymentEntry(supabase, companyId, entryBefore)
     } catch (syncError) {
       logger.warn('payment status sync failed after delete', { entryId: id, error: syncError })
+    }
+  }
+
+  // An utlägg is the same shape of problem as the invoice status above: the
+  // register row lives outside the GL and the FK is ON DELETE SET NULL, so
+  // deleting the voucher strands a claim that still counts toward "att betala"
+  // and that the register cannot remove, because its delete works by reversing
+  // the entry that no longer exists. entryBefore.source_id is the claim: the
+  // forward link is already cleared by the time we get here.
+  if (entryBefore?.source_type === 'expense_claim' && entryBefore.source_id) {
+    try {
+      const discarded = await discardExpenseClaimForDeletedVoucher(
+        supabase,
+        companyId,
+        entryBefore.source_id,
+      )
+      if (!discarded.ok) {
+        // Payout state outranks the voucher delete: leave the row and say so.
+        // The claim is visible in the register, so this is recoverable by hand
+        // rather than a silent loss.
+        logger.warn('expense claim kept after voucher delete', {
+          entryId: id,
+          claimId: entryBefore.source_id,
+          code: discarded.code,
+          detail: discarded.detail,
+        })
+      } else if (discarded.deleted) {
+        logger.info('expense claim removed with its voucher', {
+          entryId: id,
+          claimId: entryBefore.source_id,
+        })
+      }
+    } catch (claimError) {
+      logger.warn('expense claim cleanup failed after delete', {
+        entryId: id,
+        claimId: entryBefore.source_id,
+        error: claimError,
+      })
     }
   }
 
