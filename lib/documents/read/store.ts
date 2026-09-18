@@ -25,7 +25,7 @@ export interface ReadableDocumentRow {
 }
 
 /** Everything the lanes need to decide, in one select. */
-export const LANE_COLUMNS = 'id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error'
+// The lane columns of document_attachments (ReadableDocumentRow). Written out at every select so the schema guard can check them.
 
 export type StoreOutcome =
   | { status: 'read'; pages: number; reader: string; partial?: string }
@@ -148,7 +148,7 @@ export async function readUnreadDocuments(
   }
   const { data, error } = await supabase
     .from('document_attachments')
-    .select(LANE_COLUMNS)
+    .select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error')
     .is('pages_read_at', null)
     .order('created_at', { ascending: false })
     .limit(limit)
@@ -162,7 +162,7 @@ export async function readUnreadDocuments(
   if (room <= 0 || !getAiStatus().configured) return counts
   const { data: retry, error: retryError } = await supabase
     .from('document_attachments')
-    .select(LANE_COLUMNS)
+    .select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error')
     .in('read_error', RETRY_REASONS)
     .order('pages_read_at', { ascending: true })
     .limit(room * 4)

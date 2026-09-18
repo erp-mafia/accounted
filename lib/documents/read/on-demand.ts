@@ -3,7 +3,7 @@ import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { createLogger } from '@/lib/logger'
 import { needsReadOnDemand } from './lanes'
-import { LANE_COLUMNS, readAndStoreDocument, type ReadableDocumentRow, type StoreOutcome } from './store'
+import { readAndStoreDocument, type ReadableDocumentRow, type StoreOutcome } from './store'
 
 const log = createLogger('documents/read/on-demand')
 
@@ -16,7 +16,7 @@ export type OnDemandOutcome = StoreOutcome | { status: 'skipped'; reason: 'alrea
  * a voucher-tied scan from years ago ever costs a model page.
  */
 export async function ensureDocumentRead(supabase: SupabaseClient, companyId: string, documentId: string): Promise<OnDemandOutcome> {
-  const { data, error } = await supabase.from('document_attachments').select(LANE_COLUMNS).eq('id', documentId).eq('company_id', companyId).maybeSingle()
+  const { data, error } = await supabase.from('document_attachments').select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error').eq('id', documentId).eq('company_id', companyId).maybeSingle()
   if (error) throw new Error(`document fetch failed: ${error.message}`)
   if (!data) return { status: 'skipped', reason: 'not_found' }
   const doc = data as ReadableDocumentRow

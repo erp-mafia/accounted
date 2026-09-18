@@ -6,7 +6,7 @@ import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
 import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
-import { LANE_COLUMNS, readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
+import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
 import { isActingType } from '@/lib/documents/read/lanes'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
@@ -141,7 +141,7 @@ function runStep(supabase: SupabaseClient, job: ClaimedJob, identities: Map<stri
 }
 
 async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
-  const { data, error } = await supabase.from('document_attachments').select(`${LANE_COLUMNS}, admission_state`).eq('id', job.document_id).maybeSingle()
+  const { data, error } = await supabase.from('document_attachments').select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error, admission_state').eq('id', job.document_id).maybeSingle()
   if (error) throw new Error(`document fetch failed: ${error.message}`)
   if (!data) return 'skipped: not_found'
   const doc = data as ReadableDocumentRow & { admission_state: string | null }

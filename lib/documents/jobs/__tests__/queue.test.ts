@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
-vi.mock('@/lib/documents/read/store', () => ({ readDocumentByPlan: vi.fn(), LANE_COLUMNS: 'id, company_id' }))
+vi.mock('@/lib/documents/read/store', () => ({ readDocumentByPlan: vi.fn() }))
 vi.mock('@/lib/documents/classify/classify', () => ({
   classifyDocument: vi.fn(),
   loadCompanyIdentity: vi.fn(async () => ({ name: 'Exempelbolaget AB', orgNumber: null })),
