@@ -316,7 +316,6 @@ describe('syncVacationLedgerForEmployees', () => {
       quantity,
       vacation_category: category,
       vacation_saved_year: savedYear,
-      sort_order: 0,
     })
     const bookedRun = (
       month: number,
@@ -408,6 +407,37 @@ describe('syncVacationLedgerForEmployees', () => {
       const explicit = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-11-13')
       expect(explicit.ok).toBe(true)
       expect(upserted![0].taken_days).toBe(8 + 3 + 1)
+    })
+
+    it('buckets a run into the vacation year its avvikelseperiod ends in, not its pay month', async () => {
+      // Apr-Mar years under previous_month: the April 2026 run deducts March
+      // leave, which belongs to the year that started 2025-04-01. The May run
+      // deducts April leave and opens the new year.
+      const aprilRun = bookedRun(4, 2, [vacationLine(2)], { start: '2026-03-01', end: '2026-03-31' }) as never
+      const mayRun = bookedRun(5, 1, [vacationLine(1)], { start: '2026-04-01', end: '2026-04-30' }) as never
+      queueBase({
+        basis: 'statutory_apr_mar',
+        openRows: [
+          {
+            id: 'row-2025',
+            employee_id: EMPLOYEE_ID,
+            vacation_year_start: '2025-04-01',
+            entitled_days: 25,
+            accrued_days: 25,
+            taken_days: 0,
+            saved_days: {},
+            forced_payout_days: 0,
+            status: 'open',
+          },
+        ],
+        booked: [aprilRun, mayRun],
+      })
+
+      const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-05-20')
+      expect(result.ok).toBe(true)
+      const byYear = new Map(upserted!.map((r) => [r.vacation_year_start, r]))
+      expect(byYear.get('2025-04-01')?.taken_days).toBe(2)
+      expect(byYear.get('2026-04-01')?.taken_days).toBe(1)
     })
 
     it('is idempotent: a second sync over the same booked runs yields the same row', async () => {

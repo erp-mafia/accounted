@@ -159,7 +159,7 @@ export async function syncVacationLedgerForEmployees(
       .from('salary_run_employees')
       .select(
         'employee_id, vacation_days_taken, ' +
-          'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year, sort_order), ' +
+          'line_items:salary_line_items(item_type, quantity, vacation_category, vacation_saved_year), ' +
           'salary_run:salary_runs!inner(period_year, period_month, status, deviation_period_start, deviation_period_end)',
       )
       .eq('company_id', companyId)
@@ -168,20 +168,18 @@ export async function syncVacationLedgerForEmployees(
     if (bookedErr) return { ok: false, message: bookedErr.message }
     const booked = ((bookedRows ?? []) as unknown as BookedRunRow[])
       .filter((r) => r.salary_run?.status === 'booked')
-      // Chronological, so a 'saved' line without an origin year takes the
-      // oldest saved year first across runs in the order they were paid.
-      .sort((a, b) => {
-        const ra = a.salary_run!
-        const rb = b.salary_run!
-        return ra.period_year * 12 + ra.period_month - (rb.period_year * 12 + rb.period_month)
-      })
+      // Chronological by the leave the run deducts, so a 'saved' line without
+      // an origin year takes the oldest saved year first across runs.
+      .sort((a, b) => runDeviationWindow(a.salary_run!).end.localeCompare(runDeviationWindow(b.salary_run!).end))
 
     /**
      * The booked runs that count toward `yearStart` for an employee. A run
-     * whose avvikelseperiod ended on or before the opening balance's as-of
-     * date is already inside the migrated balance (under previous_month the
-     * first Accounted run deducts LAST month's leave) and is skipped, or the
-     * days would be deducted twice.
+     * belongs to the vacation year its avvikelseperiod ends in: the leave it
+     * deducts was taken there, and under previous_month that is the month
+     * before the pay month (an April run deducting March leave closes the
+     * Apr-Mar year, it does not open the next one). A run whose window ended
+     * on or before the opening balance's as-of date is already inside the
+     * migrated balance and is skipped, or the days would be deducted twice.
      */
     const bookedInYear = (employeeId: string, yearStart: string): BookedRunRow[] => {
       const bounds = getVacationYearBounds(yearStart)
@@ -190,10 +188,9 @@ export async function syncVacationLedgerForEmployees(
       const rows: BookedRunRow[] = []
       for (const row of booked) {
         if (row.employee_id !== employeeId) continue
-        const run = row.salary_run!
-        const periodDate = `${run.period_year}-${String(run.period_month).padStart(2, '0')}-01`
-        if (periodDate < bounds.start || periodDate >= bounds.end) continue
-        if (asOf && runDeviationWindow(run).end <= asOf) continue
+        const leaveEnd = runDeviationWindow(row.salary_run!).end
+        if (leaveEnd < bounds.start || leaveEnd >= bounds.end) continue
+        if (asOf && leaveEnd <= asOf) continue
         rows.push(row)
       }
       return rows

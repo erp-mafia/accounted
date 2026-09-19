@@ -251,6 +251,15 @@ export async function updatePayslipLine(
   if (typeof updates.amount === 'number') {
     updates.amount = roundOre(updates.amount)
   }
+  // Moving the category off 'saved' (null returns the line to paid days)
+  // retires the origin year with it unless the caller sets the year itself.
+  if (
+    'vacation_category' in updates &&
+    updates.vacation_category !== 'saved' &&
+    !('vacation_saved_year' in updates)
+  ) {
+    updates.vacation_saved_year = null
+  }
   // Validate the row as it will read after the patch: a sparse update that
   // flips a flag or the sign can invalidate a percentage set earlier.
   const merged = { ...existing.data, ...updates } as SalaryLineItemRow

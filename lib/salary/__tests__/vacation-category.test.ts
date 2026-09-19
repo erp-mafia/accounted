@@ -67,17 +67,11 @@ describe('effectiveVacationAsOfDate', () => {
 })
 
 describe('splitVacationTaken', () => {
-  const vacation = (
-    quantity: number,
-    category: string | null = null,
-    savedYear: string | null = null,
-    sortOrder = 0,
-  ) => ({
+  const vacation = (quantity: number, category: string | null = null, savedYear: string | null = null) => ({
     item_type: 'vacation',
     quantity,
     vacation_category: category,
     vacation_saved_year: savedYear,
-    sort_order: sortOrder,
   })
 
   it('contributes exactly vacation_days_taken for runs without lines or categories', () => {
@@ -154,6 +148,25 @@ describe('splitVacationTaken', () => {
       '2025',
     )
     expect(unseeded.savedByYear).toEqual({ '2025': 1 })
+  })
+
+  it('allocates unnamed saved days after the named years, whatever order the lines arrive in', () => {
+    // Named 2023 x 3 leaves one 2023 day; the unnamed 2 then take that day
+    // and one from 2024. Read in the other order the unnamed line would
+    // have emptied 2023 first and the named line would overdraw it.
+    const seed = { '2023': 4, '2024': 5 }
+    const namedFirst = splitVacationTaken(
+      [{ vacation_days_taken: 5, line_items: [vacation(3, 'saved', '2023'), vacation(2, 'saved')] }],
+      seed,
+      '2022',
+    )
+    const unnamedFirst = splitVacationTaken(
+      [{ vacation_days_taken: 5, line_items: [vacation(2, 'saved'), vacation(3, 'saved', '2023')] }],
+      seed,
+      '2022',
+    )
+    expect(namedFirst.savedByYear).toEqual({ '2023': 4, '2024': 1 })
+    expect(unnamedFirst).toEqual(namedFirst)
   })
 
   it('never lets a categorized total push the paid share below zero', () => {

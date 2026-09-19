@@ -443,4 +443,38 @@ describe('vacation_category on payslip lines', () => {
       vacation_saved_year: null,
     })
   })
+
+  it('a category patch alone off saved retires the origin year (null returns the line to paid days)', async () => {
+    for (const category of [null, 'unpaid'] as const) {
+      mock.reset()
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+      mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: category, vacation_saved_year: null } })
+      const result = await updatePayslipLine(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        lineId: LINE_ID,
+        patch: { vacation_category: category },
+      })
+      expect(result.ok).toBe(true)
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
+        vacation_category: category,
+        vacation_saved_year: null,
+      })
+    }
+  })
+
+  it('keeps an explicitly patched saved year and refuses it without category saved', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { vacation_category: null, vacation_saved_year: '2024' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.details?.field).toBe('vacation_category')
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
 })

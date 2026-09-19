@@ -383,6 +383,12 @@ describe('previewVacationYearClose: categorized cutover pools', () => {
     const row = result.data.rows[0]
     expect(row.unpaid_days_lapsed).toBe(4)
     expect(row.advance_days_taken).toBe(2)
+    // The pools the close nets out must be in the projection, or they read
+    // as undefined and the close silently reports zero consumption.
+    const ledgerSelect = String(mock.findCall('employee_vacation_balances', 'select')?.[0] ?? '')
+    for (const column of ['unpaid_days', 'advance_days', 'saved_days_taken']) {
+      expect(ledgerSelect).toContain(column)
+    }
     expect(row.next_year_entitled).toBe(23)
   })
 

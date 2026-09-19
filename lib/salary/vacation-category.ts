@@ -77,7 +77,6 @@ export interface VacationLineLike {
   quantity: number | null
   vacation_category?: string | null
   vacation_saved_year?: string | null
-  sort_order?: number | null
 }
 
 export interface BookedVacationSource {
@@ -137,16 +136,21 @@ export function splitVacationTaken(
 
   for (const run of runs) {
     let nonPaid = 0
-    const lines = (run.line_items ?? [])
-      .filter((li) => li.item_type === 'vacation' && (li.quantity ?? 0) > 0)
-      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    const lines = (run.line_items ?? []).filter(
+      (li) => li.item_type === 'vacation' && (li.quantity ?? 0) > 0,
+    )
+    // Within one run the named saved years are consumed before any unnamed
+    // saved line is allocated: the unnamed allocation then sees what the
+    // named lines already took, whatever order the rows came back in (the
+    // embed has no stable order).
+    let unnamedSaved = 0
     for (const li of lines) {
       const days = li.quantity ?? 0
       switch (li.vacation_category) {
         case 'saved':
           nonPaid = roundOre(nonPaid + days)
           if (li.vacation_saved_year) consumeSaved(li.vacation_saved_year, days)
-          else allocateOldestFirst(days)
+          else unnamedSaved = roundOre(unnamedSaved + days)
           break
         case 'unpaid':
           nonPaid = roundOre(nonPaid + days)
@@ -161,6 +165,7 @@ export function splitVacationTaken(
           break
       }
     }
+    if (unnamedSaved > 0) allocateOldestFirst(unnamedSaved)
     split.paid = roundOre(split.paid + Math.max(0, roundOre((run.vacation_days_taken || 0) - nonPaid)))
   }
   return split

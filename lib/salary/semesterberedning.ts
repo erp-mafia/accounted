@@ -304,7 +304,9 @@ export async function previewVacationYearClose(
 
   const { data: ledgerRows, error: ledgerErr } = await supabase
     .from('employee_vacation_balances')
-    .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, status')
+    .select(
+      'id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, status, unpaid_days, advance_days, saved_days_taken',
+    )
     .eq('company_id', companyId)
     .eq('vacation_year_start', closingYearStart)
   if (ledgerErr) {
