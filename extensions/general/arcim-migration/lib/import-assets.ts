@@ -21,6 +21,7 @@ import { createAsset } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { isAccountNumber, isIsoDateShaped } from '@/lib/invariants'
+import { countCalendarMonths, dayAfter, firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
 import { createLogger } from '@/lib/logger'
 import type { AssetCategory } from '@/types'
 import type { AssetSkipReasons } from '../types'
@@ -101,14 +102,19 @@ function isoDateOrNull(value: string | null | undefined): string | null {
 }
 
 /** Whole months between two ISO dates, rounded to nearest, minimum 1. */
+/**
+ * Useful life in whole months, from the month the plan starts through the
+ * month it ends.
+ *
+ * On the month grid rather than by counting days. The previous form added
+ * (toDay - fromDay) / 30, which turned a plan running 2026-05-28 to
+ * 2031-04-30 into 59 months instead of 60 and left every asset acquired
+ * mid-month a month short. Measuring to the day AFTER the final date also
+ * makes the answer the same whether the source reports the last day of the
+ * final month or the first day after it, which Fortnox does not document.
+ */
 export function monthsBetween(fromIso: string, toIso: string): number {
-  const from = new Date(`${fromIso}T00:00:00Z`)
-  const to = new Date(`${toIso}T00:00:00Z`)
-  const months =
-    (to.getUTCFullYear() - from.getUTCFullYear()) * 12 +
-    (to.getUTCMonth() - from.getUTCMonth()) +
-    (to.getUTCDate() - from.getUTCDate()) / 30
-  return Math.max(1, Math.round(months))
+  return Math.max(1, countCalendarMonths(firstOfMonth(fromIso), firstOfMonth(dayAfter(toIso))) - 1)
 }
 
 /** K2 standard useful life (schablon, 5 years) when the source gives no usable depreciation window. */
@@ -149,6 +155,67 @@ function accountString(value: number | string | null | undefined): string | null
   if (value === null || value === undefined) return null
   const text = String(value)
   return isAccountNumber(text) ? text : null
+}
+
+/**
+ * Find the asset's type, which is what carries the BAS account triple.
+ *
+ * By TypeId when the payload has one, and by the `Type` label when it does
+ * not. The list endpoint reports the type as text ("1300 - Utveckling") and
+ * does not always carry TypeId, so an id-only lookup silently found nothing
+ * and every asset fell back to its category default: assets whose ledger sits
+ * on 1010 arriving on 1290, and so on for any company whose types are not the
+ * standard ones.
+ */
+export function resolveAssetType(
+  asset: FortnoxAsset,
+  typeById: Map<number, FortnoxAssetType>,
+  types: readonly FortnoxAssetType[],
+): FortnoxAssetType | undefined {
+  if (typeof asset.TypeId === 'number') {
+    const byId = typeById.get(asset.TypeId)
+    if (byId) return byId
+  }
+  const label = asset.Type?.trim()
+  if (!label) return undefined
+
+  // All whitespace, not just the ends: "1300- Utveckling" and
+  // "1300 - Utveckling" name the same type, and which one a payload carries is
+  // not something to depend on. Two genuinely different types could collide
+  // under this, but the uniqueness check below turns that into no match rather
+  // than a wrong one.
+  const normalize = (value: string) => value.replace(/\s+/g, '').toLowerCase()
+  const target = normalize(label)
+
+  // Tried in order of how much the match proves. The combined form identifies
+  // a type; a number or a description on its own only narrows it, and two
+  // types can share either. Take a looser form only when it lands on exactly
+  // one type: picking the first of several would put the asset on another
+  // type's accounts, which is the failure this function exists to prevent,
+  // just harder to notice.
+  const candidates = [
+    (type: FortnoxAssetType) => {
+      const number = type.Number?.trim() ?? ''
+      const description = type.Description?.trim() ?? ''
+      return number !== '' && description !== '' &&
+        normalize(`${number} - ${description}`) === target
+    },
+    (type: FortnoxAssetType) => {
+      const number = type.Number?.trim() ?? ''
+      return number !== '' && normalize(number) === target
+    },
+    (type: FortnoxAssetType) => {
+      const description = type.Description?.trim() ?? ''
+      return description !== '' && normalize(description) === target
+    },
+  ]
+
+  for (const matches of candidates) {
+    const found = types.filter(matches)
+    if (found.length === 1) return found[0]
+    if (found.length > 1) return undefined
+  }
+  return undefined
 }
 
 /**
@@ -348,10 +415,8 @@ export async function importProviderAssets(
       continue
     }
 
-    const mapped = mapFortnoxAsset(
-      asset,
-      typeof asset.TypeId === 'number' ? typeById.get(asset.TypeId) : undefined,
-    )
+    const assetType = resolveAssetType(asset, typeById, types)
+    const mapped = mapFortnoxAsset(asset, assetType)
     if ('reason' in mapped) {
       skipReasons.unsupported = (skipReasons.unsupported ?? 0) + 1
       skipped++
@@ -374,6 +439,15 @@ export async function importProviderAssets(
     try {
       await createAsset(supabase, companyId, userId, mapped.input)
       imported++
+      if (!assetType) {
+        // Counted here rather than at resolution: an asset that turns out to
+        // be a duplicate or fails to import never reached the register, and
+        // saying its accounts came from a default would describe a row that
+        // does not exist. Not a skip either, the asset is in: the accounts
+        // came from a guess about the category rather than from the source,
+        // so a register that does not tie to the ledger has a stated reason.
+        skipReasons.typeUnresolved = (skipReasons.typeUnresolved ?? 0) + 1
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       log.error('failed to import an asset', error as Error, {
