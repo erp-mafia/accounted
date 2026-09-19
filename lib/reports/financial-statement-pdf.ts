@@ -6,11 +6,82 @@
  */
 
 import type {
+  FinancialStatementColumn,
   FinancialStatementGroup,
   FinancialStatementSection,
   FinancialStatementSummaryRow,
 } from './financial-statement-pdf-template'
-import type { BalanceSheetReport, IncomeStatementReport } from '@/types'
+import { roundOre } from '@/lib/money'
+import type {
+  BalanceSheetReport,
+  BalanceSheetSection,
+  IncomeStatementReport,
+  IncomeStatementSection,
+} from '@/types'
+
+/**
+ * Amount columns, in render order. Abbreviated the way the operational
+ * template abbreviates them: the header cell is 82pt at 9pt bold, which
+ * "Ingående balans" spelled out does not fit.
+ */
+export const INCOME_STATEMENT_PDF_COLUMNS: FinancialStatementColumn[] = [
+  { label: 'Ing. saldo', muted: true },
+  { label: 'Period' },
+  { label: 'Ackumulerat', muted: true },
+]
+
+export const BALANCE_SHEET_PDF_COLUMNS: FinancialStatementColumn[] = [
+  { label: 'Ing. balans', muted: true },
+  { label: 'Ing. saldo', muted: true },
+  { label: 'Period', muted: true },
+  { label: 'Utg. balans' },
+]
+
+/** Ingående saldo, Period, Ackumulerat: one figure per column. */
+function incomeStatementSection(section: IncomeStatementSection): FinancialStatementSection {
+  return {
+    title: section.title,
+    rows: section.rows.map((r) => ({
+      account_number: r.account_number,
+      account_name: r.account_name,
+      amounts: [r.ytd_opening, r.amount, r.ytd_closing],
+    })),
+    subtotals: [section.subtotal_ytd_opening, section.subtotal, section.subtotal_ytd_closing],
+  }
+}
+
+/** Ingående balans, Ingående saldo, Period, Utgående balans. */
+function balanceSheetSection(section: BalanceSheetSection): FinancialStatementSection {
+  return {
+    title: section.title,
+    rows: section.rows.map((r) => ({
+      account_number: r.account_number,
+      account_name: r.account_name,
+      amounts: [r.year_ib, r.ib, r.period_change, r.amount],
+    })),
+    subtotals: [
+      section.subtotal_year_ib,
+      section.subtotal_ib,
+      section.subtotal_period_change,
+      section.subtotal,
+    ],
+  }
+}
+
+/** Column-wise sum of a set of section subtotals. */
+function sumColumns(sections: FinancialStatementSection[], columnCount: number): number[] {
+  return Array.from({ length: columnCount }, (_, ci) =>
+    roundOre(sections.reduce((sum, s) => sum + (s.subtotals[ci] ?? 0), 0)),
+  )
+}
+
+/** Column-wise arithmetic over equally long figure lists. */
+function combineColumns(
+  columnCount: number,
+  combine: (index: number) => number,
+): number[] {
+  return Array.from({ length: columnCount }, (_, ci) => roundOre(combine(ci)))
+}
 
 // K2/K3 uppställningsform (ÅRL bilaga 2, kostnadsslagsindelad) splits class 8
 // into three named blocks with subtotals:
@@ -35,6 +106,7 @@ function sectionPrefix(section: FinancialStatementSection, prefixes: string[]): 
 }
 
 export interface IncomeStatementPdfModel {
+  columns: FinancialStatementColumn[]
   groups: FinancialStatementGroup[]
   summary: FinancialStatementSummaryRow[]
 }
@@ -44,55 +116,68 @@ export interface IncomeStatementPdfModel {
  * PDF from a generated income statement.
  */
 export function buildIncomeStatementPdfModel(report: IncomeStatementReport): IncomeStatementPdfModel {
-  const operatingResult = Math.round((report.total_revenue - report.total_expenses) * 100) / 100
+  const columnCount = INCOME_STATEMENT_PDF_COLUMNS.length
+
+  const revenueSections = report.revenue_sections.map(incomeStatementSection)
+  const expenseSections = report.expense_sections.map(incomeStatementSection)
+  const financialSections = report.financial_sections.map(incomeStatementSection)
+
+  const totalRevenue = [
+    report.total_revenue_ytd_opening,
+    report.total_revenue,
+    report.total_revenue_ytd_closing,
+  ]
+  const totalExpenses = [
+    report.total_expenses_ytd_opening,
+    report.total_expenses,
+    report.total_expenses_ytd_closing,
+  ]
+  const operatingResult = combineColumns(
+    columnCount,
+    (ci) => totalRevenue[ci] - totalExpenses[ci],
+  )
 
   // Split class 8 into its three K2/K3 blocks plus a catch-all for any
   // prefix the generator emits but we haven't explicitly mapped. If a future
   // generator change adds sections for 85/86/87 or similar, this keeps them
   // visible and arithmetically accounted for rather than silently dropped.
-  const finansiellaPosterSections = report.financial_sections.filter((s) =>
+  const finansiellaPosterSections = financialSections.filter((s) =>
     sectionPrefix(s, FINANSIELLA_POSTER_PREFIXES),
   )
-  const bokslutsdispositionerSections = report.financial_sections.filter((s) =>
+  const bokslutsdispositionerSections = financialSections.filter((s) =>
     sectionPrefix(s, BOKSLUTSDISPOSITIONER_PREFIXES),
   )
-  const skattSections = report.financial_sections.filter((s) =>
+  const skattSections = financialSections.filter((s) =>
     sectionPrefix(s, SKATT_PREFIXES),
   )
-  const ovrigaFinansiellaPosterSections = report.financial_sections.filter(
+  const ovrigaFinansiellaPosterSections = financialSections.filter(
     (s) => !sectionPrefix(s, KNOWN_CLASS_8_PREFIXES),
   )
 
-  const totalFinansiellaPoster = Math.round(
-    finansiellaPosterSections.reduce((sum, s) => sum + s.subtotal, 0) * 100,
-  ) / 100
-  const totalBokslutsdispositioner = Math.round(
-    bokslutsdispositionerSections.reduce((sum, s) => sum + s.subtotal, 0) * 100,
-  ) / 100
-  const totalSkatt = Math.round(
-    skattSections.reduce((sum, s) => sum + s.subtotal, 0) * 100,
-  ) / 100
-  const totalOvrigaFinansiellaPoster = Math.round(
-    ovrigaFinansiellaPosterSections.reduce((sum, s) => sum + s.subtotal, 0) * 100,
-  ) / 100
+  const totalFinansiellaPoster = sumColumns(finansiellaPosterSections, columnCount)
+  const totalBokslutsdispositioner = sumColumns(bokslutsdispositionerSections, columnCount)
+  const totalSkatt = sumColumns(skattSections, columnCount)
+  const totalOvrigaFinansiellaPoster = sumColumns(ovrigaFinansiellaPosterSections, columnCount)
   // Catch-all is treated as part of "finansiella poster" for the subtotal:
   // 85-87 accounts in BAS are financial-adjacent (not tax, not bokslut).
-  const resultatEfterFinansiellaPoster = Math.round(
-    (operatingResult + totalFinansiellaPoster + totalOvrigaFinansiellaPoster) * 100,
-  ) / 100
+  const resultatEfterFinansiellaPoster = combineColumns(
+    columnCount,
+    (ci) =>
+      operatingResult[ci] + totalFinansiellaPoster[ci] + totalOvrigaFinansiellaPoster[ci],
+  )
 
   const groups: FinancialStatementGroup[] = [
     {
       heading: 'Rörelseintäkter',
-      sections: report.revenue_sections,
+      sections: revenueSections,
       totalLabel: 'Summa rörelseintäkter',
-      total: report.total_revenue,
+      totals: totalRevenue,
     },
     {
       heading: 'Rörelsekostnader',
-      sections: report.expense_sections,
+      sections: expenseSections,
       totalLabel: 'Summa rörelsekostnader',
-      total: report.total_expenses,
+      totals: totalExpenses,
       negate: true,
     },
   ]
@@ -102,7 +187,7 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
       heading: 'Finansiella poster',
       sections: finansiellaPosterSections,
       totalLabel: 'Summa finansiella poster',
-      total: totalFinansiellaPoster,
+      totals: totalFinansiellaPoster,
     })
   }
   if (ovrigaFinansiellaPosterSections.length > 0) {
@@ -110,7 +195,7 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
       heading: 'Övriga finansiella poster',
       sections: ovrigaFinansiellaPosterSections,
       totalLabel: 'Summa övriga finansiella poster',
-      total: totalOvrigaFinansiellaPoster,
+      totals: totalOvrigaFinansiellaPoster,
     })
   }
   if (bokslutsdispositionerSections.length > 0) {
@@ -118,7 +203,7 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
       heading: 'Bokslutsdispositioner',
       sections: bokslutsdispositionerSections,
       totalLabel: 'Summa bokslutsdispositioner',
-      total: totalBokslutsdispositioner,
+      totals: totalBokslutsdispositioner,
     })
   }
   if (skattSections.length > 0) {
@@ -126,7 +211,7 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
       heading: 'Skatter',
       sections: skattSections,
       totalLabel: 'Summa skatter',
-      total: totalSkatt,
+      totals: totalSkatt,
     })
   }
 
@@ -137,7 +222,7 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
   //   Skatt på årets resultat (always, so the reader can verify the tax calc)
   //   Årets resultat
   const summary: FinancialStatementSummaryRow[] = [
-    { label: 'Rörelseresultat', amount: operatingResult },
+    { label: 'Rörelseresultat', amounts: operatingResult },
   ]
   if (
     finansiellaPosterSections.length > 0 ||
@@ -145,37 +230,57 @@ export function buildIncomeStatementPdfModel(report: IncomeStatementReport): Inc
   ) {
     summary.push({
       label: 'Resultat efter finansiella poster',
-      amount: resultatEfterFinansiellaPoster,
+      amounts: resultatEfterFinansiellaPoster,
     })
   }
   if (bokslutsdispositionerSections.length > 0) {
-    summary.push({ label: 'Bokslutsdispositioner', amount: totalBokslutsdispositioner })
+    summary.push({ label: 'Bokslutsdispositioner', amounts: totalBokslutsdispositioner })
   }
-  summary.push({ label: 'Skatt på årets resultat', amount: totalSkatt })
-  summary.push({ label: 'Årets resultat', amount: report.net_result, emphasis: true })
+  summary.push({ label: 'Skatt på årets resultat', amounts: totalSkatt })
+  summary.push({
+    label: 'Årets resultat',
+    amounts: [
+      report.net_result_ytd_opening,
+      report.net_result,
+      report.net_result_ytd_closing,
+    ],
+    emphasis: true,
+  })
 
-  return { groups, summary }
+  return { columns: INCOME_STATEMENT_PDF_COLUMNS, groups, summary }
 }
 
 export interface BalanceSheetPdfModel {
+  columns: FinancialStatementColumn[]
   groups: FinancialStatementGroup[]
 }
 
 /** Build the balansräkning PDF groups from a generated balance sheet. */
 export function buildBalanceSheetPdfModel(report: BalanceSheetReport): BalanceSheetPdfModel {
   return {
+    columns: BALANCE_SHEET_PDF_COLUMNS,
     groups: [
       {
         heading: 'Tillgångar',
-        sections: report.asset_sections,
+        sections: report.asset_sections.map(balanceSheetSection),
         totalLabel: 'Summa tillgångar',
-        total: report.total_assets,
+        totals: [
+          report.total_assets_year_ib,
+          report.total_assets_ib,
+          report.total_assets_period_change,
+          report.total_assets,
+        ],
       },
       {
         heading: 'Eget kapital och skulder',
-        sections: report.equity_liability_sections,
+        sections: report.equity_liability_sections.map(balanceSheetSection),
         totalLabel: 'Summa eget kapital och skulder',
-        total: report.total_equity_liabilities,
+        totals: [
+          report.total_equity_liabilities_year_ib,
+          report.total_equity_liabilities_ib,
+          report.total_equity_liabilities_period_change,
+          report.total_equity_liabilities,
+        ],
       },
     ],
   }

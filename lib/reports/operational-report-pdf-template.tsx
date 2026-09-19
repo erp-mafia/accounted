@@ -112,16 +112,25 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     paddingRight: 12,
   },
+  // Four amount columns (Balansrapport: Ing. balans / Ing. saldo / Period /
+  // Utg. balans, Resultatrapport: Ing. saldo / Period / Ackumulerat /
+  // Föregående) have to fit A4 portrait next to the account number and name,
+  // which 90pt at fontSize 10 cannot do. Courier at 9pt is 5.4pt per
+  // character, so 82pt holds the 15 of "-123 456 789,00". Wrapping is not a
+  // fallback: sv-SE groups with U+00A0, so an amount that does not fit
+  // overflows into the neighbouring column instead of breaking.
   colAmount: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#1a1a1a',
   },
   colAmountMuted: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#666',
   },
   subtotalLabel: {
@@ -131,9 +140,10 @@ const styles = StyleSheet.create({
     paddingLeft: 48,
   },
   subtotalAmount: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     fontStyle: 'italic',
     color: '#444',
   },
@@ -157,24 +167,28 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#1a1a1a',
   },
+  // Same 82pt cell as the table columns, so the same 9pt: at the page's 10pt
+  // the widest sv-SE amount is 90pt and overflows the cell.
   summaryAmount: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#1a1a1a',
   },
   summaryAmountMuted: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#666',
   },
   summaryAmountEmphasis: {
-    width: 90,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
     fontWeight: 'bold',
-    fontSize: 11,
+    fontSize: 9,
   },
   balanceVerdict: {
     flexDirection: 'row',
@@ -242,16 +256,24 @@ interface CommonHeaderProps {
   title: string
   company: CompanySettings
   period: { start: string; end: string }
+  /**
+   * The fiscal period's own bounds. Printed next to Period so a narrowed
+   * window discloses which räkenskapsår the Ing. balans column refers to.
+   */
+  fiscalYear: { start: string; end: string }
   /** Partial-view disclosure (dimension-filtered exports, BFNAR 2013:2). */
   filterNote?: string
   /** Highest posted voucher per series in the window. Reconciliation aid (#1267). */
   latestVouchers?: LatestVoucherPerSeries[]
 }
 
-function HeaderBlock({ title, company, period, filterNote, latestVouchers }: CommonHeaderProps) {
+function HeaderBlock({ title, company, period, fiscalYear, filterNote, latestVouchers }: CommonHeaderProps) {
   const companyDisplayName = company.company_name || ''
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
+    : ''
+  const fiscalYearLabel = fiscalYear?.start && fiscalYear?.end
+    ? `${formatDateSv(fiscalYear.start)} till ${formatDateSv(fiscalYear.end)}`
     : ''
   const vouchersLabel = formatLatestVouchers(latestVouchers)
   return (
@@ -263,6 +285,9 @@ function HeaderBlock({ title, company, period, filterNote, latestVouchers }: Com
         )}
         {periodLabel && (
           <Text style={styles.period}>Period: {periodLabel}</Text>
+        )}
+        {fiscalYearLabel && (
+          <Text style={styles.period}>Räkenskapsår: {fiscalYearLabel}</Text>
         )}
         {vouchersLabel && (
           <Text style={styles.period}>{LATEST_VOUCHERS_LABEL}: {vouchersLabel}</Text>
@@ -322,6 +347,7 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
           title="Resultatrapport"
           company={company}
           period={report.period}
+          fiscalYear={report.fiscal_year}
           filterNote={filterNote}
           latestVouchers={report.latest_vouchers}
         />
@@ -329,7 +355,9 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmount]}>Innevarande</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ing. saldo</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmount]}>Period</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ackumulerat</Text>
           {hasPrior && (
             <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Föregående</Text>
           )}
@@ -345,7 +373,9 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
               <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
+                <Text style={styles.colAmountMuted}>{formatAmount(row.ytd_opening)}</Text>
                 <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
+                <Text style={styles.colAmountMuted}>{formatAmount(row.ytd_closing)}</Text>
                 {hasPrior && (
                   <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
                 )}
@@ -353,7 +383,13 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             ))}
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
+                {formatAmount(group.subtotal_ytd_opening)}
+              </Text>
               <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
+                {formatAmount(group.subtotal_ytd_closing)}
+              </Text>
               {hasPrior && (
                 <Text style={[styles.subtotalAmount, { color: '#666' }]}>
                   {formatAmount(group.subtotal_prior)}
@@ -369,8 +405,11 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
             <Text style={styles.summaryAmountEmphasis}>
               {formatAmount(report.net_result_current)}
             </Text>
+            <Text style={styles.summaryAmountMuted}>
+              {formatAmount(report.net_result_ytd)}
+            </Text>
             {hasPrior && (
-              <Text style={[styles.summaryAmountEmphasis, { color: '#666' }]}>
+              <Text style={styles.summaryAmountMuted}>
                 {formatAmount(report.net_result_prior)}
               </Text>
             )}
@@ -397,15 +436,17 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
           title="Balansrapport"
           company={company}
           period={report.period}
+          fiscalYear={report.fiscal_year}
           latestVouchers={report.latest_vouchers}
         />
 
         <View style={styles.tableHeader}>
           <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
           <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ingående</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Förändring</Text>
-          <Text style={[styles.tableHeaderText, styles.colAmount]}>Utgående</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ing. balans</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Ing. saldo</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmountMuted]}>Period</Text>
+          <Text style={[styles.tableHeaderText, styles.colAmount]}>Utg. balans</Text>
         </View>
 
         {report.groups.map((group) => (
@@ -417,6 +458,7 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
               <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
+                <Text style={styles.colAmountMuted}>{formatAmount(row.year_ib)}</Text>
                 <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
                 <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
                 <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
@@ -424,7 +466,12 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
             ))}
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
+                {formatAmount(group.subtotal_year_ib)}
+              </Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>
+                {formatAmount(group.subtotal_ib)}
+              </Text>
               <Text style={[styles.subtotalAmount, { color: '#666' }]}>
                 {formatAmount(group.subtotal_ub - group.subtotal_ib)}
               </Text>

@@ -172,6 +172,8 @@ export function buildTrialBalanceRows(
       account_class: accountInfo.class,
       opening_debit: roundOre(opening.debit),
       opening_credit: roundOre(opening.credit),
+      year_opening_debit: roundOre(opening.debit),
+      year_opening_credit: roundOre(opening.credit),
       period_debit: roundOre(periodActivity.debit),
       period_credit: roundOre(periodActivity.credit),
       closing_debit: roundOre(opening.debit + periodActivity.debit),
