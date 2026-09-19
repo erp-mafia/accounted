@@ -595,7 +595,7 @@ export async function validateVoucherForInvoiceLink(
     // exchange_rate, and the voucher's SEK total within 10% of remaining *
     // rate. The RPC settles the full remaining; on accrual it also books the
     // FX residual to 7960/3960. Kontantmetoden takes the same road since
-    // 20260918120000: with no receivable there is no residual to book, only
+    // 20260919110000: with no receivable there is no residual to book, only
     // an invoice to mark paid against the verifikat that holds the money.
     const exchangeRate = Number(invoice.exchange_rate)
     const fallbackEligible =

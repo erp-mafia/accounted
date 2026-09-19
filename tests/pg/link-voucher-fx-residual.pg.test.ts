@@ -31,12 +31,12 @@ const MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
-// 20260918120000 opens the fallback to kontantmetoden; replayed after the
+// 20260919110000 opens the fallback to kontantmetoden; replayed after the
 // migration above so the suite runs the pair as prod does.
 const CASH_MIGRATION_SQL = readFileSync(
   path.join(
     process.cwd(),
-    'supabase/migrations/20260918120000_link_voucher_fx_fallback_cash_method.sql',
+    'supabase/migrations/20260919110000_link_voucher_fx_fallback_cash_method.sql',
   ),
   'utf8',
 )
@@ -627,7 +627,7 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
   })
 
   it('settles a foreign invoice on kontantmetoden without writing a residual', async () => {
-    // The fallback was accrual-only until 20260918120000. On kontantmetoden
+    // The fallback was accrual-only until 20260919110000. On kontantmetoden
     // there is no receivable, so there is no kursdifferens to true up
     // (ML 8 kap 21-23 §): the link marks the invoice paid against the verifikat
     // that already holds the money and books nothing new.

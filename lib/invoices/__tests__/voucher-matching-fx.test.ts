@@ -931,7 +931,7 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
   })
 
-  it('accepts a SEK-booked voucher on kontantmetoden (migration 20260918120000)', async () => {
+  it('accepts a SEK-booked voucher on kontantmetoden (migration 20260919110000)', async () => {
     // The bank row carries slightly less than the invoice's booked SEK value,
     // the everyday spread between the bank's rate and Riksbankens. On
     // kontantmetoden that is not a delbetalning and not a kursdifferens: with
