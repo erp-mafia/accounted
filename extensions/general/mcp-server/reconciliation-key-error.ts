@@ -2,6 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { parseAccountKey } from '@/lib/reconciliation/schemas'
 import { listReconciliationAccounts } from '@/lib/reconciliation/service'
 import { findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('mcp-server:reconciliation-key-error')
 
 export const SKATTEKONTO_NOT_CONNECTED_MESSAGE =
   'Skattekontot är inte kopplat för bolaget. Koppla Skatteverket under Inställningar (eller gnubok_connect_skatteverket) så finns account_key skattekonto.'
@@ -25,7 +28,13 @@ export async function unknownAccountKeyError(
     let connected = false
     try {
       connected = (await findCompanyTokenUser(supabase, companyId)) !== null
-    } catch {
+    } catch (err) {
+      // A lookup failure must not hide the original "unknown key" answer, but
+      // it is not the same as "not connected" either, so it leaves a trace.
+      log.warn('skatteverket connection lookup failed while explaining account_key', {
+        companyId,
+        error: err instanceof Error ? err.message : String(err),
+      })
       connected = false
     }
     return new Error(connected ? SKATTEKONTO_NOT_SYNCED_MESSAGE : SKATTEKONTO_NOT_CONNECTED_MESSAGE)
@@ -35,7 +44,11 @@ export async function unknownAccountKeyError(
   try {
     const accounts = await listReconciliationAccounts(supabase, companyId, { withStatus: false })
     known = (accounts ?? []).map((account) => account.account_key)
-  } catch {
+  } catch (err) {
+    log.warn('reconciliation account listing failed while explaining account_key', {
+      companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
     known = []
   }
   const format = parsed ? '' : ' Format: "skattekonto", "bank:<cash_account_id>" or "manual:<BAS>".'
