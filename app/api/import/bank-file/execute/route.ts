@@ -4,8 +4,6 @@ import { ensureInitialized } from '@/lib/init'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import type { RawTransaction } from '@/types'
 import { generateExternalId } from '@/lib/import/bank-file/parser'
-import { getFormat } from '@/lib/import/bank-file/formats'
-import { CreateCashAccountSchema } from '@/lib/api/schemas'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
@@ -90,15 +88,6 @@ export const POST = withRouteContext(
     if (!transactions || transactions.length === 0) {
       return errorResponseFromCode('BANK_FILE_NO_TRANSACTIONS', log, { requestId })
     }
-    // Same 1920-1999 rule as POST /api/cash-accounts. Checked before anything
-    // is written: an out-of-range account must never bind rows nor import them
-    // unbound.
-    if (settlement_account && !CreateCashAccountSchema.shape.ledger_account.safeParse(settlement_account).success) {
-      return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_INVALID', log, {
-        requestId,
-        details: { settlement_account },
-      })
-    }
 
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
 
@@ -143,7 +132,11 @@ export const POST = withRouteContext(
       // use, exactly as ingest binds every row of a batch to one account.
       const batchCurrency = dominantCurrency(transactions)
       try {
-        await ensureManualCashAccount(supabase, companyId, settlement_account, batchCurrency)
+        // Named after the ledger, not the currency: two manual accounts in
+        // the same currency must stay distinguishable in the account pickers.
+        await ensureManualCashAccount(
+          supabase, companyId, settlement_account, batchCurrency, `Bankkonto ${settlement_account}`,
+        )
       } catch (err) {
         opLog.error('settlement cash account unavailable', err as Error, {
           settlementAccount: settlement_account,
@@ -212,42 +205,6 @@ export const POST = withRouteContext(
           .limit(1)
           .maybeSingle()
         sieOverlap = data ?? null
-      }
-
-      // ingest binds rows to the picked account only if that cash account
-      // exists, and never creates one (PSD2 seeding owns that). A file is the
-      // user's own account, so create it here, in the file's currency. If that
-      // fails the import stops: rows imported without their account is the bug
-      // this guards against, not a degraded mode.
-      if (settlement_account) {
-        const { data: existing } = await supabase
-          .from('cash_accounts')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('ledger_account', settlement_account)
-          .maybeSingle()
-        if (!existing) {
-          const { error: createError } = await supabase.from('cash_accounts').insert({
-            company_id: companyId,
-            ledger_account: settlement_account,
-            name: `Bankkonto ${settlement_account}`,
-            bank_name: ['generic-csv', 'camt053'].includes(format) ? null : (getFormat(format)?.name ?? null),
-            currency: (transactions[0]?.currency || 'SEK').toUpperCase(),
-            source: 'manual',
-            enabled: true,
-            is_primary: false,
-          })
-          if (createError) {
-            opLog.error('cash account for the settlement account was not created', createError, {
-              settlementAccount: settlement_account,
-            })
-            await supabase
-              .from('bank_file_imports')
-              .update({ status: 'failed', error_message: `Kunde inte skapa bankkontot ${settlement_account}` })
-              .eq('id', importRecord.id)
-            return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_FAILED', opLog, { requestId })
-          }
-        }
       }
 
       const ingestOptions: IngestOptions = {
