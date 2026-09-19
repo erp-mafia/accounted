@@ -87,8 +87,10 @@ const LEGACY_OPENING_ROW = {
  * exactly these neutral values and nothing else may differ.
  */
 const NEW_LEDGER_DEFAULTS = { unpaid_days: 0, advance_days: 0, saved_days_taken: {} }
-const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0 }
-const NEW_LIABILITY_TOTALS_DEFAULTS = { advanceVacationDebt: 0 }
+// netLiability equals totalLiability whenever no förskottsskuld is loaded, so
+// its neutral value is the captured total, not zero.
+const NEW_LIABILITY_ROW_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
+const NEW_LIABILITY_TOTALS_DEFAULTS = { advanceVacationDebt: 0, netLiability: 66235.68 }
 
 function omit<T extends Record<string, unknown>>(obj: T, keys: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {}

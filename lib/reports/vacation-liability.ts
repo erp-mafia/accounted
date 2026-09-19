@@ -26,9 +26,11 @@ export interface VacationLiabilityRow {
   accruedAvgifter: number     // Account 2940
   avgifterRate: number
   /** Förskottsskuld SEK from the cutover opening row (Semesterlagen 29 a §):
-   *  its own row on the report, subtracted from the net liability. */
+   *  a receivable on the employee, shown as its own figure and never netted
+   *  into the 2920/2940 liability that bokslut and reconciliation book. */
   advanceVacationDebt: number
-  totalLiability: number      // 2920 + 2940 - förskottsskuld
+  totalLiability: number      // 2920 + 2940 (the booked liability)
+  netLiability: number        // totalLiability - förskottsskuld (information only)
 }
 
 export interface VacationLiabilityReport {
@@ -38,6 +40,7 @@ export interface VacationLiabilityReport {
     accruedAvgifter: number   // Sum for account 2940
     advanceVacationDebt: number
     totalLiability: number
+    netLiability: number
   }
   asOfDate: string
 }
@@ -239,9 +242,11 @@ export async function generateVacationLiability(
       accruedAvgifter,
       avgifterRate: accruals?.lastRate || 0.3142,
       advanceVacationDebt,
-      // Net liability: what the company owes minus what the employee owes
-      // back for förskottssemester.
-      totalLiability: r(accruedAmount + accruedAvgifter - advanceVacationDebt),
+      // The booked liability (2920 + 2940) stays gross: a receivable is never
+      // netted against a liability on the balance sheet (ÅRL 2 kap 4 §). The
+      // net figure is informational.
+      totalLiability: r(accruedAmount + accruedAvgifter),
+      netLiability: r(accruedAmount + accruedAvgifter - advanceVacationDebt),
     }
   })
 
@@ -250,6 +255,7 @@ export async function generateVacationLiability(
     accruedAvgifter: r(rows.reduce((s, row) => s + row.accruedAvgifter, 0)),
     advanceVacationDebt: r(rows.reduce((s, row) => s + row.advanceVacationDebt, 0)),
     totalLiability: r(rows.reduce((s, row) => s + row.totalLiability, 0)),
+    netLiability: r(rows.reduce((s, row) => s + row.netLiability, 0)),
   }
 
   return {

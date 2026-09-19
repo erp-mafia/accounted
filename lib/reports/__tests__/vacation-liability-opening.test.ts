@@ -213,9 +213,11 @@ describe('generateVacationLiability with categorized cutover balances', () => {
     expect(row.accruedAmount).toBe(46200)
     expect(row.accruedAvgifter).toBe(14516.04)
     expect(row.advanceVacationDebt).toBe(4500)
-    expect(row.totalLiability).toBe(56216.04)
+    expect(row.totalLiability).toBe(60716.04)
+    expect(row.netLiability).toBe(56216.04)
     expect(report.totals.advanceVacationDebt).toBe(4500)
-    expect(report.totals.totalLiability).toBe(56216.04)
+    expect(report.totals.totalLiability).toBe(60716.04)
+    expect(report.totals.netLiability).toBe(56216.04)
     // 2920 / 2940 reconciliation figures are untouched by the debt.
     expect(report.totals.accruedAmount).toBe(46200)
     expect(report.totals.accruedAvgifter).toBe(14516.04)
