@@ -2782,7 +2782,7 @@ export const UpdateSettingsSchema = z.object({
   // Öresavrundning: round each net payout up to whole kronor (banks that
   // reject öre in salary payment files). Diff books on 3740.
   salary_net_rounding: z.boolean().optional(),
-  // Avvikelseperiod (migration 20260919110000): which month's absence and
+  // Avvikelseperiod (migration 20260918120000): which month's absence and
   // worked days a new run reads. Snapshotted onto each run at creation.
   salary_deviation_period: z.enum(['same_month', 'previous_month']).optional(),
   // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
