@@ -41,6 +41,7 @@ interface ResourceGroup {
 
 const RESOURCES: ResourceGroup[] = [
   { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and update their payment and contact settings.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings)?$/.test(p) },
+  { slug: 'portfolio', label: 'Portfolio', description: 'Cross-company reads for keys that reach more than one company: one overview call over a membership-checked scope (all, byrå team, or explicit ids) instead of one call per company.', matcher: (p) => /\/portfolio(\/|$)/.test(p) },
   { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
   { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
   { slug: 'articles', label: 'Articles', description: 'Read the article/product catalogue used to build invoice line items.', matcher: (p) => /\/articles(\/|$)/.test(p) },

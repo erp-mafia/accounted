@@ -251,13 +251,28 @@ import {
   addCompanyToTopLevelNext,
   assertMcpCompanyWriteAccess,
   codedError,
+  companyEchoFromContext,
+  companyEchoPayload,
   extractRequestedCompany,
   isCompanyDependentTool,
+  isOperationScopedTool,
   isOptionalCompanyTool,
+  isScopedTool,
+  listAccessibleCompanies,
   noCompanyYetError,
+  parseScopeArgument,
   projectToolInputSchema,
   resolveMcpCompanyContext,
+  resolveMcpCompanyScope,
+  resolveOperationCompanyId,
+  type CompanyEcho,
+  type McpCompanyScope,
 } from './company-routing'
+import { currentStagingBatchId, runWithStagingBatch } from '@/lib/pending-operations/batch-context'
+import { runAcrossCompanies, summarizeCompanyResult } from '@/lib/portfolio/runner'
+import { fetchPortfolioOverview, type DeadlineKindFilter, type PortfolioCompanyRow } from '@/lib/portfolio/overview'
+import { getByraMembership } from '@/lib/clients/fetch-client-overview'
+import { companyCurrentResource } from './resources/company-current'
 import { findUnknownArgKeys, listArgKeys, shortestExampleFor } from './arg-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
@@ -365,7 +380,7 @@ import {
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/lib/mirror-extraction'
 // Skatteverket filing tools (PR5). Cross-extension lib import, same sanctioned
@@ -1185,6 +1200,9 @@ async function stagePendingOperation(
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
       risk_level: riskLevel,
+      // Set only inside gnubok_stage_across_companies (request-local async
+      // context); NULL for every other staging path.
+      batch_id: currentStagingBatchId(),
     })
     .select('*')
     .single()
@@ -3599,6 +3617,273 @@ const STAGING_ARGS_PROPERTIES = {
   },
 } as const
 
+// ── Multi-company helpers (one connection, every company) ────
+// Shared `scope` argument of the cross-company tools. Object form is the
+// documented one; parseScopeArgument also accepts a bare "all"/"team" or an
+// id array for convenience.
+const SCOPE_INPUT_PROPERTY = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    companies: {
+      description: '"all" (default), "team" (byrå clients) or company ids.',
+      anyOf: [
+        { type: 'string', enum: ['all', 'team'] },
+        { type: 'array', items: { type: 'string', format: 'uuid' }, maxItems: 25 },
+      ],
+    },
+    exclude: { type: 'array', items: { type: 'string', format: 'uuid' } },
+  },
+} as const
+
+// Wire shape (see scopeTail): { resolved, truncated, remaining_company_ids,
+// unresolved, dormant, team }. resolved = companies run; truncated +
+// remaining_company_ids = beyond the 25-company cap (call again with those
+// ids); unresolved = explicit ids this key cannot reach; dormant = paused for
+// this user (multi-user seat lapsed). Declared loosely: the tools/list budget
+// has no room for the same six fields on every cross-company tool.
+const SCOPE_OUTPUT_PROPERTY = { type: 'object' } as const
+
+function scopeTail(scope: McpCompanyScope) {
+  return {
+    resolved: scope.companies.length,
+    truncated: scope.truncated,
+    remaining_company_ids: scope.remainingCompanyIds,
+    unresolved: scope.unresolved,
+    dormant: scope.dormant,
+    team: scope.team,
+  }
+}
+
+function portfolioRowToWire(row: PortfolioCompanyRow) {
+  return {
+    company_id: row.companyId,
+    name: row.name,
+    org_number: row.orgNumber,
+    entity_type: row.entityType,
+    role: row.role,
+    team_id: row.teamId,
+    unbooked_count: row.unbookedCount,
+    inbox_count: row.inboxCount,
+    next_deadline: row.nextDeadline
+      ? {
+          title: row.nextDeadline.title,
+          due_date: row.nextDeadline.dueDate,
+          tax_deadline_type: row.nextDeadline.taxDeadlineType,
+          urgency: row.nextDeadline.urgency,
+        }
+      : null,
+    last_booked_date: row.lastBookedDate,
+  }
+}
+
+/**
+ * Arguments for an inner tool run by a cross-company tool: must be an object,
+ * must not carry company_id (the scope supplies it), and must pass the same
+ * unknown-key guard the dispatcher applies to a direct call.
+ */
+function readInnerArguments(inner: McpTool, raw: unknown): Record<string, unknown> {
+  if (raw === undefined || raw === null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw codedError('VALIDATION_ERROR', 'arguments must be an object')
+  }
+  const innerArgs = raw as Record<string, unknown>
+  if ('company_id' in innerArgs) {
+    throw codedError('VALIDATION_ERROR', 'Do not pass company_id inside arguments: the scope selects the companies.')
+  }
+  const unknownArgKeys = findUnknownArgKeys(inner.inputSchema as Record<string, unknown>, innerArgs)
+  if (unknownArgKeys.length > 0) {
+    throw codedError(
+      'VALIDATION_ERROR',
+      `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${inner.name}. ` +
+        `Valid parameters: ${listArgKeys(inner.inputSchema as Record<string, unknown>).join(', ') || '(none)'}.`
+    )
+  }
+  return innerArgs
+}
+
+/**
+ * One inner call of a cross-company tool: the same capability gate and
+ * telemetry a direct call gets, attributed to the company it ran for and
+ * marked companySelection=scope. Membership was checked by the scope
+ * resolver (and, for writes, again per company by the staging tool).
+ */
+async function runInnerTool(params: {
+  supabase: SupabaseClient
+  inner: McpTool
+  innerArgs: Record<string, unknown>
+  companyId: string
+  userId: string
+  actor: ActorContext
+  requestId: string | number | null
+}): Promise<unknown> {
+  const { supabase, inner, innerArgs, companyId, userId, actor, requestId } = params
+  const startedAt = Date.now()
+  const requiredScope = TOOL_SCOPE_MAP[inner.name] ?? null
+  try {
+    const requiredCapability = MCP_TOOL_CAPABILITY_MAP[inner.name]
+    if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
+      const blocked = capabilityBlockedError(requiredCapability)
+      throw Object.assign(new Error(blocked.message_en ?? blocked.message_sv), { code: blocked.code })
+    }
+    const result = await withSIEExternalReport(supabase, companyId, inner.name, () =>
+      inner.execute({ ...innerArgs }, companyId, userId, supabase, actor)
+    )
+    emitToolCallTelemetry({
+      tool: inner.name,
+      requiredScope,
+      actor,
+      latencyMs: Date.now() - startedAt,
+      success: true,
+      isError: false,
+      errorCode: null,
+      errorKind: null,
+      errorMessage: null,
+      requestId,
+      userId,
+      companyId,
+      companySelection: 'scope',
+    })
+    return result
+  } catch (err) {
+    const structured = toToolError(err, { toolName: inner.name })
+    emitToolCallTelemetry({
+      tool: inner.name,
+      requiredScope,
+      actor,
+      latencyMs: Date.now() - startedAt,
+      success: false,
+      isError: true,
+      errorCode: structured.error.code,
+      errorKind: 'execution',
+      errorMessage: structured.error.message_sv,
+      errorDetail: structured.error.message_en,
+      errorCause: errorCauseTag(err),
+      requestId,
+      userId,
+      companyId,
+      companySelection: 'scope',
+    })
+    throw Object.assign(new Error(structured.error.message_en || structured.error.message_sv), {
+      code: structured.error.code,
+    })
+  }
+}
+
+/**
+ * Commit one staged operation the way gnubok_approve_pending_operation always
+ * has: api_key commit provenance, the actor's unattended ceiling, the user's
+ * email for attribution, and the PendingOperationApproved audit row. Shared
+ * by the single-operation and the batch paths so the two cannot drift.
+ */
+async function commitStagedOperation(params: {
+  supabase: SupabaseClient
+  userId: string
+  companyId: string
+  operation: PendingOperation
+  actor: ActorContext | undefined
+  userEmail: string | undefined
+  confirmed: boolean
+}): Promise<Awaited<ReturnType<typeof commitPendingOperation>>> {
+  const { supabase, userId, companyId, operation, actor, userEmail, confirmed } = params
+  // commit_method provenance (agent_first_vision.md §8 P0-1): MCP approvals
+  // are relayed through an agent credential: record that in the immutable
+  // layer instead of claiming 'user_accept'. ALL MCP traffic authenticates
+  // as an api_key actor (the claude.ai OAuth connector's access_token is
+  // itself a minted gnubok_sk_ key), so 'api_key' is the truthful value.
+  // The actor option covers EVERY journal commit this operation makes via
+  // the runWithActor() scope inside commitPendingOperation, stamping
+  // journal_entries.committed_actor_* and the audit_log COMMIT row.
+  const commitMethod =
+    actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
+
+  const result = await commitPendingOperation(supabase, userId, companyId, operation, {
+    commitMethod,
+    actor: {
+      type: actor?.type === 'api_key' ? 'api_key' : 'user',
+      ...(actor?.label ? { label: actor.label } : {}),
+      // Only an api_key actor can carry a ceiling; the ternary above already
+      // collapsed everything else to 'user', for which exceedsUnattendedLimit
+      // returns false regardless.
+      ...(actor?.type === 'api_key'
+        ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
+        : {}),
+    },
+    ...(userEmail ? { userEmail } : {}),
+  })
+
+  // Audit the MCP-initiated approval. Failure must not break the user flow:
+  // the side-effects have already happened.
+  try {
+    await appendProcessingHistory({
+      companyId,
+      correlationId: operation.id,
+      aggregateType: 'System',
+      aggregateId: operation.id,
+      eventType: 'PendingOperationApproved',
+      payload: {
+        operation_id: operation.id,
+        operation_type: operation.operation_type,
+        risk_level: operation.risk_level,
+        outcome: result.status,
+        commit_method: commitMethod,
+        channel: 'mcp',
+        confirmed,
+        ...(operation.batch_id ? { batch_id: operation.batch_id } : {}),
+      },
+      actor: {
+        type: actor?.type === 'api_key' ? 'api_key' : 'user',
+        id: actor?.id ?? userId,
+        ...(actor?.label ? { label: actor.label } : {}),
+      },
+      occurredAt: new Date(),
+    })
+  } catch (auditErr) {
+    log.warn('Failed to append PendingOperationApproved audit event', auditErr)
+  }
+
+  return result
+}
+
+/**
+ * Staging tools never batched: their operations are high risk (irreversible
+ * postings, period state, external sends, filings) and must be staged and
+ * approved one company at a time with an explicit confirmed=true. The
+ * approve-side gate (batch approval skips risk_level=high) is the backstop
+ * for anything that escalates to high at staging time.
+ */
+const BATCH_EXCLUDED_TOOLS = new Set([
+  'gnubok_run_year_end',
+  'gnubok_lock_period',
+  'gnubok_close_period',
+  'gnubok_unlock_period',
+  'gnubok_set_opening_balances',
+  'gnubok_post_kontantmetod_cutoff',
+  'gnubok_run_currency_revaluation',
+  'gnubok_reverse_journal_entry',
+  'gnubok_correct_entry',
+  'gnubok_create_voucher',
+  'gnubok_send_invoice',
+  'gnubok_mark_invoice_as_paid',
+  'gnubok_mark_invoice_as_sent',
+  'gnubok_credit_invoice',
+  'gnubok_credit_supplier_invoice',
+  'gnubok_approve_supplier_invoice',
+  'gnubok_delete_draft_invoice',
+  'gnubok_import_sie',
+  'gnubok_undo_sie_import',
+  'gnubok_generate_agi',
+  'gnubok_agi_submit',
+  'gnubok_vat_declaration_submit',
+  'gnubok_book_salary_run',
+  'gnubok_close_vacation_year',
+  'gnubok_bulk_book_transactions',
+  'gnubok_bulk_book_inbox_items',
+  'gnubok_settle_rot_rut_payout',
+  'gnubok_match_batch_allocate',
+  'gnubok_dispose_asset',
+])
+
 export const tools: McpTool[] = [
   {
     // The bridge that makes `catalogVisibility: 'search'` usable on hosts that
@@ -3813,11 +4098,14 @@ export const tools: McpTool[] = [
     name: 'gnubok_list_companies',
     keywords: ['företag', 'bolag', 'mina företag'],
     title: 'List Companies',
-    description: 'List every non-archived company this API-key user can access. Use company_id from this result on other tools; omit it there to use the API key default.',
+    description: 'List every non-archived company this API-key user can access: default first, then most recently used. Use company_id on other tools; omit it for the default. query narrows by name or org number.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: {},
+      properties: {
+        query: { type: 'string', maxLength: 120, description: 'Name substring or org number; omit for all.' },
+      },
+      required: [],
     },
     outputSchema: {
       type: 'object',
@@ -3835,17 +4123,24 @@ export const tools: McpTool[] = [
               entity_type: { type: ['string', 'null'] },
               role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer'] },
               is_default: { type: 'boolean' },
+              team_id: { type: ['string', 'null'] },
+              last_used_at: { type: ['string', 'null'] },
             },
-            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'is_default'],
+            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'is_default', 'team_id', 'last_used_at'],
           },
         },
         count: { type: 'number' },
+        total_count: { type: 'number' },
         default_company_id: { type: ['string', 'null'] },
+        // { team_id, name, role, client_count } for byrå members; scope
+        // { companies: "team" } then addresses the clients.
+        team: { type: ['object', 'null'] },
+        scope_hint: { type: 'string' },
       },
-      required: ['companies', 'count', 'default_company_id'],
+      required: ['companies', 'count', 'total_count', 'default_company_id', 'team', 'scope_hint'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(_args, defaultCompanyId, userId, supabase) {
+    async execute(args, defaultCompanyId, userId, supabase) {
       type CompanyRow = {
         id: string
         name: string
@@ -3890,20 +4185,535 @@ export const tools: McpTool[] = [
         }
       }
 
-      const companies = accessible.map(({ membership, company }) => ({
+      // Team membership and the companies' team ids: only when the user is on
+      // a byrå team, so a plain one-company user pays nothing extra.
+      const teamIds = new Map<string, string | null>()
+      let team: { team_id: string; name: string; role: 'owner' | 'admin' | 'member'; client_count: number } | null = null
+      if (companyIds.length > 0) {
+        try {
+          const byra = await getByraMembership(supabase, userId)
+          if (byra) {
+            const { data: teamRows } = await supabase
+              .from('companies')
+              .select('id, team_id')
+              .in('id', companyIds)
+            for (const row of (teamRows ?? []) as Array<{ id: string; team_id: string | null }>) {
+              teamIds.set(row.id, row.team_id)
+            }
+            const clientCount = companyIds.filter((id) => teamIds.get(id) === byra.teamId).length
+            team = { team_id: byra.teamId, name: byra.teamName, role: byra.role, client_count: clientCount }
+          }
+        } catch (error) {
+          log.warn('gnubok_list_companies team lookup failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          })
+        }
+      }
+
+      // Recency: the last mcp.tool_called row per company for this user. One
+      // bounded query; a failure only costs the ordering.
+      const lastUsed = new Map<string, string>()
+      if (companyIds.length > 1) {
+        try {
+          const { data: recent } = await supabase
+            .from('event_log')
+            .select('company_id, created_at')
+            .eq('user_id', userId)
+            .eq('event_type', 'mcp.tool_called')
+            .in('company_id', companyIds)
+            .order('created_at', { ascending: false })
+            .limit(300)
+          for (const row of (recent ?? []) as Array<{ company_id: string; created_at: string }>) {
+            if (!lastUsed.has(row.company_id)) lastUsed.set(row.company_id, row.created_at)
+          }
+        } catch (error) {
+          log.warn('gnubok_list_companies recency lookup failed', {
+            error: error instanceof Error ? error.message : 'unknown',
+          })
+        }
+      }
+
+      const all = accessible.map(({ membership, company }) => ({
         company_id: company.id,
         name: displayNames.get(company.id) ?? company.name,
         org_number: company.org_number,
         entity_type: company.entity_type,
         role: membership.role,
         is_default: company.id === defaultCompanyId,
+        team_id: teamIds.get(company.id) ?? null,
+        last_used_at: lastUsed.get(company.id) ?? null,
       }))
-      const hasAccessibleDefault = companies.some((company) => company.is_default)
+      // Default first, then most recently used, then by name: the order an
+      // agent should try when the user names a company loosely.
+      all.sort((a, b) => {
+        if (a.is_default !== b.is_default) return a.is_default ? -1 : 1
+        if (a.last_used_at !== b.last_used_at) {
+          if (!a.last_used_at) return 1
+          if (!b.last_used_at) return -1
+          return a.last_used_at < b.last_used_at ? 1 : -1
+        }
+        return a.name.localeCompare(b.name, 'sv')
+      })
+
+      const query = typeof args.query === 'string' ? args.query.trim().toLowerCase() : ''
+      const queryDigits = query.replace(/\D/g, '')
+      const companies = query
+        ? all.filter((company) => {
+            if (company.name.toLowerCase().includes(query)) return true
+            if (company.company_id.toLowerCase() === query) return true
+            const orgDigits = (company.org_number ?? '').replace(/\D/g, '')
+            return queryDigits.length >= 6 && orgDigits.includes(queryDigits)
+          })
+        : all
+      const hasAccessibleDefault = all.some((company) => company.is_default)
 
       return {
         companies,
         count: companies.length,
+        total_count: all.length,
         default_company_id: hasAccessibleDefault ? defaultCompanyId : null,
+        team,
+        scope_hint:
+          all.length > 1
+            ? 'For all companies at once: gnubok_client_overview or gnubok_run_across_companies with scope { companies: "all" }' +
+              (team ? ' or { companies: "team" } for the byrå clients.' : '.')
+            : 'One company: company_id can be omitted on every call.',
+      }
+    },
+  },
+
+  // ── Multi-company: one connection, every company ─────────────
+  // The scoped tools take `scope` (a set of companies) instead of company_id
+  // and membership-check every company in the set (resolveMcpCompanyScope).
+  {
+    name: 'gnubok_client_overview',
+    keywords: ['klienter', 'mina klienter', 'alla bolag', 'portfölj', 'byrå', 'vilka klienter'],
+    title: 'Client Overview',
+    description:
+      'Cross-company overview in one call: unbooked transactions, inbox documents, next deadline and last booked date per company, urgency first. scope = all, the byrå team or ids; filter by deadline kind and window or by unbooked count.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        scope: SCOPE_INPUT_PROPERTY,
+        deadline_kind: {
+          type: 'string',
+          enum: ['vat', 'agi', 'f_skatt', 'inkomstdeklaration', 'arsredovisning', 'any'],
+          description: 'Only companies with an open deadline of this kind.',
+        },
+        deadline_within_days: { type: 'number', minimum: 1, maximum: 365, description: 'Due within N days (overdue included).' },
+        min_unbooked: { type: 'number', minimum: 0 },
+        min_inbox: { type: 'number', minimum: 0 },
+      },
+      required: [],
+      examples: [{ scope: { companies: 'team' }, deadline_kind: 'vat', deadline_within_days: 14 }],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        team: { type: ['object', 'null'] },
+        summary: { type: 'object' },
+        companies: { type: 'array', items: { type: 'object' } },
+        scope: SCOPE_OUTPUT_PROPERTY,
+      },
+      required: ['team', 'summary', 'companies', 'scope'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, _companyId, userId, supabase) {
+      const scope = await resolveMcpCompanyScope({
+        supabase,
+        userId,
+        scope: parseScopeArgument(args.scope),
+      })
+      const overview = await fetchPortfolioOverview(supabase, scope, {
+        ...(typeof args.deadline_kind === 'string'
+          ? { deadlineKind: args.deadline_kind as DeadlineKindFilter }
+          : {}),
+        ...(typeof args.deadline_within_days === 'number'
+          ? { deadlineWithinDays: args.deadline_within_days }
+          : {}),
+        ...(typeof args.min_unbooked === 'number' ? { minUnbooked: args.min_unbooked } : {}),
+        ...(typeof args.min_inbox === 'number' ? { minInbox: args.min_inbox } : {}),
+      })
+      return {
+        team: overview.team,
+        summary: overview.summary,
+        companies: overview.companies.map(portfolioRowToWire),
+        scope: scopeTail(scope),
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_portfolio_readiness',
+    keywords: ['alla klienter', 'momsavstämning alla', 'bokslut alla', 'redo'],
+    title: 'Portfolio Readiness',
+    description:
+      'Readiness across companies in one call: kind=vat runs gnubok_vat_close_check per company (period_type, year, period), kind=year_end runs gnubok_year_end_readiness on each company\'s open fiscal period. Returns blockers per company, summary only.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', enum: ['vat', 'year_end'] },
+        scope: SCOPE_INPUT_PROPERTY,
+        period_type: { type: 'string', enum: ['monthly', 'quarterly', 'yearly'], description: 'kind=vat: VAT period type.' },
+        year: { type: 'number', description: 'kind=vat: year.' },
+        period: { type: 'number', description: 'kind=vat: 1-12 monthly, 1-4 quarterly, 1 yearly.' },
+      },
+      required: ['kind'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string' },
+        scope: SCOPE_OUTPUT_PROPERTY,
+        results: { type: 'array', items: { type: 'object' } },
+        ready: { type: 'number' },
+        blocked: { type: 'number' },
+        failed: { type: 'number' },
+        elapsed_ms: { type: 'number' },
+      },
+      required: ['kind', 'scope', 'results', 'ready', 'blocked', 'failed', 'elapsed_ms'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    catalogVisibility: 'search',
+    async execute(args, _companyId, userId, supabase, actor) {
+      const kind = args.kind === 'year_end' ? 'year_end' : args.kind === 'vat' ? 'vat' : null
+      if (!kind) throw codedError('VALIDATION_ERROR', 'kind must be "vat" or "year_end"')
+      const innerName = kind === 'vat' ? 'gnubok_vat_close_check' : 'gnubok_year_end_readiness'
+      const inner = tools.find((t) => t.name === innerName)
+      if (!inner) throw codedError('INTERNAL_ERROR', `${innerName} is not registered`)
+      const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
+      const innerScope = TOOL_SCOPE_MAP[innerName]
+      if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
+        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+      }
+      if (kind === 'vat') {
+        if (typeof args.period_type !== 'string' || typeof args.year !== 'number' || typeof args.period !== 'number') {
+          throw codedError('VALIDATION_ERROR', 'kind=vat needs period_type, year and period')
+        }
+      }
+      const scope = await resolveMcpCompanyScope({
+        supabase,
+        userId,
+        scope: parseScopeArgument(args.scope),
+      })
+      const runnerActor: ActorContext = actor ?? { type: 'api_key' }
+      const run = await runAcrossCompanies(
+        scope.companies.map((company) => ({ companyId: company.companyId, name: company.name })),
+        async (company) => {
+          let innerArgs: Record<string, unknown>
+          if (kind === 'vat') {
+            innerArgs = { period_type: args.period_type, year: args.year, period: args.period }
+          } else {
+            // The earliest not-yet-closed fiscal period is the one year-end
+            // can run on (fiscal_periods has no status column: closed state is
+            // is_closed, lock state is locked_at).
+            const { data: periods, error } = await supabase
+              .from('fiscal_periods')
+              .select('id, period_start, period_end, is_closed')
+              .eq('company_id', company.companyId)
+              .eq('is_closed', false)
+              .order('period_start', { ascending: true })
+              .limit(1)
+            if (error) throw new Error(`Failed to find the open fiscal period: ${error.message}`)
+            const open = (periods ?? [])[0] as { id: string } | undefined
+            if (!open) throw codedError('NOT_FOUND', 'No open fiscal period')
+            innerArgs = { fiscal_period_id: open.id }
+          }
+          return runInnerTool({
+            supabase,
+            inner,
+            innerArgs,
+            companyId: company.companyId,
+            userId,
+            actor: runnerActor,
+            requestId: null,
+          })
+        }
+      )
+      const results = run.results.map((row) => {
+        if (!row.ok) {
+          return { company: { company_id: row.company.companyId, name: row.company.name }, ok: false, error: row.error }
+        }
+        const data = row.data as Record<string, unknown>
+        const blockers = Array.isArray(data.blockers) ? data.blockers : []
+        const ready =
+          typeof data.ready === 'boolean' ? data.ready : blockers.length === 0
+        return {
+          company: { company_id: row.company.companyId, name: row.company.name },
+          ok: true,
+          ready,
+          blockers: blockers.slice(0, 10),
+          blocker_count: blockers.length,
+          ...(Array.isArray(data.warnings) ? { warning_count: data.warnings.length } : {}),
+          ...(typeof data.summary === 'string' || (data.summary && typeof data.summary === 'object')
+            ? { summary: data.summary }
+            : {}),
+          ...(data.period_label ? { period_label: data.period_label } : {}),
+        }
+      })
+      return {
+        kind,
+        scope: scopeTail(scope),
+        results,
+        ready: results.filter((r) => r.ok && (r as { ready?: boolean }).ready === true).length,
+        blocked: results.filter((r) => r.ok && (r as { ready?: boolean }).ready === false).length,
+        failed: run.failed,
+        elapsed_ms: run.elapsed_ms,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_run_across_companies',
+    keywords: ['alla bolag', 'alla klienter', 'kör för alla', 'varje företag', 'alla företag'],
+    title: 'Run Across Companies',
+    description:
+      'Run one READ tool once per company in a scope (all, team or ids): one result per company in a single answer. summary (default) keeps totals and first rows so 25 companies fit; full caps each at 20 KB. Writes: gnubok_stage_across_companies.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tool: { type: 'string', description: 'A read-only company tool, e.g. "gnubok_list_uncategorized_transactions".' },
+        arguments: { type: 'object', description: 'That tool\'s arguments, without company_id.' },
+        scope: SCOPE_INPUT_PROPERTY,
+        response_format: { type: 'string', enum: ['summary', 'full'] },
+        concurrency: { type: 'number', minimum: 1, maximum: 4 },
+      },
+      required: ['tool'],
+      examples: [
+        { tool: 'gnubok_list_uncategorized_transactions', arguments: { limit: 20 }, scope: { companies: 'all' } },
+      ],
+    },
+    // results[] = { company: { company_id, name }, ok, data | error, truncated?, elapsed_ms }.
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tool: { type: 'string' },
+        scope: SCOPE_OUTPUT_PROPERTY,
+        results: { type: 'array', items: { type: 'object' } },
+        succeeded: { type: 'number' },
+        failed: { type: 'number' },
+        skipped: { type: 'array', items: { type: 'object' } },
+        elapsed_ms: { type: 'number' },
+        truncated: { type: 'boolean' },
+      },
+      required: ['tool', 'scope', 'results', 'succeeded', 'failed', 'skipped', 'elapsed_ms', 'truncated'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, _companyId, userId, supabase, actor) {
+      const innerName = toCanonicalToolName(typeof args.tool === 'string' ? args.tool : '')
+      const inner = tools.find((t) => t.name === innerName)
+      if (!inner) {
+        throw codedError('NOT_FOUND', `Unknown tool "${String(args.tool ?? '')}". Find the name with gnubok_search_tools.`)
+      }
+      if (inner.annotations.readOnlyHint !== true) {
+        throw codedError('VALIDATION_ERROR', `${innerName} is a write tool: stage it per company with gnubok_stage_across_companies.`)
+      }
+      if (!isCompanyDependentTool(innerName) || isScopedTool(innerName)) {
+        throw codedError('VALIDATION_ERROR', `${innerName} is not a company-scoped tool: call it directly.`)
+      }
+      const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
+      const innerScope = TOOL_SCOPE_MAP[innerName]
+      if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
+        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+      }
+      const innerArgs = readInnerArguments(inner, args.arguments)
+      const mode: 'summary' | 'full' = args.response_format === 'full' ? 'full' : 'summary'
+      const scope = await resolveMcpCompanyScope({
+        supabase,
+        userId,
+        scope: parseScopeArgument(args.scope),
+      })
+      const runnerActor: ActorContext = actor ?? { type: 'api_key' }
+      const run = await runAcrossCompanies(
+        scope.companies.map((company) => ({ companyId: company.companyId, name: company.name })),
+        (company) =>
+          runInnerTool({
+            supabase,
+            inner,
+            innerArgs,
+            companyId: company.companyId,
+            userId,
+            actor: runnerActor,
+            requestId: null,
+          }),
+        { concurrency: typeof args.concurrency === 'number' ? args.concurrency : undefined }
+      )
+      let anyTruncated = false
+      const results = run.results.map((row) => {
+        const company = { company_id: row.company.companyId, name: row.company.name }
+        if (!row.ok) return { company, ok: false, error: row.error, elapsed_ms: row.elapsed_ms }
+        const summarised = summarizeCompanyResult(row.data, mode)
+        if (summarised.truncated) anyTruncated = true
+        return {
+          company,
+          ok: true,
+          data: summarised.data,
+          ...(summarised.truncated ? { truncated: true } : {}),
+          elapsed_ms: row.elapsed_ms,
+        }
+      })
+      return {
+        tool: innerName,
+        scope: scopeTail(scope),
+        results,
+        succeeded: run.succeeded,
+        failed: run.failed,
+        skipped: run.skipped.map((company) => ({ company_id: company.companyId, name: company.name })),
+        elapsed_ms: run.elapsed_ms,
+        truncated: anyTruncated,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_stage_across_companies',
+    keywords: ['alla bolag', 'alla klienter', 'batch', 'stage för alla'],
+    title: 'Stage Across Companies',
+    description:
+      'Stage one write tool once per company in a scope; the operations share a batch_id for gnubok_list_pending_operations and gnubok_approve_pending_operation. Nothing posts here. High-risk tools (year-end, period lock/close, storno, vouchers, sends) are refused: run them per company.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tool: { type: 'string', description: 'A staging write tool, e.g. "gnubok_ignore_transaction".' },
+        arguments: { type: 'object', description: 'Arguments shared by every company, without company_id.' },
+        per_company_arguments: {
+          type: 'object',
+          description: 'Overrides keyed by company_id, merged over arguments.',
+          additionalProperties: { type: 'object' },
+        },
+        scope: SCOPE_INPUT_PROPERTY,
+        dry_run: { type: 'boolean', description: 'Forward dry_run=true to every company (tool must support it).' },
+      },
+      required: ['tool'],
+    },
+    // Not the staged-operation contract itself (staged_count, not `staged`):
+    // the batch stages INNER operations; this result lists them.
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        batch_id: { type: ['string', 'null'] },
+        tool: { type: 'string' },
+        scope: SCOPE_OUTPUT_PROPERTY,
+        results: { type: 'array', items: { type: 'object' } },
+        staged_count: { type: 'number' },
+        failed: { type: 'number' },
+        dry_run: { type: 'boolean' },
+        message: { type: 'string' },
+      },
+      required: ['batch_id', 'tool', 'scope', 'results', 'staged_count', 'failed', 'dry_run', 'message'],
+    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    catalogVisibility: 'search',
+    async execute(args, _companyId, userId, supabase, actor) {
+      const innerName = toCanonicalToolName(typeof args.tool === 'string' ? args.tool : '')
+      const inner = tools.find((t) => t.name === innerName)
+      if (!inner) {
+        throw codedError('NOT_FOUND', `Unknown tool "${String(args.tool ?? '')}". Find the name with gnubok_search_tools.`)
+      }
+      if (inner.outputSchema !== STAGED_OPERATION_SCHEMA) {
+        throw codedError('VALIDATION_ERROR', `${innerName} does not stage a pending operation: use gnubok_run_across_companies for reads, or call the tool per company.`)
+      }
+      if (BATCH_EXCLUDED_TOOLS.has(innerName)) {
+        throw codedError('VALIDATION_ERROR', `${innerName} is a high-risk operation and is never staged in batch: call it per company and approve each one with confirmed=true.`)
+      }
+      if (!isCompanyDependentTool(innerName) || isScopedTool(innerName)) {
+        throw codedError('VALIDATION_ERROR', `${innerName} is not a company-scoped tool.`)
+      }
+      const keyScopes = args.__keyScopes as ApiKeyScope[] | undefined
+      const innerScope = TOOL_SCOPE_MAP[innerName]
+      if (innerScope && keyScopes && !hasScope(keyScopes, innerScope)) {
+        throw new Error(`Insufficient scope: this API key does not have the "${innerScope}" scope`)
+      }
+      const sharedArgs = readInnerArguments(inner, args.arguments)
+      const dryRun = args.dry_run === true
+      const innerProps = (inner.inputSchema as { properties?: Record<string, unknown> }).properties ?? {}
+      if (dryRun && !('dry_run' in innerProps)) {
+        throw codedError('VALIDATION_ERROR', `${innerName} has no dry_run: stage without it, or preview per company.`)
+      }
+      const perCompany =
+        args.per_company_arguments && typeof args.per_company_arguments === 'object' && !Array.isArray(args.per_company_arguments)
+          ? (args.per_company_arguments as Record<string, unknown>)
+          : {}
+      const scope = await resolveMcpCompanyScope({
+        supabase,
+        userId,
+        scope: parseScopeArgument(args.scope),
+      })
+      // Explicit ids that do not resolve are an error for a write: silently
+      // staging for a subset of what the caller named would be worse than
+      // refusing.
+      if (scope.unresolved.length > 0) {
+        throw codedError('NOT_FOUND', `Not accessible: ${scope.unresolved.join(', ')}. Call gnubok_list_companies for the companies this key can reach.`)
+      }
+      const runnerActor: ActorContext = actor ?? { type: 'api_key' }
+      const batchId = dryRun ? null : randomUUID()
+      const stageOne = async (company: { companyId: string; name: string }) => {
+        const context = await resolveMcpCompanyContext({
+          supabase,
+          userId,
+          defaultCompanyId: null,
+          requestedCompanyId: company.companyId,
+        })
+        assertMcpCompanyWriteAccess(context, innerScope)
+        const override = perCompany[company.companyId]
+        const innerArgs = {
+          ...sharedArgs,
+          ...(override && typeof override === 'object' && !Array.isArray(override)
+            ? readInnerArguments(inner, override)
+            : {}),
+          ...(dryRun ? { dry_run: true } : {}),
+        }
+        return runInnerTool({
+          supabase,
+          inner,
+          innerArgs,
+          companyId: company.companyId,
+          userId,
+          actor: runnerActor,
+          requestId: null,
+        })
+      }
+      const companies = scope.companies.map((company) => ({ companyId: company.companyId, name: company.name }))
+      // Writes stage one company at a time: the staging helper stamps the
+      // batch id from the async context, and sequential staging keeps
+      // idempotency and period checks in a predictable order.
+      const run = batchId
+        ? await runWithStagingBatch(batchId, () => runAcrossCompanies(companies, stageOne, { concurrency: 1 }))
+        : await runAcrossCompanies(companies, stageOne, { concurrency: 1 })
+      const results = run.results.map((row) => {
+        const company = { company_id: row.company.companyId, name: row.company.name }
+        if (!row.ok) return { company, ok: false, error: row.error }
+        const staged = row.data as Record<string, unknown>
+        return {
+          company,
+          ok: true,
+          ...(typeof staged.operation_id === 'string' ? { operation_id: staged.operation_id } : {}),
+          ...(staged.risk_level ? { risk_level: staged.risk_level } : {}),
+          ...(staged.dry_run === true ? { dry_run: true } : {}),
+          ...(staged.preview ? { preview: summarizeCompanyResult(staged.preview, 'full').data } : {}),
+          ...(typeof staged.message === 'string' ? { message: staged.message } : {}),
+        }
+      })
+      const stagedCount = results.filter((r) => r.ok && 'operation_id' in r).length
+      return {
+        batch_id: batchId,
+        tool: innerName,
+        scope: scopeTail(scope),
+        results,
+        staged_count: stagedCount,
+        failed: run.failed,
+        dry_run: dryRun,
+        message: dryRun
+          ? `Dry run across ${companies.length} companies: nothing staged.`
+          : `Staged ${stagedCount} operation${stagedCount === 1 ? '' : 's'} under batch ${batchId}. Review per company, then gnubok_approve_pending_operation with batch_id (low and medium risk) or operation_id; high-risk operations are approved one by one with confirmed=true.`,
       }
     },
   },
@@ -21857,6 +22667,8 @@ export const tools: McpTool[] = [
           type: 'boolean',
           description: 'Render the interactive approval widget (claude.ai / Desktop): approve/reject by click; the click supplies the high-risk BFL acknowledgment. Data returned either way. Default false.',
         },
+        batch_id: { type: 'string', format: 'uuid', description: 'Only the gnubok_stage_across_companies batch (all companies).' },
+        all_companies: { type: 'boolean', description: 'Every company this key reaches; rows carry company_id and company_name.' },
       },
       required: [],
     },
@@ -21866,10 +22678,23 @@ export const tools: McpTool[] = [
     // render_ui=true (the dispatcher emits result-level _meta in that case),
     // keeping the tool data-only by default.
     uiResourceUri: 'ui://pending-operations/app.html',
-    async execute(args, companyId, _userId, supabase) {
+    async execute(args, companyId, userId, supabase) {
       const status = (args.status as string) ?? 'pending'
       const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
       const offset = Math.max(0, (args.offset as number) ?? 0)
+      const batchId = typeof args.batch_id === 'string' ? args.batch_id : null
+      // A batch spans companies by construction, so a batch filter lists
+      // across every accessible company like all_companies=true does.
+      const acrossCompanies = args.all_companies === true || batchId !== null
+
+      // Cross-company listing is bounded to the caller's memberships (the
+      // service role sees everything, so the filter is the authorization).
+      const accessible = acrossCompanies ? await listAccessibleCompanies(supabase, userId) : []
+      const accessibleIds = accessible.map((company) => company.company_id)
+      const namesById = new Map(accessible.map((company) => [company.company_id, company.name]))
+      if (acrossCompanies && accessibleIds.length === 0) {
+        return { operations: [], ...pageTail([], 0, offset) }
+      }
 
       // `params` holds the raw operation inputs (invoice line items, supplier
       // PII, voucher descriptions): excluded from the list response to
@@ -21879,21 +22704,27 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('pending_operations')
         .select(
-          'id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data',
+          'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data',
           { count: 'exact' }
         )
-        .eq('company_id', companyId)
         .eq('status', status)
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1)
-
+      query = acrossCompanies ? query.in('company_id', accessibleIds) : query.eq('company_id', companyId)
+      if (batchId) query = query.eq('batch_id', batchId)
       if (args.risk_level) query = query.eq('risk_level', args.risk_level as string)
       if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
 
       const { data, error, count } = await query
+        .order('created_at', { ascending: false })
+        .range(offset, offset + limit - 1)
       if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
 
-      const operations = data ?? []
+      const rows = (data ?? []) as Array<Record<string, unknown>>
+      const operations = acrossCompanies
+        ? rows.map((row) => ({
+            ...row,
+            company_name: namesById.get(String(row.company_id)) ?? null,
+          }))
+        : rows
       const totalCount = count ?? operations.length
       return { operations, ...pageTail(operations, totalCount, offset) }
     },
@@ -21903,40 +22734,130 @@ export const tools: McpTool[] = [
     name: 'gnubok_approve_pending_operation',
     keywords: ['godkänn', 'bekräfta'],
     title: 'Approve Pending Operation',
-    description: "Commit a staged pending_operation the user has explicitly authorised. risk_level=high requires confirmed=true: surface the BFL 5 kap 5§ irreversibility and any preview compliance_warning first. The /pending web UI is an equivalent commit path.",
+    description: "Commit a staged pending_operation the user has explicitly authorised; company_id is not needed, it follows the operation. risk_level=high needs confirmed=true: surface the BFL 5 kap 5§ irreversibility first. batch_id approves a batch (low/medium risk).",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve' },
+        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve. Either this or batch_id.' },
+        batch_id: { type: 'string', format: 'uuid', description: 'Approve a whole gnubok_stage_across_companies batch (low/medium risk; high-risk members are only listed).' },
         confirmed: {
           type: 'boolean',
           description: 'Required when the operation has risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close). Acknowledges the BFL/BFNAR irreversibility implications. The web UI surfaces the same gate via an explicit warning dialog.',
         },
       },
-      required: ['operation_id'],
+      required: [],
       // confirmed is not optional for a high-risk operation: without it the
       // approval is refused, which reads to an agent as a permissions problem.
-      examples: [{ operation_id: '9a44...' }, { operation_id: '9a44...', confirmed: true }],
+      examples: [{ operation_id: '9a44...' }, { operation_id: '9a44...', confirmed: true }, { batch_id: '8c1f...' }],
     },
     outputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        status: { type: 'string', enum: ['committed', 'rejected', 'failed'] },
+        status: { type: 'string', enum: ['committed', 'rejected', 'failed', 'batch'] },
         operation_id: { type: 'string' },
         data: { type: 'object' },
         error: { type: 'string' },
         error_code: { type: 'string' },
         auto_rejected: { type: 'boolean' },
         operation_status: { type: 'string', enum: ['pending', 'committed', 'rejected', 'failed_partial'], description: 'pending = not consumed, re-approvable' },
+        batch_id: { type: 'string' },
+        results: { type: 'array', items: { type: 'object' } },
+        committed: { type: 'number' },
+        skipped: { type: 'number' },
+        failed: { type: 'number' },
       },
-      required: ['status', 'operation_id'],
+      required: ['status'],
     },
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const operationId = args.operation_id as string
-      if (!operationId) throw new Error('operation_id is required')
+      const operationId = typeof args.operation_id === 'string' ? args.operation_id : ''
+      const batchId = typeof args.batch_id === 'string' ? args.batch_id : ''
+      if (!operationId && !batchId) throw new Error('operation_id or batch_id is required')
+      if (operationId && batchId) throw new Error('Pass either operation_id or batch_id, not both')
+
+      // Resolve the user's email so commitPendingOperation can attribute the
+      // journal_entries.committed_by_email and any user-facing email side
+      // effects (send_invoice cc) to the actor: matches the web-UI commit
+      // path attribution (V8.2.1, GDPR Art. 25(1)).
+      let userEmail: string | undefined
+      try {
+        const { data: userData } = await supabase.auth.admin.getUserById(userId)
+        userEmail = userData.user?.email ?? undefined
+      } catch (err) {
+        log.warn('Failed to resolve user email for MCP approval', { userId, err })
+      }
+
+      // Batch approval: every still-pending member of the batch, each in its
+      // own company, membership- and role-checked per row. High-risk members
+      // are never committed here (BFL 5 kap 5§ acknowledgment is per
+      // operation); they are reported so the caller approves them one by one.
+      if (batchId) {
+        const { data: members, error: batchError } = await supabase
+          .from('pending_operations')
+          .select('*')
+          .eq('batch_id', batchId)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: true })
+        if (batchError) throw new Error(`Failed to load batch: ${batchError.message}`)
+        const batchOps = (members ?? []) as PendingOperation[]
+        if (batchOps.length === 0) throw new Error('Batch not found or nothing left to approve')
+
+        const results: Array<Record<string, unknown>> = []
+        let committed = 0
+        let skipped = 0
+        let failed = 0
+        for (const member of batchOps) {
+          const row: Record<string, unknown> = {
+            operation_id: member.id,
+            company_id: member.company_id,
+            operation_type: member.operation_type,
+            risk_level: member.risk_level,
+          }
+          try {
+            const context = await resolveMcpCompanyContext({
+              supabase,
+              userId,
+              defaultCompanyId: null,
+              requestedCompanyId: member.company_id,
+            })
+            assertMcpCompanyWriteAccess(context, 'pending_operations:approve')
+            row.company_name = context.companyName
+            if (member.risk_level === 'high') {
+              skipped += 1
+              results.push({ ...row, status: 'skipped', reason: 'high_risk_requires_individual_approval' })
+              continue
+            }
+            const outcome = await commitStagedOperation({
+              supabase,
+              userId,
+              companyId: member.company_id,
+              operation: member,
+              actor,
+              userEmail,
+              confirmed: false,
+            })
+            if (outcome.status === 'committed') committed += 1
+            else failed += 1
+            results.push({
+              ...row,
+              status: outcome.status,
+              ...(outcome.error ? { error: outcome.error } : {}),
+              ...(outcome.code ? { error_code: outcome.code } : {}),
+              ...(outcome.operation_status ? { operation_status: outcome.operation_status } : {}),
+            })
+          } catch (err) {
+            failed += 1
+            results.push({
+              ...row,
+              status: 'failed',
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        return { status: 'batch', batch_id: batchId, results, committed, skipped, failed }
+      }
 
       const { data: op, error: fetchError } = await supabase
         .from('pending_operations')
@@ -21955,18 +22876,6 @@ export const tools: McpTool[] = [
         throw new Error(
           `Operation "${operation.operation_type}" is risk_level=high: pass confirmed=true to approve. The web UI requires the same positive acknowledgment per BFL 5 kap 5§ (irreversible postings).`
         )
-      }
-
-      // Resolve the user's email so commitPendingOperation can attribute the
-      // journal_entries.committed_by_email and any user-facing email side
-      // effects (send_invoice cc) to the actor: matches the web-UI commit
-      // path attribution (V8.2.1, GDPR Art. 25(1)).
-      let userEmail: string | undefined
-      try {
-        const { data: userData } = await supabase.auth.admin.getUserById(userId)
-        userEmail = userData.user?.email ?? undefined
-      } catch (err) {
-        log.warn('Failed to resolve user email for MCP approval', { userId, err })
       }
 
       // commit_method provenance (agent_first_vision.md §8 P0-1): MCP
@@ -21989,58 +22898,15 @@ export const tools: McpTool[] = [
       // this operation makes via the runWithActor() scope inside
       // commitPendingOperation, stamping journal_entries.committed_actor_*
       // and the audit_log COMMIT row (migration 20260619120000).
-      const commitMethod =
-        actor?.type === 'api_key' ? ('api_key' as const) : ('user_accept' as const)
-
-      const result = await commitPendingOperation(
+      const result = await commitStagedOperation({
         supabase,
         userId,
         companyId,
         operation,
-        {
-          commitMethod,
-          actor: {
-            type: actor?.type === 'api_key' ? 'api_key' : 'user',
-            ...(actor?.label ? { label: actor.label } : {}),
-            // Only an api_key actor can carry a ceiling; the ternary above
-            // already collapsed everything else to 'user', for which
-            // exceedsUnattendedLimit returns false regardless.
-            ...(actor?.type === 'api_key'
-              ? { unattendedCommitLimit: actor.unattendedCommitLimit ?? null }
-              : {}),
-          },
-          ...(userEmail ? { userEmail } : {}),
-        }
-      )
-
-      // Audit the MCP-initiated approval. Failure must not break the user
-      // flow: the side-effects have already happened.
-      try {
-        await appendProcessingHistory({
-          companyId,
-          correlationId: operationId,
-          aggregateType: 'System',
-          aggregateId: operationId,
-          eventType: 'PendingOperationApproved',
-          payload: {
-            operation_id: operationId,
-            operation_type: operation.operation_type,
-            risk_level: operation.risk_level,
-            outcome: result.status,
-            commit_method: commitMethod,
-            channel: 'mcp',
-            confirmed: args.confirmed === true,
-          },
-          actor: {
-            type: actor?.type === 'api_key' ? 'api_key' : 'user',
-            id: actor?.id ?? userId,
-            ...(actor?.label ? { label: actor.label } : {}),
-          },
-          occurredAt: new Date(),
-        })
-      } catch (auditErr) {
-        log.warn('Failed to append PendingOperationApproved audit event', auditErr)
-      }
+        actor,
+        userEmail,
+        confirmed: args.confirmed === true,
+      })
 
       return {
         status: result.status,
@@ -22960,6 +23826,11 @@ const CACHE_STATIC = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_SKILLS = { ttlMs: 300_000, cacheScope: 'private' } as const
 const CACHE_LIVE = { ttlMs: 0, cacheScope: 'private' } as const
 
+/** Resource template for any company the key reaches (resources/templates/list). */
+const COMPANY_CONTEXT_TEMPLATE = 'Accounted://company/{company_id}/context'
+const COMPANY_CONTEXT_TEMPLATE_RE =
+  /^Accounted:\/\/company\/([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\/context$/i
+
 const SERVER_CAPABILITIES = {
   tools: { listChanged: false },
   resources: { listChanged: false },
@@ -23054,6 +23925,9 @@ function emitToolCallTelemetry(payload: {
   // null/empty while the key's user has no company yet (issue #1814): the
   // event-log persister requires a company scope, so nothing is emitted.
   companyId: string | null
+  // How the company was chosen (see lib/events/types.ts). Omitted by the
+  // error paths that never reached routing.
+  companySelection?: 'default' | 'explicit' | 'operation' | 'scope' | 'none'
 }): void {
   if (!payload.companyId) return
   const companyId = payload.companyId
@@ -23063,6 +23937,7 @@ function emitToolCallTelemetry(payload: {
       payload: {
         tool: payload.tool,
         requiredScope: payload.requiredScope,
+        ...(payload.companySelection ? { companySelection: payload.companySelection } : {}),
         actorType: payload.actor.type,
         actorId: payload.actor.id ?? null,
         actorLabel: payload.actor.label ?? null,
@@ -23542,8 +24417,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); a WRITE outside tools/list is then out of reach (the bridge refuses writes), so check callable_via on each search hit before planning around it.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (missing scope or search-only write).',
-            `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
-            '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
+            `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
+            '• Many companies at once: gnubok_client_overview (unbooked, inbox, next deadline per company; filter by deadline kind and window), gnubok_run_across_companies (any read tool once per company, one summarised answer) and gnubok_stage_across_companies (one write staged per company under a batch_id; approve the batch or each operation). scope = { companies: "all" | "team" | [ids] }; "team" is the byrå team\'s clients.',
+            '• MCP resources use the default company. For another company read Accounted://company/{company_id}/context (resource template) or call gnubok_get_agent_briefing with company_id.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
             '• When a tool is missing, a description misled you, a result looks wrong, or something worked unusually well, call gnubok_feedback (context + suggestion, optional tool_name). It is read by the product team and has fixed real bugs; include ids and what you expected. Rate-limited 1/min/key, so batch a session\'s findings into one call.',
             '',
@@ -23796,6 +24672,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // no company yet (issue #1814): resolveMcpCompanyContext refuses every
       // company-dependent tool with NO_COMPANY_YET before it gets here.
       let effectiveCompanyId: string | null = companyId
+      // The company the call ran for, announced first in the text result of
+      // every company-scoped tool (null for company-independent tools).
+      let companyEcho: CompanyEcho | null = null
+      let companySelection: 'default' | 'explicit' | 'operation' | 'scope' | 'none' = 'none'
       const companyRoutingStartedAt = Date.now()
       try {
         const extracted = extractRequestedCompany(rawToolArgs)
@@ -23826,18 +24706,47 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           isCompanyDependentTool(toolName) ||
           (isOptionalCompanyTool(toolName) && !isAnonymous && extracted.requestedCompanyId !== undefined)
         if (wantsCompanyContext) {
+          // Approve/reject name an operation whose row already knows its
+          // company: route there when the caller did not name one, so the
+          // company_id never has to be repeated on the approval.
+          let requestedCompanyId = extracted.requestedCompanyId
+          if (requestedCompanyId === undefined && isOperationScopedTool(toolName)) {
+            const fromRow = await resolveOperationCompanyId(supabase, toolArgs.operation_id)
+            if (fromRow) {
+              requestedCompanyId = fromRow
+              companySelection = 'operation'
+            }
+          }
           const companyContext = await resolveMcpCompanyContext({
             supabase,
             userId,
             defaultCompanyId: companyId,
-            requestedCompanyId: extracted.requestedCompanyId,
+            requestedCompanyId,
           })
           assertMcpCompanyWriteAccess(companyContext, requiredScope)
           effectiveCompanyId = companyContext.companyId
+          companyEcho = companyEchoFromContext(companyContext)
+          if (companySelection === 'none') {
+            companySelection = extracted.requestedCompanyId !== undefined ? 'explicit' : 'default'
+          }
+        } else if (isScopedTool(toolName)) {
+          companySelection = 'scope'
         }
       } catch (err) {
         const structured = toToolError(err, { toolName })
-        const publicStructured = projectMcpPayload(structured, toolNamespace)
+        // A company the key cannot reach: answer with the companies it can,
+        // so the agent corrects itself in one call instead of stalling (740
+        // such denials in the 60 days before this shipped had no way back).
+        // NOT_FOUND only: a FORBIDDEN is about the role in a company the
+        // caller did reach, and the viewer gate must stay a pure refusal.
+        const candidates =
+          structured.error.code === 'NOT_FOUND'
+            ? await listAccessibleCompanies(supabase, userId)
+            : []
+        const publicStructured = projectMcpPayload(
+          candidates.length > 0 ? { ...structured, candidates } : structured,
+          toolNamespace
+        )
         emitToolCallTelemetry({
           tool: toolName,
           requiredScope: requiredScope ?? null,
@@ -23978,14 +24887,16 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               ? addCompanyToTopLevelNext(rawResult, effectiveCompanyId)
               : rawResult
             const result = projectMcpPayload(canonicalResult, toolNamespace)
+            const textPayload = companyEcho ? companyEchoPayload(result, companyEcho) : result
             const stored: Record<string, unknown> = {
               resultType: 'complete',
-              content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+              content: [{ type: 'text', text: JSON.stringify(textPayload, null, 2) }],
             }
             if (result !== null && result !== undefined) {
               stored.structuredContent =
                 typeof result === 'object' && !Array.isArray(result) ? result : { value: result }
             }
+            if (companyEcho) stored._meta = { company: companyEcho }
             await resolveMcpTask(supabase, task.id, { status: 'completed', result: stored })
             emitToolCallTelemetry({
               tool: toolName,
@@ -24000,6 +24911,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
+              companySelection,
             })
           } catch (err) {
             // Tool failures complete the task with the standard isError
@@ -24033,6 +24945,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               requestId: id ?? null,
               userId,
               companyId: effectiveCompanyId,
+              companySelection,
             })
           }
         })
@@ -24051,7 +24964,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // scopes: search filters to what the API key can actually invoke, the
         // briefing flags each recommended tool as callable or not. Inject
         // privately via __keyScopes.
-        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing') {
+        if (
+          toolName === 'gnubok_search_tools' ||
+          toolName === 'gnubok_get_agent_briefing' ||
+          // The cross-company tools check the INNER tool's scope per call.
+          isScopedTool(toolName)
+        ) {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
         if (toolName === 'gnubok_search_tools') {
@@ -24063,8 +24981,12 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           : rawResult
         const result = projectMcpPayload(canonicalResult, toolNamespace)
         const latencyMs = Date.now() - callStartedAt
+        // The text block (what the model reads) announces the company first;
+        // structuredContent stays the tool's own shape so strict clients can
+        // validate it against outputSchema (see companyEchoPayload).
+        const textPayload = companyEcho ? companyEchoPayload(result, companyEcho) : result
         const response: Record<string, unknown> = {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify(textPayload, null, 2) }],
         }
         // Emit structuredContent for every tool: clients with outputSchema support
         // can consume this directly without re-parsing the JSON-stringified text block.
@@ -24078,6 +25000,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // by default and never sends a render directive a plain-data call didn't ask for.
         if (tool.uiResourceUri && (toolArgs as Record<string, unknown>).render_ui === true) {
           response._meta = { ui: { resourceUri: tool.uiResourceUri } }
+        }
+        if (companyEcho) {
+          response._meta = { ...((response._meta as Record<string, unknown> | undefined) ?? {}), company: companyEcho }
         }
         // Record the response's `next.tool` (when present) so the next call
         // from the same session can be matched against it.
@@ -24107,6 +25032,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
+          companySelection,
         })
         return NextResponse.json(jsonRpc(id ?? null, decorate(response)))
       } catch (err) {
@@ -24131,6 +25057,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           requestId: id ?? null,
           userId,
           companyId: effectiveCompanyId,
+          companySelection,
         })
         return NextResponse.json(
           jsonRpc(id ?? null, decorate({
@@ -24169,9 +25096,92 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       )
     }
 
+    // Resource templates (spec 2025-06-18): the per-company working memory
+    // for any company the key reaches, not only the default one.
+    case 'resources/templates/list':
+      return NextResponse.json(
+        jsonRpc(id ?? null, decorate(projectMcpPayload({
+          resourceTemplates: [
+            {
+              uriTemplate: COMPANY_CONTEXT_TEMPLATE,
+              name: 'Company context',
+              description: 'Working memory for one company this key reaches (same shape as Accounted://company/current): identity, active fiscal period, lock dates, entity counts, voucher series, recent activity, deadlines. company_id from gnubok_list_companies.',
+              mimeType: 'application/json',
+            },
+          ],
+        }, toolNamespace), CACHE_STATIC))
+      )
+
     case 'resources/read': {
       const uri = (params as Record<string, unknown>)?.uri as string
       const readStartedAt = Date.now()
+
+      // Accounted://company/{company_id}/context: the company-current
+      // resource for an explicit company, membership-checked like a tool
+      // call with company_id.
+      const templateMatch = typeof uri === 'string' ? COMPANY_CONTEXT_TEMPLATE_RE.exec(uri) : null
+      if (templateMatch) {
+        try {
+          if (isAnonymous) return unauthorized()
+          const context = await resolveMcpCompanyContext({
+            supabase,
+            userId,
+            defaultCompanyId: companyId,
+            requestedCompanyId: templateMatch[1].toLowerCase(),
+          })
+          const result = await companyCurrentResource.read({
+            supabase,
+            companyId: context.companyId,
+            userId,
+            scopes: keyScopes,
+          })
+          emitResourceReadTelemetry({
+            uri,
+            kind: 'data',
+            success: true,
+            errorCode: null,
+            actor,
+            latencyMs: Date.now() - readStartedAt,
+            requestId: id ?? null,
+            userId,
+            companyId: context.companyId,
+          })
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              contents: [
+                {
+                  uri,
+                  mimeType: companyCurrentResource.mimeType,
+                  text: JSON.stringify(
+                    projectMcpPayload(
+                      companyEchoPayload(result, companyEchoFromContext(context)),
+                      toolNamespace
+                    ),
+                    null,
+                    2
+                  ),
+                },
+              ],
+            }, CACHE_LIVE))
+          )
+        } catch (err) {
+          const structured = toToolError(err)
+          emitResourceReadTelemetry({
+            uri,
+            kind: 'data',
+            success: false,
+            errorCode: structured.error.code,
+            actor,
+            latencyMs: Date.now() - readStartedAt,
+            requestId: id ?? null,
+            userId,
+            companyId,
+          })
+          return NextResponse.json(
+            jsonRpcError(id ?? null, -32602, `Resource read failed: ${structured.error.message_en || structured.error.message_sv}`)
+          )
+        }
+      }
 
       const widget = findUiWidget(uri)
       if (widget) {

@@ -25,3 +25,4 @@ Work through unbooked bank transactions and receipts and stage correct vouchers.
 - Evidence over guesses: ledger context and mapping rules outrank general knowledge.
 - Every write stages a pending operation; the user approves before anything is booked.
 - Amounts are SEK with ore precision; never round away balance.
+- Company context: if the working directory (or a parent, nearest wins) contains `.accounted.json` with `{ "company_id": "<uuid>", "name": "<name>" }`, pass that `company_id` on every company-scoped call and say the company name once at the start. Otherwise, if `accounted_list_companies` returns more than one company, ask once which company the task concerns (or whether it spans all of them) before any write. Never write to a company the user did not name in a multi-company account. Every tool result begins with `company: { company_id, name, is_default }`: read it back to the user whenever it is not the company they named.

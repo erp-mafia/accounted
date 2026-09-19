@@ -51,7 +51,7 @@ Behåll alla tre parametrarna. \`tool_namespace=accounted\` väljer verktygsnamn
 
 ## Väg B: Claude Code (plugin)
 
-Bäst i terminalen. Pluginet installerar både anslutningen och sju färdiga arbetsflöden som följer den svenska bokföringsrytmen.
+Bäst i terminalen. Pluginet installerar både anslutningen och åtta färdiga arbetsflöden som följer den svenska bokföringsrytmen.
 
 \`\`\`text
 /plugin marketplace add erp-mafia/accounted
@@ -69,6 +69,8 @@ Kör sedan \`/mcp\` och logga in med Accounted (samma OAuth-ruta som i väg A). 
 | \`/accounted:vat\` | Förbereder och stämmer av momsdeklarationen |
 | \`/accounted:payroll\` | Månadens lönekörning och underlag för AGI |
 | \`/accounted:year-end\` | Bokslut, spärrat mot readiness-kontrollen |
+| \`/accounted:clients\` | Alla bolag på anslutningen i en tabell, mest brådskande först |
+| \`/accounted:use\` | Knyter den aktuella mappen till ett bolag |
 
 Vill du bara ha anslutningen utan arbetsflödena kopplar \`claude mcp add\` in samma server i Claude Code:
 
@@ -115,6 +117,14 @@ Bäst när du hellre använder en långlivad API-nyckel än OAuth-flödet, eller
 Nyckelns rättigheter styr exakt vilka verktyg som går att kalla: en nyckel utan skrivrättigheter kan läsa rapporter och reskontror men inte lägga upp en bokföring.
 
 Nyckelvärdet börjar fortfarande med \`gnubok_sk_\`. Det är ett stabilt kreditformat, inte namnet på integrationen. Befintliga \`gnubok-mcp\`-konfigurationer fortsätter att fungera oförändrade.
+
+## Flera företag, en anslutning
+
+Anslutningen är knuten till dig, inte till ett bolag: en inloggning eller en API-nyckel når varje bolag du är medlem i. \`accounted_list_companies\` listar dem, och \`is_default\` markerar det som används när ett anrop inte anger \`company_id\`. Varje verktygssvar börjar med \`company: { company_id, name, is_default }\`, så du ser alltid vems böcker ett svar kommer från.
+
+Fråga om alla på en gång: \`accounted_client_overview\` ger en rad per bolag (obokfört, inkorg, nästa deadline, senast bokfört) och \`accounted_run_across_companies\` kör ett läsverktyg per bolag och sammanfattar resultaten. Byråteam anger \`scope: { companies: "team" }\` för att täcka alla klienter teamet arbetar med. En skrivning för flera bolag lägger upp en pending operation per bolag under ett gemensamt \`batch_id\`; låg- och medelriskoperationer kan godkännas tillsammans, högriskoperationer en i taget.
+
+I Claude Code knyter du en mapp till ett bolag med \`/accounted:use <namn eller organisationsnummer>\`: kommandot skriver \`.accounted.json\` i mappen, och varje flöde som startas därifrån går mot det bolaget. En mapp per klient är byråmönstret; \`/accounted:clients\` visar hela portföljen varifrån som helst.
 
 ## Testa med de här frågorna
 

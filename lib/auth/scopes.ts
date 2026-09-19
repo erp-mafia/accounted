@@ -51,6 +51,11 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // gnubok_update_company_settings; direct write, no staging).
   'PATCH /api/v1/companies/:companyId/settings': 'companies:write',
 
+  // Portfolio: cross-company reads over every company the key user can
+  // reach (consultant, byrå member, multi-company owner). The company scope
+  // is membership-checked inside lib/portfolio/scope.ts.
+  'GET /api/v1/portfolio/overview': 'companies:read',
+
   // Operations (async long-running tasks)
   'GET /api/v1/operations/:id': 'operations:read',
 

@@ -5,6 +5,13 @@ vi.mock('@/lib/company/context', () => ({
   getUserCompanies: vi.fn(),
 }))
 
+// No byrå team in these cases: the team block stays null and the tool makes
+// no companies.team_id lookup.
+vi.mock('@/lib/clients/fetch-client-overview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/clients/fetch-client-overview')>()
+  return { ...actual, getByraMembership: vi.fn().mockResolvedValue(null) }
+})
+
 import { getUserCompanies } from '@/lib/company/context'
 import { tools } from '../server'
 
@@ -104,6 +111,8 @@ describe('gnubok_list_companies', () => {
           entity_type: 'AB',
           role: 'owner',
           is_default: true,
+          team_id: null,
+          last_used_at: null,
         },
         {
           company_id: OTHER_COMPANY_ID,
@@ -112,10 +121,53 @@ describe('gnubok_list_companies', () => {
           entity_type: 'EF',
           role: 'viewer',
           is_default: false,
+          team_id: null,
+          last_used_at: null,
         },
       ],
       count: 2,
+      total_count: 2,
       default_company_id: DEFAULT_COMPANY_ID,
+      team: null,
+      scope_hint: expect.stringContaining('scope { companies: "all" }'),
     })
+  })
+
+  it('narrows by name substring or org number digits and keeps total_count', async () => {
+    vi.mocked(getUserCompanies).mockResolvedValue([
+      {
+        company_id: DEFAULT_COMPANY_ID,
+        role: 'owner',
+        joined_at: '2026-01-01',
+        companies: { id: DEFAULT_COMPANY_ID, name: 'Ateljé Norr AB', org_number: '559000-0001', entity_type: 'AB', archived_at: null, created_at: '2026-01-01' },
+      },
+      {
+        company_id: OTHER_COMPANY_ID,
+        role: 'admin',
+        joined_at: '2026-02-01',
+        companies: { id: OTHER_COMPANY_ID, name: 'Wennberg Konsult', org_number: '559000-0002', entity_type: 'AB', archived_at: null, created_at: '2026-02-01' },
+      },
+    ] as never)
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({
+          in: vi.fn(() => ({ order: vi.fn(() => ({ range: vi.fn().mockResolvedValue({ data: [], error: null }) })) })),
+        })),
+      })),
+    }
+
+    const byName = (await listCompaniesTool.execute({ query: 'norr' }, DEFAULT_COMPANY_ID, 'user-1', supabase as never, { type: 'api_key' })) as {
+      companies: Array<{ company_id: string }>
+      count: number
+      total_count: number
+    }
+    expect(byName.companies.map((c) => c.company_id)).toEqual([DEFAULT_COMPANY_ID])
+    expect(byName.count).toBe(1)
+    expect(byName.total_count).toBe(2)
+
+    const byOrg = (await listCompaniesTool.execute({ query: '559000-0002' }, DEFAULT_COMPANY_ID, 'user-1', supabase as never, { type: 'api_key' })) as {
+      companies: Array<{ company_id: string }>
+    }
+    expect(byOrg.companies.map((c) => c.company_id)).toEqual([OTHER_COMPANY_ID])
   })
 })

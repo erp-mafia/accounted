@@ -25,3 +25,4 @@ A read-only pass over the books that ends in a short prioritized list. This flow
 
 - Strictly read-only: do not stage or approve anything in this flow, even if the fix is obvious. Offer the fixing flow instead.
 - Report only what the data shows; no speculative findings.
+- Company context: if the working directory (or a parent, nearest wins) contains `.accounted.json` with `{ "company_id": "<uuid>", "name": "<name>" }`, pass that `company_id` on every company-scoped call and say the company name once at the start. Otherwise, if `accounted_list_companies` returns more than one company, ask once which company the task concerns (or whether it spans all of them) before any write. Never write to a company the user did not name in a multi-company account. Every tool result begins with `company: { company_id, name, is_default }`: read it back to the user whenever it is not the company they named.

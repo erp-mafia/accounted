@@ -495,7 +495,21 @@ describe('tools/list payload size guard', () => {
     //     with; the item and write schemas were trimmed to bare formats first
     //     (measured 61 849 after the trim; 61 975 once merged with the
     //     cutover-balance step above).
-    expect(approxTokens).toBeLessThan(62_200)
+    //   * 62.2K to 63.2K with "one connection, every company" (2026-09-19):
+    //     two entry tools ride the default catalog, gnubok_client_overview
+    //     (the byrå cockpit as a tool) and gnubok_run_across_companies (any
+    //     read tool once per company in one answer); the batch stager and
+    //     the readiness fan-out are search-only and named by those two.
+    //     Existing tools grew too: gnubok_list_companies (query, team,
+    //     recency), gnubok_list_pending_operations (batch_id,
+    //     all_companies) and gnubok_approve_pending_operation (batch_id).
+    //     Paid first inside the cluster: the shared scope output schema is
+    //     declared as a bare object (its six fields are documented in a
+    //     comment), the per-row result schema of run_across is a bare
+    //     object, the team block lost its property list, and every new
+    //     description was cut to one clause (measured 63 073 after the trim,
+    //     ~130 headroom).
+    expect(approxTokens).toBeLessThan(63_200)
   })
 
   /**

@@ -23,3 +23,4 @@ Run the monthly close as a checklist against live data. The authoritative checkl
 - The server-side checklist is authoritative; do not substitute a generic month-end list from memory.
 - Every write stages a pending operation; the user approves each before it is booked.
 - Never work around a locked or closed period; surface it and stop.
+- Company context: if the working directory (or a parent, nearest wins) contains `.accounted.json` with `{ "company_id": "<uuid>", "name": "<name>" }`, pass that `company_id` on every company-scoped call and say the company name once at the start. Otherwise, if `accounted_list_companies` returns more than one company, ask once which company the task concerns (or whether it spans all of them) before any write. Never write to a company the user did not name in a multi-company account. Every tool result begins with `company: { company_id, name, is_default }`: read it back to the user whenever it is not the company they named.
