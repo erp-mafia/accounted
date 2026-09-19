@@ -968,6 +968,43 @@ describe('validateVoucherForInvoiceLink: foreign-currency invoices', () => {
     expect(result.ok).toBe(true)
   })
 
+  it('refuses on kontantmetoden when the invoice was booked at issue', async () => {
+    // journal_entry_id means a 1510 balance at the invoice rate: a kronor
+    // settlement leaves a kursdifferens the cash path never books, so the
+    // validator refuses exactly where the RPC does.
+    const cashVoucher = entry('je-cash-booked', 22, 'Inbetalning', [
+      {
+        id: 'l-booked-bank',
+        account_number: '1930',
+        debit_amount: 11450,
+        credit_amount: 0,
+        currency: 'SEK',
+      },
+      {
+        id: 'l-booked-ar',
+        account_number: '1510',
+        debit_amount: 0,
+        credit_amount: 11450,
+        currency: 'SEK',
+      },
+    ])
+    const { supabase } = createFilteringSupabase({
+      accountingMethod: 'cash',
+      entries: [cashVoucher],
+    })
+
+    const result = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      { ...eurInvoice(), journal_entry_id: 'je-registration' } as never,
+      'je-cash-booked'
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+  })
+
   it('still refuses the wrong voucher on kontantmetoden', async () => {
     const wrongVoucher = entry('je-cash-wrong', 21, 'Inbetalning', [
       {

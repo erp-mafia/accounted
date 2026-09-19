@@ -12236,7 +12236,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, customer_id, customer:customers(id, name)'
+          'id, invoice_number, status, document_type, currency, total, paid_amount, remaining_amount, due_date, paid_at, exchange_rate, journal_entry_id, customer_id, customer:customers(id, name)'
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)

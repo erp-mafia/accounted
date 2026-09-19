@@ -41,6 +41,16 @@ const CASH_MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
+// 20260919144500 narrows that opening to an invoice that was never booked at
+// issue. Replayed last, so the suite pins the function prod ends up with.
+const UNBOOKED_ONLY_MIGRATION_SQL = readFileSync(
+  path.join(
+    process.cwd(),
+    'supabase/migrations/20260919144500_link_voucher_fx_fallback_unbooked_invoices_only.sql',
+  ),
+  'utf8',
+)
+
 let seq = 0
 function nextSeq(): number {
   return (Date.now() % 1_000_000) * 1000 + seq++
@@ -54,6 +64,7 @@ async function withFxMigration(fn: (client: PoolClient) => Promise<void>): Promi
     await client.query('BEGIN')
     await client.query(MIGRATION_SQL)
     await client.query(CASH_MIGRATION_SQL)
+    await client.query(UNBOOKED_ONLY_MIGRATION_SQL)
     await fn(client)
   } finally {
     await client.query('ROLLBACK').catch(() => {})
@@ -627,10 +638,10 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
   })
 
   it('settles a foreign invoice on kontantmetoden without writing a residual', async () => {
-    // The fallback was accrual-only until 20260919110000. On kontantmetoden
-    // there is no receivable, so there is no kursdifferens to true up
-    // (ML 8 kap 21-23 §): the link marks the invoice paid against the verifikat
-    // that already holds the money and books nothing new.
+    // The fallback was accrual-only until 20260919110000. A kontantmetod
+    // invoice that was never booked has no receivable, so there is no
+    // kursdifferens to true up: the link marks the invoice paid against the
+    // verifikat that already holds the money and books nothing new.
     await withFxMigration(async (client) => {
       const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
       await client.query(
@@ -676,6 +687,82 @@ describe('link_invoice_to_voucher: SEK-booked voucher settles a foreign invoice'
         [companyId, voucherId],
       )
       expect(entries[0].n).toBe(0)
+
+      // With no verifikat written, the payment row is the whole trace of the
+      // link: which voucher, and the rate the kronor actually settled at next
+      // to the invoice's own.
+      const { rows: payments } = await client.query(
+        `SELECT journal_entry_id, amount, exchange_rate, payment_exchange_rate
+         FROM public.invoice_payments WHERE invoice_id = $1`,
+        [invoiceId],
+      )
+      expect(payments).toHaveLength(1)
+      expect(payments[0].journal_entry_id).toBe(voucherId)
+      expect(Number(payments[0].amount)).toBe(1000)
+      expect(Number(payments[0].exchange_rate)).toBe(11.5)
+      expect(Number(payments[0].payment_exchange_rate)).toBe(11.45)
+    })
+  })
+
+  it('refuses on kontantmetoden when the invoice was booked at issue', async () => {
+    // A kontantmetod company can still hold an invoice that reached the ledger
+    // at issue (a method switch, the explicit Bokför route, migrated data).
+    // That one has a 1510 balance at the invoice rate, so a kronor settlement
+    // does leave a kursdifferens, and the cash branch books none. Same voucher
+    // as the accepted case above; only journal_entry_id differs.
+    await withFxMigration(async (client) => {
+      const { userId, companyId, fiscalPeriodId } = await seedTenant(client)
+      await client.query(
+        `INSERT INTO public.company_settings (user_id, company_id, accounting_method)
+         VALUES ($1, $2, 'cash')`,
+        [userId, companyId],
+      )
+      const { invoiceId } = await seedCustomerInvoice(client, {
+        userId,
+        companyId,
+        currency: 'EUR',
+        total: 1000,
+        totalSek: 11500,
+        exchangeRate: 11.5,
+      })
+      const registrationId = await seedVoucher(client, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        debitAccount: '1510',
+        creditAccount: '3001',
+        sekAmount: 11500,
+        entryDate: '2026-05-01',
+      })
+      await client.query(`UPDATE public.invoices SET journal_entry_id = $1 WHERE id = $2`, [
+        registrationId,
+        invoiceId,
+      ])
+      const voucherId = await seedVoucher(client, {
+        userId,
+        companyId,
+        fiscalPeriodId,
+        debitAccount: '1930',
+        creditAccount: '1510',
+        sekAmount: 11450,
+      })
+
+      const result = await callLinkInvoice(client, { invoiceId, voucherId, userId, companyId })
+
+      expect(result.ok).toBe(false)
+      expect(result.code).toBe('LINK_VOUCHER_CURRENCY_MISMATCH')
+
+      const { rows } = await client.query(
+        `SELECT status, remaining_amount FROM public.invoices WHERE id = $1`,
+        [invoiceId],
+      )
+      expect(rows[0].status).toBe('sent')
+      expect(Number(rows[0].remaining_amount)).toBe(1000)
+      const { rows: payments } = await client.query(
+        `SELECT COUNT(*)::int AS n FROM public.invoice_payments WHERE invoice_id = $1`,
+        [invoiceId],
+      )
+      expect(payments[0].n).toBe(0)
     })
   })
 
