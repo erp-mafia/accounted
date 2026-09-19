@@ -41,10 +41,10 @@ async function setVatBox(companyId: string, accountNumber: string, box: string |
 }
 
 describe('chart_of_accounts.vat_box', () => {
-  it('accepts every box code, none, and NULL on a 26xx account', async () => {
+  it('accepts every box code and NULL on a 26xx account', async () => {
     const { companyId, userId } = await seedCompany()
     await insertAccount(companyId, userId, '2617', 2)
-    for (const box of ['10', '11', '12', '30', '31', '32', '60', '61', '62', '48', 'none', null]) {
+    for (const box of ['10', '11', '12', '30', '31', '32', '60', '61', '62', '48', null]) {
       await expect(setVatBox(companyId, '2617', box)).resolves.toBeDefined()
     }
   })
@@ -52,7 +52,7 @@ describe('chart_of_accounts.vat_box', () => {
   it('refuses boxes outside the set', async () => {
     const { companyId, userId } = await seedCompany()
     await insertAccount(companyId, userId, '2616', 2)
-    for (const box of ['49', '50', '05', '20', 'ruta30', '']) {
+    for (const box of ['49', '50', '05', '20', 'ruta30', 'none', '']) {
       await expect(setVatBox(companyId, '2616', box)).rejects.toThrow(/chart_of_accounts_vat_box_check/)
     }
   })

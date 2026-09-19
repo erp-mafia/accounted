@@ -11,10 +11,12 @@
  * company's history), so the account itself carries the ruta it feeds.
  *
  * `vat_box` on chart_of_accounts is that override: null keeps the BAS
- * mapping, a box code routes the balance there, 'none' keeps the account
- * out of the declaration. Only 26xx accounts other than 2650 (the
- * momsredovisning clearing account) may carry one; the DB CHECK mirrors
- * ACCOUNT_VAT_BOXES and isVatBoxAccount.
+ * mapping, a box code routes the balance there. There is deliberately no
+ * "no box" value: a 26xx account with a balance is VAT until proven
+ * otherwise, and an opt-out would let a real balance leave the declaration
+ * in silence. Only 26xx accounts other than 2650 (the momsredovisning
+ * clearing account) may carry one; the DB CHECK mirrors ACCOUNT_VAT_BOXES
+ * and isVatBoxAccount.
  */
 import { ACCOUNT_TO_BOX, BOX_LABELS, type MomsBox } from './moms-box-mapping'
 import type { AccountVatRutaMapping } from './account-vat-treatment'
@@ -27,11 +29,11 @@ export const ACCOUNT_VAT_BOX_CODES = [
   '48',
 ] as const
 
-/** The stored values: a box code, or 'none' to keep the account out of the declaration. */
-export const ACCOUNT_VAT_BOXES = [...ACCOUNT_VAT_BOX_CODES, 'none'] as const
+/** The stored values. One name for the set the schema, the DB CHECK and the UI share. */
+export const ACCOUNT_VAT_BOXES = ACCOUNT_VAT_BOX_CODES
 
 export type AccountVatBoxCode = typeof ACCOUNT_VAT_BOX_CODES[number]
-export type AccountVatBox = typeof ACCOUNT_VAT_BOXES[number]
+export type AccountVatBox = AccountVatBoxCode
 
 export function isAccountVatBox(value: unknown): value is AccountVatBox {
   return typeof value === 'string' && (ACCOUNT_VAT_BOXES as readonly string[]).includes(value)
@@ -49,10 +51,10 @@ export function isVatBoxAccount(accountNumber: string): boolean {
 /**
  * The ruta an override routes the balance to, in the shape the declaration
  * consumes for dynamic accounts. Output VAT boxes read the credit balance,
- * ruta 48 the debit balance. 'none' maps nowhere (null).
+ * ruta 48 the debit balance, the same sides the static BAS map uses, so a
+ * period dominated by credit notes comes out negative rather than lost.
  */
-export function vatBoxRutaMapping(box: AccountVatBox): AccountVatRutaMapping | null {
-  if (box === 'none') return null
+export function vatBoxRutaMapping(box: AccountVatBox): AccountVatRutaMapping {
   return { box: `ruta${box}` as AccountVatRutaMapping['box'], side: box === '48' ? 'debit' : 'credit' }
 }
 
@@ -65,7 +67,7 @@ export function basVatBox(accountNumber: string): AccountVatBoxCode | null {
 }
 
 export function vatBoxLabel(box: AccountVatBox): string {
-  return box === 'none' ? 'Ingen ruta' : BOX_LABELS[box as MomsBox]
+  return BOX_LABELS[box as MomsBox]
 }
 
 /** The last digit of the box for the rate the name states: 25 % (or unstated) 0, 12 % 1, 6 % 2. */

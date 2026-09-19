@@ -139,13 +139,11 @@ export async function fetchDynamicVatAccounts(
 
     if (row.account_class === 2) {
       // A VAT account with an explicit momsruta leaves its BAS box (explicit)
-      // and feeds the chosen one; 'none' leaves the declaration entirely.
-      // A class-2 row without an override is not a VAT classification at all.
+      // and feeds the chosen one. A class-2 row without an override is not a
+      // VAT classification at all.
       if (!isVatBoxAccount(account) || !isAccountVatBox(row.vat_box)) continue
       result.explicitAccounts.add(account)
-      const mapping = vatBoxRutaMapping(row.vat_box)
-      if (!mapping) continue
-      result.mappingByAccount.set(account, mapping)
+      result.mappingByAccount.set(account, vatBoxRutaMapping(row.vat_box))
       result.accounts.push(account)
       continue
     }

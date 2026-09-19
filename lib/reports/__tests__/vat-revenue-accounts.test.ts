@@ -277,24 +277,13 @@ describe('fetchDynamicVatAccounts (26xx momsruta override)', () => {
     expect(result.rcBasisRateByAccount.size).toBe(0)
   })
 
-  it("keeps an account with vat_box 'none' out of every box", async () => {
-    fetchAllRowsMock.mockResolvedValue([
-      row('2618', 'Vilande utgående moms', { vat_box: 'none' }),
-    ])
-
-    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
-
-    expect(result.explicitAccounts.has('2618')).toBe(true)
-    expect(result.mappingByAccount.has('2618')).toBe(false)
-    expect(result.accounts).toEqual([])
-  })
-
   it('ignores class-2 rows without an override, 2650, and invalid values', async () => {
     fetchAllRowsMock.mockResolvedValue([
       row('2615', 'Utgående moms import 25 %'),
       row('2650', 'Redovisningskonto för moms', { vat_box: '48' }),
       row('2440', 'Leverantörsskulder', { vat_box: '30' }),
       row('2616', 'Utgående moms VMB', { vat_box: '49' }),
+      row('2618', 'Vilande utgående moms', { vat_box: 'none' }),
     ])
 
     const result = await fetchDynamicVatAccounts(supabase, 'company-1')

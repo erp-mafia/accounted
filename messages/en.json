@@ -5921,7 +5921,6 @@
     "vat_box_bas": "Per BAS: box {box} ({label})",
     "vat_box_bas_unknown": "Per BAS: no box (the account number is not in BAS)",
     "vat_box_option": "Box {box}: {label}",
-    "vat_box_none": "No box (outside the return)",
     "vat_box_help": "Controls which VAT return box receives the account balance. Only set it when the chart deviates from BAS, e.g. import on 2616 or services from outside the EU on 2617.",
     "vat_box_deviation": "The account name suggests box {box} ({label}), not the box BAS gives the number. Pick that box if the name is right.",
     "vat_treatment_standard_25": "Swedish sales, 25% (box 05)",

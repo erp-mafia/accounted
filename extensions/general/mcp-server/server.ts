@@ -9574,7 +9574,7 @@ export const tools: McpTool[] = [
         sru_code: { type: 'string' },
         vat_box: {
           type: ['string', 'null'],
-          description: '26xx momsruta: 10-12, 30-32, 60-62, 48, none; null = BAS.',
+          description: '26xx momsruta: 10-12, 30-32, 60-62 or 48; null = BAS.',
         },
         is_active: { type: 'boolean', description: 'false deactivates.' },
         dry_run: { type: 'boolean' },

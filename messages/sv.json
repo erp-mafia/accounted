@@ -5921,7 +5921,6 @@
     "vat_box_bas": "Enligt BAS: ruta {box} ({label})",
     "vat_box_bas_unknown": "Enligt BAS: ingen ruta (kontonumret finns inte i BAS)",
     "vat_box_option": "Ruta {box}: {label}",
-    "vat_box_none": "Ingen ruta (utanför deklarationen)",
     "vat_box_help": "Styr vilken ruta kontots saldo hamnar i. Välj bara om kontoplanen avviker från BAS, t.ex. import på 2616 eller tjänster utanför EU på 2617.",
     "vat_box_deviation": "Kontonamnet antyder ruta {box} ({label}), inte den ruta BAS ger kontonumret. Välj rutan om namnet stämmer.",
     "vat_treatment_standard_25": "Försäljning Sverige, 25 % (ruta 05)",

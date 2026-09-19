@@ -8,9 +8,10 @@
 -- The import keeps the company's numbers (they are its history), so the
 -- account carries the ruta it feeds instead.
 --
--- null keeps the BAS mapping, a box code routes the balance there, 'none'
--- keeps the account out of the declaration. Only 26xx accounts other than
--- 2650 (momsredovisning, which nets the declaration) may carry one. The set
+-- null keeps the BAS mapping, a box code routes the balance there. There is
+-- no "no box" value on purpose: an opt-out would let a real VAT balance leave
+-- the declaration in silence. Only 26xx accounts other than 2650
+-- (momsredovisning, which nets the declaration) may carry one. The set
 -- mirrors ACCOUNT_VAT_BOXES in lib/vat/account-vat-box.ts.
 ALTER TABLE public.chart_of_accounts
   ADD COLUMN IF NOT EXISTS vat_box text;
@@ -28,13 +29,12 @@ ALTER TABLE public.chart_of_accounts
         '10', '11', '12',
         '30', '31', '32',
         '60', '61', '62',
-        '48',
-        'none'
+        '48'
       )
     )
   );
 
 COMMENT ON COLUMN public.chart_of_accounts.vat_box IS
-  'Momsruta override for a 26xx VAT account: box code (10-12, 30-32, 60-62, 48), ''none'' to keep it out of the declaration, or NULL for the BAS mapping by account number.';
+  'Momsruta override for a 26xx VAT account: box code (10-12, 30-32, 60-62, 48), or NULL for the BAS mapping by account number.';
 
 NOTIFY pgrst, 'reload schema';

@@ -20,9 +20,9 @@ interface AccountVatBoxSelectProps {
 
 /**
  * Momsruta for a 26xx VAT account. 'bas' (stored as null) keeps the mapping
- * by account number; a box code routes the balance there; 'none' keeps the
- * account out of the declaration. Renders only for accounts that may carry
- * an override (isVatBoxAccount), so the caller gates on that.
+ * by account number; a box code routes the balance there. Renders only for
+ * accounts that may carry an override (isVatBoxAccount), so the caller gates
+ * on that.
  */
 export function AccountVatBoxSelect({
   value,
@@ -52,7 +52,6 @@ export function AccountVatBoxSelect({
               {t('vat_box_option', { box, label: vatBoxLabel(box) })}
             </SelectItem>
           ))}
-          <SelectItem value="none">{t('vat_box_none')}</SelectItem>
         </SelectContent>
       </Select>
       <p className="text-xs text-muted-foreground">

@@ -36,6 +36,7 @@ describe('isAccountVatBox', () => {
   it('accepts exactly the stored set', () => {
     for (const box of ACCOUNT_VAT_BOXES) expect(isAccountVatBox(box)).toBe(true)
     expect(isAccountVatBox('49')).toBe(false)
+    expect(isAccountVatBox('none')).toBe(false)
     expect(isAccountVatBox('50')).toBe(false)
     expect(isAccountVatBox('05')).toBe(false)
     expect(isAccountVatBox(10)).toBe(false)
@@ -56,9 +57,6 @@ describe('vatBoxRutaMapping', () => {
     expect(vatBoxRutaMapping('48')).toEqual({ box: 'ruta48', side: 'debit' })
   })
 
-  it("maps 'none' nowhere", () => {
-    expect(vatBoxRutaMapping('none')).toBeNull()
-  })
 })
 
 describe('basVatBox', () => {
@@ -115,8 +113,8 @@ describe('vatBoxDeviationFromName', () => {
 })
 
 describe('vatBoxLabel', () => {
-  it('uses the declaration labels and a plain label for none', () => {
+  it('uses the declaration labels', () => {
     expect(vatBoxLabel('30')).toBe('Utgående moms på inköp 25%')
-    expect(vatBoxLabel('none')).toBe('Ingen ruta')
+    expect(vatBoxLabel('48')).toBe('Ingående moms att dra av')
   })
 })
