@@ -13,9 +13,53 @@ import {
   type ScopedCompany,
 } from '@/lib/portfolio/scope'
 import type { CompanyRole } from '@/types'
+import { COMPANY_PIN_QUERY_PARAM } from './tool-namespace'
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/**
+ * Per-key company allowlist (validateApiKey().allowedCompanyIds): null means
+ * the key reaches every membership; a list means only those companies. Ids
+ * compare case-insensitively because a caller may spell a UUID in upper
+ * case while the DB returns lower case.
+ */
+export type CompanyAllowlist = readonly string[] | null | undefined
+
+export function isCompanyAllowed(allowlist: CompanyAllowlist, companyId: string): boolean {
+  if (!allowlist) return true
+  const wanted = companyId.toLowerCase()
+  return allowlist.some((id) => id.toLowerCase() === wanted)
+}
+
+/**
+ * The company set a tool may enumerate for this actor: the pin alone when
+ * the connection is pinned, else the key allowlist, else null (every
+ * membership). For gnubok_list_companies and the all_companies listing,
+ * which enumerate rather than resolve one company.
+ */
+export function effectiveCompanyRestriction(actor: {
+  allowedCompanyIds?: string[] | null
+  pinnedCompanyId?: string | null
+} | undefined): string[] | null {
+  if (!actor) return null
+  if (actor.pinnedCompanyId) return [actor.pinnedCompanyId]
+  return actor.allowedCompanyIds ?? null
+}
+
+/**
+ * `?company=<uuid>` on the MCP endpoint URL. Absent: no pin. Present but not
+ * a UUID: malformed, which the dispatcher answers with a JSON-RPC error
+ * before anything else runs. The value is normalised to lower case, the
+ * spelling the DB and every company_id echo use.
+ */
+export function parseCompanyPin(request: Request): { pin: string | null; malformed: boolean } {
+  const raw = new URL(request.url).searchParams.get(COMPANY_PIN_QUERY_PARAM)
+  if (raw === null) return { pin: null, malformed: false }
+  const trimmed = raw.trim()
+  if (!UUID_PATTERN.test(trimmed)) return { pin: null, malformed: true }
+  return { pin: trimmed.toLowerCase(), malformed: false }
+}
 
 const COMPANY_INDEPENDENT_TOOLS = new Set([
   'gnubok_search_tools',
@@ -161,7 +205,8 @@ export function companyEchoPayload(result: unknown, company: CompanyEcho): unkno
  */
 export async function listAccessibleCompanies(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  allowedCompanyIds?: CompanyAllowlist
 ): Promise<Array<{ company_id: string; name: string }>> {
   try {
     type MembershipRow = {
@@ -176,7 +221,9 @@ export async function listAccessibleCompanies(
       const company = Array.isArray(membership.companies)
         ? membership.companies[0]
         : membership.companies
-      return company && company.archived_at === null ? [company] : []
+      return company && company.archived_at === null && isCompanyAllowed(allowedCompanyIds, company.id)
+        ? [company]
+        : []
     })
     if (accessible.length === 0) return []
     const displayNames = new Map<string, string>()
@@ -258,7 +305,17 @@ export function isTenantWriteScope(scope: ApiKeyScope | undefined): boolean {
   return scope !== undefined && scopeKind(scope) === 'write'
 }
 
-export function projectToolInputSchema(tool: ToolSchemaSource): Record<string, unknown> {
+/**
+ * The tool's inputSchema as tools/list shows it: company-dependent tools
+ * (and the optional-company ones) gain the company_id property. Under a
+ * pinned connection (`options.pinned`) nothing gains it: the company is
+ * fixed by the URL and a company_id argument is refused by the dispatcher.
+ */
+export function projectToolInputSchema(
+  tool: ToolSchemaSource,
+  options: { pinned?: boolean } = {}
+): Record<string, unknown> {
+  if (options.pinned) return tool.inputSchema
   if (!isCompanyDependentTool(tool.name) && !isOptionalCompanyTool(tool.name)) return tool.inputSchema
 
   const properties =
@@ -292,10 +349,20 @@ export async function resolveMcpCompanyContext(args: {
   /** null while the key's user has no company (see validateApiKey). */
   defaultCompanyId: string | null
   requestedCompanyId?: string
+  /**
+   * The key's company allowlist (validateApiKey().allowedCompanyIds). A
+   * company outside it is refused as NOT_FOUND before the membership query,
+   * with the same answer a non-member company gets: the allowlist never
+   * reveals more than membership would.
+   */
+  allowedCompanyIds?: CompanyAllowlist
 }): Promise<McpCompanyContext> {
   const companyId = args.requestedCompanyId ?? args.defaultCompanyId
   if (!companyId) {
     throw noCompanyYetError()
+  }
+  if (!isCompanyAllowed(args.allowedCompanyIds, companyId)) {
+    throw codedError('NOT_FOUND', 'Company not reachable with this key')
   }
 
   // One query: the membership row, the archived flag, and both name sources
@@ -383,8 +450,15 @@ export async function resolveMcpCompanyScope(args: {
   supabase: SupabaseClient
   userId: string
   scope: CompanyScopeInput | undefined
+  /** The key's company allowlist: the scope is intersected with it. */
+  allowedCompanyIds?: CompanyAllowlist
 }): Promise<McpCompanyScope> {
-  const resolved = await resolveCompanyScope(args.supabase, args.userId, args.scope ?? {})
+  const input: CompanyScopeInput = args.scope ?? {}
+  const resolved = await resolveCompanyScope(
+    args.supabase,
+    args.userId,
+    args.allowedCompanyIds ? { ...input, restrictTo: [...args.allowedCompanyIds] } : input
+  )
   const dormant: string[] = []
   const kept: ScopedCompany[] = []
   const gates = await Promise.all(

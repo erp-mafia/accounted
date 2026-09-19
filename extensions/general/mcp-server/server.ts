@@ -253,6 +253,7 @@ import {
   codedError,
   companyEchoFromContext,
   companyEchoPayload,
+  effectiveCompanyRestriction,
   extractRequestedCompany,
   isCompanyDependentTool,
   isOperationScopedTool,
@@ -260,6 +261,7 @@ import {
   isScopedTool,
   listAccessibleCompanies,
   noCompanyYetError,
+  parseCompanyPin,
   parseScopeArgument,
   projectToolInputSchema,
   resolveMcpCompanyContext,
@@ -568,6 +570,19 @@ interface ActorContext {
    * behavior.
    */
   client?: string | null
+  /**
+   * Per-key company allowlist (validateApiKey().allowedCompanyIds): null
+   * when the key reaches every membership. An authorization input, not
+   * telemetry: the tools that enumerate or resolve companies intersect with
+   * it. Only meaningful for `type: 'api_key'`.
+   */
+  allowedCompanyIds?: string[] | null
+  /**
+   * The company this connection is pinned to (`?company=<uuid>` on the MCP
+   * URL), or null. Also the key default for the request. Tools that
+   * enumerate companies list only this one under a pin.
+   */
+  pinnedCompanyId?: string | null
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -3970,6 +3985,9 @@ export const tools: McpTool[] = [
     async execute(args, _companyId, _userId, _supabase, _actor) {
       const namespace: McpToolNamespace =
         args.__toolNamespace === 'accounted' ? 'accounted' : 'gnubok'
+      // Injected by the dispatcher on a pinned connection: the company switch
+      // and the cross-company tools are not part of this connection.
+      const companyPinned = args.__companyPinned === true
       const query = canonicalizeToolReferencesInText(
         ((args.query as string) || '').toLowerCase().trim()
       )
@@ -3992,6 +4010,7 @@ export const tools: McpTool[] = [
       const scopesInjected = Array.isArray(rawKeyScopes)
 
       let candidates = tools.filter((t) => {
+        if (companyPinned && (t.name === 'gnubok_list_companies' || isScopedTool(t.name))) return false
         const required = TOOL_SCOPE_MAP[t.name]
         if (required) {
           // Scoped tool: visible only if scopes were injected AND the caller has it.
@@ -4065,7 +4084,7 @@ export const tools: McpTool[] = [
               description: t.description,
               scope: requiredScope,
               ...reach,
-              inputSchema: projectToolInputSchema(t),
+              inputSchema: projectToolInputSchema(t, { pinned: companyPinned }),
               ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
               annotations: t.annotations,
               ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -4140,7 +4159,7 @@ export const tools: McpTool[] = [
       required: ['companies', 'count', 'total_count', 'default_company_id', 'team', 'scope_hint'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args, defaultCompanyId, userId, supabase) {
+    async execute(args, defaultCompanyId, userId, supabase, actor) {
       type CompanyRow = {
         id: string
         name: string
@@ -4154,12 +4173,20 @@ export const tools: McpTool[] = [
         companies: CompanyRow | CompanyRow[] | null
       }
 
+      // The key allowlist, or the pin alone on a pinned connection: this
+      // key's reach, never the user's whole membership list.
+      const restriction = effectiveCompanyRestriction(actor)
+      const reachable = restriction
+        ? new Set(restriction.map((id) => id.toLowerCase()))
+        : null
       const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
       const accessible = memberships.flatMap((membership) => {
         const company = Array.isArray(membership.companies)
           ? membership.companies[0]
           : membership.companies
-        return company && company.archived_at === null ? [{ membership, company }] : []
+        if (!company || company.archived_at !== null) return []
+        if (reachable && !reachable.has(company.id.toLowerCase())) return []
+        return [{ membership, company }]
       })
       const companyIds = accessible.map(({ company }) => company.id)
       const displayNames = new Map<string, string>()
@@ -4320,11 +4347,12 @@ export const tools: McpTool[] = [
       required: ['team', 'summary', 'companies', 'scope'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args, _companyId, userId, supabase) {
+    async execute(args, _companyId, userId, supabase, actor) {
       const scope = await resolveMcpCompanyScope({
         supabase,
         userId,
         scope: parseScopeArgument(args.scope),
+        allowedCompanyIds: actor?.allowedCompanyIds,
       })
       const overview = await fetchPortfolioOverview(supabase, scope, {
         ...(typeof args.deadline_kind === 'string'
@@ -4399,6 +4427,7 @@ export const tools: McpTool[] = [
         supabase,
         userId,
         scope: parseScopeArgument(args.scope),
+        allowedCompanyIds: actor?.allowedCompanyIds,
       })
       const runnerActor: ActorContext = actor ?? { type: 'api_key' }
       const run = await runAcrossCompanies(
@@ -4528,6 +4557,7 @@ export const tools: McpTool[] = [
         supabase,
         userId,
         scope: parseScopeArgument(args.scope),
+        allowedCompanyIds: actor?.allowedCompanyIds,
       })
       const runnerActor: ActorContext = actor ?? { type: 'api_key' }
       const run = await runAcrossCompanies(
@@ -4646,6 +4676,7 @@ export const tools: McpTool[] = [
         supabase,
         userId,
         scope: parseScopeArgument(args.scope),
+        allowedCompanyIds: actor?.allowedCompanyIds,
       })
       // Explicit ids that do not resolve are an error for a write: silently
       // staging for a subset of what the caller named would be worse than
@@ -4661,6 +4692,7 @@ export const tools: McpTool[] = [
           userId,
           defaultCompanyId: null,
           requestedCompanyId: company.companyId,
+          allowedCompanyIds: actor?.allowedCompanyIds,
         })
         assertMcpCompanyWriteAccess(context, innerScope)
         const override = perCompany[company.companyId]
@@ -22678,7 +22710,7 @@ export const tools: McpTool[] = [
     // render_ui=true (the dispatcher emits result-level _meta in that case),
     // keeping the tool data-only by default.
     uiResourceUri: 'ui://pending-operations/app.html',
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const status = (args.status as string) ?? 'pending'
       const limit = Math.min(200, Math.max(1, (args.limit as number) ?? 50))
       const offset = Math.max(0, (args.offset as number) ?? 0)
@@ -22689,7 +22721,9 @@ export const tools: McpTool[] = [
 
       // Cross-company listing is bounded to the caller's memberships (the
       // service role sees everything, so the filter is the authorization).
-      const accessible = acrossCompanies ? await listAccessibleCompanies(supabase, userId) : []
+      const accessible = acrossCompanies
+        ? await listAccessibleCompanies(supabase, userId, effectiveCompanyRestriction(actor))
+        : []
       const accessibleIds = accessible.map((company) => company.company_id)
       const namesById = new Map(accessible.map((company) => [company.company_id, company.name]))
       if (acrossCompanies && accessibleIds.length === 0) {
@@ -22821,6 +22855,7 @@ export const tools: McpTool[] = [
               userId,
               defaultCompanyId: null,
               requestedCompanyId: member.company_id,
+              allowedCompanyIds: actor?.allowedCompanyIds,
             })
             assertMcpCompanyWriteAccess(context, 'pending_operations:approve')
             row.company_name = context.companyName
@@ -24241,6 +24276,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let apiKeyName: string | undefined
   let keyMode: ApiKeyMode = 'live'
   let unattendedCommitLimit: number | null = null
+  let allowedCompanyIds: string[] | null = null
+  // `?company=<uuid>` on the URL: the connection is pinned to that company
+  // (validated against membership and the allowlist below, per request).
+  let pinnedCompanyId: string | null = null
+  let pinnedCompanyName: string | null = null
   if (token) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
@@ -24264,6 +24304,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       apiKeyName,
       mode: keyMode,
       unattendedCommitLimit,
+      allowedCompanyIds,
     } = authResult)
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
@@ -24276,6 +24317,55 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     if (!rl.ok) return rl.response!
   }
   const supabase = createServiceClientNoCookies()
+
+  // ── Company pin ──
+  // `?company=<uuid>` pins the whole connection to one company: it becomes
+  // the default, tools/list hides the company switch, and a call naming
+  // another company_id is refused. Resolved on every authenticated request
+  // through the same membership + allowlist + seat gate a company_id
+  // argument goes through, so a pin can never reach more than the key can.
+  // Anonymous requests are unaffected: there is no key to check it against
+  // until the client connects.
+  if (!isAnonymous) {
+    const pin = parseCompanyPin(request)
+    if (pin.malformed) {
+      return NextResponse.json(
+        jsonRpcError(
+          body.id ?? null,
+          -32602,
+          'Invalid company pin: the company query parameter must be a company id (UUID). Remove it, or use an id from gnubok_list_companies.'
+        ),
+        { status: 400 }
+      )
+    }
+    if (pin.pin) {
+      try {
+        const pinContext = await resolveMcpCompanyContext({
+          supabase,
+          userId,
+          defaultCompanyId: companyId,
+          requestedCompanyId: pin.pin,
+          allowedCompanyIds,
+        })
+        pinnedCompanyId = pinContext.companyId
+        pinnedCompanyName = pinContext.companyName
+        companyId = pinContext.companyId
+      } catch (err) {
+        const code = (err as { code?: string }).code
+        const internal = code === 'INTERNAL_ERROR'
+        const message = internal
+          ? `Could not verify the pinned company: ${err instanceof Error ? err.message : 'unknown error'}`
+          : code === 'FORBIDDEN'
+            ? `The pinned company (${pin.pin}) is not usable with this key: ${err instanceof Error ? err.message : 'refused'}`
+            : `This connection is pinned to a company this key cannot reach (${pin.pin}). Remove the company query parameter from the URL, or pin one of the companies gnubok_list_companies returns.`
+        return NextResponse.json(
+          jsonRpcError(body.id ?? null, internal ? -32603 : -32602, message),
+          internal ? { status: 500 } : undefined
+        )
+      }
+    }
+  }
+
   // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
   // way for an agent to keep a stable identifier across tools/call invocations
   // in one conversation. We use it to correlate telemetry + drive the next-hint
@@ -24299,6 +24389,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         unattendedCommitLimit,
         sessionId,
         client,
+        allowedCompanyIds,
+        pinnedCompanyId,
       }
 
   // ── Stateless core (spec 2026-07-28) ──
@@ -24417,7 +24509,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             'Discovery:',
             '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); a WRITE outside tools/list is then out of reach (the bridge refuses writes), so check callable_via on each search hit before planning around it.',
             '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (missing scope or search-only write).',
-            `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
+            pinnedCompanyId
+              ? `• Companies: this connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}). Every tool runs for it; do not pass company_id. The company switch (gnubok_list_companies) and the cross-company tools are not available on this connection.`
+              : `• Companies: ${companyId ? `the default company is ${companyId}; omit company_id to use it` : 'this account has no company yet. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}. gnubok_list_companies lists every company this key reaches (default first, then most recently used; query narrows by name or org number). A wrong company_id answers with candidates. gnubok_approve_pending_operation and gnubok_reject_pending_operation need only the operation_id: the company follows the operation.`,
             '• Many companies at once: gnubok_client_overview (unbooked, inbox, next deadline per company; filter by deadline kind and window), gnubok_run_across_companies (any read tool once per company, one summarised answer) and gnubok_stage_across_companies (one write staged per company under a batch_id; approve the batch or each operation). scope = { companies: "all" | "team" | [ids] }; "team" is the byrå team\'s clients.',
             '• MCP resources use the default company. For another company read Accounted://company/{company_id}/context (resource template) or call gnubok_get_agent_briefing with company_id.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
@@ -24486,6 +24580,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // can pick the right tool; calling a protected one is what produces
         // the 401 challenge that starts the connect (and signup) flow.
         if (isAnonymous) return true
+        // Pinned connection: no company switch, no cross-company tools.
+        if (pinnedCompanyId && (t.name === 'gnubok_list_companies' || isScopedTool(t.name))) {
+          return false
+        }
         const required = TOOL_SCOPE_MAP[t.name]
         return !required || hasScope(keyScopes, required)
       })
@@ -24512,7 +24610,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 name: toPublicToolName(t.name, toolNamespace),
                 ...(t.title ? { title: t.title } : {}),
                 description: t.description,
-                inputSchema: projectToolInputSchema(t),
+                inputSchema: projectToolInputSchema(t, { pinned: pinnedCompanyId !== null }),
                 ...(t.outputSchema ? { outputSchema: t.outputSchema } : {}),
                 annotations: t.annotations,
                 ...(Object.keys(meta).length > 0 ? { _meta: meta } : {}),
@@ -24699,6 +24797,28 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
 
 
+        // Pinned connection: the company is fixed by the URL. A call that
+        // names another company is refused outright (FORBIDDEN, not the
+        // NOT_FOUND-with-candidates a free connection gives: there is
+        // nothing to switch to), and the cross-company tools are unavailable.
+        if (pinnedCompanyId) {
+          if (
+            extracted.requestedCompanyId !== undefined &&
+            extracted.requestedCompanyId.toLowerCase() !== pinnedCompanyId
+          ) {
+            throw codedError(
+              'FORBIDDEN',
+              `This connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}): company_id ${extracted.requestedCompanyId} is not reachable here. Omit company_id, or connect without the company query parameter to reach other companies.`
+            )
+          }
+          if (isScopedTool(toolName)) {
+            throw codedError(
+              'VALIDATION_ERROR',
+              `This connection is pinned to ${pinnedCompanyName} (${pinnedCompanyId}): ${requestedToolName} works across companies and is not available here. Call the underlying tool directly; it runs for ${pinnedCompanyName}.`
+            )
+          }
+        }
+
         // Optional-company tools resolve (and membership-check) a company only
         // when the caller names one; anonymous callers have no memberships to
         // check, so a company_id from them is dropped rather than resolved.
@@ -24708,9 +24828,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (wantsCompanyContext) {
           // Approve/reject name an operation whose row already knows its
           // company: route there when the caller did not name one, so the
-          // company_id never has to be repeated on the approval.
+          // company_id never has to be repeated on the approval. Not under a
+          // pin: the company is the pin, and an operation staged elsewhere
+          // is simply not found there.
           let requestedCompanyId = extracted.requestedCompanyId
-          if (requestedCompanyId === undefined && isOperationScopedTool(toolName)) {
+          if (requestedCompanyId === undefined && !pinnedCompanyId && isOperationScopedTool(toolName)) {
             const fromRow = await resolveOperationCompanyId(supabase, toolArgs.operation_id)
             if (fromRow) {
               requestedCompanyId = fromRow
@@ -24722,6 +24844,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             userId,
             defaultCompanyId: companyId,
             requestedCompanyId,
+            allowedCompanyIds,
           })
           assertMcpCompanyWriteAccess(companyContext, requiredScope)
           effectiveCompanyId = companyContext.companyId
@@ -24741,7 +24864,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // caller did reach, and the viewer gate must stay a pure refusal.
         const candidates =
           structured.error.code === 'NOT_FOUND'
-            ? await listAccessibleCompanies(supabase, userId)
+            ? await listAccessibleCompanies(
+                supabase,
+                userId,
+                pinnedCompanyId ? [pinnedCompanyId] : allowedCompanyIds
+              )
             : []
         const publicStructured = projectMcpPayload(
           candidates.length > 0 ? { ...structured, candidates } : structured,
@@ -24974,6 +25101,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
         if (toolName === 'gnubok_search_tools') {
           (toolArgs as Record<string, unknown>).__toolNamespace = toolNamespace
+          if (pinnedCompanyId) (toolArgs as Record<string, unknown>).__companyPinned = true
         }
         const rawResult = await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))
         const canonicalResult = effectiveCompanyId
@@ -25128,6 +25256,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             userId,
             defaultCompanyId: companyId,
             requestedCompanyId: templateMatch[1].toLowerCase(),
+            // Under a pin only the pinned company's context is readable.
+            allowedCompanyIds: pinnedCompanyId ? [pinnedCompanyId] : allowedCompanyIds,
           })
           const result = await companyCurrentResource.read({
             supabase,

@@ -126,6 +126,8 @@ Fråga om alla på en gång: \`accounted_client_overview\` ger en rad per bolag 
 
 I Claude Code knyter du en mapp till ett bolag med \`/accounted:use <namn eller organisationsnummer>\`: kommandot skriver \`.accounted.json\` i mappen, och varje flöde som startas därifrån går mot det bolaget. En mapp per klient är byråmönstret; \`/accounted:clients\` visar hela portföljen varifrån som helst.
 
+En nyckel kan också begränsas till några av dina bolag när du skapar den eller ansluter, och en begränsad nyckel når aldrig de övriga, hur anropet än formuleras. Vill du låsa en anslutning till ett enda bolag lägger du till \`?company=<bolagets id>\` i adressen (eller sätter \`ACCOUNTED_COMPANY\` för bryggan): bolagsväxlingen försvinner helt, varje anrop går mot det bolaget, och ett anrop som anger ett annat \`company_id\` avvisas.
+
 ## Testa med de här frågorna
 
 Alla tre är rena läsningar och säkra att köra mot ditt riktiga bolag (med en \`gnubok_sk_test_*\`-nyckel kan inget bokföras alls). De går igenom hela läsvägen utan att boka något.

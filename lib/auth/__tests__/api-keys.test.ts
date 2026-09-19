@@ -299,6 +299,7 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read', 'reports:read'],
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
     })
   })
 
@@ -322,6 +323,7 @@ describe('validateApiKey', () => {
       scopes: DEFAULT_SCOPES,
       mode: 'live',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
     })
   })
 
@@ -348,6 +350,7 @@ describe('validateApiKey', () => {
       scopes: ['transactions:read'],
       mode: 'test',
       unattendedCommitLimit: null,
+      allowedCompanyIds: null,
     })
   })
 
@@ -385,6 +388,43 @@ describe('validateApiKey', () => {
         })
         const result = await validateApiKey('gnubok_sk_test-key-value')
         expect(result).toMatchObject({ unattendedCommitLimit: null })
+      }
+    })
+  })
+
+  describe('allowed company ids (per-key allowlist, migration 20260919210000)', () => {
+    it('surfaces the allowlist from the RPC row', async () => {
+      setupMockRpc({
+        data: [{
+          user_id: 'user-123',
+          company_id: 'company-456',
+          scopes: ['transactions:read'],
+          rate_limited: false,
+          allowed_company_ids: ['company-456', 'company-789'],
+        }],
+        error: null,
+      })
+
+      const result = await validateApiKey('gnubok_sk_test-key-value')
+      expect(result).toMatchObject({ allowedCompanyIds: ['company-456', 'company-789'] })
+    })
+
+    it('reads an absent, null, empty or malformed value as no allowlist', async () => {
+      // Absent = a DB that has not run the migration: the key keeps reaching
+      // every membership, exactly as before the column existed.
+      for (const raw of [undefined, null, [], 'company-456', { 0: 'x' }, [42]]) {
+        setupMockRpc({
+          data: [{
+            user_id: 'user-123',
+            company_id: 'company-456',
+            scopes: ['transactions:read'],
+            rate_limited: false,
+            allowed_company_ids: raw,
+          }],
+          error: null,
+        })
+        const result = await validateApiKey('gnubok_sk_test-key-value')
+        expect(result).toMatchObject({ allowedCompanyIds: null })
       }
     })
   })

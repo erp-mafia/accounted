@@ -36,6 +36,14 @@ export interface AuthCodePayload {
    * route falls back to resolving the active company itself.
    */
   companyId?: string | null
+  /**
+   * Per-key company allowlist chosen on the consent page. A non-empty array
+   * restricts the minted key to exactly those companies (api_key_companies
+   * rows); null or undefined leaves it unrestricted, reaching every company
+   * the user belongs to, including future memberships. When present,
+   * `companyId` is always one of these.
+   */
+  companyIds?: string[] | null
   exp: number
 }
 

@@ -44,6 +44,14 @@ export interface CompanyScopeInput {
   companies?: CompanyScopeSelector
   /** Company ids removed from the selection (applied after the selector). */
   exclude?: string[]
+  /**
+   * The key's company allowlist (validateApiKey().allowedCompanyIds), applied
+   * right after membership resolution and before any selector: a membership
+   * outside it is not accessible for this key, so 'all' and 'team' never
+   * include it and an explicit id for it lands in `unresolved`. null or
+   * undefined means no allowlist.
+   */
+  restrictTo?: string[] | null
 }
 
 export interface ScopedCompany {
@@ -137,11 +145,16 @@ export async function resolveCompanyScope(
   const selector: CompanyScopeSelector = input.companies ?? 'all'
 
   // 1. Memberships: the authorization boundary for everything that follows.
+  //    A key allowlist (restrictTo) narrows it further and never widens it.
+  const restrictTo = input.restrictTo
+    ? new Set(input.restrictTo.map((id) => id.toLowerCase()))
+    : null
   const memberships = (await getUserCompanies(supabase, userId)) as unknown as MembershipRow[]
   const accessible = new Map<string, ScopedCompany>()
   for (const membership of memberships) {
     const company = pickEmbedded(membership.companies)
     if (!company || company.archived_at !== null) continue
+    if (restrictTo && !restrictTo.has(company.id.toLowerCase())) continue
     accessible.set(company.id.toLowerCase(), {
       companyId: company.id,
       name: company.name,

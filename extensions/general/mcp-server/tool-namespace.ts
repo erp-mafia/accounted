@@ -1,6 +1,13 @@
 export type McpToolNamespace = 'gnubok' | 'accounted'
 
 export const TOOL_NAMESPACE_QUERY_PARAM = 'tool_namespace'
+/**
+ * `?company=<uuid>` on the MCP endpoint pins the whole connection to one
+ * company: it becomes the default, the company switch disappears from
+ * tools/list, and a call naming another company_id is refused. Parsed by
+ * parseCompanyPin in company-routing.ts.
+ */
+export const COMPANY_PIN_QUERY_PARAM = 'company'
 
 const LEGACY_TOOL_PREFIX = 'gnubok_'
 const ACCOUNTED_TOOL_PREFIX = 'accounted_'

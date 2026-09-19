@@ -173,6 +173,16 @@ export async function validateApiKey(
        * block every commit for the key.
        */
       unattendedCommitLimit: number | null
+      /**
+       * Per-key company allowlist (api_key_companies, migration
+       * 20260919210000): null when the key has no rows, meaning every
+       * non-archived company the user belongs to is reachable (and future
+       * memberships follow); else the listed company ids, which every door
+       * intersects with live membership on each call. The allowlist can only
+       * narrow reach, never widen it. null also when the deployed DB has not
+       * run the migration yet.
+       */
+      allowedCompanyIds: string[] | null
     }
   | { error: string; status: number }
 > {
@@ -224,7 +234,24 @@ export async function validateApiKey(
     // month-end because a defence-in-depth read blipped would be far worse
     // than not enforcing.
     unattendedCommitLimit: parseUnattendedCommitLimit(row.unattended_commit_limit),
+    allowedCompanyIds: parseAllowedCompanyIds(row.allowed_company_ids),
   }
+}
+
+/**
+ * Null unless the value is a non-empty array of strings.
+ *
+ * The RPC returns NULL for a key without allowlist rows and never an empty
+ * array (array_agg over zero rows is NULL), so anything that is not a
+ * non-empty string array reads as "no allowlist": absent (a DB that has not
+ * run the migration), null, or a malformed value. Unlike the commit limit
+ * this is not fail-open by accident: the allowlist narrows a key that is
+ * already bounded by live membership, so its absence is today's behaviour.
+ */
+function parseAllowedCompanyIds(value: unknown): string[] | null {
+  if (!Array.isArray(value)) return null
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  return ids.length > 0 ? ids : null
 }
 
 /**

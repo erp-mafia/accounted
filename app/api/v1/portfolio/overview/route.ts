@@ -302,6 +302,9 @@ export const GET = withApiV1('portfolio.overview', async (request, ctx) => {
   const scope = await resolveCompanyScope(ctx.supabase, ctx.userId, {
     companies: selector,
     ...(excludeIds.length > 0 ? { exclude: excludeIds } : {}),
+    // Per-key company allowlist: a restricted key never sees a company it was
+    // not issued for, whatever the selector says.
+    ...(ctx.allowedCompanyIds ? { restrictTo: ctx.allowedCompanyIds } : {}),
   })
   const overview = await fetchPortfolioOverview(ctx.supabase, scope, filters)
 

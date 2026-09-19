@@ -2,10 +2,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   companyEchoFromContext,
   companyEchoPayload,
+  effectiveCompanyRestriction,
+  isCompanyAllowed,
   isCompanyDependentTool,
   isOperationScopedTool,
   isScopedTool,
   listAccessibleCompanies,
+  parseCompanyPin,
   parseScopeArgument,
   projectToolInputSchema,
   resolveMcpCompanyContext,
@@ -255,5 +258,139 @@ describe('listAccessibleCompanies', () => {
 
     getUserCompaniesMock.mockRejectedValue(new Error('down'))
     await expect(listAccessibleCompanies(supabase as never, 'user-1')).resolves.toEqual([])
+  })
+})
+
+describe('per-key company allowlist', () => {
+  it('isCompanyAllowed: null allows everything, a list allows only its members (case-insensitive)', () => {
+    expect(isCompanyAllowed(null, OTHER_COMPANY_ID)).toBe(true)
+    expect(isCompanyAllowed(undefined, OTHER_COMPANY_ID)).toBe(true)
+    expect(isCompanyAllowed([DEFAULT_COMPANY_ID], OTHER_COMPANY_ID)).toBe(false)
+    expect(isCompanyAllowed([DEFAULT_COMPANY_ID], DEFAULT_COMPANY_ID.toUpperCase())).toBe(true)
+  })
+
+  it('resolveMcpCompanyContext refuses a company outside the allowlist before any membership query', async () => {
+    const { client, chain } = membershipClient({
+      data: { company_id: OTHER_COMPANY_ID, role: 'owner' },
+      error: null,
+    })
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: DEFAULT_COMPANY_ID,
+        requestedCompanyId: OTHER_COMPANY_ID,
+        allowedCompanyIds: [DEFAULT_COMPANY_ID],
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Company not reachable with this key' })
+    expect(chain.maybeSingle).not.toHaveBeenCalled()
+
+    // The default company is checked the same way: a key whose stored default
+    // fell outside its allowlist must not silently route there.
+    await expect(
+      resolveMcpCompanyContext({
+        supabase: client as never,
+        userId: 'user-1',
+        defaultCompanyId: OTHER_COMPANY_ID,
+        allowedCompanyIds: [DEFAULT_COMPANY_ID],
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(chain.maybeSingle).not.toHaveBeenCalled()
+  })
+
+  it('resolveMcpCompanyContext resolves an allowed company through the membership query as before', async () => {
+    const { client, chain } = membershipClient({
+      data: { company_id: OTHER_COMPANY_ID, role: 'admin', companies: { archived_at: null, name: 'Other AB' } },
+      error: null,
+    })
+    const context = await resolveMcpCompanyContext({
+      supabase: client as never,
+      userId: 'user-1',
+      defaultCompanyId: DEFAULT_COMPANY_ID,
+      requestedCompanyId: OTHER_COMPANY_ID,
+      allowedCompanyIds: [OTHER_COMPANY_ID.toUpperCase()],
+    })
+    expect(context.companyId).toBe(OTHER_COMPANY_ID)
+    expect(chain.maybeSingle).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolveMcpCompanyScope passes the allowlist to the lib resolver as restrictTo, and nothing otherwise', async () => {
+    resolveCompanyScopeMock.mockResolvedValue({
+      companies: [],
+      truncated: false,
+      remainingCompanyIds: [],
+      unresolved: [],
+      team: null,
+    })
+    await resolveMcpCompanyScope({
+      supabase: {} as never,
+      userId: 'user-1',
+      scope: { companies: 'team' },
+      allowedCompanyIds: [OTHER_COMPANY_ID],
+    })
+    expect(resolveCompanyScopeMock).toHaveBeenLastCalledWith({}, 'user-1', {
+      companies: 'team',
+      restrictTo: [OTHER_COMPANY_ID],
+    })
+
+    await resolveMcpCompanyScope({
+      supabase: {} as never,
+      userId: 'user-1',
+      scope: { companies: 'all' },
+      allowedCompanyIds: null,
+    })
+    expect(resolveCompanyScopeMock).toHaveBeenLastCalledWith({}, 'user-1', { companies: 'all' })
+  })
+
+  it('listAccessibleCompanies keeps only allowlisted memberships', async () => {
+    getUserCompaniesMock.mockResolvedValue([
+      { company_id: DEFAULT_COMPANY_ID, companies: { id: DEFAULT_COMPANY_ID, name: 'Default AB', archived_at: null } },
+      { company_id: OTHER_COMPANY_ID, companies: { id: OTHER_COMPANY_ID, name: 'Other AB', archived_at: null } },
+    ])
+    const rangeMock = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ in: vi.fn(() => ({ order: vi.fn(() => ({ range: rangeMock })) })) })),
+      })),
+    }
+    await expect(
+      listAccessibleCompanies(supabase as never, 'user-1', [OTHER_COMPANY_ID])
+    ).resolves.toEqual([{ company_id: OTHER_COMPANY_ID, name: 'Other AB' }])
+    await expect(listAccessibleCompanies(supabase as never, 'user-1', null)).resolves.toHaveLength(2)
+  })
+
+  it('effectiveCompanyRestriction: the pin alone, else the allowlist, else null', () => {
+    expect(effectiveCompanyRestriction(undefined)).toBeNull()
+    expect(effectiveCompanyRestriction({})).toBeNull()
+    expect(effectiveCompanyRestriction({ allowedCompanyIds: [OTHER_COMPANY_ID] })).toEqual([OTHER_COMPANY_ID])
+    expect(
+      effectiveCompanyRestriction({ allowedCompanyIds: [OTHER_COMPANY_ID, DEFAULT_COMPANY_ID], pinnedCompanyId: DEFAULT_COMPANY_ID })
+    ).toEqual([DEFAULT_COMPANY_ID])
+  })
+})
+
+describe('pinned connection helpers', () => {
+  const endpoint = 'http://localhost:3000/api/extensions/ext/mcp-server/mcp'
+
+  it('parseCompanyPin reads ?company, normalises case, and flags a malformed value', () => {
+    expect(parseCompanyPin(new Request(endpoint))).toEqual({ pin: null, malformed: false })
+    expect(parseCompanyPin(new Request(`${endpoint}?company=${OTHER_COMPANY_ID.toUpperCase()}`))).toEqual({
+      pin: OTHER_COMPANY_ID,
+      malformed: false,
+    })
+    expect(parseCompanyPin(new Request(`${endpoint}?tool_namespace=accounted&company=acme`))).toEqual({
+      pin: null,
+      malformed: true,
+    })
+    expect(parseCompanyPin(new Request(`${endpoint}?company=`))).toEqual({ pin: null, malformed: true })
+  })
+
+  it('projectToolInputSchema adds no company_id under a pin', () => {
+    const tool = { name: 'gnubok_list_invoices', inputSchema: { type: 'object', properties: { status: { type: 'string' } } } }
+    const free = projectToolInputSchema(tool)
+    expect((free.properties as Record<string, unknown>).company_id).toBeDefined()
+    const pinned = projectToolInputSchema(tool, { pinned: true })
+    expect(pinned).toBe(tool.inputSchema)
+    expect((pinned.properties as Record<string, unknown>).company_id).toBeUndefined()
   })
 })

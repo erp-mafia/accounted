@@ -280,6 +280,13 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     )
   }
 
+  // Per-key company allowlist (api_key_companies): a restricted key lists
+  // only the companies it was issued for. Membership still bounds the query
+  // above; the allowlist only narrows it.
+  if (ctx.allowedCompanyIds) {
+    query = query.in('company_id', ctx.allowedCompanyIds)
+  }
+
   const { data, error } = await query
 
   if (error) {

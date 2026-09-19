@@ -192,7 +192,18 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the day's other merges (peppol, SIE set-based import) under the Motparter
 // page. Same escape hatch, same reason: one expression somewhere in the files
 // the branches do not share.
-const UNRESOLVED_CEILING = 407
+// 2026-09-19: 407 -> 409 with the per-key company allowlist (api_key_companies):
+// the OAuth token route and the settings key-creation route write the
+// allowlist as one bulk insert of { api_key_id, company_id } rows mapped from
+// the selected ids (a row per company cannot be an object literal). Both
+// columns are created by migration 20260919210000 and the same shape is
+// pinned by tests/pg/api-key-companies.pg.test.ts.
+// 2026-09-19 later: those two bulk inserts, the PATCH route's upsert array
+// and its interpolated not-in prune moved into two SECURITY DEFINER RPCs
+// (create_api_key_with_allowlist, replace_api_key_allowlist, migration
+// 20260919220000) so key + allowlist are one transaction; the count is 405.
+// The ceiling stays at 409 as headroom.
+const UNRESOLVED_CEILING = 409
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

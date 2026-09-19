@@ -2954,7 +2954,18 @@
     "sod_warning": "This key can both create bookkeeping and approve it. That lets an automated agent commit postings with no human review (segregation of duties).",
     "sod_dialog_title": "Confirm combined permissions",
     "sod_dialog_description": "This key combines a staging write scope with permission to approve staged operations. That lets an automated agent both create and approve postings without a human reviewing them. Create the key anyway?",
-    "sod_confirm": "Create anyway"
+    "sod_confirm": "Create anyway",
+    "companies_section_title": "Companies",
+    "companies_help": "The key reaches the companies you tick. Leave all ticked and it also follows companies you join later.",
+    "companies_all": "All companies",
+    "companies_some": "{selected} of {total, plural, =1 {# company} other {# companies}}",
+    "companies_edit": "Change companies for {name}",
+    "active_company_tag": "(active)",
+    "companies_dialog_title": "Companies for this key",
+    "companies_dialog_description": "Choose which companies \"{name}\" reaches. The company the key was created in cannot be unticked.",
+    "save": "Save",
+    "toast_companies_saved": "Companies updated",
+    "toast_companies_failed": "Could not update companies"
   },
   "settings_oauth_clients": {
     "title": "OAuth clients",

@@ -206,6 +206,44 @@ describe('resolveCompanyScope', () => {
     expect(rest.truncated).toBe(false)
   })
 
+  it('restrictTo narrows every selector to the key allowlist and reports outsiders as unresolved', async () => {
+    mocks.getByraMembership.mockResolvedValue({ teamId: TEAM_ID, teamName: 'Siffra', role: 'admin' })
+    mocks.getUserCompanies.mockResolvedValue([
+      membership({ id: uuid(1), name: 'Klient A', teamId: TEAM_ID }),
+      membership({ id: uuid(2), name: 'Klient B', teamId: TEAM_ID }),
+      membership({ id: uuid(3), name: 'Eget bolag', teamId: OTHER_TEAM_ID }),
+    ])
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+
+    // 'all' keeps only the allowlist (case-insensitive on the ids).
+    const all = await resolveCompanyScope(client, USER_ID, { restrictTo: [uuid(2).toUpperCase(), uuid(3)] })
+    expect(all.companies.map((c) => c.companyId)).toEqual([uuid(3), uuid(2)])
+
+    // 'team' is intersected too.
+    const team = await resolveCompanyScope(client, USER_ID, { companies: 'team', restrictTo: [uuid(2), uuid(3)] })
+    expect(team.companies.map((c) => c.companyId)).toEqual([uuid(2)])
+
+    // An explicit member id outside the allowlist is unresolved, like a non-member.
+    const explicit = await resolveCompanyScope(client, USER_ID, {
+      companies: [uuid(1), uuid(2)],
+      restrictTo: [uuid(2), uuid(3)],
+    })
+    expect(explicit.companies.map((c) => c.companyId)).toEqual([uuid(2)])
+    expect(explicit.unresolved).toEqual([uuid(1)])
+  })
+
+  it('null restrictTo means no allowlist', async () => {
+    mocks.getUserCompanies.mockResolvedValue([
+      membership({ id: uuid(1), name: 'Alpha' }),
+      membership({ id: uuid(2), name: 'Beta' }),
+    ])
+    enqueue({ data: [] })
+    const scope = await resolveCompanyScope(client, USER_ID, { restrictTo: null })
+    expect(scope.companies).toHaveLength(2)
+  })
+
   it('falls back to companies.name when the settings lookup fails', async () => {
     mocks.getUserCompanies.mockResolvedValue([membership({ id: uuid(1), name: 'Alpha AB' })])
     enqueue({ data: null, error: { message: 'boom', code: '57014' } })
