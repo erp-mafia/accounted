@@ -16951,7 +16951,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_employee_opening_balances',
     keywords: ['anställd', 'ingående saldo', 'semesterdagar'],
     title: 'Set Employee Opening Balances (Cutover)',
-    description: 'Stage payroll cutover state per employee: YTD gross/tax/net (ytd_net null = unknown), vacation pools in Fortnox/Azets terms (Betalda, Sparade per år, Obetalda, Förskott, Extra betalda) as of vacation_as_of_date, paid days taken this year, opening semesterlöneskuld and förskottsskuld SEK, karens adjustment. An omitted field keeps its stored value; 0 (null for ytd_net/vacation_as_of_date) clears it. Locked after a booked run.',
+    description: 'Stage payroll cutover state per employee: YTD gross/tax/net (ytd_net null = unknown), vacation pools as of vacation_as_of_date (Betalda, Sparade per år, Obetalda, Förskott, Extra betalda), semesterlöneskuld and förskottsskuld SEK, karens adjustment. Locked after a booked run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17143,7 +17143,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['semester', 'semestersaldo', 'semesterdagar'],
     title: 'Get Vacation Balance (Semestersaldo)',
-    description: 'Get one employee\'s open vacation balance: entitled/taken/remaining paid days, sparade dagar still held per origin year (and saved_days_taken consumed this year), the unpaid (Obetalda) and advance (Förskott) cutover pools, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
+    description: 'Get one employee\'s open vacation balance: paid days entitled/taken/remaining, sparade dagar per origin year (and saved_days_taken), the Obetalda and Förskott cutover pools, forced payouts and estimated semesterlöneskuld. Use before gnubok_close_vacation_year.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
