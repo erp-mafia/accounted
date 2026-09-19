@@ -1039,9 +1039,9 @@ Response `204`.
 **Add a payslip line to an employee in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line.
+Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).
 
-**Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee.
+**Use when:** You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year's paid days, vacation_category.
 **Do not use for:** Editing the base monthly salary (PATCH the run-employee via the internal surface; not on v1 yet). Absence: register absence days instead (PUT /employees/{id}/absence); the engine derives sick/VAB lines itself.
 
 **Pitfalls:**
@@ -1049,6 +1049,7 @@ Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, 
 - Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
 - Engine-derived lines (absence, benefits, the semesterersättning row under vacation_rule semesterersattning) are regenerated on every :calculate; manual lines survive, including a semesterersattning line you add yourself.
 - one_off_tax_percent is the percentage YOU verified against Skatteverket's engångsbelopp table for the employee's yearly income; the API never estimates it. It is refused (400) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.
+- vacation_category is only valid on item_type vacation (400 VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run's days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own cutover pools.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1072,7 +1073,9 @@ Request body:
   is_net_deduction?: boolean,
   account_number?: string,
   sort_order?: number,
-  one_off_tax_percent?: number | null
+  one_off_tax_percent?: number | null,
+  vacation_category?: "paid" | "extra_paid" | "saved" | "unpaid" | "advance" | null,
+  vacation_saved_year?: string | null
 }
 ```
 
@@ -1104,7 +1107,9 @@ Response `200`:
     is_net_deduction: boolean,
     account_number: string | null,
     sort_order: number,
-    one_off_tax_percent?: number | null
+    one_off_tax_percent?: number | null,
+    vacation_category?: string | null,
+    vacation_saved_year?: string | null
   },
   meta: {
     request_id: string,
@@ -1221,7 +1226,7 @@ Example response `200`:
 **Update a payslip line in a draft salary run.**
 `scope:payroll:write · risk:low · idempotent · dry-run · reversible`
 
-Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation.
+Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year's paid days.
 
 **Use when:** You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.
 **Do not use for:** Post-calculation tax/avgifter adjustments (review-stage overrides are not on v1). Engine-derived lines (absence/benefits): they are regenerated by :calculate, so edits are overwritten.
@@ -1231,6 +1236,7 @@ Updates fields on a salary_line_items row (amount, description, quantity, unit_p
 - A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.
 - Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.
 - The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.
+- vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1254,7 +1260,9 @@ Request body:
   is_net_deduction?: boolean,
   account_number?: string,
   sort_order?: number,
-  one_off_tax_percent?: number | null
+  one_off_tax_percent?: number | null,
+  vacation_category?: "paid" | "extra_paid" | "saved" | "unpaid" | "advance" | null,
+  vacation_saved_year?: string | null
 }
 ```
 
@@ -1283,7 +1291,9 @@ Response `200`:
     is_net_deduction: boolean,
     account_number: string | null,
     sort_order: number,
-    one_off_tax_percent?: number | null
+    one_off_tax_percent?: number | null,
+    vacation_category?: string | null,
+    vacation_saved_year?: string | null
   },
   meta: {
     request_id: string,

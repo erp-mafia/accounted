@@ -8184,7 +8184,17 @@
     "opening_balances_update": "Uppdatera ingående saldon",
     "opening_balances_saving": "Sparar…",
     "opening_balances_saved": "Ingående saldon sparade",
-    "opening_balances_save_failed": "Kunde inte spara ingående saldon"
+    "opening_balances_save_failed": "Kunde inte spara ingående saldon",
+    "opening_balances_vacation_as_of": "Semestersaldon per datum",
+    "opening_balances_vacation_as_of_hint": "Dagen semestersaldona avser. Tomt = dagen före bytesdatumet. Med avvikelseperiod föregående månad: ange sista dagen i månaden före den månad som första lönekörningen drar semester för, annars räknas de dagarna som redan avdragna.",
+    "opening_balances_days_extra_paid": "Extra betalda dagar kvar",
+    "opening_balances_days_extra_paid_hint": "Betalda dagar utöver lagens 25 (kollektivavtal eller anställningsavtal). Fortnox/Azets: Extra betalda. Räknas in i de betalda dagarna.",
+    "opening_balances_days_unpaid": "Obetalda dagar kvar",
+    "opening_balances_days_unpaid_hint": "Obetalda semesterdagar kvar i år. Fortnox/Azets: Obetalda. Förfaller vid semesterårsskiftet.",
+    "opening_balances_days_advance": "Förskottsdagar kvar",
+    "opening_balances_days_advance_hint": "Beviljad förskottssemester som inte tagits ut. Fortnox/Azets: Förskott. Uttagna dagar minskar nästa års rätt.",
+    "opening_balances_advance_debt": "Förskottsskuld (SEK)",
+    "opening_balances_advance_debt_hint": "Skuld för redan uttagen förskottssemester (semesterlagen 29 a §). Visas som egen rad i semesterskuldsrapporten och bokförs inte."
   },
   "salary_override": {
     "title": "Avancerat läge",

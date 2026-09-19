@@ -26,13 +26,19 @@ interface OpeningBalancesData {
   cutover_date: string
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  /** null = unknown historical net (set over the API; the payslip prints "Underlag saknas"). */
+  ytd_net: number | null
   vacation_paid_days_remaining: number
   vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
   opening_semester_liability: number
   opening_semester_liability_avgifter: number
   karens_periods_adjustment: number
+  vacation_as_of_date?: string | null
+  vacation_unpaid_days_remaining?: number
+  vacation_advance_days_remaining?: number
+  vacation_extra_paid_days_remaining?: number
+  opening_advance_vacation_debt?: number
   locked: boolean
   locked_by_run_id: string | null
 }
@@ -55,6 +61,35 @@ interface PanelValues {
   liability: string
   liabilityAvgifter: string
   karens: string
+  /** Empty = the day before the cutover date (stored as null). */
+  vacationAsOf: string
+  daysExtraPaid: string
+  daysUnpaid: string
+  daysAdvance: string
+  advanceDebt: string
+}
+
+const EMPTY_VALUES: PanelValues = {
+  cutoverDate: `${currentYear}-01-01`,
+  ytdGross: '',
+  ytdTax: '',
+  ytdNet: '',
+  daysRemaining: '',
+  daysTaken: '',
+  savedByYear: {},
+  liability: '',
+  liabilityAvgifter: '',
+  karens: '',
+  vacationAsOf: '',
+  daysExtraPaid: '',
+  daysUnpaid: '',
+  daysAdvance: '',
+  advanceDebt: '',
+}
+
+/** Empty string for 0 and absent pools so the panel stays clean for legacy rows. */
+function poolValue(days: number | undefined): string {
+  return days ? String(days) : ''
 }
 
 /**
@@ -92,22 +127,18 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
   const [liability, setLiability] = useState('')
   const [liabilityAvgifter, setLiabilityAvgifter] = useState('')
   const [karens, setKarens] = useState('')
+  const [vacationAsOf, setVacationAsOf] = useState('')
+  const [daysExtraPaid, setDaysExtraPaid] = useState('')
+  const [daysUnpaid, setDaysUnpaid] = useState('')
+  const [daysAdvance, setDaysAdvance] = useState('')
+  const [advanceDebt, setAdvanceDebt] = useState('')
+  // A stored null ytd_net (unknown historical net, set over the API) must
+  // survive a save the user did not touch it in: an empty field then keeps
+  // sending null instead of silently turning "unknown" into 0.
+  const [ytdNetUnknown, setYtdNetUnknown] = useState(false)
   // Fingerprint of the last loaded/saved values: the save button stays
   // disabled until the fields actually differ from it.
-  const [baseline, setBaseline] = useState(() =>
-    fingerprint({
-      cutoverDate: `${currentYear}-01-01`,
-      ytdGross: '',
-      ytdTax: '',
-      ytdNet: '',
-      daysRemaining: '',
-      daysTaken: '',
-      savedByYear: {},
-      liability: '',
-      liabilityAvgifter: '',
-      karens: '',
-    }),
-  )
+  const [baseline, setBaseline] = useState(() => fingerprint(EMPTY_VALUES))
 
   useEffect(() => {
     async function load() {
@@ -121,7 +152,7 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             cutoverDate: data.cutover_date,
             ytdGross: String(data.ytd_gross),
             ytdTax: String(data.ytd_tax),
-            ytdNet: String(data.ytd_net),
+            ytdNet: data.ytd_net === null ? '' : String(data.ytd_net),
             daysRemaining: String(data.vacation_paid_days_remaining),
             daysTaken: String(data.vacation_days_taken_this_year ?? 0),
             savedByYear: Object.fromEntries(
@@ -130,9 +161,15 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             liability: String(data.opening_semester_liability),
             liabilityAvgifter: String(data.opening_semester_liability_avgifter),
             karens: String(data.karens_periods_adjustment),
+            vacationAsOf: data.vacation_as_of_date ?? '',
+            daysExtraPaid: poolValue(data.vacation_extra_paid_days_remaining),
+            daysUnpaid: poolValue(data.vacation_unpaid_days_remaining),
+            daysAdvance: poolValue(data.vacation_advance_days_remaining),
+            advanceDebt: poolValue(data.opening_advance_vacation_debt),
           }
           setHasRow(true)
           setLocked(data.locked)
+          setYtdNetUnknown(data.ytd_net === null)
           setCutoverDate(values.cutoverDate)
           setYtdGross(values.ytdGross)
           setYtdTax(values.ytdTax)
@@ -143,6 +180,11 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           setLiability(values.liability)
           setLiabilityAvgifter(values.liabilityAvgifter)
           setKarens(values.karens)
+          setVacationAsOf(values.vacationAsOf)
+          setDaysExtraPaid(values.daysExtraPaid)
+          setDaysUnpaid(values.daysUnpaid)
+          setDaysAdvance(values.daysAdvance)
+          setAdvanceDebt(values.advanceDebt)
           setBaseline(fingerprint(values))
         }
       } catch {
@@ -166,6 +208,11 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
     liability,
     liabilityAvgifter,
     karens,
+    vacationAsOf,
+    daysExtraPaid,
+    daysUnpaid,
+    daysAdvance,
+    advanceDebt,
   }
   const dirty = fingerprint(currentValues) !== baseline
 
@@ -184,13 +231,18 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         cutover_date: cutoverDate,
         ytd_gross: parseFloat(ytdGross) || 0,
         ytd_tax: parseFloat(ytdTax) || 0,
-        ytd_net: parseFloat(ytdNet) || 0,
+        ytd_net: ytdNetUnknown && ytdNet.trim() === '' ? null : parseFloat(ytdNet) || 0,
         vacation_paid_days_remaining: parseFloat(daysRemaining) || 0,
         vacation_days_taken_this_year: parseFloat(daysTaken) || 0,
         vacation_saved_days_by_year: saved,
         opening_semester_liability: parseFloat(liability) || 0,
         opening_semester_liability_avgifter: parseFloat(liabilityAvgifter) || 0,
         karens_periods_adjustment: parseInt(karens, 10) || 0,
+        vacation_as_of_date: vacationAsOf.trim() === '' ? null : vacationAsOf,
+        vacation_extra_paid_days_remaining: parseFloat(daysExtraPaid) || 0,
+        vacation_unpaid_days_remaining: parseFloat(daysUnpaid) || 0,
+        vacation_advance_days_remaining: parseFloat(daysAdvance) || 0,
+        opening_advance_vacation_debt: parseFloat(advanceDebt) || 0,
       }),
     })
 
@@ -312,6 +364,21 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
         </SettingsGroup>
 
         <SettingsGroup label={t('opening_balances_vacation_heading')} className="pt-6">
+          <SettingsRow
+            label={t('opening_balances_vacation_as_of')}
+            htmlFor="ob-vacation-as-of"
+            help={t('opening_balances_vacation_as_of_hint')}
+            align="baseline"
+          >
+            <SettingsInput
+              id="ob-vacation-as-of"
+              type="date"
+              value={vacationAsOf}
+              onChange={(e) => setVacationAsOf(e.target.value)}
+              disabled={readOnly}
+              className={FIELD_CLASS}
+            />
+          </SettingsRow>
           <SettingsRow label={t('opening_balances_days_remaining')} htmlFor="ob-days-remaining" align="baseline">
             <SettingsInput id="ob-days-remaining" type="number" min={0} max={40} step={0.5} value={daysRemaining}
               onChange={(e) => setDaysRemaining(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
@@ -325,6 +392,33 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
             <SettingsInput id="ob-days-taken" type="number" min={0} max={40} step={0.5} value={daysTaken}
               onChange={(e) => setDaysTaken(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
           </SettingsRow>
+          <SettingsRow
+            label={t('opening_balances_days_extra_paid')}
+            htmlFor="ob-days-extra-paid"
+            help={t('opening_balances_days_extra_paid_hint')}
+            align="baseline"
+          >
+            <SettingsInput id="ob-days-extra-paid" type="number" min={0} max={40} step={0.5} value={daysExtraPaid}
+              onChange={(e) => setDaysExtraPaid(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow
+            label={t('opening_balances_days_unpaid')}
+            htmlFor="ob-days-unpaid"
+            help={t('opening_balances_days_unpaid_hint')}
+            align="baseline"
+          >
+            <SettingsInput id="ob-days-unpaid" type="number" min={0} max={40} step={0.5} value={daysUnpaid}
+              onChange={(e) => setDaysUnpaid(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow
+            label={t('opening_balances_days_advance')}
+            htmlFor="ob-days-advance"
+            help={t('opening_balances_days_advance_hint')}
+            align="baseline"
+          >
+            <SettingsInput id="ob-days-advance" type="number" min={0} max={40} step={0.5} value={daysAdvance}
+              onChange={(e) => setDaysAdvance(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
           <SettingsRow label={t('opening_balances_liability')} htmlFor="ob-liability" align="baseline">
             <SettingsInput id="ob-liability" type="number" min={0} value={liability}
               onChange={(e) => setLiability(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
@@ -332,6 +426,15 @@ export function OpeningBalancesPanel({ employeeId, canWrite }: { employeeId: str
           <SettingsRow label={t('opening_balances_liability_avgifter')} htmlFor="ob-liability-avgifter" align="baseline">
             <SettingsInput id="ob-liability-avgifter" type="number" min={0} value={liabilityAvgifter}
               onChange={(e) => setLiabilityAvgifter(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
+          </SettingsRow>
+          <SettingsRow
+            label={t('opening_balances_advance_debt')}
+            htmlFor="ob-advance-debt"
+            help={t('opening_balances_advance_debt_hint')}
+            align="baseline"
+          >
+            <SettingsInput id="ob-advance-debt" type="number" min={0} value={advanceDebt}
+              onChange={(e) => setAdvanceDebt(e.target.value)} disabled={readOnly} className={FIELD_CLASS} />
           </SettingsRow>
         </SettingsGroup>
 

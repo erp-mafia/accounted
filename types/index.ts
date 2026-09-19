@@ -4337,7 +4337,9 @@ export interface SalaryRunEmployee {
   calculation_breakdown: Record<string, unknown> | null
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  /** null = unknown: the cutover opening balance had no historical net
+   *  (migration 20260919130000); the payslip prints "Underlag saknas". */
+  ytd_net: number | null
   created_at: string
   updated_at: string
   // Relations
@@ -4368,6 +4370,11 @@ export interface SalaryLineItem {
   /** Engine provenance (migration 20260919120000): 'vacation_compensation' on the
    *  semesterersättning row run-calculation derives; null on manual rows. */
   calculation_source?: 'vacation_compensation' | null
+  /** Which vacation pool a vacation line draws from (migration 20260919130100);
+   *  null = paid. Only on item_type 'vacation'. */
+  vacation_category?: 'paid' | 'extra_paid' | 'saved' | 'unpaid' | 'advance' | null
+  /** Origin year (YYYY) of the sparade dagar a 'saved' line consumes; null = oldest first. */
+  vacation_saved_year?: string | null
   created_at: string
   updated_at: string
 }

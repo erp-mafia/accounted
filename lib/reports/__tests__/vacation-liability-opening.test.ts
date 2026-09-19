@@ -177,3 +177,93 @@ describe('generateVacationLiability with opening balances', () => {
     expect(row.accruedAmount).toBe(46200)
   })
 })
+
+describe('generateVacationLiability with categorized cutover balances', () => {
+  it('shows the förskottsskuld as its own row and subtracts it from the net liability', async () => {
+    mock.enqueue({ data: [EMPLOYEE] })
+    mock.enqueue({
+      data: [
+        {
+          employee_id: EMPLOYEE_ID,
+          vacation_accrual: 4200,
+          vacation_accrual_avgifter: 1319.64,
+          avgifter_rate: 0.3142,
+          vacation_days_taken: 3,
+          salary_run: { period_year: 2026, status: 'booked' },
+        },
+      ],
+    })
+    mock.enqueue({ data: [] }) // vacation ledger
+    mock.enqueue({
+      data: [
+        {
+          employee_id: EMPLOYEE_ID,
+          cutover_date: '2026-07-01',
+          vacation_paid_days_remaining: 12.5,
+          vacation_saved_days_by_year: {},
+          opening_semester_liability: 42000,
+          opening_semester_liability_avgifter: 13196.4,
+          opening_advance_vacation_debt: 4500,
+        },
+      ],
+    })
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const row = report.rows[0]
+    expect(row.accruedAmount).toBe(46200)
+    expect(row.accruedAvgifter).toBe(14516.04)
+    expect(row.advanceVacationDebt).toBe(4500)
+    expect(row.totalLiability).toBe(56216.04)
+    expect(report.totals.advanceVacationDebt).toBe(4500)
+    expect(report.totals.totalLiability).toBe(56216.04)
+    // 2920 / 2940 reconciliation figures are untouched by the debt.
+    expect(report.totals.accruedAmount).toBe(46200)
+    expect(report.totals.accruedAvgifter).toBe(14516.04)
+  })
+
+  it('carries the förskottsskuld into later report years and drops it before cutover', async () => {
+    const opening = {
+      employee_id: EMPLOYEE_ID,
+      cutover_date: '2026-07-01',
+      vacation_paid_days_remaining: 0,
+      vacation_saved_days_by_year: {},
+      opening_semester_liability: 0,
+      opening_semester_liability_avgifter: 0,
+      opening_advance_vacation_debt: 4500,
+    }
+    mock.enqueue({ data: [EMPLOYEE] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [opening] })
+    const later = await generateVacationLiability(supabase, COMPANY_ID, 2027)
+    expect(later.rows[0].advanceVacationDebt).toBe(4500)
+
+    mock.enqueue({ data: [EMPLOYEE] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [opening] })
+    const before = await generateVacationLiability(supabase, COMPANY_ID, 2025)
+    expect(before.rows[0].advanceVacationDebt).toBe(0)
+  })
+
+  it('counts sparade dagar net of saved-category consumption from the ledger', async () => {
+    mock.enqueue({ data: [EMPLOYEE] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({
+      data: [
+        {
+          employee_id: EMPLOYEE_ID,
+          vacation_year_start: '2026-01-01',
+          entitled_days: 25,
+          taken_days: 5,
+          saved_days: { '2025': 5, '2024': 2 },
+          saved_days_taken: { '2024': 2, '2025': 1 },
+        },
+      ],
+    })
+    mock.enqueue({ data: [] })
+
+    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    expect(report.rows[0].vacationDaysSaved).toBe(4)
+  })
+})

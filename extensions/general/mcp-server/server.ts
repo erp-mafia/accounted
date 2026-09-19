@@ -16951,7 +16951,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_set_employee_opening_balances',
     keywords: ['anställd', 'ingående saldo', 'semesterdagar'],
     title: 'Set Employee Opening Balances (Cutover)',
-    description: 'Stage payroll cutover state per employee: YTD gross/tax/net, vacation days remaining and taken this year, sparade dagar by origin year, opening semesterlöneskuld SEK, karens adjustment. An omitted field keeps its stored value; send 0 to clear it. Locked after a booked run.',
+    description: 'Stage payroll cutover state per employee: YTD gross/tax/net (ytd_net null = unknown), vacation pools in Fortnox/Azets terms (Betalda, Sparade per år, Obetalda, Förskott, Extra betalda) as of vacation_as_of_date, paid days taken this year, opening semesterlöneskuld and förskottsskuld SEK, karens adjustment. An omitted field keeps its stored value; 0 (null for ytd_net/vacation_as_of_date) clears it. Locked after a booked run.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -16965,16 +16965,21 @@ export const tools: McpTool[] = [
             additionalProperties: false,
             properties: {
               employee_id: { type: 'string', description: 'UUID of the employee' },
-              cutover_date: { type: 'string', description: 'First day of the first Accounted-run month (YYYY-MM-01)' },
+              cutover_date: { type: 'string', description: 'YYYY-MM-01, first month run in Accounted' },
               ytd_gross: { type: 'number' },
               ytd_tax: { type: 'number' },
-              ytd_net: { type: 'number' },
-              vacation_paid_days_remaining: { type: 'number' },
-              vacation_days_taken_this_year: { type: 'number', description: 'Paid days already taken this vacation year under the previous system (0-40)' },
+              ytd_net: { type: ['number', 'null'], description: 'null = unknown' },
+              vacation_paid_days_remaining: { type: 'number', description: 'Betalda days left (0-40)' },
+              vacation_days_taken_this_year: { type: 'number', description: 'Paid days already taken this year (0-40)' },
               vacation_saved_days_by_year: { type: 'object', description: 'Origin year -> days, e.g. {"2025": 5}; {} clears' },
               opening_semester_liability: { type: 'number', description: 'SEK on 2920 (report-only; booked via SIE)' },
               opening_semester_liability_avgifter: { type: 'number', description: 'SEK on 2940' },
-              karens_periods_adjustment: { type: 'number', description: 'Karens periods last 12 months not imported as absence rows (0-10)' },
+              karens_periods_adjustment: { type: 'number', description: 'Karens periods last 12 months not in absence rows (0-10)' },
+              vacation_as_of_date: { type: ['string', 'null'], description: 'YYYY-MM-DD the pools are struck per; null = day before cutover_date' },
+              vacation_unpaid_days_remaining: { type: 'number', description: 'Obetalda days left (0-40)' },
+              vacation_advance_days_remaining: { type: 'number', description: 'Förskott days left (0-40)' },
+              vacation_extra_paid_days_remaining: { type: 'number', description: 'Extra betalda days left (0-40)' },
+              opening_advance_vacation_debt: { type: 'number', description: 'Förskottsskuld SEK, report only' },
             },
             required: ['employee_id', 'cutover_date'],
           },
@@ -17020,7 +17025,15 @@ export const tools: McpTool[] = [
         'vacation_saved_days_by_year',
         'opening_semester_liability', 'opening_semester_liability_avgifter',
         'karens_periods_adjustment',
+        'vacation_as_of_date',
+        'vacation_unpaid_days_remaining', 'vacation_advance_days_remaining',
+        'vacation_extra_paid_days_remaining', 'opening_advance_vacation_debt',
       ] as const
+      // Columns where a stored NULL is a legitimate value (migration
+      // 20260919130000): unknown historical net, and "as of the day before
+      // cutover". They must be carried through as null or the schema's
+      // .default() would turn them into 0 / a missing key on every merge.
+      const NULLABLE_FIELDS = new Set<string>(['ytd_net', 'vacation_as_of_date'])
 
       const patches = rawItems.map((raw) => {
         if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
@@ -17056,12 +17069,13 @@ export const tools: McpTool[] = [
         const carried: Record<string, unknown> = {}
         for (const field of MERGEABLE_FIELDS) {
           // The null-skip cannot drop a legitimately stored value: every
-          // mergeable column is NOT NULL with a default (migration
-          // 20260713101000), so a stored row never holds NULL here. If a
-          // future migration adds a NULLABLE mergeable column, carry null
-          // through explicitly or the schema .default() resets it on merge.
+          // mergeable column except the two in NULLABLE_FIELDS is NOT NULL
+          // with a default (migration 20260713101000), so a stored row never
+          // holds NULL there. The nullable pair is carried through as null
+          // explicitly, otherwise the schema .default() resets it on merge.
           const value = stored?.[field]
-          if (value !== undefined && value !== null) carried[field] = value
+          if (value === undefined) continue
+          if (value !== null || NULLABLE_FIELDS.has(field)) carried[field] = value
         }
         // No stored row: the schema defaults still apply, so a first-time
         // cutover keeps landing on 0 / {} for anything not supplied.
@@ -17129,7 +17143,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['semester', 'semestersaldo', 'semesterdagar'],
     title: 'Get Vacation Balance (Semestersaldo)',
-    description: 'Get one employee\'s open vacation balance: entitled/taken/remaining days, sparade dagar per origin year, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
+    description: 'Get one employee\'s open vacation balance: entitled/taken/remaining paid days, sparade dagar still held per origin year (and saved_days_taken consumed this year), the unpaid (Obetalda) and advance (Förskott) cutover pools, forced payouts and estimated semesterlöneskuld in SEK. Use before gnubok_close_vacation_year.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -17149,7 +17163,10 @@ export const tools: McpTool[] = [
         accrued_days: { type: 'number' },
         taken_days: { type: 'number' },
         remaining_days: { type: 'number' },
-        saved_days: { type: 'object', description: 'Origin year -> days' },
+        saved_days: { type: 'object', description: 'Origin year -> days still held (seed minus saved_days_taken)' },
+        saved_days_taken: { type: 'object', description: 'Origin year -> days consumed this year by saved vacation lines' },
+        unpaid_days: { type: 'number', description: 'Obetalda days still available (cutover pool minus unpaid vacation lines)' },
+        advance_days: { type: 'number', description: 'Förskott days still available (cutover pool minus advance vacation lines)' },
         forced_payout_days: { type: 'number' },
         estimated_liability_sek: { type: 'number' },
       },
@@ -17161,7 +17178,7 @@ export const tools: McpTool[] = [
       if (!employeeId) throw new Error('employee_id is required')
       const { data: balance, error } = await supabase
         .from('employee_vacation_balances')
-        .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days')
+        .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, unpaid_days, advance_days, saved_days_taken')
         .eq('company_id', companyId)
         .eq('employee_id', employeeId)
         .eq('status', 'open')
@@ -17188,14 +17205,22 @@ export const tools: McpTool[] = [
         .maybeSingle()
       if (empErr) throw dbError(empErr)
       if (!employee) throw new Error(`Employee ${employeeId} not found for this company`)
-      const savedTotal = Object.values((rest.saved_days as Record<string, number> | null) ?? {})
-        .reduce((s, d) => s + (Number(d) || 0), 0)
+      // Sparade dagar still held: seeded years minus what 'saved' vacation
+      // lines consumed this year (same helper as the v1 route).
+      const { remainingSavedDays, sumDays } = await import('@/lib/salary/vacation-category')
+      const savedTaken = (rest.saved_days_taken as Record<string, number> | null) ?? {}
+      const savedDays = remainingSavedDays(rest.saved_days as Record<string, number> | null, savedTaken)
+      const savedTotal = sumDays(savedDays)
       const liabilityDays = Math.max(0, remaining + savedTotal)
       const estimatedLiability = roundOre(liabilityDays * dayValueSek(employee as DayValueEmployee))
 
       return {
         employee_vacation_balance_id: id,
         ...rest,
+        saved_days: savedDays,
+        saved_days_taken: savedTaken,
+        unpaid_days: (rest.unpaid_days as number | null) ?? 0,
+        advance_days: (rest.advance_days as number | null) ?? 0,
         remaining_days: remaining,
         estimated_liability_sek: estimatedLiability,
       }

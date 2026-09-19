@@ -40,6 +40,7 @@ import { dailyDivisor } from './work-schedule'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
+import { remainingSavedDays } from './vacation-category'
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 
@@ -69,6 +70,11 @@ export interface VacationCloseEmployeeRow {
   untaken_below_floor_days: number
   /** Saved days whose origin year fell out of the 5-year window: forced payout. */
   expiring_days: number
+  /** Obetalda days still unused at close: they lapse (Semesterlagen 8 §), never carry. */
+  unpaid_days_lapsed: number
+  /** Förskott days taken during the closing year: they reduce next year's
+   *  entitlement; the förskottsskuld itself stays on the opening row. */
+  advance_days_taken: number
   saved_days_before: Record<string, number>
   saved_days_after: Record<string, number>
   next_year_entitled: number
@@ -308,6 +314,24 @@ export async function previewVacationYearClose(
     ((ledgerRows ?? []) as unknown as VacationBalanceRow[]).map((r) => [r.employee_id, r]),
   )
 
+  // Cutover pools: förskott days taken during the closing year are the
+  // imported pool minus what the ledger still holds, and only the year that
+  // contains cutover_date ever seeded that pool.
+  const { data: openingRows, error: openingErr } = await supabase
+    .from('employee_opening_balances')
+    .select('employee_id, cutover_date, vacation_advance_days_remaining')
+    .eq('company_id', companyId)
+  if (openingErr) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: openingErr.message } }
+  }
+  const openingByEmployee = new Map(
+    ((openingRows ?? []) as Array<{
+      employee_id: string
+      cutover_date: string
+      vacation_advance_days_remaining: number | null
+    }>).map((o) => [o.employee_id, o]),
+  )
+
   const closingYear = Number(closingYearStart.slice(0, 4))
   // The rolled liability is paid out during the new vacation year: that is
   // the year the avgifter age tier is evaluated against.
@@ -318,8 +342,22 @@ export async function previewVacationYearClose(
     const ledger = ledgerByEmployee.get(emp.id)
     const entitled = ledger?.entitled_days ?? emp.vacation_days_per_year
     const taken = ledger?.taken_days ?? 0
-    const savedBefore = (ledger?.saved_days ?? {}) as Record<string, number>
+    // Sparade dagar still held: the seeded years minus what 'saved' vacation
+    // lines consumed during the year.
+    const savedBefore = remainingSavedDays(
+      (ledger?.saved_days ?? {}) as Record<string, number>,
+      ledger?.saved_days_taken ?? {},
+    )
     const remaining = Math.max(0, roundOre(entitled - taken))
+
+    const opening = openingByEmployee.get(emp.id)
+    const cutoverInClosingYear =
+      !!opening && opening.cutover_date >= closingYearStart && opening.cutover_date < bounds.end
+    const advanceSeed = cutoverInClosingYear ? (opening.vacation_advance_days_remaining || 0) : 0
+    const advanceTaken = ledger
+      ? Math.max(0, roundOre(advanceSeed - (ledger.advance_days ?? advanceSeed)))
+      : 0
+    const unpaidLapsed = ledger?.unpaid_days ?? 0
 
     // Semesterlagen 18 §: only days exceeding the 20-day floor are saveable.
     const saveable = Math.max(0, Math.min(remaining, entitled - 20))
@@ -361,9 +399,16 @@ export async function previewVacationYearClose(
       saveable_days: saveable,
       untaken_below_floor_days: untakenBelowFloor,
       expiring_days: expiring,
+      unpaid_days_lapsed: unpaidLapsed,
+      advance_days_taken: advanceTaken,
       saved_days_before: savedBefore,
       saved_days_after: savedAfter,
-      next_year_entitled: nextYearEntitled(emp, newYearStart, newYearBounds.end),
+      // Förskott days taken this year were paid before they were earned:
+      // they come off the new year's entitlement.
+      next_year_entitled: Math.max(
+        0,
+        roundOre(nextYearEntitled(emp, newYearStart, newYearBounds.end) - advanceTaken),
+      ),
       day_value_sek: dayValue,
       computed_liability_sek: liability,
       avgifter_rate: avgifterRateFor(emp, settlementYear),
@@ -479,6 +524,11 @@ export async function commitVacationYearClose(
     saved_days: row.saved_days_after,
     forced_payout_days: row.expiring_days,
     status: 'open',
+    // Unpaid days lapse, förskott was a cutover-only grant, and the new
+    // year's saved seed starts unconsumed.
+    unpaid_days: 0,
+    advance_days: 0,
+    saved_days_taken: {},
   }))
   if (nextRows.length > 0) {
     const { error: nextErr } = await supabase

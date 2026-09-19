@@ -230,10 +230,11 @@ export interface PayslipData {
   vacationAccrualAvgifter: number
   totalEmployerCost: number
 
-  // YTD
+  // YTD. ytdNet is null when the cutover opening balance had no historical
+  // net: the accumulator then prints "Underlag saknas" instead of a false 0.
   ytdGross: number
   ytdTax: number
-  ytdNet: number
+  ytdNet: number | null
 
   // Bank
   bankAccount?: string // masked
@@ -385,7 +386,7 @@ export function PayslipPDF({ data }: { data: PayslipData }) {
           </View>
           <View style={styles.ytdRow}>
             <Text style={styles.ytdLabel}>Netto</Text>
-            <Text style={styles.ytdValue}>{fmt(data.ytdNet)}</Text>
+            <Text style={styles.ytdValue}>{data.ytdNet === null ? 'Underlag saknas' : fmt(data.ytdNet)}</Text>
           </View>
         </View>
 

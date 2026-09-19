@@ -320,7 +320,7 @@ export async function runSalaryCalculation(
   //     adjustment that reaches sjuklön) is worse than failing the
   //     calculation, and matches how this function treats every other query
   //     error.
-  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
+  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number | null }>
   try {
     const openingRows = await loadOpeningBalances(supabase, companyId, rosterEmployeeIds)
     for (const opening of openingRows) {
@@ -852,6 +852,11 @@ export async function runSalaryCalculation(
         0,
       )
 
+    // Keep raw engine tax/net for the calculation trace, but snapshots and
+    // run totals must use the same effective withholding as payslips/bank.
+    const effectiveTax = sre.tax_withheld_override ?? result.taxWithheld
+    const effectiveNet = roundOre(result.netSalary + result.taxWithheld - effectiveTax)
+
     // 8g. Write the per-employee row. Mirrors calendar-derived hours into the
     //     hours_worked snapshot column so downstream code (reports, storno via
     //     correct/route) sees a consistent value.
@@ -885,8 +890,8 @@ export async function runSalaryCalculation(
         vacation_days_taken: vacationDays,
         calculation_breakdown: { steps: result.steps },
         ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
-        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld),
-        ytd_net: roundOre((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary),
+        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + effectiveTax),
+        ytd_net: ytdByEmployee.get(sre.employee_id)?.net === null ? null : roundOre((ytdByEmployee.get(sre.employee_id)?.net ?? 0) + effectiveNet),
       })
       .eq('id', sre.id)
 
@@ -966,8 +971,8 @@ export async function runSalaryCalculation(
     }
 
     totalGross += result.grossSalary
-    totalTax += result.taxWithheld
-    totalNet += result.netSalary
+    totalTax += effectiveTax
+    totalNet += effectiveNet
     totalAvgifter += result.avgifterAmount
     totalVacationAccrual += result.vacationAccrual
     totalEmployerCost += result.totalEmployerCost

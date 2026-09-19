@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
 
 /**
  * Semesterlöneskuld: Vacation liability report per BFNAR 2016:10.
@@ -24,7 +25,10 @@ export interface VacationLiabilityRow {
   accruedAmount: number       // Account 2920
   accruedAvgifter: number     // Account 2940
   avgifterRate: number
-  totalLiability: number      // 2920 + 2940
+  /** Förskottsskuld SEK from the cutover opening row (Semesterlagen 29 a §):
+   *  its own row on the report, subtracted from the net liability. */
+  advanceVacationDebt: number
+  totalLiability: number      // 2920 + 2940 - förskottsskuld
 }
 
 export interface VacationLiabilityReport {
@@ -32,6 +36,7 @@ export interface VacationLiabilityReport {
   totals: {
     accruedAmount: number     // Sum for account 2920
     accruedAvgifter: number   // Sum for account 2940
+    advanceVacationDebt: number
     totalLiability: number
   }
   asOfDate: string
@@ -108,7 +113,7 @@ export async function generateVacationLiability(
   // SEK stays derived from runs + the opening terms below.
   const { data: ledgerRows } = await supabase
     .from('employee_vacation_balances')
-    .select('employee_id, vacation_year_start, entitled_days, taken_days, saved_days')
+    .select('employee_id, vacation_year_start, entitled_days, taken_days, saved_days, saved_days_taken')
     .eq('company_id', companyId)
     .eq('status', 'open')
     .gte('vacation_year_start', `${year}-01-01`)
@@ -120,13 +125,18 @@ export async function generateVacationLiability(
       entitled_days: number
       taken_days: number
       saved_days: Record<string, number> | null
+      saved_days_taken?: Record<string, number> | null
     }>).map((r) => [r.employee_id, r]),
   )
 
+  // The förskottsskuld (opening_advance_vacation_debt) is carried for every
+  // report year from the cutover year on, like the opening liability: it is
+  // written off after five years or settled at termination (Semesterlagen
+  // 29 a §), never by a year close.
   const { data: openingRows } = await supabase
     .from('employee_opening_balances')
     .select(
-      'employee_id, cutover_date, vacation_paid_days_remaining, vacation_saved_days_by_year, opening_semester_liability, opening_semester_liability_avgifter',
+      'employee_id, cutover_date, vacation_paid_days_remaining, vacation_saved_days_by_year, opening_semester_liability, opening_semester_liability_avgifter, opening_advance_vacation_debt',
     )
     .eq('company_id', companyId)
   const openingByEmployee = new Map<
@@ -136,6 +146,7 @@ export async function generateVacationLiability(
       savedDays: number
       liability: number
       liabilityAvgifter: number
+      advanceDebt: number
     }
   >()
   for (const opening of (openingRows || []) as Array<{
@@ -145,6 +156,7 @@ export async function generateVacationLiability(
     vacation_saved_days_by_year: Record<string, number> | null
     opening_semester_liability: number
     opening_semester_liability_avgifter: number
+    opening_advance_vacation_debt?: number | null
   }>) {
     const cutoverYear = Number(opening.cutover_date.slice(0, 4))
     if (year < cutoverYear) continue
@@ -157,6 +169,7 @@ export async function generateVacationLiability(
       savedDays,
       liability: opening.opening_semester_liability || 0,
       liabilityAvgifter: opening.opening_semester_liability_avgifter || 0,
+      advanceDebt: opening.opening_advance_vacation_debt || 0,
     })
   }
 
@@ -197,10 +210,8 @@ export async function generateVacationLiability(
       daysTaken = ledger.taken_days
       daysEntitled = ledger.entitled_days
       daysRemaining = ledger.entitled_days - ledger.taken_days
-      daysSaved = Object.values(ledger.saved_days ?? {}).reduce(
-        (sum, days) => sum + (Number(days) || 0),
-        0,
-      )
+      // Seeded sparade dagar minus what 'saved' vacation lines consumed.
+      daysSaved = sumDays(remainingSavedDays(ledger.saved_days ?? {}, ledger.saved_days_taken ?? {}))
     } else {
       daysTaken = accruals?.totalDaysTaken || 0
       daysEntitled = emp.vacation_days_per_year
@@ -212,6 +223,8 @@ export async function generateVacationLiability(
         : emp.vacation_days_per_year - daysTaken
       daysSaved = emp.vacation_days_saved + (opening?.savedDays || 0)
     }
+
+    const advanceVacationDebt = r(opening?.advanceDebt || 0)
 
     return {
       employeeId: emp.id,
@@ -225,13 +238,17 @@ export async function generateVacationLiability(
       accruedAmount,
       accruedAvgifter,
       avgifterRate: accruals?.lastRate || 0.3142,
-      totalLiability: r(accruedAmount + accruedAvgifter),
+      advanceVacationDebt,
+      // Net liability: what the company owes minus what the employee owes
+      // back for förskottssemester.
+      totalLiability: r(accruedAmount + accruedAvgifter - advanceVacationDebt),
     }
   })
 
   const totals = {
     accruedAmount: r(rows.reduce((s, row) => s + row.accruedAmount, 0)),
     accruedAvgifter: r(rows.reduce((s, row) => s + row.accruedAvgifter, 0)),
+    advanceVacationDebt: r(rows.reduce((s, row) => s + row.advanceVacationDebt, 0)),
     totalLiability: r(rows.reduce((s, row) => s + row.totalLiability, 0)),
   }
 

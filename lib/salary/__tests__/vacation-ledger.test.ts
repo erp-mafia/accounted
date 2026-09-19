@@ -310,6 +310,148 @@ describe('syncVacationLedgerForEmployees', () => {
     expect(row.accrued_days).toBe(12.5)
   })
 
+  describe('categorized vacation lines (cutover pools)', () => {
+    const vacationLine = (quantity: number, category: string | null = null, savedYear: string | null = null) => ({
+      item_type: 'vacation',
+      quantity,
+      vacation_category: category,
+      vacation_saved_year: savedYear,
+      sort_order: 0,
+    })
+    const bookedRun = (
+      month: number,
+      vacationDaysTaken: number,
+      lines: Array<ReturnType<typeof vacationLine>> | undefined,
+      window?: { start: string; end: string },
+    ) => ({
+      employee_id: EMPLOYEE_ID,
+      vacation_days_taken: vacationDaysTaken,
+      line_items: lines,
+      salary_run: {
+        period_year: 2026,
+        period_month: month,
+        status: 'booked',
+        deviation_period_start: window?.start ?? null,
+        deviation_period_end: window?.end ?? null,
+      },
+    })
+    const CATEGORIZED_OPENING = {
+      employee_id: EMPLOYEE_ID,
+      cutover_date: '2026-09-01',
+      vacation_paid_days_remaining: 10,
+      vacation_days_taken_this_year: 8,
+      vacation_saved_days_by_year: { '2024': 2, '2025': 5 },
+      vacation_as_of_date: null,
+      vacation_unpaid_days_remaining: 5,
+      vacation_advance_days_remaining: 3,
+      vacation_extra_paid_days_remaining: 2,
+    }
+
+    it('seeds the pools from the cutover row and folds extra paid days into entitled', async () => {
+      queueBase({ opening: [CATEGORIZED_OPENING] })
+
+      const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-09-13')
+      expect(result.ok).toBe(true)
+      const row = upserted![0]
+      // paid 10 + extra paid 2 + already taken 8
+      expect(row.entitled_days).toBe(20)
+      expect(row.taken_days).toBe(8)
+      expect(row.unpaid_days).toBe(5)
+      expect(row.advance_days).toBe(3)
+      expect(row.saved_days).toEqual({ '2024': 2, '2025': 5 })
+      expect(row.saved_days_taken).toEqual({})
+    })
+
+    it('splits a booked run by category: paid share, own pools, oldest saved year first', async () => {
+      queueBase({
+        opening: [CATEGORIZED_OPENING],
+        booked: [
+          bookedRun(9, 7, [
+            vacationLine(2),
+            vacationLine(1, 'extra_paid'),
+            vacationLine(3, 'saved'),
+            vacationLine(1, 'unpaid'),
+          ]) as never,
+          bookedRun(10, 2, [vacationLine(1, 'advance'), vacationLine(1, 'saved', '2025')]) as never,
+        ],
+      })
+
+      const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-11-13')
+      expect(result.ok).toBe(true)
+      const row = upserted![0]
+      // paid: 2 + 1 (extra paid joins the paid pool) + 8 pre-cutover
+      expect(row.taken_days).toBe(11)
+      expect(row.unpaid_days).toBe(4)
+      expect(row.advance_days).toBe(2)
+      // 3 unnamed saved days: 2024 (2) first, then 1 from 2025; plus 1 named 2025.
+      expect(row.saved_days_taken).toEqual({ '2024': 2, '2025': 2 })
+      // The seed is never reduced in place (idempotent recompute).
+      expect(row.saved_days).toEqual({ '2024': 2, '2025': 5 })
+    })
+
+    it('skips a booked run whose avvikelseperiod ended on or before the as-of date', async () => {
+      // previous_month: the September run deducts August. With the default
+      // as-of (day before cutover = Aug 31) August is already inside the
+      // balance; an explicit as-of of Jul 31 says it is not.
+      const septemberRun = bookedRun(9, 3, [vacationLine(3)], { start: '2026-08-01', end: '2026-08-31' }) as never
+      const octoberRun = bookedRun(10, 1, [vacationLine(1)], { start: '2026-09-01', end: '2026-09-30' }) as never
+
+      queueBase({ opening: [CATEGORIZED_OPENING], booked: [septemberRun, octoberRun] })
+      const defaulted = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-11-13')
+      expect(defaulted.ok).toBe(true)
+      expect(upserted![0].taken_days).toBe(8 + 1)
+
+      queueBase({
+        opening: [{ ...CATEGORIZED_OPENING, vacation_as_of_date: '2026-07-31' }],
+        booked: [septemberRun, octoberRun],
+      })
+      const explicit = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-11-13')
+      expect(explicit.ok).toBe(true)
+      expect(upserted![0].taken_days).toBe(8 + 3 + 1)
+    })
+
+    it('is idempotent: a second sync over the same booked runs yields the same row', async () => {
+      const booked = [bookedRun(9, 4, [vacationLine(1), vacationLine(2, 'saved'), vacationLine(1, 'unpaid')]) as never]
+      queueBase({ opening: [CATEGORIZED_OPENING], booked })
+      await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-10-13')
+      const first = upserted![0]
+
+      queueBase({
+        opening: [CATEGORIZED_OPENING],
+        booked,
+        openRows: [{ id: 'row-1', ...first }],
+      })
+      await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-10-13')
+      expect(upserted![0]).toEqual(first)
+    })
+
+    it('reads a legacy opening row and legacy booked rows exactly as before', async () => {
+      queueBase({
+        opening: [
+          {
+            employee_id: EMPLOYEE_ID,
+            cutover_date: '2026-07-01',
+            vacation_paid_days_remaining: 12.5,
+            vacation_days_taken_this_year: 7,
+            vacation_saved_days_by_year: { '2025': 5 },
+          },
+        ],
+        booked: [
+          { employee_id: EMPLOYEE_ID, vacation_days_taken: 2, salary_run: { period_year: 2026, period_month: 7, status: 'booked' } },
+        ],
+      })
+
+      const result = await syncVacationLedgerForEmployees(supabase, COMPANY_ID, [EMPLOYEE_ID], '2026-07-13')
+      expect(result.ok).toBe(true)
+      const row = upserted![0]
+      expect(row.entitled_days).toBe(19.5)
+      expect(row.taken_days).toBe(9)
+      expect(row.unpaid_days).toBe(0)
+      expect(row.advance_days).toBe(0)
+      expect(row.saved_days_taken).toEqual({})
+    })
+  })
+
   it('never throws: DB errors return ok:false (non-fatal contract)', async () => {
     mock.enqueue({ data: null }) // company_settings (defaults calendar)
     mock.enqueue({ data: null, error: { message: 'boom' } }) // employees fails

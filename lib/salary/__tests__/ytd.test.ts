@@ -361,3 +361,117 @@ describe('refreshRunYtd', () => {
     expect(result).toEqual({ ok: true, updated: 0 })
   })
 })
+
+describe('cutover: unknown net and tax overrides (ported from #2729)', () => {
+  it('retains a mid-month starter first salary in the following month YTD', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [makePrior({ salary_run: { period_year: 2026, period_month: 8, status: 'booked' } })] })
+    const totals = await computePriorYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      periodYear: 2026,
+      periodMonth: 9,
+      employeeIds: ['e1'],
+      openingRows: [{ employee_id: 'e1', cutover_date: '2026-08-01', ytd_gross: 0, ytd_tax: 0, ytd_net: 0 }],
+    })
+    expect(totals.get('e1')).toEqual({ gross: 25000, tax: 4346, net: 20654 })
+  })
+
+  it('preserves unknown historical net rather than deriving it from gross and tax', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [] })
+    const totals = await computePriorYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      periodYear: 2026,
+      periodMonth: 8,
+      employeeIds: ['e1'],
+      openingRows: [{ employee_id: 'e1', cutover_date: '2026-08-01', ytd_gross: 210000, ytd_tax: 48000, ytd_net: null }],
+    })
+    expect(totals.get('e1')).toEqual({ gross: 210000, tax: 48000, net: null })
+  })
+
+  it('keeps net unknown for the whole cutover year even after in-system months', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [makePrior({ salary_run: { period_year: 2026, period_month: 8, status: 'booked' } })] })
+    const totals = await computePriorYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      periodYear: 2026,
+      periodMonth: 9,
+      employeeIds: ['e1'],
+      openingRows: [{ employee_id: 'e1', cutover_date: '2026-08-01', ytd_gross: 210000, ytd_tax: 48000, ytd_net: null }],
+    })
+    expect(totals.get('e1')).toEqual({ gross: 235000, tax: 52346, net: null })
+  })
+
+  it('carries actual withholding and payout rather than superseded computed tax', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: [makePrior({ tax_withheld_override: 5000 })] })
+    const ytd = await computePriorYtd(mock.supabase as never, {
+      companyId: COMPANY,
+      periodYear: 2026,
+      periodMonth: 8,
+      employeeIds: ['e1'],
+      openingRows: [],
+    })
+    expect(ytd.get('e1')).toEqual({ gross: 25000, tax: 5000, net: 20000 })
+  })
+
+  it('refreshes current-month YTD with an explicit zero-tax override', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'run-1', period_year: 2026, period_month: 8 } })
+    mock.enqueue({
+      data: [
+        {
+          id: 'sre-1',
+          employee_id: 'e1',
+          gross_salary: 35000,
+          tax_withheld: 6709,
+          tax_withheld_override: 0,
+          net_salary: 28291,
+          ytd_gross: 35000,
+          ytd_tax: 6709,
+          ytd_net: 28291,
+        },
+      ],
+    })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: null })
+    expect(await refreshRunYtd(mock.supabase as never, { companyId: COMPANY, salaryRunId: 'run-1' })).toEqual({
+      ok: true,
+      updated: 1,
+    })
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ ytd_gross: 35000, ytd_tax: 0, ytd_net: 35000 }])
+  })
+
+  it('refresh writes a null net snapshot when the opening net is unknown and leaves it alone when unchanged', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: { id: 'run-1', period_year: 2026, period_month: 8 } })
+    mock.enqueue({
+      data: [
+        { id: 'sre-1', employee_id: 'e1', gross_salary: 35000, tax_withheld: 6709, net_salary: 28291, ytd_gross: 35000, ytd_tax: 6709, ytd_net: 28291 },
+      ],
+    })
+    mock.enqueue({ data: [{ employee_id: 'e1', cutover_date: '2026-08-01', ytd_gross: 210000, ytd_tax: 48000, ytd_net: null, karens_periods_adjustment: 0 }] })
+    mock.enqueue({ data: [] })
+    mock.enqueue({ data: null })
+    expect(await refreshRunYtd(mock.supabase as never, { companyId: COMPANY, salaryRunId: 'run-1' })).toEqual({
+      ok: true,
+      updated: 1,
+    })
+    expect(mock.findCall('salary_run_employees', 'update')).toEqual([{ ytd_gross: 245000, ytd_tax: 54709, ytd_net: null }])
+
+    const again = createQueuedMockSupabase()
+    again.enqueue({ data: { id: 'run-1', period_year: 2026, period_month: 8 } })
+    again.enqueue({
+      data: [
+        { id: 'sre-1', employee_id: 'e1', gross_salary: 35000, tax_withheld: 6709, net_salary: 28291, ytd_gross: 245000, ytd_tax: 54709, ytd_net: null },
+      ],
+    })
+    again.enqueue({ data: [{ employee_id: 'e1', cutover_date: '2026-08-01', ytd_gross: 210000, ytd_tax: 48000, ytd_net: null, karens_periods_adjustment: 0 }] })
+    again.enqueue({ data: [] })
+    expect(await refreshRunYtd(again.supabase as never, { companyId: COMPANY, salaryRunId: 'run-1' })).toEqual({
+      ok: true,
+      updated: 0,
+    })
+  })
+})

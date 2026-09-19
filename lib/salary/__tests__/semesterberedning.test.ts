@@ -92,14 +92,17 @@ beforeEach(() => {
 })
 
 /** Queue the preview's supabase calls: closure check, roster, ledger rows,
- * fiscal period (for the booked-balance read). */
+ * cutover opening rows (förskott pool), fiscal period (for the booked-balance
+ * read). */
 function queuePreview(over: {
   ledger?: Array<Record<string, unknown>>
+  opening?: Array<Record<string, unknown>>
   closure?: { id: string } | null
 } = {}) {
   mock.enqueue({ data: over.closure ?? null }) // vacation_year_closures check
   mock.enqueue({ data: [ROSTER_ROW] }) // roster
   mock.enqueue({ data: over.ledger ?? [] }) // ledger rows for the closing year
+  mock.enqueue({ data: over.opening ?? [] }) // employee_opening_balances (advance pool)
   mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } }) // fiscal period
 }
 
@@ -215,6 +218,7 @@ describe('previewVacationYearClose: beredning math', () => {
     mock.enqueue({
       data: [ledgerRow(EMPLOYEE_ID), ledgerRow(EMPLOYEE_2), ledgerRow(EMPLOYEE_3)],
     }) // ledger rows
+    mock.enqueue({ data: [] }) // employee_opening_balances (advance pool)
     mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } })
 
     const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
@@ -349,5 +353,82 @@ describe('commitVacationYearClose', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('VACATION_YEAR_ALREADY_CLOSED')
+  })
+})
+
+describe('previewVacationYearClose: categorized cutover pools', () => {
+  const ledgerRow = (over: Record<string, unknown>) => ({
+    id: 'vb-1',
+    employee_id: EMPLOYEE_ID,
+    vacation_year_start: '2025-01-01',
+    entitled_days: 25,
+    accrued_days: 0,
+    taken_days: 25,
+    saved_days: {},
+    forced_payout_days: 0,
+    status: 'open',
+    ...over,
+  })
+
+  it('lapses unpaid days and lets förskott days taken reduce next year\'s entitlement', async () => {
+    queuePreview({
+      // Cutover pool granted 3 förskott days; the ledger still holds 1, so 2 were taken.
+      ledger: [ledgerRow({ unpaid_days: 4, advance_days: 1 })],
+      opening: [{ employee_id: EMPLOYEE_ID, cutover_date: '2025-09-01', vacation_advance_days_remaining: 3 }],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = result.data.rows[0]
+    expect(row.unpaid_days_lapsed).toBe(4)
+    expect(row.advance_days_taken).toBe(2)
+    expect(row.next_year_entitled).toBe(23)
+  })
+
+  it('ignores the förskott pool of a cutover outside the closing year', async () => {
+    queuePreview({
+      ledger: [ledgerRow({ advance_days: 0 })],
+      opening: [{ employee_id: EMPLOYEE_ID, cutover_date: '2024-09-01', vacation_advance_days_remaining: 3 }],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.data.rows[0].advance_days_taken).toBe(0)
+    expect(result.data.rows[0].next_year_entitled).toBe(25)
+  })
+
+  it('rolls only the sparade dagar still held after saved-category consumption', async () => {
+    queuePreview({
+      ledger: [
+        ledgerRow({
+          saved_days: { '2023': 2, '2024': 3 },
+          saved_days_taken: { '2023': 2, '2024': 1 },
+        }),
+      ],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = result.data.rows[0]
+    expect(row.saved_days_before).toEqual({ '2023': 0, '2024': 2 })
+    expect(row.saved_days_after).toEqual({ '2024': 2 })
+    // Liability covers the 2 saved days still held, nothing for the consumed ones.
+    expect(row.computed_liability_sek).toBe(2 * row.day_value_sek)
+  })
+
+  it('reads the legacy ledger row unchanged (no pools, no consumption)', async () => {
+    queuePreview({ ledger: [ledgerRow({ saved_days: { '2024': 3 } })] })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-01-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = result.data.rows[0]
+    expect(row.saved_days_before).toEqual({ '2024': 3 })
+    expect(row.unpaid_days_lapsed).toBe(0)
+    expect(row.advance_days_taken).toBe(0)
+    expect(row.next_year_entitled).toBe(25)
   })
 })

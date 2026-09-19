@@ -8184,7 +8184,17 @@
     "opening_balances_update": "Update opening balances",
     "opening_balances_saving": "Saving…",
     "opening_balances_saved": "Opening balances saved",
-    "opening_balances_save_failed": "Could not save opening balances"
+    "opening_balances_save_failed": "Could not save opening balances",
+    "opening_balances_vacation_as_of": "Vacation balances as of",
+    "opening_balances_vacation_as_of_hint": "The day the vacation balances are struck per. Empty = the day before the cutover date. With a previous-month deviation period: enter the last day of the month before the month the first run deducts leave for, otherwise those days count as already deducted.",
+    "opening_balances_days_extra_paid": "Extra paid days left",
+    "opening_balances_days_extra_paid_hint": "Paid days above the statutory 25 (collective or employment agreement). Fortnox/Azets: Extra betalda. Counted into the paid days.",
+    "opening_balances_days_unpaid": "Unpaid days left",
+    "opening_balances_days_unpaid_hint": "Unpaid vacation days left this year. Fortnox/Azets: Obetalda. Lapse at the vacation-year close.",
+    "opening_balances_days_advance": "Advance days left",
+    "opening_balances_days_advance_hint": "Granted advance vacation not yet taken. Fortnox/Azets: Förskott. Days taken reduce next year's entitlement.",
+    "opening_balances_advance_debt": "Advance vacation debt (SEK)",
+    "opening_balances_advance_debt_hint": "Debt for advance vacation already taken (Annual Leave Act 29 a §). Shown as its own row on the vacation liability report and never booked."
   },
   "salary_override": {
     "title": "Advanced mode",

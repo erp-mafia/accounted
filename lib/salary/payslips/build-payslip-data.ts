@@ -145,7 +145,7 @@ export function buildPayslipData(params: {
     totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
     ytdGross: sre.ytd_gross as number,
     ytdTax: sre.ytd_tax as number,
-    ytdNet: sre.ytd_net as number,
+    ytdNet: sre.ytd_net as number | null,
     bankAccount,
     breakdownSteps,
   }

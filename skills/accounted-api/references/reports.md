@@ -694,6 +694,7 @@ Returns per-employee semesterlöneskuld balances as of year-end based on their v
 **Pitfalls:**
 - `year` is required.
 - Employees with vacation_rule = none or semesterersattning are excluded: they have no semesterlöneskuld liability.
+- advanceVacationDebt (per row and in totals) is the förskottsskuld loaded as a cutover opening balance (Semesterlagen 29 a §): shown as its own row and subtracted from totalLiability, so totalLiability = accruedAmount + accruedAvgifter - advanceVacationDebt. Zero for companies without categorized cutover balances.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

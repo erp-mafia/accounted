@@ -477,7 +477,17 @@ describe('tools/list payload size guard', () => {
     //     delete_absence lost 'UUID of the employee' (restates employee_id),
     //     'Range start/end (...)' wrappers around a date format, and the
     //     'use before register' sentence. Ceiling unchanged, no read demoted.
-    expect(approxTokens).toBeLessThan(60_500)
+    //   * 60.5K to 60.7K on 2026-09-19, categorized cutover balances on
+    //     gnubok_set_employee_opening_balances (#2729 cutover track): five new
+    //     properties (vacation_as_of_date, the Obetalda/Förskott/Extra betalda
+    //     pools, the förskottsskuld) are the wire contract an operator taking
+    //     over a Fortnox or Azets customer must be able to send, and ytd_net
+    //     became nullable. Descriptions trimmed first to one clause each and
+    //     the tool's older property notes shortened (cutover_date, taken this
+    //     year, karens); the contract still measured ~150 tokens over a
+    //     ceiling with ~50 headroom. gnubok_get_vacation_balance gained its
+    //     pools too but is search-only and does not count.
+    expect(approxTokens).toBeLessThan(60_700)
   })
 
   /**

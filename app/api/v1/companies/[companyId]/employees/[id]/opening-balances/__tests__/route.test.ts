@@ -551,3 +551,169 @@ describe('PUT /employees/opening-balances (bulk)', () => {
     expect(res.status).toBe(401)
   })
 })
+
+describe('categorized vacation pools (Fortnox/Azets cutover)', () => {
+  const CATEGORIZED_ROW = {
+    ...SAMPLE_ROW,
+    ytd_net: null,
+    vacation_as_of_date: `${CURRENT_YEAR}-05-31`,
+    vacation_unpaid_days_remaining: 5,
+    vacation_advance_days_remaining: 3,
+    vacation_extra_paid_days_remaining: 2,
+    opening_advance_vacation_debt: 4500,
+  }
+
+  it('GET returns every pool, the as-of date, the förskottsskuld and a null net', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: { data: { id: EMPLOYEE_ID }, error: null },
+        employee_opening_balances: { data: CATEGORIZED_ROW, error: null },
+        salary_run_employees: { data: [], error: null },
+      }),
+    )
+    const res = await getBalances(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.ytd_net).toBeNull()
+    expect(body.data.vacation_as_of_date).toBe(`${CURRENT_YEAR}-05-31`)
+    expect(body.data.vacation_unpaid_days_remaining).toBe(5)
+    expect(body.data.vacation_advance_days_remaining).toBe(3)
+    expect(body.data.vacation_extra_paid_days_remaining).toBe(2)
+    expect(body.data.opening_advance_vacation_debt).toBe(4500)
+  })
+
+  it('PUT accepts the pools with a null net and an as-of date before cutover', async () => {
+    const supabase = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: {
+        data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+        error: null,
+      },
+      salary_run_employees: { data: [], error: null },
+      employee_opening_balances: { data: [CATEGORIZED_ROW], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        {
+          method: 'PUT',
+          body: JSON.stringify({
+            ...VALID_BODY,
+            ytd_net: null,
+            vacation_as_of_date: `${CURRENT_YEAR}-05-31`,
+            vacation_unpaid_days_remaining: 5,
+            vacation_advance_days_remaining: 3,
+            vacation_extra_paid_days_remaining: 2,
+            opening_advance_vacation_debt: 4500,
+          }),
+        },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.ytd_net).toBeNull()
+    expect(body.data.vacation_advance_days_remaining).toBe(3)
+  })
+
+  it('PUT dry run previews the pools as they will be written, omitted ones at their defaults', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: {
+          data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+          error: null,
+        },
+        salary_run_employees: { data: [], error: null },
+      }),
+    )
+    const res = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances?dry_run=true`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, vacation_unpaid_days_remaining: 5 }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    // dryRunPreview envelope: { data: { dry_run: true, preview } }
+    const preview = body.data.preview
+    expect(preview.vacation_unpaid_days_remaining).toBe(5)
+    expect(preview.vacation_advance_days_remaining).toBe(0)
+    expect(preview.vacation_extra_paid_days_remaining).toBe(0)
+    expect(preview.opening_advance_vacation_debt).toBe(0)
+    expect(preview.vacation_as_of_date).toBeNull()
+  })
+
+  it('rejects an as-of date after the cutover date', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const res = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, vacation_as_of_date: `${CURRENT_YEAR}-07-02` }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects a pool above 40 days and a negative förskottsskuld', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      }),
+    )
+    const over = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, vacation_extra_paid_days_remaining: 41 }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(over.status).toBe(400)
+    const negative = await putBalances(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/opening-balances`,
+        { method: 'PUT', body: JSON.stringify({ ...VALID_BODY, opening_advance_vacation_debt: -1 }) },
+      ),
+      detailParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+    expect(negative.status).toBe(400)
+  })
+
+  it('bulk PUT carries the pools per item', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        employees: {
+          data: [{ id: EMPLOYEE_ID, employment_start: '2024-01-15', is_active: true }],
+          error: null,
+        },
+        salary_run_employees: { data: [], error: null },
+        employee_opening_balances: { data: [CATEGORIZED_ROW], error: null },
+      }),
+    )
+    const res = await putBulk(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/employees/opening-balances`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          items: [{ employee_id: EMPLOYEE_ID, ...VALID_BODY, ytd_net: null, vacation_advance_days_remaining: 3 }],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.count).toBe(1)
+  })
+})

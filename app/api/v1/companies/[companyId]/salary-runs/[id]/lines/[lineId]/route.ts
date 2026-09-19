@@ -36,6 +36,8 @@ const LineItemResponse = z.object({
   account_number: z.string().nullable(),
   sort_order: z.number(),
   one_off_tax_percent: z.number().nullable().optional(),
+  vacation_category: z.string().nullable().optional(),
+  vacation_saved_year: z.string().nullable().optional(),
 })
 
 registerEndpoint({
@@ -44,7 +46,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/lines/:lineId',
   summary: 'Update a payslip line in a draft salary run.',
   description:
-    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation.',
+    'Updates fields on a salary_line_items row (amount, description, quantity, unit_price, flags, account_number, one_off_tax_percent, vacation_category, vacation_saved_year) while the run is a draft. Amounts are rounded to whole öre. one_off_tax_percent: null removes the engångsskatt and returns the line to table taxation. vacation_category: null returns a vacation line to this year\'s paid days.',
   useWhen:
     'You spotted a wrong amount or description on a manual line before calculating: fix it in place instead of delete + recreate.',
   doNotUseFor:
@@ -54,6 +56,7 @@ registerEndpoint({
     'A lineId that belongs to a different run returns 404 SALARY_LINE_NOT_FOUND.',
     'Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.',
     'The row is validated as it reads after the patch: flipping is_net_deduction or is_gross_deduction on, setting is_taxable false, or making the amount non-positive on a line that carries one_off_tax_percent is refused with 400 VALIDATION_ERROR; clear the percentage (null) in the same call.',
+    'vacation_category (paid, extra_paid, saved, unpaid, advance) is only valid while item_type is vacation, and vacation_saved_year only with category saved; a patch that breaks either is refused with 400 VALIDATION_ERROR.',
   ],
   example: {
     request: { amount: 5500 },

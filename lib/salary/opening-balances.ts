@@ -25,13 +25,25 @@ export interface OpeningBalancesInput {
   cutover_date: string
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  /** null = the previous system could not export historical net pay
+   *  (payslip prints "Underlag saknas"); omitted on the wire = 0. */
+  ytd_net: number | null
   vacation_paid_days_remaining: number
   vacation_days_taken_this_year: number
   vacation_saved_days_by_year: Record<string, number>
   opening_semester_liability: number
   opening_semester_liability_avgifter: number
   karens_periods_adjustment: number
+  /** The day the vacation pools are struck per; null = day before cutover_date. */
+  vacation_as_of_date?: string | null
+  /** Obetalda (Fortnox/Azets): unpaid days left this vacation year. */
+  vacation_unpaid_days_remaining?: number
+  /** Förskott: förskottssemester days granted but not yet taken. */
+  vacation_advance_days_remaining?: number
+  /** Extra betalda: paid days above the statutory entitlement left this year. */
+  vacation_extra_paid_days_remaining?: number
+  /** Förskottsskuld SEK (Semesterlagen 29 a §); report only. */
+  opening_advance_vacation_debt?: number
 }
 
 export interface OpeningBalancesRow extends OpeningBalancesInput {
@@ -47,7 +59,10 @@ const ROW_COLUMNS =
   'vacation_paid_days_remaining, vacation_days_taken_this_year, ' +
   'vacation_saved_days_by_year, ' +
   'opening_semester_liability, opening_semester_liability_avgifter, ' +
-  'karens_periods_adjustment, created_at, updated_at'
+  'karens_periods_adjustment, vacation_as_of_date, ' +
+  'vacation_unpaid_days_remaining, vacation_advance_days_remaining, ' +
+  'vacation_extra_paid_days_remaining, opening_advance_vacation_debt, ' +
+  'created_at, updated_at'
 
 /** Booked-run lock lookup for a set of employees. Returns a map of
  * employee_id -> blocking booked run id (absent = unlocked). */
@@ -242,13 +257,21 @@ export async function setOpeningBalancesBulk(
     cutover_date: item.cutover_date,
     ytd_gross: roundOre(item.ytd_gross),
     ytd_tax: roundOre(item.ytd_tax),
-    ytd_net: roundOre(item.ytd_net),
+    // Explicit null = unknown historical net (kept as NULL, never 0).
+    ytd_net: item.ytd_net === null ? null : roundOre(item.ytd_net),
     vacation_paid_days_remaining: item.vacation_paid_days_remaining,
     vacation_days_taken_this_year: item.vacation_days_taken_this_year,
     vacation_saved_days_by_year: item.vacation_saved_days_by_year,
     opening_semester_liability: roundOre(item.opening_semester_liability),
     opening_semester_liability_avgifter: roundOre(item.opening_semester_liability_avgifter),
     karens_periods_adjustment: item.karens_periods_adjustment,
+    // Full replace: an omitted pool resets to 0 and an omitted as-of date to
+    // NULL (= the day before cutover_date), the documented semantics.
+    vacation_as_of_date: item.vacation_as_of_date ?? null,
+    vacation_unpaid_days_remaining: item.vacation_unpaid_days_remaining ?? 0,
+    vacation_advance_days_remaining: item.vacation_advance_days_remaining ?? 0,
+    vacation_extra_paid_days_remaining: item.vacation_extra_paid_days_remaining ?? 0,
+    opening_advance_vacation_debt: roundOre(item.opening_advance_vacation_debt ?? 0),
     updated_by: args.userId,
   }))
 
