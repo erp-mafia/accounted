@@ -95,9 +95,9 @@ export const POST = withRouteContext(
               `<p><strong>Begärd av:</strong> ${escapeHtml(user.email ?? '')} (${user.id})</p>`,
               `<p><strong>Kan registreras för mottagning:</strong> ${escapeHtml(eligibilityLine)}</p>`,
               note ? `<hr /><p>${escapeHtml(note).replace(/\n/g, '<br />')}</p>` : '',
-              `<hr /><p>Aktivera: <code>npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}</code></p>`,
+              `<hr /><p>Aktivera: <code>npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 10${wantsReceiving ? ' --receive' : ''}</code></p>`,
             ].join('\n'),
-            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\nKan registreras för mottagning: ${eligibilityLine}\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 50${wantsReceiving ? ' --receive' : ''}`,
+            text: `Bolag: ${companyName} (${orgNumber})\nCompany ID: ${companyId}\nBegärd av: ${user.email ?? ''} (${user.id})\nKan registreras för mottagning: ${eligibilityLine}\n\n${note ?? ''}\n\nAktivera: npx tsx --env-file=.env.local scripts/peppol/access.ts enable ${companyId} --max-sends 10${wantsReceiving ? ' --receive' : ''}`,
           })
           if (!sent.success) {
             log.warn('peppol access request e-mail failed', { companyId, reason: sent.error })
