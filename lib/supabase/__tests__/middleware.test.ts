@@ -975,8 +975,8 @@ describe('updateSession redirect destinations', () => {
   // ── Home-domain affinity (WL): the domain corrects itself ─────────────
 
   describe('home-domain affinity', () => {
-    const ARBORE = 'https://arbore.accounted.se'
-    const ACOUNT = 'https://acount.accounted.se'
+    const BRAND_B = 'https://brand-b.accounted.se'
+    const BRAND_A = 'https://brand-a.accounted.se'
 
     beforeEach(() => {
       state.user = SIGNED_IN
@@ -984,50 +984,50 @@ describe('updateSession redirect destinations', () => {
 
     it('redirects a byrå member on a foreign byrå domain to their own domain', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-a.accounted.se' } } },
       ]
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
-      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+      expect(locationOf(response)).toBe(`${BRAND_A}/`)
     })
 
     it('redirects a byrå member on the platform domain to their byrå domain', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
 
       const response = await runAt('https://app.gnubok.se', '/')
 
-      expect(locationOf(response)).toBe(`${ARBORE}/`)
+      expect(locationOf(response)).toBe(`${BRAND_B}/`)
     })
 
     it('preserves path and query across the affinity redirect', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
 
       const response = await runAt('https://app.gnubok.se', '/invoices/abc?tab=payments')
 
-      expect(locationOf(response)).toBe(`${ARBORE}/invoices/abc?tab=payments`)
+      expect(locationOf(response)).toBe(`${BRAND_B}/invoices/abc?tab=payments`)
     })
 
     it('lets a byrå member through on their own domain and caches the verdict', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
 
-      const response = await runAt(ARBORE, '/byra')
+      const response = await runAt(BRAND_B, '/byra')
 
       expect(response.status).toBe(200)
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=user-1~arbore.accounted.se',
+        'gnubok-home-ok=user-1~brand-b.accounted.se',
       )
     })
 
     it('keeps a byrå member with a brandless personal company on the canonical host', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
       // A personal company with no team at all: homed on canonical.
       state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
@@ -1043,7 +1043,7 @@ describe('updateSession redirect destinations', () => {
 
     it('counts a company whose team has no brand as canonical-homed too', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
       state.clientMemberships = [
         { companies: { team_id: 'team-personal', teams: { brands: null } } },
@@ -1059,32 +1059,32 @@ describe('updateSession redirect destinations', () => {
 
     it('still redirects a byrå member whose companies are all brand-homed', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
       state.clientMemberships = [
-        { companies: { team_id: 'team-arbore', teams: { brands: { id: 'brand-1' } } } },
+        { companies: { team_id: 'team-brand-b', teams: { brands: { id: 'brand-1' } } } },
       ]
 
       const response = await runAt('https://app.gnubok.se', '/')
 
-      expect(locationOf(response)).toBe(`${ARBORE}/`)
+      expect(locationOf(response)).toBe(`${BRAND_B}/`)
     })
 
     it('still redirects off a FOREIGN byrå domain even with a canonical personal company', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-a.accounted.se' } } },
       ]
       state.clientMemberships = [{ companies: { team_id: null, teams: null } }]
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
-      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+      expect(locationOf(response)).toBe(`${BRAND_A}/`)
     })
 
     it('stays put without caching when the canonical-company lookup fails', async () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
       state.clientMembershipsError = { message: 'connection reset' }
 
@@ -1100,18 +1100,18 @@ describe('updateSession redirect destinations', () => {
 
     it('tolerates the array shape for the embedded brand', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: [{ domain: 'acount.accounted.se' }] } },
+        { teams: { kind: 'byra', brands: [{ domain: 'brand-a.accounted.se' }] } },
       ]
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
-      expect(locationOf(response)).toBe(`${ACOUNT}/`)
+      expect(locationOf(response)).toBe(`${BRAND_A}/`)
     })
 
     it('redirects a user with no byrå ties off a brand domain to the platform', async () => {
-      state.hostBrand = { teamId: 'team-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b' }
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
     })
@@ -1121,48 +1121,48 @@ describe('updateSession redirect destinations', () => {
       // no team_members row, no company, only a brand_signup_allowlist entry.
       const { isEmailOnBrandAllowlist } = await import('@/lib/auth/brand-signup-gate')
       state.user = { ...SIGNED_IN, email: 'owner@partner.example' }
-      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b', id: 'brand-b-id' }
       state.allowlisted = true
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
       expect(response.status).toBe(200)
       expect(locationOf(response)).toBeNull()
       expect(response.headers.get('set-cookie')).toContain(
-        'gnubok-home-ok=user-1~arbore.accounted.se',
+        'gnubok-home-ok=user-1~brand-b.accounted.se',
       )
       expect(isEmailOnBrandAllowlist).toHaveBeenCalledWith(
-        'brand-arbore',
+        'brand-b-id',
         'owner@partner.example',
       )
     })
 
     it('still redirects a non-allowlisted email off the brand domain', async () => {
       state.user = { ...SIGNED_IN, email: 'stranger@example.com' }
-      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b', id: 'brand-b-id' }
       state.allowlisted = false
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
     })
 
     it('skips the allowlist lookup for a user without an email', async () => {
       const { isEmailOnBrandAllowlist } = await import('@/lib/auth/brand-signup-gate')
-      state.hostBrand = { teamId: 'team-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b' }
       state.allowlisted = true
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
       expect(isEmailOnBrandAllowlist).not.toHaveBeenCalled()
     })
 
     it('keeps a byrå client user on the byrå domain their company lives under', async () => {
-      state.hostBrand = { teamId: 'team-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b' }
       state.clientMemberships = [{ company_id: 'company-1' }]
 
-      const response = await runAt(ARBORE, '/')
+      const response = await runAt(BRAND_B, '/')
 
       expect(response.status).toBe(200)
     })
@@ -1175,7 +1175,7 @@ describe('updateSession redirect destinations', () => {
 
     it('does nothing on localhost and direct Vercel hosts', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'arbore.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-b.accounted.se' } } },
       ]
 
       for (const origin of [ORIGIN, 'https://erp-base-abc123.vercel.app']) {
@@ -1186,35 +1186,35 @@ describe('updateSession redirect destinations', () => {
 
     it('skips the check while this user\'s OK cookie for this host is fresh', async () => {
       state.byraMemberships = [
-        { teams: { kind: 'byra', brands: { domain: 'acount.accounted.se' } } },
+        { teams: { kind: 'byra', brands: { domain: 'brand-a.accounted.se' } } },
       ]
 
-      const response = await runAt(ARBORE, '/', {
-        cookie: 'gnubok-home-ok=user-1~arbore.accounted.se',
+      const response = await runAt(BRAND_B, '/', {
+        cookie: 'gnubok-home-ok=user-1~brand-b.accounted.se',
       })
 
       expect(response.status).toBe(200)
     })
 
     it('ignores an OK cookie left behind by a DIFFERENT user and still bounces', async () => {
-      // The amnas account-switch repro (2026-08-31): the byrå owner signs in
+      // The account-switch repro (2026-08-31): the byrå owner signs in
       // on the brand host (cookie set), signs out, and a second account with
       // no ties to the brand signs in within the TTL window. The inherited
       // host-only verdict skipped the bounce; the user-scoped value must not.
-      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b', id: 'brand-b-id' }
 
-      const response = await runAt(ARBORE, '/', {
-        cookie: 'gnubok-home-ok=user-OTHER~arbore.accounted.se',
+      const response = await runAt(BRAND_B, '/', {
+        cookie: 'gnubok-home-ok=user-OTHER~brand-b.accounted.se',
       })
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
     })
 
     it('ignores a stale host-only cookie from the pre-user-scoped format', async () => {
-      state.hostBrand = { teamId: 'team-arbore', id: 'brand-arbore' }
+      state.hostBrand = { teamId: 'team-brand-b', id: 'brand-b-id' }
 
-      const response = await runAt(ARBORE, '/', {
-        cookie: 'gnubok-home-ok=arbore.accounted.se',
+      const response = await runAt(BRAND_B, '/', {
+        cookie: 'gnubok-home-ok=brand-b.accounted.se',
       })
 
       expect(locationOf(response)).toBe('https://app.gnubok.se/')
