@@ -8,7 +8,7 @@ import { fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
-import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
+import type { CreditedInvoiceRefDto, CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { linkMigratedRegistrationVouchers, type MigratedInvoiceLinkInput } from '@/lib/invoices/link-migrated-registration-vouchers'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
@@ -27,7 +27,12 @@ export interface MigrationChunk {
   source_id: string
   payload: string
   target_id: string | null
-  receipt: { link?: Omit<MigratedInvoiceLinkInput, 'invoiceId'> }
+  receipt: {
+    link?: Omit<MigratedInvoiceLinkInput, 'invoiceId'> & {
+      /** The credited invoice as the provider named it; pairMigratedCreditNotes resolves it. */
+      creditedInvoiceRef?: CreditedInvoiceRefDto | null
+    }
+  }
 }
 
 export async function migrationRpc<T>(supabase: SupabaseClient, job: ProviderMigrationJob, name: string, args: Record<string, unknown> = {}, deadline?: number): Promise<T> {
@@ -136,8 +141,53 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
     link: { kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
       invoiceDate: invoice.issueDate, totalSek: mapped.invoice.total_sek, currencyCode: invoice.currencyCode,
-      invoiceNumber: invoice.invoiceNumber },
-    warnings: { fxUnresolved: !!mapped.fxUnresolved, vatUnresolved: mapped.vatUnresolved, creditNoteUnlinked: mapped.creditNoteUnlinked },
+      invoiceNumber: invoice.invoiceNumber, creditedInvoiceRef: mapped.creditedInvoiceRef },
+    // A credit note whose provider named the credited invoice is paired in
+    // the link phase (pairMigratedCreditNotes); only one with no reference
+    // at all is reported as unlinked here.
+    warnings: { fxUnresolved: !!mapped.fxUnresolved, vatUnresolved: mapped.vatUnresolved,
+      creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef },
+  }
+}
+
+/**
+ * Pair each imported kreditfaktura with the invoice it credits, by the
+ * reference the provider sent (receipt.link.creditedInvoiceRef).
+ *
+ * Runs in the link phase, once every sales invoice of the job is imported:
+ * chunks import in id order, so the original may well come after its credit
+ * note. The provider's id of the original resolves through this job's own
+ * chunks (source_id to target_id); its number resolves through the company's
+ * invoices, which also covers an original imported by an earlier run.
+ * Nothing is guessed from amounts, and a number two invoices share is
+ * ambiguous, so it pairs nothing. Idempotent: an already-paired row is left
+ * alone, so a replay after a timeout is harmless.
+ */
+export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
+  for (const c of chunks) {
+    const ref = c.receipt.link?.creditedInvoiceRef
+    if (c.resource !== 'salesInvoices' || !ref || !c.target_id) continue
+    let target: string | null = null
+    if (ref.id) {
+      const { data, error } = await withinMigrationDeadline(supabase.from('migration_job_chunks').select('target_id')
+        .eq('job_id', job.id).eq('resource', 'salesInvoices').eq('source_id', ref.id).not('target_id', 'is', null).maybeSingle(), deadline)
+      if (error) throw new Error(error.message)
+      target = (data as { target_id?: string | null } | null)?.target_id ?? null
+    }
+    if (!target && ref.invoiceNumber) {
+      const { data, error } = await withinMigrationDeadline(supabase.from('invoices').select('id')
+        .eq('company_id', job.company_id).eq('invoice_number', ref.invoiceNumber).neq('id', c.target_id).limit(2), deadline)
+      if (error) throw new Error(error.message)
+      const rows = (data ?? []) as { id: string }[]
+      target = rows.length === 1 ? rows[0].id : null
+    }
+    if (!target || target === c.target_id) {
+      log.warn('credit note left unpaired: credited invoice not found', { jobId: job.id, chunkId: c.id, creditedInvoice: ref.invoiceNumber ?? ref.id })
+      continue
+    }
+    const { error } = await withinMigrationDeadline(supabase.from('invoices').update({ credited_invoice_id: target })
+      .eq('id', c.target_id).eq('company_id', job.company_id).is('credited_invoice_id', null), deadline)
+    if (error) throw new Error(error.message)
   }
 }
 
@@ -176,6 +226,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
 async function followupBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
   let records: Record<string, unknown>[]
   if (job.phase === 'link') {
+    await pairMigratedCreditNotes(supabase, job, chunks, deadline)
     const inputs = chunks.map(c => ({ ...c.receipt.link!, invoiceId: c.target_id! }))
     const linked = await linkMigratedRegistrationVouchers({ supabase, companyId: job.company_id,
       invoices: inputs, dryRun: true, bounded: true })

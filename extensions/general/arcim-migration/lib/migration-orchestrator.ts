@@ -26,7 +26,7 @@ import { classifyProviderError } from '@/lib/providers/with-provider-call'
 import { fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
-import type { CustomerDto, SupplierDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
+import type { CustomerDto, SupplierDto, CreditedInvoiceRefDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
 import { orgNumberKey } from '@/lib/invariants/org-number'
@@ -886,14 +886,20 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         await loadCustomerRegister()
 
         // Bulk-load existing invoice numbers once.
-        const existingInvoices = await fetchAllRows<{ invoice_number: string }>(({ from, to }) =>
+        const existingInvoices = await fetchAllRows<{ id: string; invoice_number: string | null }>(({ from, to }) =>
           supabase
             .from('invoices')
-            .select('invoice_number')
+            .select('id, invoice_number')
             .eq('company_id', companyId)
             .range(from, to)
         )
         const existingInvoiceNumbers = new Set(existingInvoices.map((r) => r.invoice_number))
+        // For pairing a migrated kreditfaktura with the invoice it credits
+        // when that invoice was imported by an earlier run (Phase D below).
+        const invoiceIdByNumber = new Map<string, string>()
+        for (const row of existingInvoices) {
+          if (row.invoice_number) invoiceIdByNumber.set(row.invoice_number, row.id)
+        }
 
         let imported = 0
         let skipped = 0
@@ -1054,6 +1060,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         let fxUnresolved = 0
         let vatUnresolved = 0
         let creditNotesUnlinked = 0
+        let creditNotesLinked = 0
+        // This run's inserts by the provider's own id, and the credit notes
+        // whose provider named the invoice they credit, for Phase D.
+        const invoiceIdBySourceId = new Map<string, string>()
+        const creditNotesToPair: { invoiceId: string; ref: CreditedInvoiceRefDto; invoiceNumber: string }[] = []
 
         // Phase C: chunk-insert invoices + their line items.
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
@@ -1106,8 +1117,15 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
                 + 'imported with gross as subtotal and a null rate.'
               )
             }
+            if (mappedBatch[i].dto.id) invoiceIdBySourceId.set(mappedBatch[i].dto.id, String(invoiceId))
+            if (mappedBatch[i].dto.invoiceNumber) invoiceIdByNumber.set(mappedBatch[i].dto.invoiceNumber, String(invoiceId))
             if (mappedBatch[i].creditNoteUnlinked) {
-              creditNotesUnlinked++
+              const ref = mappedBatch[i].creditedInvoiceRef
+              if (ref) {
+                creditNotesToPair.push({ invoiceId: String(invoiceId), ref, invoiceNumber: mappedBatch[i].dto.invoiceNumber })
+              } else {
+                creditNotesUnlinked++
+              }
             }
             imported++
           }
@@ -1150,11 +1168,44 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
         }
 
+        // Phase D: pair each imported kreditfaktura with the invoice it
+        // credits. The provider names that invoice by its own id and number
+        // (Bokio: invoiceRef); the id resolves against this run's inserts,
+        // the number against those and against invoices imported earlier.
+        // Nothing is guessed from amounts: an unresolved reference stays
+        // unpaired and is counted, with the number on the row's notes.
+        for (const group of chunk(creditNotesToPair, ITEM_RPC_CONCURRENCY)) {
+          await Promise.all(group.map(async ({ invoiceId, ref, invoiceNumber }) => {
+            const target = (ref.id && invoiceIdBySourceId.get(ref.id))
+              || (ref.invoiceNumber && invoiceIdByNumber.get(ref.invoiceNumber))
+              || null
+            if (!target || target === invoiceId) {
+              creditNotesUnlinked++
+              console.warn(
+                `[migration] Credit note ${invoiceNumber}: credited invoice ${ref.invoiceNumber ?? ref.id} `
+                + 'is not among the imported invoices; imported unpaired.',
+              )
+              return
+            }
+            const { error } = await supabase
+              .from('invoices')
+              .update({ credited_invoice_id: target })
+              .eq('id', invoiceId)
+              .eq('company_id', companyId)
+            if (error) {
+              creditNotesUnlinked++
+              console.error(`[migration] Credit note ${invoiceNumber}: pairing with ${target} failed:`, error.message)
+              return
+            }
+            creditNotesLinked++
+          }))
+        }
+
         if (excluded.length > 0) {
           skipReasons.outsideFiscalYears = excluded.length
           skipped += excluded.length
         }
-        results.salesInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, hydration, errorSample: errorSample ?? undefined }
+        results.salesInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, creditNotesLinked, hydration, errorSample: errorSample ?? undefined }
         console.log(`[migration] Sales invoices: ${imported} imported, ${skipped} skipped (${elapsedSeconds(stepStartedAt)} s)`)
       } catch (err) {
         console.error('Failed to import sales invoices:', err)

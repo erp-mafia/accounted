@@ -16,6 +16,7 @@ import { BrioxClient } from './briox/client';
 import { BRIOX_RESOURCE_CONFIGS } from './briox/config';
 import { BokioClient, BokioApiError } from './bokio/client';
 import { BOKIO_RESOURCE_CONFIGS } from './bokio/config';
+import { isBokioCreditNotePayload } from './bokio/mapper';
 import { BjornLundenClient } from './bjornlunden/client';
 import { BL_RESOURCE_CONFIGS } from './bjornlunden/config';
 import { WintClient } from './wint/client';
@@ -75,10 +76,26 @@ export async function fetchMigrationPage(
   }
   if (result.page !== page) throw new Error('MIGRATION_PROVIDER_PAGE_MISMATCH');
   if (result.items.length === 0 && page < result.totalPages) throw new Error('MIGRATION_PROVIDER_EMPTY_PAGE');
+  const nextPage = result.items.length > 0 && page < result.totalPages ? page + 1 : null;
+  let items = result.items;
+  let total = result.totalCount;
+  if (provider === 'bokio' && resource === 'salesInvoices' && page === 1) {
+    // Bokio keeps kreditfakturor on /credit-notes, not in /invoices. The job
+    // worker persists ONE cursor per resource and its page RPC
+    // (save_provider_migration_page) accepts only page + 1 as the next
+    // cursor, so a second endpoint cannot get pages of its own: the whole
+    // credit-note register rides on page 1 instead, AHEAD of the invoices.
+    // Ahead, because the RPC keeps the first record per source id, and where
+    // /invoices repeats a credit note (status `credit`) the /credit-notes
+    // form is the one that names the credited invoice.
+    const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId!);
+    items = mergeBokioSalesDocuments(creditNotes, items);
+    total += creditNotes.length;
+  }
   return {
-    items: result.items.map(item => config.mapper(item) as MigrationDto),
-    nextPage: result.items.length > 0 && page < result.totalPages ? page + 1 : null,
-    total: result.totalCount,
+    items: items.map(item => config.mapper(item) as MigrationDto),
+    nextPage,
+    total,
   };
 }
 
@@ -88,13 +105,14 @@ async function bokioPaginate<T>(
   accessToken: string,
   companyId: string,
   path: string,
+  pageSize?: number,
 ): Promise<T[]> {
   const allItems: T[] = [];
   let page = 1;
   let totalPages = 1;
 
   do {
-    const result = await bokioClient.getPage<T>(accessToken, companyId, path, { page });
+    const result = await bokioClient.getPage<T>(accessToken, companyId, path, { page, pageSize });
     allItems.push(...result.items);
     totalPages = result.totalPages;
     page++;
@@ -102,6 +120,61 @@ async function bokioPaginate<T>(
 
   console.log(`[bokio-paginate] ${path}: fetched ${allItems.length} total items across ${totalPages} page(s)`);
   return allItems;
+}
+
+/** The spec's maximum for /credit-notes; the register is usually small. */
+const BOKIO_CREDIT_NOTE_PAGE_SIZE = 100;
+
+/**
+ * Every Bokio credit note, raw. Bokio publishes kreditfakturor on
+ * /companies/{id}/credit-notes (scope credit-notes:read), a resource of its
+ * own beside /invoices; a sales register read from /invoices alone has none
+ * of them, which is how a Bokio customer's credit notes went missing or
+ * landed as unsent invoices (crm#110).
+ *
+ * A 404 is read the way the AP endpoints' is: the resource is absent for
+ * this account, nothing to import. A 401/403 (a token without the scope) is
+ * a credential answer and propagates, because a run that silently drops
+ * every credit note is the bug this exists to fix.
+ */
+async function fetchBokioCreditNotes(
+  accessToken: string,
+  companyId: string,
+): Promise<Record<string, unknown>[]> {
+  const config = BOKIO_RESOURCE_CONFIGS[ResourceType.CreditNotes];
+  if (!config) return [];
+  try {
+    return await bokioPaginate<Record<string, unknown>>(
+      accessToken, companyId, config.listEndpoint, BOKIO_CREDIT_NOTE_PAGE_SIZE,
+    );
+  } catch (err) {
+    if (err instanceof BokioApiError && err.statusCode === 404) {
+      console.log('[provider-data-fetcher] Bokio credit-notes endpoint not available (404), skipping');
+      return [];
+    }
+    throw err;
+  }
+}
+
+/**
+ * One Bokio sales register out of the two endpoints: the credit notes first,
+ * then every invoice whose id is not already among them. /invoices can list
+ * a credit document under its own id (status `credit`); the /credit-notes
+ * form of it carries `invoiceRef`, the pointer at the credited invoice, so
+ * that form wins and comes first, which is what makes it win the importer's
+ * first-seen dedupe as well.
+ */
+function mergeBokioSalesDocuments(
+  creditNotes: Record<string, unknown>[],
+  invoices: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const creditNoteIds = new Set(
+    creditNotes.map((raw) => String(raw['id'] ?? '')).filter((id) => id !== ''),
+  );
+  return [
+    ...creditNotes,
+    ...invoices.filter((raw) => !creditNoteIds.has(String(raw['id'] ?? ''))),
+  ];
 }
 
 // ── Helper to paginate BjornLunden (uses getPage with userKey) ──────
@@ -382,10 +455,17 @@ export async function fetchSalesInvoicesDirect(
       console.warn(`[provider-data-fetcher] Bokio invoices: skipped, config=${!!config}, providerCompanyId=${providerCompanyId ?? 'undefined'}`);
       return [];
     }
-    const items = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const invoices = await bokioPaginate<Record<string, unknown>>(accessToken, providerCompanyId, config.listEndpoint);
+    const creditNotes = await fetchBokioCreditNotes(accessToken, providerCompanyId);
+    const items = mergeBokioSalesDocuments(creditNotes, invoices);
     if (items.length > 0) {
-      console.log(`[provider-data-fetcher] Bokio invoices: first item keys: ${Object.keys(items[0]).join(', ')}`);
+      console.log(
+        `[provider-data-fetcher] Bokio invoices: ${invoices.length} invoices, ${creditNotes.length} credit notes; `
+        + `first item keys: ${Object.keys(items[0]).join(', ')}`,
+      );
     }
+    // The sales mapper recognises both payload shapes, so one map covers
+    // invoices and credit notes alike (see mapBokioToSalesInvoice).
     return items.map((item) => config.mapper(item) as SalesInvoiceDto);
   }
 
@@ -649,9 +729,18 @@ function detailFetcher(
   if (provider === 'bokio') {
     const config = BOKIO_RESOURCE_CONFIGS[resource];
     if (!config || !providerCompanyId) return null;
-    return async (dto) => bokioClient.getDetail<Record<string, unknown>>(
-      accessToken, providerCompanyId, path(config.detailEndpoint, detailId(dto, config.idField)),
-    );
+    const creditNotes = resource === ResourceType.SalesInvoices
+      ? BOKIO_RESOURCE_CONFIGS[ResourceType.CreditNotes]
+      : undefined;
+    return async (dto) => {
+      // A Bokio kreditfaktura lives on /credit-notes/{id}; asking
+      // /invoices/{id} for it answers 404. The list payload's shape says
+      // which one this is.
+      const target = creditNotes && isBokioCreditNotePayload(dto._raw) ? creditNotes : config;
+      return bokioClient.getDetail<Record<string, unknown>>(
+        accessToken, providerCompanyId, path(target.detailEndpoint, detailId(dto, target.idField)),
+      );
+    };
   }
 
   if (provider === 'bjornlunden') {

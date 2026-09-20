@@ -13,6 +13,8 @@ describe('large provider register pagination', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string) => {
       const url = new URL(input)
       expect(url.hostname).toBe(provider === 'visma' ? 'eaccountingapi.vismaonline.com' : 'api.bokio.se')
+      // Bokio's sales register is two endpoints; this run has no credit notes.
+      if (url.pathname.endsWith('/credit-notes')) return Response.json(providerPage(provider, 1, 100, 0))
       const page = Number(url.searchParams.get(provider === 'visma' ? '$page' : 'page'))
       const size = Number(url.searchParams.get(provider === 'visma' ? '$pagesize' : 'pageSize'))
       expect(size).toBe(pageSize)

@@ -12,6 +12,12 @@ export const ResourceType = {
   Journals: 'journals',
   AccountingAccounts: 'accountingaccounts',
   CompanyInformation: 'companyinformation',
+  /**
+   * Kreditfakturor kept on a resource of their own by the provider (Bokio's
+   * /credit-notes). Their mapper still yields a SalesInvoiceDto with
+   * invoiceTypeCode 381, so consumers see one sales register.
+   */
+  CreditNotes: 'creditnotes',
   AccountingPeriods: 'accountingperiods',
   FinancialDimensions: 'financialdimensions',
   BalanceSheet: 'balancesheet',
@@ -113,6 +119,22 @@ export interface SourceVoucherRefDto {
   number: number;
 }
 
+/**
+ * The invoice a kreditfaktura credits, as the PROVIDER states it: the
+ * provider's own id of that invoice and its number as printed. Never an
+ * Accounted id. The importer resolves it against the invoices it has
+ * imported (this run or an earlier one) and pairs the rows through
+ * `invoices.credited_invoice_id` when it can; when it cannot, the number is
+ * still written onto the credit note so the pairing stays legible.
+ * Set only beside `invoiceTypeCode` 381.
+ */
+export interface CreditedInvoiceRefDto {
+  /** The provider's id of the credited invoice, when it names one. */
+  id?: string;
+  /** The credited invoice's number as the provider prints it. */
+  invoiceNumber?: string;
+}
+
 // ============================================
 // Sales Invoice
 // ============================================
@@ -175,7 +197,15 @@ export interface SalesInvoiceDto {
   issueDate: string;
   dueDate?: string;
   deliveryDate?: string;
+  /**
+   * UNCL1001 document type: '381' marks a kreditfaktura. Every provider
+   * mapper MUST set it for a credit note; it is the one signal the importer
+   * reads (extensions/general/arcim-migration/lib/entity-mapper.ts), and a
+   * mapper that leaves it unset lands the credit note as an ordinary invoice.
+   */
   invoiceTypeCode?: string;
+  /** The invoice this credit note credits, when the provider names it. */
+  creditedInvoiceRef?: CreditedInvoiceRefDto;
   currencyCode: string;
   status: InvoiceStatusCode;
   supplier: PartyDto;

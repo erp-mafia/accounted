@@ -2195,16 +2195,20 @@ function ResultStep({
         failed: false,
       })
     }
-    if (results.salesInvoices?.creditNotesUnlinked) {
-      // Credit notes land as ordinary invoice rows with reversed amounts. The
-      // pairing to the invoice they credit cannot be resolved at import time:
-      // no provider DTO carries a reference to it. Say so rather than leaving
-      // the user to notice a kreditfaktura that points at nothing.
-      const count = results.salesInvoices.creditNotesUnlinked
+    if (results.salesInvoices?.creditNotesUnlinked || results.salesInvoices?.creditNotesLinked) {
+      // Credit notes land as ordinary invoice rows with reversed amounts and,
+      // when the provider named the invoice they credit (Bokio does), a
+      // credited_invoice_id. Say which ones could not be paired rather than
+      // leaving the user to notice a kreditfaktura that points at nothing.
+      const unlinked = results.salesInvoices.creditNotesUnlinked ?? 0
+      const linked = results.salesInvoices.creditNotesLinked ?? 0
       entityLines.push({
         label: t('ext_arcim_credit_notes_label'),
-        value: `${count} importerade`,
-        detail: t('ext_arcim_credit_notes_unlinked_detail', { count }),
+        value: `${unlinked + linked} importerade`,
+        detail: [
+          linked > 0 ? t('ext_arcim_credit_notes_linked_detail', { count: linked }) : null,
+          unlinked > 0 ? t('ext_arcim_credit_notes_unlinked_detail', { count: unlinked }) : null,
+        ].filter(Boolean).join(' '),
         failed: false,
       })
     }
