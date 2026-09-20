@@ -56,6 +56,7 @@ describe('makePrimary', () => {
 
   it('swaps through set_cash_account_primary and returns the re-read row', async () => {
     enqueue({ data: row() })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null })
     enqueue({ data: row({ is_primary: true }) })
     const result = await makePrimary(client, 'c1', 'ca-1940')
@@ -68,8 +69,22 @@ describe('makePrimary', () => {
     expect(new Set(supabase.from.mock.calls.map((c) => c[0]))).toEqual(new Set(['cash_accounts']))
   })
 
+  it('undoes the swap when the target turned ineligible between the check and the swap', async () => {
+    enqueue({ data: row() })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
+    enqueue({ data: null }) // swap
+    enqueue({ data: row({ is_primary: true, enabled: false }) }) // disabled meanwhile
+    enqueue({ data: null }) // swap back
+    await expect(makePrimary(client, 'c1', 'ca-1940')).resolves.toEqual({ ok: false, reason: 'disabled' })
+    expect(supabase.rpc.mock.calls.map((c) => (c[1] as { p_cash_account_id: string }).p_cash_account_id)).toEqual([
+      'ca-1940',
+      'ca-1930',
+    ])
+  })
+
   it('throws when the RPC fails, leaving the old primary in place', async () => {
     enqueue({ data: row() })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null, error: { message: 'boom' } })
     await expect(makePrimary(client, 'c1', 'ca-1940')).rejects.toThrow(/setPrimary failed: boom/)
   })

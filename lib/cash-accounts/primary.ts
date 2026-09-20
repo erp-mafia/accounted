@@ -66,10 +66,32 @@ export async function makePrimary(
   if (reason) return { ok: false, reason }
   if (account.is_primary) return { ok: true, account }
 
+  // Who is primary now, so a swap that turns out to be wrong can be undone.
+  const previous = await supabase
+    .from('cash_accounts')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('is_primary', true)
+    .neq('id', cashAccountId)
+    .maybeSingle()
+  if (previous.error) throw new Error(`cash_accounts makePrimary lookup failed: ${previous.error.message}`)
+  const previousId = (previous.data as { id: string } | null)?.id ?? null
+
   await setPrimary(supabase, companyId, cashAccountId)
 
   const after = await read()
   if (after.error) throw new Error(`cash_accounts makePrimary re-read failed: ${after.error.message}`)
   if (!after.data) return { ok: false, reason: 'not_found' }
+
+  // The RPC checks only that the row exists, so the eligibility read above and
+  // the swap are two statements: a disable that commits in between would leave
+  // a disabled primary. This re-read catches every such case, because once the
+  // swap has committed setEnabled()'s own predicate (is_primary = false)
+  // refuses any further disable of this row. Hand the flag back and refuse.
+  const lateReason = primaryIneligibleReason(after.data as CashAccount)
+  if (lateReason) {
+    if (previousId) await setPrimary(supabase, companyId, previousId)
+    return { ok: false, reason: lateReason }
+  }
   return { ok: true, account: after.data as CashAccount }
 }

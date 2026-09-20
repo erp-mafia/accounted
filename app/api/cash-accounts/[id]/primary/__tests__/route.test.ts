@@ -123,6 +123,7 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
 
   it('makes an enabled SEK bank account primary through set_cash_account_primary and returns it', async () => {
     enqueue({ data: account() }) // lookup
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null }) // rpc
     enqueue({ data: account({ is_primary: true }) }) // re-read
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
@@ -138,6 +139,7 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
   // write a journal table or a transaction; only later bookings follow it.
   it('touches cash_accounts and the RPC only: no journal table, no transaction', async () => {
     enqueue({ data: account() })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null })
     enqueue({ data: account({ is_primary: true }) })
     await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
@@ -150,11 +152,34 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
 
   it('allows an account a bank connection holds: the PSD2 sync never picks a primary', async () => {
     enqueue({ data: account({ bank_connection_id: 'conn-1', source: 'enable_banking' }) })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null })
     enqueue({ data: account({ bank_connection_id: 'conn-1', source: 'enable_banking', is_primary: true }) })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
     expect(response.status).toBe(200)
     expect(rpcCalls()).toHaveLength(1)
+  })
+
+  // Superagent P2: the RPC only checks that the row exists, so a disable that
+  // commits between the eligibility read and the swap would leave a disabled
+  // primary. The re-read after the swap catches it and the flag goes back.
+  it('hands primary back and answers 400 when the target was disabled between the check and the swap', async () => {
+    enqueue({ data: account() }) // lookup: eligible
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
+    enqueue({ data: null }) // rpc: swap to 1940
+    enqueue({ data: account({ is_primary: true, enabled: false }) }) // re-read: disabled meanwhile
+    enqueue({ data: null }) // rpc: back to 1930
+    const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { reason?: string } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('CASH_ACCOUNT_PRIMARY_INELIGIBLE')
+    expect(body.error.details?.reason).toBe('disabled')
+    expect(rpcCalls()).toEqual([
+      ['set_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: CA_1940 }],
+      ['set_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: 'ca-1930' }],
+    ])
   })
 
   it('is a no-op on the account that is already primary', async () => {
@@ -166,6 +191,7 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
 
   it('maps an RPC failure to the canonical error envelope', async () => {
     enqueue({ data: account() })
+    enqueue({ data: { id: 'ca-1930' } }) // current primary
     enqueue({ data: null, error: { message: 'boom' } })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
