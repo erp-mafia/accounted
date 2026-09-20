@@ -8151,6 +8151,8 @@
     "benefits_added": "Benefit added",
     "benefits_save_failed": "Could not save benefit",
     "benefits_removed": "Benefit removed",
+    "benefits_deactivated": "Benefit ended",
+    "benefits_deactivated_hint": "The benefit has been used in a salary run and is kept in the history. Recalculate open salary runs to remove the line.",
     "benefits_remove_failed": "Could not remove",
     "benefits_type_bike": "Bicycle benefit (cykelförmån)",
     "benefits_type_car": "Car benefit (bilförmån)",

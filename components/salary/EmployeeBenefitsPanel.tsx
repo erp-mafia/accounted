@@ -130,7 +130,16 @@ export function EmployeeBenefitsPanel({ employeeId, canWrite }: { employeeId: st
   async function handleDelete(id: string) {
     const res = await fetch(`/api/salary/employees/${employeeId}/benefits/${id}`, { method: 'DELETE' })
     if (res.ok) {
-      toast({ title: t('benefits_removed') })
+      // A benefit that a payslip line already derives from is kept and
+      // switched off rather than deleted (provenance, #2695). It leaves this
+      // list either way, but a draft run keeps the derived line until it is
+      // recalculated, so say so.
+      const { data } = (await res.json()) as { data?: { deactivated?: boolean } }
+      if (data?.deactivated) {
+        toast({ title: t('benefits_deactivated'), description: t('benefits_deactivated_hint') })
+      } else {
+        toast({ title: t('benefits_removed') })
+      }
       await load()
     } else {
       toast({ title: t('benefits_remove_failed'), variant: 'destructive' })

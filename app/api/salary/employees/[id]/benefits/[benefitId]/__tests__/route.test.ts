@@ -2,7 +2,9 @@
  * Auth-wiring tests for /api/salary/employees/[id]/benefits/[benefitId]
  * (PATCH/DELETE). Runs through the real withRouteContext wrapper; mocks auth/
  * company/write and injects a queued Supabase mock via requireAuth. Covers 401,
- * 403 (viewer), a DELETE happy path, and the validity-period contract on PATCH
+ * 403 (viewer), the DELETE outcomes (hard delete, deactivate when a payslip
+ * line derives from the row, 404 when nothing matched: #2695), and the
+ * validity-period contract on PATCH
  * (CHECK (valid_to IS NULL OR valid_to >= valid_from), migration
  * 20260512200100), including the error-mapping split that used to report a
  * check_violation as 404 "Förmån hittades inte".
@@ -11,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -79,14 +81,67 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
     expect(response.status).toBe(403)
   })
 
-  it('deletes the benefit (happy path)', async () => {
-    enqueue({ data: null }) // delete (no error)
+  it('hard-deletes a benefit no payslip line derives from (happy path)', async () => {
+    enqueue({ data: null, count: 0 }) // salary_line_items referencing count
+    enqueue({ data: [{ id: 'ben-1' }] }) // delete ... returning id
 
     const response = await DELETE(del(), params)
-    const { status, body } = await parseJsonResponse<{ data: { id: string; deleted: boolean } }>(response)
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; deleted: boolean; deactivated: boolean }
+    }>(response)
 
     expect(status).toBe(200)
-    expect(body.data).toEqual({ id: 'ben-1', deleted: true })
+    expect(body.data).toEqual({ id: 'ben-1', deleted: true, deactivated: false })
+    expect(findCall('employee_benefits', 'delete')).toBeDefined()
+    expect(findCall('employee_benefits', 'update')).toBeUndefined()
+  })
+
+  // #2695: salary_line_items.source_benefit_id is ON DELETE SET NULL, so a
+  // hard delete would turn the derived line into a manual-looking one that
+  // step 8d of the calculation never removes. The row is kept and switched
+  // off instead; the next recalculation drops the line by its intact link.
+  it('keeps and deactivates a benefit that a payslip line derives from', async () => {
+    enqueue({ data: null, count: 1 }) // one derived line points at the row
+    enqueue({ data: [{ id: 'ben-1' }] }) // update ... returning id
+
+    const response = await DELETE(del(), params)
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; deleted: boolean; deactivated: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ id: 'ben-1', deleted: false, deactivated: true })
+    expect(findCall('employee_benefits', 'delete')).toBeUndefined()
+    expect(findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
+    // The update is scoped to the row on this employee in this company.
+    expect(findCalls('employee_benefits', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['id', 'ben-1'],
+        ['employee_id', 'emp-1'],
+        ['company_id', 'company-1'],
+      ]),
+    )
+  })
+
+  it('returns 404 when no benefit matched on the employee', async () => {
+    enqueue({ data: null, count: 0 })
+    enqueue({ data: [] }) // delete matched nothing
+
+    const response = await DELETE(del(), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Förmån hittades inte')
+  })
+
+  it('maps a failure on the referencing-line count to 500, not a delete', async () => {
+    enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
+
+    const response = await DELETE(del(), params)
+
+    expect(response.status).toBe(500)
+    expect(findCall('employee_benefits', 'delete')).toBeUndefined()
+    expect(findCall('employee_benefits', 'update')).toBeUndefined()
   })
 })
 

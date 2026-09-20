@@ -149,7 +149,7 @@ registerEndpoint({
     'car (bilförmån) is supplied as the monthly schablon value you computed (Skatteverket\'s bilförmånsberäkning, including miljöbil and 30 000 km reductions); the API does not compute it from the car.',
     'bike takes annual_market_value, not monthly_value: the server derives the monthly value with the 3 000 kr/year tax-free allowance. A monthly_value sent next to annual_market_value on a bike row is ignored.',
     'valid_from / valid_to gate which runs pick the row up: a run derives the line when valid_from <= payment_date <= valid_to (valid_to omitted = open-ended). Both dates are inclusive; valid_to before valid_from is 400 VALIDATION_ERROR.',
-    'To stop a benefit that already fed a calculated run, PATCH is_active=false or set valid_to rather than DELETE: a hard delete nulls the provenance on the derived payslip line (ON DELETE SET NULL), so recalculating the run keeps that line (#2695).',
+    'To stop a benefit that already fed a calculated run, PATCH is_active=false or set valid_to; DELETE on such a row keeps and deactivates it rather than removing it. Either way the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695).',
   ],
   example: {
     request: {

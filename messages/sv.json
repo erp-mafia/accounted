@@ -8151,6 +8151,8 @@
     "benefits_added": "Förmån tillagd",
     "benefits_save_failed": "Kunde inte spara förmån",
     "benefits_removed": "Förmån borttagen",
+    "benefits_deactivated": "Förmån avslutad",
+    "benefits_deactivated_hint": "Förmånen har använts i en lönekörning och behålls i historiken. Räkna om öppna lönekörningar för att ta bort raden.",
     "benefits_remove_failed": "Kunde inte ta bort",
     "benefits_type_bike": "Cykelförmån",
     "benefits_type_car": "Bilförmån",

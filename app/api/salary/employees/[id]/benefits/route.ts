@@ -47,7 +47,13 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    const result = await listEmployeeBenefits(supabase, { companyId, employeeId: id })
+    // Active rows only: this is the register the panel lets the user add to
+    // and remove from. A removed benefit that a payslip line derives from is
+    // kept as is_active=false for provenance (#2695), and the engine (step
+    // 8d) reads active rows only, so listing inactive rows here would show a
+    // "removed" benefit as live. History stays reachable on v1 (?active=false)
+    // and in the archive export.
+    const result = await listEmployeeBenefits(supabase, { companyId, employeeId: id, active: true })
     if (!result.ok) return failureResponse(result)
 
     return NextResponse.json({ data: result.data })

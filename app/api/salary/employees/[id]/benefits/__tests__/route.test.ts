@@ -1,15 +1,17 @@
 /**
- * Auth-wiring tests for /api/salary/employees/[id]/benefits (POST create).
+ * Auth-wiring tests for /api/salary/employees/[id]/benefits (GET list, POST
+ * create).
  *
  * Runs the route through the real withRouteContext wrapper; mocks auth/company/
  * write and injects a queued Supabase mock via requireAuth. Covers 401, 403
- * (viewer), and a POST happy path.
+ * (viewer), a POST happy path, and that GET lists active rows only (a removed
+ * benefit that a payslip line derives from is kept as is_active=false, #2695).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -28,13 +30,63 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
-import { POST } from '../route'
+import { GET, POST } from '../route'
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
+
+function get() {
+  return createMockRequest('/api/salary/employees/emp-1/benefits', { method: 'GET' })
+}
 
 function post(body: unknown) {
   return createMockRequest('/api/salary/employees/emp-1/benefits', { method: 'POST', body })
 }
+
+describe('GET /api/salary/employees/[id]/benefits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
+  })
+
+  it('returns 401 when unauthenticated', async () => {
+    requireAuthMock.mockResolvedValue({
+      user: null,
+      supabase,
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    })
+
+    const response = await GET(get(), params)
+    expect(response.status).toBe(401)
+  })
+
+  it('returns 404 when the employee is not in the company', async () => {
+    enqueue({ data: null }) // employee lookup
+
+    const response = await GET(get(), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+  })
+
+  // The panel is the register the user adds to and removes from. A benefit
+  // removed after a run derived a line from it is kept as is_active=false for
+  // provenance; listing it here would show a "removed" benefit as live.
+  it('lists active benefits only (happy path)', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // employee lookup
+    enqueue({ data: [{ id: 'ben-1', is_active: true }] }) // benefits
+
+    const response = await GET(get(), params)
+    const { status, body } = await parseJsonResponse<{ data: { id: string }[] }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual([{ id: 'ben-1', is_active: true }])
+    expect(findCalls('employee_benefits', 'eq')).toContainEqual(['is_active', true])
+    expect(findCalls('employee_benefits', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(findCalls('employee_benefits', 'eq')).toContainEqual(['employee_id', 'emp-1'])
+  })
+})
 
 const validBenefit = {
   benefit_type: 'other',

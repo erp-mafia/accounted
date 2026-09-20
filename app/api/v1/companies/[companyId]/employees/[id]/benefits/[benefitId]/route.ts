@@ -3,9 +3,10 @@
  *
  * PATCH  : partial update. Mandatory Idempotency-Key. Dry-runnable: the
  *          preview is the merged row. benefit_type is not patchable.
- * DELETE : hard delete, 204. Mandatory Idempotency-Key. Dry-runnable.
- *          Mirrors the dashboard's delete. For a benefit that already fed a
- *          calculated run prefer PATCH is_active=false (#2695, see pitfalls).
+ * DELETE : remove, 200 with the outcome. Mandatory Idempotency-Key.
+ *          Dry-runnable. Mirrors the dashboard's delete: a row no payslip
+ *          line derives from is hard-deleted; one that a line derives from
+ *          is kept and deactivated so provenance survives (#2695).
  */
 
 import { z } from 'zod'
@@ -99,7 +100,7 @@ registerEndpoint({
     'valid_from and valid_to are checked against the MERGED stored+patched pair: a valid_to-only patch that predates the stored valid_from is 400 VALIDATION_ERROR (field valid_to).',
     'annual_market_value is accepted on bike rows only (400 otherwise) and overrides any monthly_value in the same body.',
     'The förmånsvärde is added to the tax and arbetsgivaravgift basis at :calculate; a change here does not recompute an open run. Call POST /salary-runs/{id}/calculate afterwards.',
-    'To stop a benefit that a calculated run already consumed, set is_active=false or valid_to here rather than DELETE: recalculating the run then drops the derived line, which a hard delete would leave behind (#2695).',
+    'To stop a benefit that a calculated run already consumed, set is_active=false or valid_to here; DELETE on such a row also keeps and deactivates it rather than removing it. Either way the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695).',
   ],
   example: {
     request: { valid_to: '2026-06-30' },
@@ -170,7 +171,7 @@ export const PATCH = withApiV1<BenefitParams>(
 )
 
 // ──────────────────────────────────────────────────────────────────
-// DELETE: hard delete
+// DELETE: hard delete, or deactivate when a payslip line derives from it
 // ──────────────────────────────────────────────────────────────────
 
 registerEndpoint({
@@ -179,15 +180,15 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/benefits/:benefitId',
   summary: 'Remove a benefit (förmån) from an employee.',
   description:
-    'Hard-deletes the benefit row, the same operation the dashboard performs. 204 on success, 404 NOT_FOUND when no such row exists on the employee. Mandatory Idempotency-Key. Dry-runnable: the preview is the row that would be removed.',
+    'Removes the benefit from the employee, the same operation the dashboard performs. A row that no payslip line derives from is hard-deleted; a row that a calculated run already derived a line from is kept and switched off (is_active=false) so the line keeps its provenance. Answers 200 with the outcome, 404 NOT_FOUND when no such row exists on the employee. Mandatory Idempotency-Key. Dry-runnable: the preview is the row that would be removed.',
   useWhen:
-    'A benefit was registered by mistake and has not been used by any calculated run yet.',
+    'A benefit was registered by mistake, or it ends and you do not need it listed as active any more. If it has been used by a calculated run it is deactivated rather than deleted.',
   doNotUseFor:
-    'Ending a benefit that a run has already consumed: PATCH is_active=false or set valid_to instead (see pitfalls). Removing the derived line from one run: edit that run\'s payslip lines.',
+    'Ending a benefit on a date while keeping it active until then: PATCH valid_to. Removing the derived line from one run: edit that run\'s payslip lines.',
   pitfalls: [
     'Idempotency-Key is mandatory.',
-    'Answers 200 with { employee_benefit_id, deleted, deactivated }. A benefit that a payslip line already derives from is never hard-deleted: it is kept and switched off (deleted=false, deactivated=true), so the chain from a booked verifikat back to its förmån stays intact (BFL 5 kap 6-7 §). A second DELETE of a gone id returns 404 NOT_FOUND.',
-    'A benefit that already fed a calculated run leaves its derived payslip line behind on recalculate: the provenance column is ON DELETE SET NULL, so the engine no longer recognises the line as derived (#2695). Deactivate (PATCH is_active=false) or close the window (valid_to) instead; recalculating then removes the line.',
+    'Answers 200 with { employee_benefit_id, deleted, deactivated }. A benefit that a payslip line already derives from is never hard-deleted: it is kept and switched off (deleted=false, deactivated=true), so the chain from a booked verifikat back to its förmån stays intact (BFL 5 kap 6-7 §). A second DELETE of a gone id returns 404 NOT_FOUND; a second DELETE of a deactivated row answers deactivated=true again.',
+    'Removing or deactivating a benefit does not recompute an open run: the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695). A booked run is never changed.',
   ],
   example: {
     response: {

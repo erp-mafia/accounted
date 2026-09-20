@@ -68,9 +68,18 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string; benefitId
     const result = await deleteEmployeeBenefit(supabase, { companyId, employeeId: id, benefitId })
     if (!result.ok) return failureResponse(result)
 
-    // Hard delete, reported as done whether or not a row matched: the
-    // dashboard contract this route has always had.
-    return NextResponse.json({ data: { id: benefitId, deleted: true } })
+    // No dry-run on this door: the outcome is always committed. A benefit
+    // that a payslip line derives from is kept and switched off
+    // (deleted=false, deactivated=true) so the line keeps its provenance and
+    // the next recalculation of a draft run drops it (#2695); the panel
+    // tells the user to recalculate. Neither flag set means no row matched.
+    const outcome = result.data
+    const deleted = outcome.committed && outcome.deleted
+    const deactivated = outcome.committed && outcome.deactivated === true
+    if (!deleted && !deactivated) {
+      return NextResponse.json({ error: 'Förmån hittades inte' }, { status: 404 })
+    }
+    return NextResponse.json({ data: { id: benefitId, deleted, deactivated } })
   },
   { requireWrite: true },
 )

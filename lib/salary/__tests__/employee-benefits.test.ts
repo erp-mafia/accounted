@@ -432,7 +432,20 @@ describe('deleteEmployeeBenefit', () => {
     const result = await deleteEmployeeBenefit(supabase, args)
     expect(result).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: true } })
     expect(mock.findCall('employee_benefits', 'delete')).toBeUndefined()
-    expect(mock.findCall('employee_benefits', 'update')).toBeDefined()
+    // The switch-off is the only write, and the reference count is scoped to
+    // the company's lines that point at this row (#2695).
+    expect(mock.findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
+    expect(mock.findCalls('salary_line_items', 'eq')).toEqual([
+      ['company_id', COMPANY_ID],
+      ['source_benefit_id', BENEFIT_ID],
+    ])
+  })
+
+  it('reports a deactivate that matched nothing as neither deleted nor deactivated', async () => {
+    mock.enqueue({ data: null, count: 1 })
+    mock.enqueue({ data: [] })
+    const result = await deleteEmployeeBenefit(supabase, args)
+    expect(result).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: false } })
   })
 
   it('maps a delete failure to INTERNAL_ERROR', async () => {
