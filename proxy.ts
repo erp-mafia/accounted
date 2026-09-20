@@ -85,6 +85,7 @@ export async function proxy(request: NextRequest) {
     usesForbiddenWhiteLabelBackend(
       request.nextUrl.hostname,
       process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.PRODUCTION_CUSTOM_DOMAIN_HOSTS,
     )
   ) {
     // Renamed from 'Blocked production white-label host from staging backend'.

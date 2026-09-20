@@ -54,7 +54,7 @@ const log = createLogger('proxy')
  * The value is scoped to BOTH the user and the host (`userId~host`): a
  * host-only value let anyone who signed in within the TTL window inherit the
  * previous user's "this is home" verdict in the same browser, skipping the
- * brand-host bounce entirely (found via the amnas account-switch repro,
+ * brand-host bounce entirely (found via an account-switch repro,
  * 2026-08-31). A stale host-only cookie from before this change simply never
  * matches, so the check re-runs and the format migrates itself. The `~`
  * separator is unreserved under encodeURIComponent AND a legal raw cookie

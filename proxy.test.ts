@@ -93,7 +93,7 @@ describe('supabase environment proxy guard', () => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', undefined)
 
     expect(
-      (await proxy(new NextRequest('https://willem.accounted.se/login'))).status,
+      (await proxy(new NextRequest('https://brand-c.accounted.se/login'))).status,
     ).toBe(503)
     expect(loggerErrorMock).toHaveBeenCalledOnce()
     expect(loggerErrorMock).toHaveBeenCalledWith(
@@ -129,7 +129,7 @@ describe('production white-label proxy guard', () => {
         unstable_doesMiddlewareMatch({
           config,
           nextConfig: {},
-          url: `https://acount.accounted.se${pathname}`,
+          url: `https://brand-a.accounted.se${pathname}`,
         }),
       ).toBe(true)
     },
@@ -137,7 +137,7 @@ describe('production white-label proxy guard', () => {
 
   it('returns a non-cacheable empty 503 before session handling', async () => {
     const response = await proxy(
-      new NextRequest('https://acount.accounted.se/login'),
+      new NextRequest('https://brand-a.accounted.se/login'),
     )
 
     expect(response.status).toBe(503)
@@ -150,7 +150,7 @@ describe('production white-label proxy guard', () => {
       {
         alert: true,
         operation: 'white_label_backend_guard',
-        requestHostname: 'acount.accounted.se',
+        requestHostname: 'brand-a.accounted.se',
         backendClassification: 'non_production',
       },
     )
@@ -163,7 +163,7 @@ describe('production white-label proxy guard', () => {
     stubConfiguredEnvironment('https://qqqqqqqqqqqqqqqqqqqq.supabase.co')
 
     const response = await proxy(
-      new NextRequest('https://willem.accounted.se/login'),
+      new NextRequest('https://brand-c.accounted.se/login'),
     )
 
     expect(response.status).toBe(503)
@@ -173,7 +173,7 @@ describe('production white-label proxy guard', () => {
       {
         alert: true,
         operation: 'white_label_backend_guard',
-        requestHostname: 'willem.accounted.se',
+        requestHostname: 'brand-c.accounted.se',
         backendClassification: 'non_production',
       },
     )
@@ -184,7 +184,7 @@ describe('production white-label proxy guard', () => {
   // let it through.
   it('blocks a hosted brand nobody remembered to classify', async () => {
     const response = await proxy(
-      new NextRequest('https://improveone.accounted.se/login'),
+      new NextRequest('https://brand-e.accounted.se/login'),
     )
 
     expect(response.status).toBe(503)
@@ -219,7 +219,7 @@ describe('production white-label proxy guard', () => {
 
   it('allows the production host once it is on the production backend', async () => {
     vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', PRODUCTION_URL)
-    const request = new NextRequest('https://acount.accounted.se/login')
+    const request = new NextRequest('https://brand-a.accounted.se/login')
 
     expect((await proxy(request)).status).toBe(204)
     expect(updateSessionMock).toHaveBeenCalledOnce()
@@ -228,12 +228,12 @@ describe('production white-label proxy guard', () => {
   it('uses the request URL host and ignores x-forwarded-host', async () => {
     const spoofedForwardedHost = new NextRequest(
       'https://preview.vercel.app/login',
-      { headers: { 'x-forwarded-host': 'acount.accounted.se' } },
+      { headers: { 'x-forwarded-host': 'brand-a.accounted.se' } },
     )
     expect((await proxy(spoofedForwardedHost)).status).toBe(204)
 
     const productionHost = new NextRequest(
-      'https://acount.accounted.se/login',
+      'https://brand-a.accounted.se/login',
       { headers: { 'x-forwarded-host': 'preview.vercel.app' } },
     )
     expect((await proxy(productionHost)).status).toBe(503)
