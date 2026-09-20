@@ -1110,12 +1110,41 @@ const REBIND_ID_CHUNK_SIZE = 100
  *
  * @returns the number of rows rebound
  */
-async function rebindMovableTransactions(
+export async function rebindMovableTransactions(
   supabase: SupabaseClient,
   companyId: string,
   fromCashAccountId: string,
   toCashAccountId: string,
 ): Promise<number> {
+  const movableIds = await findMovableTransactionIds(supabase, companyId, fromCashAccountId)
+  let moved = 0
+  for (const chunk of chunkIds(movableIds, REBIND_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('transactions')
+      .update({ cash_account_id: toCashAccountId })
+      .eq('company_id', companyId)
+      .eq('cash_account_id', fromCashAccountId)
+      .in('id', chunk)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .select('id')
+    if (error) throw new Error(error.message)
+    moved += (data ?? []).length
+  }
+  return moved
+}
+
+/**
+ * Ids of the transactions on one cash_accounts row that
+ * {@link rebindMovableTransactions} may move. Read-only, so a dry run can
+ * report what a rebind would do.
+ */
+export async function findMovableTransactionIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromCashAccountId: string,
+): Promise<string[]> {
   const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
     supabase
       .from('transactions')
@@ -1128,7 +1157,7 @@ async function rebindMovableTransactions(
       .order('id', { ascending: true })
       .range(from, to),
   )
-  if (candidates.length === 0) return 0
+  if (candidates.length === 0) return []
 
   const candidateIds = candidates.map((row) => row.id)
   const anchored = new Set<string>()
@@ -1158,23 +1187,7 @@ async function rebindMovableTransactions(
     }
   }
 
-  const movableIds = candidateIds.filter((id) => !anchored.has(id))
-  let moved = 0
-  for (const chunk of chunkIds(movableIds, REBIND_ID_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('transactions')
-      .update({ cash_account_id: toCashAccountId })
-      .eq('company_id', companyId)
-      .eq('cash_account_id', fromCashAccountId)
-      .in('id', chunk)
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('supplier_invoice_id', null)
-      .select('id')
-    if (error) throw new Error(error.message)
-    moved += (data ?? []).length
-  }
-  return moved
+  return candidateIds.filter((id) => !anchored.has(id))
 }
 
 /** One account's refreshed balance snapshot, as the sync loop stores it. */
