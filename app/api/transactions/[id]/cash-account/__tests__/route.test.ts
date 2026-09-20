@@ -6,7 +6,7 @@ import {
   makeTransaction,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -179,6 +179,46 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
     const { status, body } = await parseJsonResponse<{ data: { id: string; cash_account_id: string } }>(res)
     expect(status).toBe(200)
     expect(body.data).toEqual({ id: 'tx-1', cash_account_id: 'ca-2' })
+  })
+
+  // desk crm#59: an account the company turned off as unused must not collect
+  // open rows out of sight. The disable guard refuses that state; this route
+  // was a way around it for any API caller naming the ledger.
+  describe('a disabled target account', () => {
+    it('turns a disabled account no bank connection holds back on before the move', async () => {
+      enqueue({ data: movableTx(), error: null }) // tx fetch
+      enqueue({ data: [], error: null }) // tvl pre-check clean
+      enqueue({ data: { ...targetAccount, enabled: false, bank_connection_id: null }, error: null })
+      enqueue({ data: null, error: null }) // re-enable
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null }) // move
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+      expect(findCalls('cash_accounts', 'update')).toEqual([[{ enabled: true }]])
+      expect(findCalls('cash_accounts', 'is')).toContainEqual(['bank_connection_id', null])
+    })
+
+    it('leaves a disabled account a bank connection holds alone', async () => {
+      enqueue({ data: movableTx(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: { ...targetAccount, enabled: false, bank_connection_id: 'conn-1' }, error: null })
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null })
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+    })
+
+    it('moves nothing when the re-enable fails', async () => {
+      enqueue({ data: movableTx(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: { ...targetAccount, enabled: false, bank_connection_id: null }, error: null })
+      enqueue({ data: null, error: { message: 'rls denied' } }) // re-enable fails
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBeGreaterThanOrEqual(500)
+      expect(findCalls('transactions', 'update')).toHaveLength(0)
+    })
   })
 
   it('returns 409 when the row is booked between read and write (optimistic-lock miss)', async () => {

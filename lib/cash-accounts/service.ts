@@ -1517,6 +1517,42 @@ export async function upsertFromPsd2(
 }
 
 /**
+ * Turn a disabled cash account back on because transactions are being put on
+ * it. One definition for every path that binds rows to an account by ledger:
+ * ensureManualCashAccount (bank-file import, create_transactions, Stripe sync)
+ * and the move-transaction route.
+ *
+ * The company turned the account off as unused (setEnabled); rows arriving on
+ * it mean it is in use again. Binding them to a hidden account instead would
+ * recreate exactly what the disable guard refuses (open transactions on a
+ * disabled account), refusing would stall unattended callers, and a second
+ * row is impossible under UNIQUE (company_id, ledger_account). A row a bank
+ * connection holds is left alone: its flag is the connection's, not ours.
+ *
+ * Returns whether it wrote. Throws if the write fails, so the caller binds
+ * nothing to an account that stayed hidden.
+ */
+export async function reenableIfUnused(
+  supabase: SupabaseClient,
+  companyId: string,
+  row: { id: string; enabled?: boolean | null; bank_connection_id?: string | null },
+): Promise<boolean> {
+  if (row.enabled !== false || (row.bank_connection_id ?? null) !== null) return false
+  const { error } = await supabase
+    .from('cash_accounts')
+    .update({ enabled: true })
+    .eq('company_id', companyId)
+    .eq('id', row.id)
+    .is('bank_connection_id', null)
+  if (error) throw new Error(`cash_accounts re-enable failed: ${error.message}`)
+  log.info('re-enabled a disabled cash account: transactions are being put on it', {
+    companyId,
+    cashAccountId: row.id,
+  })
+  return true
+}
+
+/**
  * Find (or create) a manual cash account for a BAS ledger slot, so transactions
  * ingested outside the PSD2 flow (create_transactions / CSV) can carry a real
  * cash_account_id instead of NULL. Without the link, reconciliation 404s on the
@@ -1570,28 +1606,7 @@ export async function ensureManualCashAccount(
       bank_connection_id: string | null
     }
     const id = idIfSameCurrency(row)
-    // The company turned this account off as unused (setEnabled) and is now
-    // putting transactions on its ledger again: it is in use, so it comes back
-    // on. Binding the rows to a hidden account instead would recreate exactly
-    // what the disable guard refuses (open transactions on a disabled account),
-    // refusing would stall unattended callers (Stripe sync), and a second row
-    // is impossible under UNIQUE (company_id, ledger_account). A row a bank
-    // connection holds is left alone: its flag is the connection's, not ours.
-    if (row.enabled === false && row.bank_connection_id === null) {
-      const reenable = await supabase
-        .from('cash_accounts')
-        .update({ enabled: true })
-        .eq('company_id', companyId)
-        .eq('id', id)
-        .is('bank_connection_id', null)
-      if (reenable.error) {
-        throw new Error(`ensureManualCashAccount re-enable failed: ${reenable.error.message}`)
-      }
-      log.info('ensureManualCashAccount re-enabled a disabled manual account', {
-        companyId,
-        ledgerAccount,
-      })
-    }
+    await reenableIfUnused(supabase, companyId, { ...row, id })
     return id
   }
 

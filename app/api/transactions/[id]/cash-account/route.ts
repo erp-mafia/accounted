@@ -4,6 +4,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { MoveTransactionCashAccountSchema } from '@/lib/api/schemas'
 import { guardSandbox } from '@/lib/sandbox/guard'
+import { reenableIfUnused } from '@/lib/cash-accounts/service'
 
 /**
  * PATCH /api/transactions/[id]/cash-account
@@ -79,10 +80,16 @@ export const PATCH = withRouteContext(
 
     const { data: targetAccount, error: accountError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, currency')
+      .select('id, ledger_account, currency, enabled, bank_connection_id')
       .eq('company_id', companyId)
       .eq('ledger_account', accountNumber)
-      .maybeSingle<{ id: string; ledger_account: string; currency: string }>()
+      .maybeSingle<{
+        id: string
+        ledger_account: string
+        currency: string
+        enabled: boolean | null
+        bank_connection_id: string | null
+      }>()
 
     if (accountError) {
       return errorResponse(accountError, log, { requestId })
@@ -96,6 +103,16 @@ export const PATCH = withRouteContext(
     // old and the new account's reconciliation. Hard-reject.
     if (transaction.currency.toUpperCase() !== targetAccount.currency.toUpperCase()) {
       return errorResponseFromCode('TRANSACTION_MOVE_CURRENCY_MISMATCH', log, { requestId })
+    }
+
+    // An unbooked row is about to land on this account, so an account the
+    // company turned off as unused comes back on first: the disable guard
+    // refuses open transactions on a hidden account, and this route must not
+    // be a way around it. Before the move, so a failed re-enable moves nothing.
+    try {
+      await reenableIfUnused(supabase, companyId, targetAccount)
+    } catch (err) {
+      return errorResponse(err, log, { requestId })
     }
 
     const { data: updated, error: updateError } = await supabase
