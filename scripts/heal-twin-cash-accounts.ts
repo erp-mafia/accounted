@@ -93,7 +93,8 @@ function print(result: HealTwinsResult): void {
     // The IBAN is not printed: the report is pasted into tickets.
     const head = `  ledgers ${group.ledgers.join(' + ')} (posted lines on: ${group.postedLedgers.join(', ') || 'none'})`
     if (group.skipped) {
-      console.log(`${head}\n    SKIPPED: ${group.skipped}`)
+      const routed = group.skipped === 'routing-outside-group' ? ` (sync routes to ${group.accountsDataLedgerFrom})` : ''
+      console.log(`${head}\n    SKIPPED: ${group.skipped}${routed}`)
       continue
     }
     console.log(`${head}\n    keep ${group.keeper?.ledger_account} (${group.keeper?.id})`)

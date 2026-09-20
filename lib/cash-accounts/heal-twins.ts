@@ -24,6 +24,8 @@ const log = createLogger('cash-accounts-heal')
  *   2. The live row is the one whose (connection, uid) an ACTIVE connection
  *      still lists in accounts_data. No such row, or several: SKIPPED (a
  *      re-auth goes through resolvePsd2LedgerAccount, which ranks the same way).
+ *      Also SKIPPED when accounts_data routes that uid onto a ledger outside
+ *      the group.
  *   3. accounts_data is re-pointed at the keeper's ledger FIRST: sync routes by
  *      that ledger (enable-banking sync, settlementAccount), so from this write
  *      on new transactions land on the keeper whatever happens next.
@@ -40,7 +42,11 @@ const log = createLogger('cash-accounts-heal')
  * transactions keep their binding: their voucher carries the old 19xx line.
  */
 
-export type TwinSkipReason = 'split-ledgers' | 'no-live-row' | 'several-live-rows'
+export type TwinSkipReason =
+  | 'split-ledgers'
+  | 'no-live-row'
+  | 'several-live-rows'
+  | 'routing-outside-group'
 
 export interface TwinRowReport {
   id: string
@@ -148,6 +154,15 @@ export async function healTwinCashAccounts(
     report.liveRowId = live.id
     const liveConn = connections.get(live.bank_connection_id as string) as ConnectionRow
     const liveEntry = (liveConn.accounts_data ?? []).find((a) => a.uid === live.external_uid)
+    // Seen on prod: accounts_data routes the live uid onto a ledger NO row of
+    // this group holds (another account's 1930). Re-pointing it would move the
+    // feed between two different accounts' ledgers, which is not this merge's
+    // call to make.
+    if (liveEntry?.ledger_account && !rows.some((r) => r.ledger_account === liveEntry.ledger_account)) {
+      report.skipped = 'routing-outside-group'
+      report.accountsDataLedgerFrom = liveEntry.ledger_account
+      continue
+    }
     if (liveEntry?.ledger_account !== keeper.ledger_account) {
       report.accountsDataLedgerFrom = liveEntry?.ledger_account ?? null
     }
