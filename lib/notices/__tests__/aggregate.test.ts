@@ -4,6 +4,7 @@ import { createMockSupabase, createQueuedMockSupabase } from '@/tests/helpers'
 import type { Notice } from '../types'
 
 const detectMocks = vi.hoisted(() => ({
+  noFiscalYear: vi.fn(),
   broken: vi.fn(),
   skv: vi.fn(),
   backup: vi.fn(),
@@ -13,6 +14,7 @@ const detectMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('../categories', () => ({
+  detectNoFiscalYear: detectMocks.noFiscalYear,
   detectBrokenBankConnections: detectMocks.broken,
   detectSkvDisconnected: detectMocks.skv,
   detectBackupFailing: detectMocks.backup,
@@ -37,6 +39,7 @@ const supabase = mockSupabase as unknown as SupabaseClient
 
 beforeEach(() => {
   vi.clearAllMocks()
+  detectMocks.noFiscalYear.mockResolvedValue(null)
   detectMocks.broken.mockResolvedValue(null)
   detectMocks.skv.mockResolvedValue(null)
   detectMocks.backup.mockResolvedValue(null)
@@ -59,9 +62,12 @@ describe('getCompanyNotices', () => {
     detectMocks.broken.mockResolvedValue(notice('bank_connection_broken', 'broken:1'))
     detectMocks.backup.mockResolvedValue(notice('backup_failing', 'backup:1'))
     detectMocks.skv.mockResolvedValue(notice('skv_disconnected', 'skv:1'))
+    detectMocks.noFiscalYear.mockResolvedValue(notice('no_fiscal_year', 'no_fiscal_year:0'))
 
     const notices = await getCompanyNotices(supabase, 'company-1', { userId: 'user-1' })
     expect(notices.map((n) => n.category)).toEqual([
+      // Nothing can be booked without a fiscal year: it leads.
+      'no_fiscal_year',
       'bank_connection_broken',
       'skv_disconnected',
       'backup_failing',

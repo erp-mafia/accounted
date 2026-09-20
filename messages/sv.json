@@ -7292,6 +7292,8 @@
     "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan."
   },
   "notices": {
+    "no_fiscal_year": "Företaget har inget räkenskapsår än, så inget kan bokföras. Importera bokföringen igen eller lägg upp räkenskapsåret själv.",
+    "no_fiscal_year_action": "Lägg upp räkenskapsår",
     "bank_broken_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_one_unnamed": "En bankkoppling har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_many": "{count} bankkopplingar har slutat fungera och hämtar inte längre transaktioner.",

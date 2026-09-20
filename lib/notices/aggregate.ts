@@ -5,6 +5,7 @@ import {
   detectBackupFailing,
   detectBrokenBankConnections,
   detectExpiringBankConnections,
+  detectNoFiscalYear,
   detectOtherAccountHint,
   detectSkvDisconnected,
   detectSkvUnexplained,
@@ -47,6 +48,7 @@ export async function getCompanyNotices(
 ): Promise<Notice[]> {
   const [candidates, dismissedIds] = await Promise.all([
     Promise.all([
+      detectNoFiscalYear(supabase, companyId),
       detectBrokenBankConnections(supabase, companyId),
       detectSkvDisconnected(supabase, userId, companyId, now),
       detectBackupFailing(supabase, companyId),

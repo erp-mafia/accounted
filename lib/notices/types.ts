@@ -14,6 +14,18 @@
 
 export const NOTICE_CATEGORIES = [
   /**
+   * The company has no fiscal year, so nothing can be booked.
+   * Pending:  zero fiscal_periods rows for the company. Company creation
+   *           always writes the first year, so the one way into this state is
+   *           a migration reset: the replacement company starts without
+   *           periods because the re-import is expected to bring them. An
+   *           owner who books by hand instead needs to be told where the year
+   *           is created.
+   * Done:     any fiscal period exists (re-import, or Inställningar,
+   *           Bokföring, Räkenskapsår).
+   */
+  'no_fiscal_year',
+  /**
    * A bank connection has already failed.
    * Pending:  bank_connections.status IN ('expired', 'error'): same predicate
    *           as BankSyncStatusChip's "attention" state.
@@ -77,6 +89,9 @@ export type NoticeSeverity = 'error' | 'warning'
  * first active one in this order. Tune here, never per call site.
  */
 export const NOTICE_PRIORITY: readonly NoticeCategory[] = [
+  // First: without a fiscal year no entry can be posted at all, which
+  // outranks any degraded integration.
+  'no_fiscal_year',
   'bank_connection_broken',
   'skv_disconnected',
   'backup_failing',

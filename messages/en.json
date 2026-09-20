@@ -7292,6 +7292,8 @@
     "coverage_notice": "Invoices before {date} may exist only as posted journal entries and are not shown in this list."
   },
   "notices": {
+    "no_fiscal_year": "The company has no fiscal year yet, so nothing can be booked. Import the bookkeeping again or create the fiscal year yourself.",
+    "no_fiscal_year_action": "Create fiscal year",
     "bank_broken_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
     "bank_broken_one_unnamed": "A bank connection has stopped working and no longer fetches transactions.",
     "bank_broken_many": "{count} bank connections have stopped working and no longer fetch transactions.",
