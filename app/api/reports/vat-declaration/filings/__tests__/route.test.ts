@@ -155,6 +155,19 @@ describe('POST /api/reports/vat-declaration/filings', () => {
     expect(body.error.code).toBe('VAT_FILING_DATE_IN_FUTURE')
   })
 
+  it('answers 409 when the store loses a concurrent update', async () => {
+    auth()
+    store.markVatPeriodFiled.mockRejectedValue(
+      Object.assign(new Error('row changed while it was being marked'), { code: 'CONFLICT' }),
+    )
+    const res = await POST(
+      createMockRequest('/api/reports/vat-declaration/filings', { method: 'POST', body: validBody }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('CONFLICT')
+  })
+
   it('records the filing and returns the record', async () => {
     auth()
     store.markVatPeriodFiled.mockResolvedValue({

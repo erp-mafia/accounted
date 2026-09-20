@@ -896,6 +896,7 @@ Marks a monthly or quarterly momsdeklaration period as filed on `filed_on` (Swed
 - The period must have ended and `filed_on` must fall after the period's last day and no later than today (Swedish date): otherwise 400 with VAT_FILING_PERIOD_NOT_ENDED, VAT_FILING_DATE_BEFORE_PERIOD_END or VAT_FILING_DATE_IN_FUTURE.
 - Omitting `reference` keeps a previously stored reference; pass null to clear it.
 - This records a fact about the books, it does not verify anything at Skatteverket. Use /skatteverket/vat-declarations to check what was actually received.
+- A 409 CONFLICT means the deadline row changed while it was being marked (for example a deadline regeneration ran at the same moment). Nothing was written; retry the same request.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

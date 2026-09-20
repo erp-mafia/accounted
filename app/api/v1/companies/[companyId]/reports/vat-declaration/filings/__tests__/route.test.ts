@@ -179,6 +179,16 @@ describe('v1 VAT filing records', () => {
     })
   })
 
+  it('POST answers 409 when the store loses a concurrent update', async () => {
+    authOk(['bookkeeping:write'])
+    store.markVatPeriodFiled.mockRejectedValue(
+      Object.assign(new Error('row changed while it was being marked'), { code: 'CONFLICT' }),
+    )
+    const res = await POST(req(BASE, { method: 'POST', body: validBody }), params())
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('CONFLICT')
+  })
+
   it('POST maps a store refusal to its status', async () => {
     authOk(['bookkeeping:write'])
     store.markVatPeriodFiled.mockResolvedValue({ ok: false, code: 'VAT_FILING_PERIOD_NOT_ENDED' })

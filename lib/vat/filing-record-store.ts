@@ -99,6 +99,15 @@ function toRecord(row: DeadlineRow): VatFilingRecord | null {
   }
 }
 
+/**
+ * The record of a filing Skatteverket has confirmed (kvittens observed), or
+ * null for any other row state. The one state manual actions must not touch;
+ * the guarded updates below filter on its exact negation.
+ */
+function confirmedRecord(row: DeadlineRow): VatFilingRecord | null {
+  return row.is_completed && row.status === 'confirmed' ? toRecord(row) : null
+}
+
 /** Every calendar VAT period the company has on record as filed, newest first. */
 export async function listVatFilings(
   supabase: SupabaseClient,
@@ -172,10 +181,15 @@ export async function markVatPeriodFiled(
   const now = new Date().toISOString()
 
   if (existing) {
-    if (existing.is_completed && existing.status === 'confirmed') {
-      const record = toRecord(existing)
-      if (record) return { ok: true, record, created: false, changed: false }
-    }
+    const confirmed = confirmedRecord(existing)
+    if (confirmed) return { ok: true, record: confirmed, created: false, changed: false }
+
+    // The "never overwrite a Skatteverket confirmation" rule lives in the
+    // UPDATE's own filter, not only in the read above: the kvittens cron can
+    // confirm this very row between our read and our write, and an update
+    // keyed on id alone would then relabel a receipted filing as a manual
+    // one (and make it unmarkable). The filter is the negation of
+    // confirmedRecord(): completed AND confirmed is the one state we refuse.
     const { data, error } = await supabase
       .from('deadlines')
       .update({
@@ -187,9 +201,22 @@ export async function markVatPeriodFiled(
       })
       .eq('id', existing.id)
       .eq('company_id', companyId)
+      .or('is_completed.eq.false,status.is.null,status.neq.confirmed')
       .select('id, tax_deadline_type, tax_period, is_completed, completed_at, status, notes, due_date')
-      .single()
+      .maybeSingle()
     if (error) throw error
+    if (!data) {
+      // Zero rows: the row changed under us. If Skatteverket confirmed it,
+      // that is the answer; anything else (the generator replaced a pending
+      // row mid-flight) is a conflict the caller retries.
+      const current = await findPeriodRow(supabase, companyId, input)
+      const nowConfirmed = current ? confirmedRecord(current) : null
+      if (nowConfirmed) return { ok: true, record: nowConfirmed, created: false, changed: false }
+      throw Object.assign(
+        new Error('vat filing: the deadline row changed while it was being marked'),
+        { code: 'CONFLICT' },
+      )
+    }
     const record = toRecord(data as DeadlineRow)
     if (!record) throw new Error('vat filing: updated deadline row did not read back as a filing')
     return { ok: true, record, created: false, changed: true }
@@ -262,7 +289,12 @@ export async function unmarkVatPeriodFiled(
     return { ok: false, code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' }
   }
   const today = opts.today ?? todayIsoStockholm()
-  const { error } = await supabase
+  // Same atomic guard as marking: only a row that is STILL a completed,
+  // unconfirmed filing at write time is put back to pending. Today every
+  // writer of 'confirmed' only touches pending rows, so this cannot lose a
+  // race yet; the filter keeps that true by construction rather than by the
+  // good behaviour of other modules.
+  const { data, error } = await supabase
     .from('deadlines')
     .update({
       is_completed: false,
@@ -275,6 +307,17 @@ export async function unmarkVatPeriodFiled(
     })
     .eq('id', existing.id)
     .eq('company_id', companyId)
+    .eq('is_completed', true)
+    .or('status.is.null,status.neq.confirmed')
+    .select('id')
+    .maybeSingle()
   if (error) throw error
+  if (!data) {
+    // Nothing was unmarked, so never report success. Say why instead.
+    const current = await findPeriodRow(supabase, companyId, input)
+    return current && confirmedRecord(current)
+      ? { ok: false, code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' }
+      : { ok: false, code: 'VAT_FILING_NOT_FOUND' }
+  }
   return { ok: true, deadline_id: existing.id }
 }
