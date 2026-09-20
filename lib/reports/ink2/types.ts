@@ -119,8 +119,8 @@ export interface INK2SRutor {
   '7653': number  // 4.3c Andra ej avdragsgilla kostnader
   '7754': number  // 4.5c Andra ej skattepliktiga intäkter
   '7763': number  // 4.14a Outnyttjat underskott från föregående beskattningsår
-  '8020': number  // 4.15 Överskott → punkt 1.1
-  '8021': number  // 4.16 Underskott → punkt 1.2
+  '7670': number  // 4.15 Överskott, flyttas till punkt 1.1 (INK2 7104)
+  '7770': number  // 4.16 Underskott, flyttas till punkt 1.2 (INK2 7114)
 }
 
 // Account mapping configuration for INK2R

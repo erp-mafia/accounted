@@ -192,12 +192,12 @@
     "version": 1
   },
   "horizontal/swedish-sru-filing": {
-    "hash": "56a1ce1be4908e15b6e3c9dcad64e5a3fb0f4400c47a2f88504d0bf897f4a9da",
-    "version": 6
+    "hash": "1bfe3a84e6f9919d1cd4fb28e978fa4c704c4619fe331b716d923e3cdb347d1a",
+    "version": 7
   },
   "horizontal/swedish-sru-filing/sru-codes": {
-    "hash": "b96a87715d6d9091e7ee43558b362b51565f23f1b6268784084b0a498aa867fc",
-    "version": 5
+    "hash": "5052baa2513b4e9833025b3d0e7de54fcfeb0fa47ba32891d5c0ec1530685fa3",
+    "version": 6
   },
   "horizontal/swedish-tax-planning": {
     "hash": "99b87fac9eacf0ad168434c2bce99f21cdb8a53cb26ccabb64ba291b9059aa24",

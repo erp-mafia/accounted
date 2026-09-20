@@ -457,8 +457,8 @@ export async function generateINK2Declaration(
     '7653': nonDeductibleExpenses,
     '7754': nonTaxableIncome,
     '7763': deficitCarryforward,
-    '8020': taxableResult >= 0 ? taxableResult : 0,
-    '8021': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+    '7670': taxableResult >= 0 ? taxableResult : 0,
+    '7770': taxableResult < 0 ? Math.abs(taxableResult) : 0,
   }
 
   // Add warnings

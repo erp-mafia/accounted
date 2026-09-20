@@ -357,15 +357,15 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
             <tfoot>
               <tr className="border-t font-medium">
                 <td className="py-2">
-                  {data.ink2s['8020'] > 0 ? 'Överskott (punkt 1.1)' : 'Underskott (punkt 1.2)'}
+                  {data.ink2s['7670'] > 0 ? 'Överskott (punkt 1.1)' : 'Underskott (punkt 1.2)'}
                 </td>
                 <td
                   className={`py-2 text-right tabular-nums ${
-                    data.ink2s['8020'] > 0 ? 'text-success' : 'text-destructive'
+                    data.ink2s['7670'] > 0 ? 'text-success' : 'text-destructive'
                   }`}
                 >
                   {formatWholeKronor(
-                    data.ink2s['8020'] > 0 ? data.ink2s['8020'] : data.ink2s['8021']
+                    data.ink2s['7670'] > 0 ? data.ink2s['7670'] : data.ink2s['7770']
                   )}
                 </td>
               </tr>

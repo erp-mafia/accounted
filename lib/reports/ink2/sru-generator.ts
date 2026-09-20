@@ -180,8 +180,8 @@ function generateBlanketterSru(declaration: INK2Declaration, now: Date): string 
     '7653',
     '7754',
     '7763',
-    '8020',
-    '8021',
+    '7670',
+    '7770',
   ]
   for (const code of ink2sNumericFields) {
     const value = declaration.ink2s[code]

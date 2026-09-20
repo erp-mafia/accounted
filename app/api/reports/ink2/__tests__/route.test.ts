@@ -51,8 +51,8 @@ function makeDeclaration() {
       '7653': 4_000,
       '7754': 0,
       '7763': 100_000,
-      '8020': 406_000,
-      '8021': 0,
+      '7670': 406_000,
+      '7770': 0,
     },
     breakdown: {},
     totals: { totalAssets: 0, totalEquityLiabilities: 0, operatingResult: 0, aretsResultat: 442_000 },
@@ -97,7 +97,7 @@ describe('GET /api/reports/ink2', () => {
     expect(res.status).toBe(200)
     const { body } = await parseJsonResponse<{ data: { ink2s: Record<string, number> } }>(res)
     expect(body.data.ink2s['7763']).toBe(100_000)
-    expect(body.data.ink2s['8020']).toBe(406_000)
+    expect(body.data.ink2s['7670']).toBe(406_000)
     expect(generateMock).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_ID)
   })
 
