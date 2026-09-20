@@ -1185,3 +1185,4 @@ Entries dated before 2026-08-01 were archived on 2026-09-13 to keep this file re
 
 [2026-09-18] Provider registers use encrypted snapshots, leased jobs and transactional source receipts: bounded cron workers resume after timeouts without replaying successful writes; payment candidates are planned across the whole job before linking (#2690).
 [2026-09-19] Provider imports never adopt parties by display name alone: use provider IDs or organization identity; unidentified invoice parties stay separate to avoid assigning invoices to another same-named entity (#2743).
+[2026-09-19] Kvittojakten for MCP agents opens the chat prefilled via ?q=, reversing #2627 for this one prompt: it names a skill (kvittojakten-<client>) and no tenant data; company and worklist arrive over MCP. One skill body plus a per-harness block, separate slugs: load_skill never sniffs clients.

@@ -156,6 +156,24 @@ export const RECOMMENDED_WORKFLOW_LOADOUTS: readonly WorkflowLoadout[] = [
       'gnubok_approve_pending_operation',
     ],
   },
+  {
+    workflow: 'receipt_hunt',
+    description: 'Find missing underlag in the user\'s own mailbox and stage the links (Kvittojakten).',
+    // The harness-neutral slug; the three chat clients load kvittojakten-<client>.
+    skill: 'kvittojakten',
+    tools: [
+      'gnubok_list_companies',
+      'gnubok_call_tool',
+      'gnubok_receipt_hunt_worklist',
+      'gnubok_list_unmatched_documents',
+      'gnubok_create_document_upload',
+      'gnubok_complete_document_upload',
+      'gnubok_link_document_to_voucher',
+      'gnubok_attach_document_to_transaction',
+      'gnubok_list_pending_operations',
+      'gnubok_approve_pending_operation',
+    ],
+  },
 ]
 
 /** What annotateLoadoutTools needs to know about one registry tool. */

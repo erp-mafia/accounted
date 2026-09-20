@@ -15,6 +15,7 @@ import {
 import { useCompany } from '@/contexts/CompanyContext'
 import { AI_CLIENTS, aiChatLink, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import type { AiTask } from '@/lib/worklist/ai-task'
+import { KvittojaktenButton } from './KvittojaktenButton'
 
 const pillClass =
   'inline-flex h-6 shrink-0 items-center gap-2 rounded-full bg-primary px-3 text-[11.5px] text-primary-foreground transition-colors duration-150 hover:bg-primary/85 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -32,6 +33,10 @@ const pillClass =
  * "Fortsätt till Claude" opens an empty chat where they paste. Company data
  * never enters an external URL, which is why the prompt travels via the
  * clipboard and not a query string.
+ *
+ * One row is different: "Verifikat utan underlag" hands over Kvittojakten
+ * (KvittojaktenButton), whose prompt names a skill and no tenant data, so it
+ * opens the chat prefilled in one click instead of going through the dialog.
  */
 export function AiTaskAction({
   clients,
@@ -52,6 +57,10 @@ export function AiTaskAction({
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
   const [handoffClient, setHandoffClient] = useState<AiClient | null>(null)
+
+  if (task.category === 'verifikat_missing_document') {
+    return <KvittojaktenButton clients={clients} preferredClient={preferredClient} onOpen={onOpen} disabled={disabled} />
+  }
 
   const connected = AI_CLIENTS.filter((c) => clients.includes(c.id))
   if (connected.length === 0 || !company) return null

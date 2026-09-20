@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { aiChatLink, aiConnectAction, connectedAiClients, openAiConnector, pickConnectedAiClient } from '../ai-clients'
+import {
+  aiChatLink,
+  aiConnectAction,
+  aiPrefilledChatLink,
+  connectedAiClients,
+  kvittojaktenSkillSlug,
+  openAiConnector,
+  pickConnectedAiClient,
+} from '../ai-clients'
 
 describe('openAiConnector', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -83,5 +91,21 @@ describe('aiConnectAction', () => {
     const grok = aiConnectAction('grok', input)
     expect(grok.open).toBe('https://grok.com/')
     expect(grok.copy).toContain('client=grok&auth=required')
+  })
+})
+
+describe('aiPrefilledChatLink', () => {
+  it('opens each client on a new chat with the prompt in q', () => {
+    const prompt = `Ladda skillen "${kvittojaktenSkillSlug('claude')}" & följ den`
+    expect(aiPrefilledChatLink('claude', prompt)).toBe(
+      'https://claude.ai/new?q=Ladda%20skillen%20%22kvittojakten-claude%22%20%26%20f%C3%B6lj%20den',
+    )
+    expect(aiPrefilledChatLink('chatgpt', 'x')).toBe('https://chatgpt.com/?q=x')
+    expect(aiPrefilledChatLink('grok', 'x')).toBe('https://grok.com/?q=x')
+  })
+
+  it('names a skill per client', () => {
+    expect(kvittojaktenSkillSlug('chatgpt')).toBe('kvittojakten-chatgpt')
+    expect(kvittojaktenSkillSlug('grok')).toBe('kvittojakten-grok')
   })
 })

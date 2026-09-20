@@ -10,6 +10,7 @@ import { kreditfakturaProcessSkill } from './kreditfaktura-process'
 import { customerOnboardingSkill } from './customer-onboarding'
 import { reconcileMonthSkill } from './reconcile-month'
 import { onboardingSkill } from './onboarding'
+import { kvittojaktenSkills } from './kvittojakten'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 
 /** Static workflow skills the server ships with. Tier: 'workflow'. */
@@ -24,6 +25,7 @@ export const workflowSkills: Skill[] = [
   customerOnboardingSkill,
   reconcileMonthSkill,
   onboardingSkill,
+  ...kvittojaktenSkills,
 ]
 
 /**

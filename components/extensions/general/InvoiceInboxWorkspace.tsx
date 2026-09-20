@@ -7,6 +7,8 @@ import { InboxPipeline, type InboxPipeStage } from '@/components/extensions/gene
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { KvittojaktenButton } from '@/components/dashboard/KvittojaktenButton'
+import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -713,6 +715,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         if (json.data) setWhatsapp(json.data)
       } catch {
         // Same: not every company has it.
+      }
+    })()
+  }, [])
+
+  // Kvittojakten through the user's own AI client: shown only when a client
+  // is connected AND something lacks an underlag. A failed read hides the
+  // button; it only ever adds a shortcut.
+  const [agentHandoff, setAgentHandoff] = useState<{ clients: AiClient[]; count: number } | null>(null)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/receipt-hunt/agent-handoff')
+        if (!res.ok) return
+        const json = (await res.json()) as { data?: { clients: AiClient[]; count: number } }
+        if (json.data) setAgentHandoff(json.data)
+      } catch {
+        // No button.
       }
     })()
   }, [])
@@ -1440,6 +1459,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {/* The hunt lived only in Settings, so the button that fills this
               page sat on a different page. It runs in passes and reports as it
               goes, because a backlog does not clear in one request. */}
+          {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
+            <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
+          )}
           {mailConnected && (
             <Button variant="ghost" size="sm" onClick={hunting ? stopHunt : hunt} disabled={false}>
               {hunting ? (

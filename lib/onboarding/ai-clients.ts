@@ -85,3 +85,19 @@ export function aiConnectAction(client: AiClient, input: { origin: string; appNa
     copy: sideDoorServerUrl({ origin: input.origin, door: client as SideDoor }),
   }
 }
+
+/** The Kvittojakten skill served to each client (extensions/general/mcp-server/skills/kvittojakten.ts). */
+export function kvittojaktenSkillSlug(client: AiClient): string {
+  return `kvittojakten-${client}`
+}
+
+/**
+ * Open a chat with the Kvittojakten prompt already typed in: the one handoff
+ * that travels in a query string. The rule above still holds because this
+ * prompt names a skill and nothing else: no company, no count, no task
+ * detail. The agent learns the company and the work from Accounted over MCP
+ * after the chat opens. Never pass a prompt that carries tenant data here.
+ */
+export function aiPrefilledChatLink(client: AiClient, prompt: string): string {
+  return `${aiChatLink(client)}?q=${encodeURIComponent(prompt)}`
+}

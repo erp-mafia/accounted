@@ -186,8 +186,11 @@ export interface HuntOptions {
   dryRun?: boolean
 }
 
-/** Purchases with no receipt that nobody has booked yet. */
-async function fetchCandidateTransactions(
+/**
+ * Purchases with no receipt that nobody has booked yet. Exported for the
+ * agent worklist (agent-worklist.ts), so both engines share one predicate.
+ */
+export async function fetchCandidateTransactions(
   supabase: SupabaseClient,
   companyId: string,
 ): Promise<HuntTransaction[]> {

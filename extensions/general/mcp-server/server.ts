@@ -146,6 +146,7 @@ import {
   type RcBasisGapScan,
 } from '@/lib/reports/vat-filing-gate'
 import { findRcBasisGaps } from '@/lib/reports/rc-basis-gaps'
+import { resolveAgentWorklist } from '@/lib/receipt-hunt/agent-worklist'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { expandParty } from '@/lib/parties/party-api'
 import { listForCompany as listCashAccountsForCompany } from '@/lib/cash-accounts/service'
@@ -6040,6 +6041,70 @@ export const tools: McpTool[] = [
       const rows = result.verifikat ?? []
       const total = result.total_count ?? 0
       return { verifikat: rows, ...pageTail(rows, total, offset) }
+    },
+  },
+
+  {
+    name: 'gnubok_receipt_hunt_worklist',
+    // Reached through the kvittojakten skill, which names it: a slot in
+    // tools/list would spend the context budget on every other session.
+    catalogVisibility: 'search',
+    keywords: ['kvittojakten', 'kvitto', 'underlag', 'saknar underlag', 'mail'],
+    title: 'Kvittojakten Worklist',
+    description: 'What lacks an underlag, shaped for a mail search: posted verifikat and unbooked purchases, largest first, with counterparty, amount, date window, portal hint and the inbox address to forward to. Load skill kvittojakten first.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        limit: { type: 'number', description: 'Max items to return, 1-100 (default 25)' },
+        since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return items on or after this date.' },
+      },
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              kind: { type: 'string', enum: ['verifikat', 'transaction'] },
+              journal_entry_id: { type: ['string', 'null'] },
+              transaction_id: { type: ['string', 'null'] },
+              voucher: { type: ['string', 'null'] },
+              date: { type: 'string' },
+              amount: { type: 'number' },
+              currency: { type: 'string' },
+              counterparty: { type: ['string', 'null'] },
+              description: { type: ['string', 'null'] },
+              invoice_number: { type: ['string', 'null'] },
+              search_from: { type: 'string' },
+              search_to: { type: 'string' },
+              mail_searchable: { type: 'boolean' },
+              portal: {
+                type: ['object', 'null'],
+                additionalProperties: false,
+                properties: {
+                  vendor: { type: 'string' },
+                  url: { type: 'string' },
+                  note: { type: ['string', 'null'] },
+                },
+              },
+            },
+          },
+        },
+        total_count: { type: 'number' },
+        inbox_address: { type: ['string', 'null'], description: 'Forward a found mail here to turn it into an inbox document. Null when no inbox is provisioned.' },
+      },
+      required: ['items', 'total_count', 'inbox_address'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, companyId, _userId, supabase) {
+      const limit = Number(args.limit) || undefined
+      const since = typeof args.since === 'string' ? args.since : null
+      return resolveAgentWorklist(supabase, companyId, { limit, since })
     },
   },
 
