@@ -4636,6 +4636,13 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  ASSET_DELETE_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgången kan inte tas bort eftersom den har nått bokföringen: avskrivningar är bokförda eller tillgången är avyttrad. Registerraden är då räkenskapsinformation (BFL 7 kap.). Använd avyttring, eller återför verifikatet med storno först.',
+    message_en:
+      'The asset cannot be deleted because it has reached the books: depreciation is posted or the asset is disposed. The register row is then accounting information (BFL ch. 7). Dispose it, or reverse the voucher with storno first.',
+  },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,
     message_sv:

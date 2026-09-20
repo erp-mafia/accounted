@@ -6,6 +6,7 @@ import {
   createAsset,
   listAssets,
   defaultAccountsForCategory,
+  assetDeleteBlockReason,
 } from '@/lib/bokslut/assets/asset-service'
 import { CreateAssetSchema } from '@/lib/bokslut/assets/asset-api'
 import {
@@ -41,10 +42,17 @@ export const GET = withRouteContext('assets.list', async (request, ctx) => {
       }
     }
 
-    const annotated = data.map((asset) => ({
-      ...asset,
-      has_posted_depreciation: postedAssetIds.has(asset.id),
-    }))
+    // deletable: a row that never reached the books (no posted depreciation,
+    // not disposed) may be removed with DELETE /api/assets/[id]; the UI shows
+    // "Ta bort" only then. Same rule the delete enforces server-side.
+    const annotated = data.map((asset) => {
+      const posted = postedAssetIds.has(asset.id)
+      return {
+        ...asset,
+        has_posted_depreciation: posted,
+        deletable: assetDeleteBlockReason(asset, posted) === null,
+      }
+    })
     return NextResponse.json({ data: annotated })
   } catch (err) {
     return errorResponse(err, log, { requestId })

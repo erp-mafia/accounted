@@ -18,7 +18,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Loader2, Lock } from 'lucide-react'
+import { Loader2, Lock, Trash2 } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -26,13 +27,16 @@ import type { Asset, AssetCategory } from '@/types'
 
 /** The list route annotates each asset with whether any depreciation has been
  *  posted against it. When true, the acquisition-basis fields are locked. */
-type EditableAsset = Asset & { has_posted_depreciation?: boolean }
+type EditableAsset = Asset & { has_posted_depreciation?: boolean; deletable?: boolean }
 
 interface EditAssetDialogProps {
   asset: EditableAsset
   open: boolean
   onOpenChange: (open: boolean) => void
   onSaved: () => void
+  /** Offered by the page only when the row never reached the books
+   *  (deletable). The page owns the confirm and the DELETE call. */
+  onDelete?: () => void
 }
 
 // Same category labels as CreateAssetDialog.
@@ -47,7 +51,14 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string }[] = [
   { value: 'other_tangible', label: 'Övrig materiell tillgång' },
 ]
 
-export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAssetDialogProps) {
+export function EditAssetDialog({
+  asset,
+  open,
+  onOpenChange,
+  onSaved,
+  onDelete,
+}: EditAssetDialogProps) {
+  const t = useTranslations('assets')
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   // Once depreciation has been booked, acquisition date/cost/category are
@@ -221,26 +232,44 @@ export function EditAssetDialog({ asset, open, onOpenChange, onSaved }: EditAsse
             </div>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Avbryt
-          </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={!canWrite || submitting}
-            title={
-              !canWrite ? 'Endast användare med skrivrättigheter kan ändra tillgångar.' : undefined
-            }
-          >
-            {!canWrite && <Lock className="mr-1 h-4 w-4" />}
-            {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
-              </>
-            ) : (
-              'Spara'
-            )}
-          </Button>
+        <DialogFooter className="sm:justify-between">
+          {/* "Ta bort" sits apart from Avbryt/Spara: it is the exit for a row
+              that never reached the books, the only case the page passes it. */}
+          {onDelete && canWrite ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-destructive hover:text-destructive sm:mr-auto"
+              onClick={onDelete}
+              disabled={submitting}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {t('action_delete')}
+            </Button>
+          ) : (
+            <span className="hidden sm:block" />
+          )}
+          <div className="flex flex-col-reverse gap-2 sm:flex-row">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+              Avbryt
+            </Button>
+            <Button
+              onClick={handleSubmit}
+              disabled={!canWrite || submitting}
+              title={
+                !canWrite ? 'Endast användare med skrivrättigheter kan ändra tillgångar.' : undefined
+              }
+            >
+              {!canWrite && <Lock className="mr-1 h-4 w-4" />}
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
+                </>
+              ) : (
+                'Spara'
+              )}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

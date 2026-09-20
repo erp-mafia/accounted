@@ -57,6 +57,7 @@ const EXAMPLE_ASSET = {
   disposed_proceeds: null,
   disposal_journal_entry_id: null,
   has_posted_depreciation: false,
+  deletable: true,
   created_at: '2026-03-01T09:12:00.000Z',
   updated_at: '2026-03-01T09:12:00.000Z',
 }

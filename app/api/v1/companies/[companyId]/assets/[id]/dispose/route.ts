@@ -86,6 +86,7 @@ registerEndpoint({
           disposed_proceeds: 12500,
           disposal_journal_entry_id: 'je_…',
           has_posted_depreciation: true,
+          deletable: false,
           created_at: '2026-03-01T09:12:00.000Z',
           updated_at: '2026-09-15T10:00:00.000Z',
         },

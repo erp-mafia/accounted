@@ -31,7 +31,7 @@ Response `200`:
 ```ts
 {
   data: {
-    assets: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, created_at: string, updated_at: string, id: string }[]
+    assets: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string }[]
   },
   meta: {
     request_id: string,
@@ -68,6 +68,7 @@ Example response `200`:
         "disposed_proceeds": null,
         "disposal_journal_entry_id": null,
         "has_posted_depreciation": false,
+        "deletable": true,
         "created_at": "2026-03-01T09:12:00.000Z",
         "updated_at": "2026-03-01T09:12:00.000Z"
       }
@@ -153,6 +154,7 @@ Response `200`:
     disposed_proceeds: number | null,
     disposal_journal_entry_id: string | null,
     has_posted_depreciation: boolean,
+    deletable: boolean,
     created_at: string,
     updated_at: string,
     id: string
@@ -190,6 +192,7 @@ Example response `200`:
     "disposed_proceeds": null,
     "disposal_journal_entry_id": null,
     "has_posted_depreciation": false,
+    "deletable": true,
     "created_at": "2026-03-01T09:12:00.000Z",
     "updated_at": "2026-03-01T09:12:00.000Z"
   },
@@ -241,6 +244,7 @@ Response `200`:
     disposed_proceeds: number | null,
     disposal_journal_entry_id: string | null,
     has_posted_depreciation: boolean,
+    deletable: boolean,
     created_at: string,
     updated_at: string,
     id: string
@@ -278,6 +282,7 @@ Example response `200`:
     "disposed_proceeds": null,
     "disposal_journal_entry_id": null,
     "has_posted_depreciation": false,
+    "deletable": true,
     "created_at": "2026-03-01T09:12:00.000Z",
     "updated_at": "2026-03-02T08:00:00.000Z"
   },
@@ -359,6 +364,7 @@ Response `200`:
     disposed_proceeds: number | null,
     disposal_journal_entry_id: string | null,
     has_posted_depreciation: boolean,
+    deletable: boolean,
     created_at: string,
     updated_at: string,
     id: string
@@ -396,6 +402,7 @@ Example response `200`:
     "disposed_proceeds": null,
     "disposal_journal_entry_id": null,
     "has_posted_depreciation": false,
+    "deletable": true,
     "created_at": "2026-03-01T09:12:00.000Z",
     "updated_at": "2026-03-02T08:00:00.000Z"
   },
@@ -405,6 +412,32 @@ Example response `200`:
   }
 }
 ```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/assets/{id}`
+
+**Delete an asset that never reached the books.**
+`scope:bookkeeping:write · risk:medium · dry-run`
+
+Removes a register row that has no posted depreciation and is not disposed, together with its own unposted depreciation drafts. No voucher is touched. A row that has reached the books is räkenskapsinformation (BFL 7 kap.) and is refused with 409 ASSET_DELETE_BLOCKED: dispose it, or reverse the posted voucher with storno first. Dry-run answers 204 without deleting, or the same 409.
+
+**Use when:** A row was added by mistake (a typo, a migration test row) and deletable is true on GET. Check deletable first: it is the same rule the delete enforces.
+**Do not use for:** Taking a real asset out of the register (POST /assets/{id}/dispose posts the avyttring voucher). Undoing posted depreciation (storno the voucher). Editing a wrong basis (PATCH).
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- 409 ASSET_DELETE_BLOCKED once any planenlig avskrivning is posted or the asset is disposed: the register row is then accounting information and leaves only through disposal or storno.
+- 204 No Content on success: there is no body to parse. A second DELETE answers 404 ASSET_NOT_FOUND.
+- Hard delete: the row is not archived. Re-create it with POST /assets if it was removed by mistake.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `204`.
 
 ---
 
@@ -461,7 +494,7 @@ Response `200`:
 ```ts
 {
   data: {
-    asset: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, created_at: string, updated_at: string, id: string },
+    asset: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string },
     disposal_entry: { journal_entry_id: string, voucher_number: number | null } | null,
     gain_or_loss: number
   },
@@ -499,6 +532,7 @@ Example response `200`:
       "disposed_proceeds": 12500,
       "disposal_journal_entry_id": "je_…",
       "has_posted_depreciation": true,
+      "deletable": false,
       "created_at": "2026-03-01T09:12:00.000Z",
       "updated_at": "2026-09-15T10:00:00.000Z"
     },

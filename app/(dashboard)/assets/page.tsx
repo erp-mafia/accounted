@@ -9,14 +9,21 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
+import { useToast } from '@/components/ui/use-toast'
 import { Package, Plus } from 'lucide-react'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Asset, AssetCategory } from '@/types'
 import { CreateAssetDialog } from '@/components/bookkeeping/assets/CreateAssetDialog'
 import { EditAssetDialog } from '@/components/bookkeeping/assets/EditAssetDialog'
 
-/** GET /api/assets annotates each row with whether depreciation has posted. */
-type AssetRow = Asset & { has_posted_depreciation?: boolean }
+/** GET /api/assets annotates each row with whether depreciation has posted
+ *  and whether the row may be deleted (never reached the books). */
+type AssetRow = Asset & { has_posted_depreciation?: boolean; deletable?: boolean }
 
 const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
   immaterial: 'category_immaterial',
@@ -32,6 +39,8 @@ const CATEGORY_LABEL_KEYS: Record<AssetCategory, string> = {
 export default function AssetsPage() {
   const t = useTranslations('assets')
   const router = useRouter()
+  const { toast } = useToast()
+  const { dialogProps: confirmProps, confirm } = useDestructiveConfirm()
   const [assets, setAssets] = useState<AssetRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -70,6 +79,39 @@ export default function AssetsPage() {
     setEditing(null)
     setReloadKey((k) => k + 1)
   }, [])
+
+  // Only offered on rows the list marked deletable: never posted, never
+  // disposed. The server enforces the same rule (409 ASSET_DELETE_BLOCKED),
+  // and the confirm runs the DELETE inside the dialog so it shows its own
+  // pending state and closes when the call settles.
+  const handleDelete = useCallback(
+    async (asset: AssetRow) => {
+      const ok = await confirm(
+        {
+          title: t('delete_confirm_title'),
+          description: t('delete_confirm_description', { name: asset.name }),
+          confirmLabel: t('action_delete'),
+        },
+        async () => {
+          const res = await fetch(`/api/assets/${asset.id}`, { method: 'DELETE' })
+          if (!res.ok) {
+            const body = await res.json().catch(() => null)
+            toast({
+              title: t('delete_failed_title'),
+              description: getErrorMessage(body?.error ?? body),
+              variant: 'destructive',
+            })
+            throw new Error('asset delete failed')
+          }
+        },
+      )
+      if (!ok) return
+      toast({ title: t('delete_success_title'), description: asset.name })
+      setEditing(null)
+      setReloadKey((k) => k + 1)
+    },
+    [confirm, t, toast],
+  )
 
   return (
     <div className="space-y-8">
@@ -180,6 +222,15 @@ export default function AssetsPage() {
                             >
                               {t('action_dispose')}
                             </button>
+                            {asset.deletable && (
+                              <button
+                                type="button"
+                                className={cn(QUIET_LINK_CLASS, 'text-destructive')}
+                                onClick={() => void handleDelete(asset)}
+                              >
+                                {t('action_delete')}
+                              </button>
+                            )}
                           </span>
                         )}
                       </td>
@@ -208,8 +259,11 @@ export default function AssetsPage() {
             if (!open) setEditing(null)
           }}
           onSaved={handleSaved}
+          onDelete={editing.deletable ? () => void handleDelete(editing) : undefined}
         />
       )}
+
+      <DestructiveConfirmDialog {...confirmProps} />
     </div>
   )
 }

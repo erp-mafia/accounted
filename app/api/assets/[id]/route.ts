@@ -5,7 +5,10 @@ import { validateBody } from '@/lib/api/validate'
 import {
   getAsset,
   updateAsset,
+  deleteNeverPostedAsset,
   defaultAccountsForCategory,
+  hasPostedDepreciation,
+  assetDeleteBlockReason,
 } from '@/lib/bokslut/assets/asset-service'
 import { UpdateAssetSchema } from '@/lib/bokslut/assets/asset-api'
 import { validateComponents } from '@/lib/bokslut/assets/k3-components'
@@ -24,7 +27,16 @@ export const GET = withRouteContext(
       if (!asset) {
         return NextResponse.json({ error: { code: 'ASSET_NOT_FOUND' } }, { status: 404 })
       }
-      return NextResponse.json({ data: asset })
+      // Same annotation as the list: the UI locks the basis fields on
+      // has_posted_depreciation and offers "Ta bort" only on deletable.
+      const posted = await hasPostedDepreciation(supabase, companyId, asset.id)
+      return NextResponse.json({
+        data: {
+          ...asset,
+          has_posted_depreciation: posted,
+          deletable: assetDeleteBlockReason(asset, posted) === null,
+        },
+      })
     } catch (err) {
       return errorResponse(err, log, { requestId })
     }
@@ -158,6 +170,32 @@ export const PATCH = withRouteContext(
     try {
       const asset = await updateAsset(supabase, companyId, id, validation.data)
       return NextResponse.json({ data: asset })
+    } catch (err) {
+      return errorResponse(err, log, { requestId })
+    }
+  },
+  { requireWrite: true },
+)
+
+/**
+ * Remove a register row that never reached the books. The service refuses
+ * (409 ASSET_DELETE_BLOCKED) once depreciation is posted or the asset is
+ * disposed: those rows are räkenskapsinformation and leave through disposal
+ * or storno only. No voucher is touched either way.
+ */
+export const DELETE = withRouteContext(
+  'assets.delete',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { supabase, companyId, log, requestId } = ctx
+    try {
+      const deleted = await deleteNeverPostedAsset(supabase, companyId, id)
+      log.info('asset removed from register (never posted)', {
+        assetId: deleted.id,
+        name: deleted.name,
+        acquisitionCost: deleted.acquisition_cost,
+      })
+      return NextResponse.json({ data: { id: deleted.id, deleted: true } })
     } catch (err) {
       return errorResponse(err, log, { requestId })
     }

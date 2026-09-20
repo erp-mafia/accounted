@@ -22,6 +22,7 @@ import {
   defaultAccountsForCategory,
   inBasRange,
   type AssetDisposalPreview,
+  assetDeleteBlockReason,
 } from './asset-service'
 import { validateComponents } from './k3-components'
 import { findK2ExcludedAccount, k2ExcludedAccountMessages } from './k2-account-guard'
@@ -444,6 +445,10 @@ export function assetView(asset: Asset, hasPostedDepreciation: boolean) {
       : Number(asset.disposed_proceeds),
     disposal_journal_entry_id: asset.disposal_journal_entry_id ?? null,
     has_posted_depreciation: hasPostedDepreciation,
+    // A register row that never drove a voucher may be deleted outright
+    // (DELETE /assets/{id}); one that has must leave through disposal or
+    // storno. Same rule as the delete itself: assetDeleteBlockReason().
+    deletable: assetDeleteBlockReason(asset, hasPostedDepreciation) === null,
     created_at: asset.created_at,
     updated_at: asset.updated_at,
   }
@@ -508,6 +513,7 @@ export const AssetViewSchema = z.object({
   disposed_proceeds: z.number().nullable(),
   disposal_journal_entry_id: z.string().nullable(),
   has_posted_depreciation: z.boolean().describe('True once any planenlig avskrivning has been posted: acquisition_date, acquisition_cost and category are then locked (ASSET_CORRECTION_BLOCKED) and a correction goes through storno.'),
+  deletable: z.boolean().describe('True while the row never reached the books (no posted depreciation, not disposed): DELETE /assets/{id} removes it. False means the row is räkenskapsinformation and leaves only through disposal or storno (409 ASSET_DELETE_BLOCKED).'),
   created_at: z.string(),
   updated_at: z.string(),
 })

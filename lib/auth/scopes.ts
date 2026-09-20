@@ -314,6 +314,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'POST /api/v1/companies/:companyId/assets': 'bookkeeping:write',
   'GET /api/v1/companies/:companyId/assets/:id': 'reports:read',
   'PATCH /api/v1/companies/:companyId/assets/:id': 'bookkeeping:write',
+  // Removing a never-posted row is a register write like create/update.
+  'DELETE /api/v1/companies/:companyId/assets/:id': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/assets/:id/dispose': 'bookkeeping:write',
 
   // Webhooks (Phase 6 PR-1)

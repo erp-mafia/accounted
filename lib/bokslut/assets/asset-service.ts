@@ -1020,3 +1020,115 @@ function disposalAccounts(category: AssetCategory): { gain: string; loss: string
   }
   return { gain: '3973', loss: '7973' }
 }
+
+// ── Register-only delete ─────────────────────────────────────────
+//
+// The anläggningsregister is sidoordnad bokföring (BFL 5 kap. 4 §, BFNAR
+// 2013:2 kap. 4). A row becomes räkenskapsinformation the moment it drives a
+// voucher: a posted planenlig avskrivning (depreciation_schedules with a
+// journal_entry_id) or the avyttring voucher (disposed_at /
+// disposal_journal_entry_id). From then on BFL 7 kap. retention applies and
+// the only exits are disposal and storno. A row that never reached the books
+// (a typo, a Bokio migration test row) is a register entry and nothing else,
+// so removing it changes no bokföringspost and may be done outright.
+//
+// createAsset() posts no acquisition voucher (the purchase is already in the
+// ledger), and no document links point at assets, so those two signals do not
+// exist here. The manual-depreciation ledger heuristic used by the basis
+// correction guard (hasManualDepreciationPosted) is deliberately NOT a delete
+// blocker: a hand-posted avskrivningsverifikat carries no link to the register
+// row, the ledger is untouched by removing the row, and on a shared 12x9
+// account the heuristic would refuse every migrated company's typo rows.
+
+export type AssetDeleteBlockReason = 'disposed' | 'depreciation_posted'
+
+export class AssetDeleteBlockedError extends Error {
+  readonly code = 'ASSET_DELETE_BLOCKED'
+  constructor(readonly reason: AssetDeleteBlockReason) {
+    super(
+      reason === 'disposed'
+        ? 'Cannot delete a disposed asset: the disposal voucher references it. Reverse the disposal with storno first.'
+        : 'Cannot delete an asset with posted depreciation: reverse the depreciation (storno) first, or dispose the asset.',
+    )
+    this.name = 'AssetDeleteBlockedError'
+  }
+}
+
+/**
+ * The single definition of "reached the books". Pure so every door (list
+ * annotation, GET, v1 view, the delete itself) derives `deletable` from the
+ * same rule; the async wrapper below feeds it the schedule check.
+ */
+export function assetDeleteBlockReason(
+  asset: Pick<Asset, 'disposed_at' | 'disposal_journal_entry_id'>,
+  hasPostedDepreciationRows: boolean,
+): AssetDeleteBlockReason | null {
+  if (asset.disposed_at || asset.disposal_journal_entry_id) return 'disposed'
+  if (hasPostedDepreciationRows) return 'depreciation_posted'
+  return null
+}
+
+export async function getAssetDeleteBlock(
+  supabase: SupabaseClient,
+  companyId: string,
+  asset: Asset,
+): Promise<AssetDeleteBlockReason | null> {
+  const disposed = assetDeleteBlockReason(asset, false)
+  if (disposed) return disposed
+  return assetDeleteBlockReason(asset, await hasPostedDepreciation(supabase, companyId, asset.id))
+}
+
+/**
+ * Delete an asset that never reached the books, together with its own
+ * unposted depreciation_schedules drafts. Throws AssetNotFoundError (404) when
+ * the row is not in this company and AssetDeleteBlockedError (409) when a
+ * posted signal exists. Returns the row as it was, for the caller's log line.
+ *
+ * Runs on the caller's client so RLS and the writer-role trigger apply: the
+ * assets_delete policy is membership-scoped and depreciation_schedules_delete
+ * only admits rows with journal_entry_id IS NULL, which is why the drafts are
+ * removed explicitly before the parent row rather than left to the FK cascade
+ * (a cascade runs as table owner and would not consult that policy).
+ */
+export async function deleteNeverPostedAsset(
+  supabase: SupabaseClient,
+  companyId: string,
+  assetId: string,
+): Promise<Asset> {
+  const asset = await getAsset(supabase, companyId, assetId)
+  if (!asset) throw new AssetNotFoundError()
+
+  const block = await getAssetDeleteBlock(supabase, companyId, asset)
+  if (block) throw new AssetDeleteBlockedError(block)
+
+  const { error: scheduleError } = await supabase
+    .from('depreciation_schedules')
+    .delete()
+    .eq('company_id', companyId)
+    .eq('asset_id', assetId)
+    .is('journal_entry_id', null)
+  if (scheduleError) {
+    throw new Error(`Failed to delete depreciation drafts for asset ${assetId}: ${scheduleError.message}`)
+  }
+
+  // disposed_at IS NULL re-checks the disposal signal inside the statement,
+  // so a disposal that lands between the check above and this delete makes
+  // the delete a no-op instead of removing a row a voucher now references.
+  const { error, count } = await supabase
+    .from('assets')
+    .delete({ count: 'exact' })
+    .eq('id', assetId)
+    .eq('company_id', companyId)
+    .is('disposed_at', null)
+  if (error) throw new Error(`Failed to delete asset ${assetId}: ${error.message}`)
+
+  if (!count) {
+    // Nothing matched: either the row vanished (deleted concurrently) or it
+    // was disposed concurrently. Re-read to answer with the right status.
+    const still = await getAsset(supabase, companyId, assetId)
+    if (still) throw new AssetDeleteBlockedError('disposed')
+    throw new AssetNotFoundError()
+  }
+
+  return asset
+}

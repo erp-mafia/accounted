@@ -1,20 +1,29 @@
 /**
- * GET   /api/v1/companies/{companyId}/assets/{id}
- * PATCH /api/v1/companies/{companyId}/assets/{id}
+ * GET    /api/v1/companies/{companyId}/assets/{id}
+ * PATCH  /api/v1/companies/{companyId}/assets/{id}
+ * DELETE /api/v1/companies/{companyId}/assets/{id}
  *
  * One asset in the anläggningsregister. PATCH is partial; the acquisition
  * basis (date, cost, category) is only writable while nothing has been posted
  * against the asset, otherwise the service answers 409
- * ASSET_CORRECTION_BLOCKED and the correction goes through storno.
+ * ASSET_CORRECTION_BLOCKED and the correction goes through storno. DELETE
+ * removes a row that never reached the books (no posted depreciation, not
+ * disposed); anything else answers 409 ASSET_DELETE_BLOCKED.
  */
 import { z } from 'zod'
-import { ok } from '@/lib/api/v1/response'
+import { ok, noContent } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
-import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
+import { registerEndpoint, dataEnvelope, NoBodyResponse } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { getAsset, updateAsset } from '@/lib/bokslut/assets/asset-service'
+import {
+  getAsset,
+  updateAsset,
+  deleteNeverPostedAsset,
+  getAssetDeleteBlock,
+  AssetDeleteBlockedError,
+} from '@/lib/bokslut/assets/asset-service'
 import {
   AssetViewSchema,
   UpdateAssetSchema,
@@ -45,6 +54,7 @@ const EXAMPLE_ASSET = {
   disposed_proceeds: null,
   disposal_journal_entry_id: null,
   has_posted_depreciation: false,
+  deletable: true,
   created_at: '2026-03-01T09:12:00.000Z',
   updated_at: '2026-03-02T08:00:00.000Z',
 }
@@ -103,6 +113,34 @@ registerEndpoint({
   dryRunSupported: true,
   request: { body: UpdateAssetSchema },
   response: { success: dataEnvelope(AssetShape) },
+})
+
+registerEndpoint({
+  operation: 'assets.delete',
+  method: 'DELETE',
+  path: '/api/v1/companies/:companyId/assets/:id',
+  summary: 'Delete an asset that never reached the books.',
+  description:
+    'Removes a register row that has no posted depreciation and is not disposed, together with its own unposted depreciation drafts. No voucher is touched. A row that has reached the books is räkenskapsinformation (BFL 7 kap.) and is refused with 409 ASSET_DELETE_BLOCKED: dispose it, or reverse the posted voucher with storno first. Dry-run answers 204 without deleting, or the same 409.',
+  useWhen:
+    'A row was added by mistake (a typo, a migration test row) and deletable is true on GET. Check deletable first: it is the same rule the delete enforces.',
+  doNotUseFor:
+    'Taking a real asset out of the register (POST /assets/{id}/dispose posts the avyttring voucher). Undoing posted depreciation (storno the voucher). Editing a wrong basis (PATCH).',
+  pitfalls: [
+    'Idempotency-Key is mandatory.',
+    '409 ASSET_DELETE_BLOCKED once any planenlig avskrivning is posted or the asset is disposed: the register row is then accounting information and leaves only through disposal or storno.',
+    '204 No Content on success: there is no body to parse. A second DELETE answers 404 ASSET_NOT_FOUND.',
+    'Hard delete: the row is not archived. Re-create it with POST /assets if it was removed by mistake.',
+  ],
+  example: {
+    response: { data: null, meta: { request_id: 'req_…', api_version: '2026-05-12' } },
+  },
+  scope: 'bookkeeping:write',
+  risk: 'medium',
+  idempotent: false,
+  reversible: false,
+  dryRunSupported: true,
+  response: { success: NoBodyResponse, errorCodes: ['ASSET_NOT_FOUND', 'ASSET_DELETE_BLOCKED'] },
 })
 
 function invalidId(ctx: { log: Parameters<typeof v1ErrorResponseFromCode>[1]; requestId: string }) {
@@ -183,6 +221,40 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
 
       const asset = await updateAsset(ctx.supabase, ctx.companyId!, assetId, body)
       return ok({ id: asset.id, ...assetView(asset, posted.has(assetId)) }, { requestId: ctx.requestId })
+    } catch (error) {
+      return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
+    }
+  },
+  { requireIdempotencyKey: true },
+)
+
+export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
+  'assets.delete',
+  async (_request, ctx, params) => {
+    const { id } = await params.params
+    const idParse = z.string().uuid().safeParse(id)
+    if (!idParse.success) return invalidId(ctx)
+    const assetId = idParse.data
+
+    try {
+      if (ctx.dryRun) {
+        // Same checks as the commit, nothing written: the caller learns
+        // whether the row can go (204) or why not (404 / 409).
+        const existing = await getAsset(ctx.supabase, ctx.companyId!, assetId)
+        if (!existing) {
+          return v1ErrorResponseFromCode('ASSET_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+        }
+        const block = await getAssetDeleteBlock(ctx.supabase, ctx.companyId!, existing)
+        if (block) throw new AssetDeleteBlockedError(block)
+        return noContent({ requestId: ctx.requestId })
+      }
+
+      const deleted = await deleteNeverPostedAsset(ctx.supabase, ctx.companyId!, assetId)
+      ctx.log.info('asset removed from register (never posted)', {
+        assetId: deleted.id,
+        name: deleted.name,
+      })
+      return noContent({ requestId: ctx.requestId })
     } catch (error) {
       return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     }

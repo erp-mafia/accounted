@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 169 endpoints.
+  pagination, scopes), and all 170 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 169 operations. Paths are shown without
+API version `2026-05-12`, 170 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -377,7 +377,7 @@ GET /companies/{companyId}/reports/vacation-liability : Vacation liability (seme
 GET /companies/{companyId}/reports/vat-declaration : Swedish VAT declaration (momsdeklaration) for a period [scope:reports:read risk:low idempotent]
 ```
 
-### Fixed assets (5)
+### Fixed assets (6)
 
 Full detail: [references/assets.md](references/assets.md)
 
@@ -386,6 +386,7 @@ GET /companies/{companyId}/assets : List the fixed-asset register (anläggningsr
 POST /companies/{companyId}/assets : Register a fixed asset (no voucher is posted) [scope:bookkeeping:write risk:low idempotent dry-run]
 GET /companies/{companyId}/assets/{id} : Get one fixed asset [scope:reports:read risk:low idempotent]
 PATCH /companies/{companyId}/assets/{id} : Partially update a fixed asset [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/assets/{id} : Delete an asset that never reached the books [scope:bookkeeping:write risk:medium dry-run]
 POST /companies/{companyId}/assets/{id}/dispose : Dispose a fixed asset and post the avyttring voucher [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 ```
 

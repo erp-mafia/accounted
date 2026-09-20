@@ -24,12 +24,26 @@ vi.mock('@/lib/bokslut/assets/asset-service', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bokslut/assets/asset-service')>(
     '@/lib/bokslut/assets/asset-service',
   )
-  return { ...actual, getAsset: vi.fn(), updateAsset: vi.fn() }
+  return {
+    ...actual,
+    getAsset: vi.fn(),
+    updateAsset: vi.fn(),
+    deleteNeverPostedAsset: vi.fn(),
+    getAssetDeleteBlock: vi.fn(),
+  }
 })
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { getAsset, updateAsset, AssetCorrectionBlockedError } from '@/lib/bokslut/assets/asset-service'
-import { GET, PATCH } from '../route'
+import {
+  getAsset,
+  updateAsset,
+  deleteNeverPostedAsset,
+  getAssetDeleteBlock,
+  AssetCorrectionBlockedError,
+  AssetDeleteBlockedError,
+  AssetNotFoundError,
+} from '@/lib/bokslut/assets/asset-service'
+import { GET, PATCH, DELETE } from '../route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -85,6 +99,14 @@ function patchRequest(url: string, body: unknown): Request {
     },
     body: JSON.stringify(body),
   })
+}
+
+function deleteRequest(url: string, opts: { idempotencyKey?: string | null } = {}): Request {
+  const headers: Record<string, string> = { Authorization: 'Bearer test-fixture-not-a-real-key' }
+  if (opts.idempotencyKey !== null) {
+    headers['Idempotency-Key'] = opts.idempotencyKey ?? 'abcd1234-3333-4abc-8def-1234567890ab'
+  }
+  return new Request(url, { method: 'DELETE', headers })
 }
 
 type MockResult = { data?: unknown; error?: unknown }
@@ -251,5 +273,81 @@ describe('PATCH /api/v1/companies/{companyId}/assets/{id}', () => {
       notes: 'Serie C02',
     })
     expect(body.data).toMatchObject({ id: ASSET_ID, name: 'Renamed', notes: 'Serie C02', has_posted_depreciation: false })
+  })
+})
+
+describe('DELETE /api/v1/companies/{companyId}/assets/{id}', () => {
+  beforeEach(() => withScopes(['bookkeeping:write']))
+
+  it('returns 401 without an API key', async () => {
+    mockValidate.mockResolvedValue(null)
+    const res = await DELETE(new Request(url(ASSET_ID), { method: 'DELETE' }), routeParams(ASSET_ID))
+    expect(res.status).toBe(401)
+    expect(deleteNeverPostedAsset).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 INSUFFICIENT_SCOPE for a read-only key', async () => {
+    withScopes(['reports:read'])
+    const res = await DELETE(deleteRequest(url(ASSET_ID)), routeParams(ASSET_ID))
+    expect(res.status).toBe(403)
+    expect(deleteNeverPostedAsset).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when the Idempotency-Key header is missing', async () => {
+    const res = await DELETE(deleteRequest(url(ASSET_ID), { idempotencyKey: null }), routeParams(ASSET_ID))
+    expect(res.status).toBe(400)
+    expect(deleteNeverPostedAsset).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a non-UUID id', async () => {
+    const res = await DELETE(deleteRequest(url('nope')), routeParams('nope'))
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('returns 404 ASSET_NOT_FOUND when the row is not in this company', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockRejectedValue(new AssetNotFoundError())
+    const res = await DELETE(deleteRequest(url(ASSET_ID)), routeParams(ASSET_ID))
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('ASSET_NOT_FOUND')
+  })
+
+  it('returns 409 ASSET_DELETE_BLOCKED once the row has reached the books', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockRejectedValue(
+      new AssetDeleteBlockedError('depreciation_posted'),
+    )
+    const res = await DELETE(deleteRequest(url(ASSET_ID)), routeParams(ASSET_ID))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('ASSET_DELETE_BLOCKED')
+    expect(body.error.message_en).toContain('reached the books')
+  })
+
+  it('deletes a never-posted row and answers 204 with no body', async () => {
+    vi.mocked(deleteNeverPostedAsset).mockResolvedValue(ASSET as never)
+    const res = await DELETE(deleteRequest(url(ASSET_ID)), routeParams(ASSET_ID))
+    expect(res.status).toBe(204)
+    expect(await res.text()).toBe('')
+    expect(deleteNeverPostedAsset).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, ASSET_ID)
+  })
+
+  it('dry-run answers 204 without deleting when the row is deletable', async () => {
+    vi.mocked(getAsset).mockResolvedValue(ASSET as never)
+    vi.mocked(getAssetDeleteBlock).mockResolvedValue(null)
+    const res = await DELETE(deleteRequest(`${url(ASSET_ID)}?dry_run=true`), routeParams(ASSET_ID))
+    expect(res.status).toBe(204)
+    expect(deleteNeverPostedAsset).not.toHaveBeenCalled()
+  })
+
+  it('dry-run answers 409 ASSET_DELETE_BLOCKED for a disposed row', async () => {
+    vi.mocked(getAsset).mockResolvedValue({ ...ASSET, disposed_at: '2026-06-30' } as never)
+    vi.mocked(getAssetDeleteBlock).mockResolvedValue('disposed')
+    const res = await DELETE(deleteRequest(`${url(ASSET_ID)}?dry_run=true`), routeParams(ASSET_ID))
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('ASSET_DELETE_BLOCKED')
+    expect(deleteNeverPostedAsset).not.toHaveBeenCalled()
   })
 })
