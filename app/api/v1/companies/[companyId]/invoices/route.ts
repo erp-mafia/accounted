@@ -30,7 +30,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
-import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { buildInvoiceWriteData, VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
@@ -44,7 +44,7 @@ import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
 } from '@/lib/invoices/invoice-register-coverage'
-import type { Customer, Invoice, InvoiceDocumentType } from '@/types'
+import type { Invoice, InvoiceDocumentType } from '@/types'
 
 // Map a self-billed-sale service failure onto the v1 invoice error envelope.
 function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Context) {
@@ -618,19 +618,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
-    // Customer fetch (scoped to company). The builder reads customer_type +
-    // vat_number_validated (VAT rules / allowed rates) and, for the
-    // VAT-treatment explanation in meta.warnings, vat_number: without it an
-    // unvalidated EU customer that HAS a number would be told it has none.
-    // Select exactly those instead of '*' to keep PII out of this path.
-    // `country` is deliberately NOT added in this change: the builder would
-    // then start refusing reverse charge for an eu_business row with country
-    // SE on this surface (#2025 parity), which changes the VAT a public API
-    // charges and needs its own decision. The explanation reads the same
-    // object as the rule, so the two cannot disagree either way.
+    // Customer fetch (scoped to company). Not '*': customer PII stays out of
+    // this path. The columns are the shared VAT_TREATMENT_CUSTOMER_COLUMNS,
+    // not a list typed here: a hand-picked list is how `country` went missing
+    // on this route (#2783), so an eu_business established in Sweden got 0 %
+    // reverse charge here and 25 % on every other surface (#2025). The
+    // builder's customer type makes every field it reads a required key, so a
+    // column dropped from the projection no longer compiles.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated')
+      .select(VAT_TREATMENT_CUSTOMER_COLUMNS)
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -654,8 +651,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const build = await buildInvoiceWriteData({
       supabase: ctx.supabase,
       companyId: ctx.companyId!,
-      // Narrow projection above; the builder only touches these two fields.
-      customer: customer as unknown as Customer,
+      // personal_number is withheld on purpose (PII, see the fetch above), so
+      // the ROT/RUT fallback to the customer card does not apply on this
+      // surface: a v1 caller sends deduction_personnummer. Explicit null, not
+      // an omitted key, so the choice is visible and type-checked.
+      customer: { ...customer, personal_number: null },
       documentType,
       input,
     })

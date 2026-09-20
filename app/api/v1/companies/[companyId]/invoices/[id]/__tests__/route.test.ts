@@ -40,8 +40,26 @@ type MockResult = { data?: unknown; error?: unknown }
 type Capture = { table: string; op: 'update' | 'insert' | 'delete'; payload: unknown }
 
 /**
+ * Keep only the columns a flat select() asked for, as PostgREST would.
+ * '*' (or no select at all) returns the row untouched.
+ */
+function projectRow(data: unknown, columns: string | null): unknown {
+  if (!columns || columns.trim() === '*') return data
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return data
+  const row = data as Record<string, unknown>
+  const wanted = columns.split(',').map((column) => column.trim()).filter(Boolean)
+  return Object.fromEntries(wanted.filter((column) => column in row).map((column) => [column, row[column]]))
+}
+
+/**
  * Per-table result queues (arrays pop in order; single values repeat) plus a
  * capture log of update/insert payloads so totals recomputation is assertable.
+ *
+ * The `customers` chain honours select(): the resolved row carries only the
+ * requested columns. It used to hand back the whole fixture whatever was
+ * selected, so a route that forgot a column the VAT rule reads still saw it
+ * and the test passed on broken code. That is how #2783 hid: `country` was
+ * never selected here, yet a fixture carrying it reached the builder anyway.
  */
 function makeFlexibleSupabase(
   byTable: Record<string, MockResult | MockResult[]>,
@@ -51,34 +69,38 @@ function makeFlexibleSupabase(
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
-  const buildChain = (table: string): unknown => {
+  const buildChain = (table: string, columns: string | null): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
             const q = queues.get(table)
             const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
+            resolve(table === 'customers' ? { ...next, data: projectRow(next.data, columns) } : next)
           }
+        }
+        if (prop === 'select') {
+          return (requested?: unknown) =>
+            buildChain(table, typeof requested === 'string' ? requested : columns)
         }
         if (prop === 'update' || prop === 'insert') {
           return (payload: unknown) => {
             captures.push({ table, op: prop, payload })
-            return buildChain(table)
+            return buildChain(table, columns)
           }
         }
         if (prop === 'delete') {
           return () => {
             captures.push({ table, op: 'delete', payload: undefined })
-            return buildChain(table)
+            return buildChain(table, columns)
           }
         }
-        return (..._args: unknown[]) => buildChain(table)
+        return (..._args: unknown[]) => buildChain(table, columns)
       },
     }
     return new Proxy({}, handler)
   }
-  return { from: vi.fn((table: string) => buildChain(table)) }
+  return { from: vi.fn((table: string) => buildChain(table, null)) }
 }
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -119,6 +141,23 @@ const INTERNAL_COLUMNS = {
 const NEW_ITEMS = [
   { description: 'Konsultation', quantity: 2, unit: 'tim', unit_price: 1000, vat_rate: 25 },
 ]
+
+// No vat_rate: the line takes the customer default the VAT rule decides.
+const ITEMS_WITHOUT_RATE = [{ description: 'Konsultation', quantity: 2, unit: 'tim', unit_price: 1000 }]
+
+// An eu_business row with a VIES-validated German number whose country is
+// Sweden: the contradiction #2025 refuses reverse charge for. The fixture
+// carries MORE columns than the route may select (name, personal_number), so a
+// test only sees `country` when the route actually asks for it.
+const EU_BUSINESS_VALIDATED_COUNTRY_SE = {
+  id: CUSTOMER_ID,
+  name: 'Nordisk Filial GmbH',
+  customer_type: 'eu_business',
+  vat_number: 'DE123456789',
+  vat_number_validated: true,
+  country: 'SE',
+  personal_number: null,
+}
 
 function makePatchRequest(body: unknown, opts: { idempotencyKey?: boolean; auth?: boolean; dryRun?: boolean } = {}) {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
@@ -332,6 +371,127 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(body.meta.warnings.map((w: { code: string }) => w.code)).toEqual([
       'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED',
     ])
+  })
+
+  // #2783: the country-SE rule (#2025) on PATCH. A buyer established in Sweden
+  // owes Swedish VAT whatever foreign VAT number it holds (huvudregeln, ML 6
+  // kap. 34 §: a B2B service is taxed where the buyer is established). The
+  // lines omit vat_rate on purpose, so the rate is the customer default the
+  // rule decides, not one the caller typed.
+  it('replaced lines to a validated eu_business whose country is SE get Swedish VAT, not reverse charge, and say why (#2783)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: INTERNAL_COLUMNS, error: null },
+        ],
+        customers: { data: EU_BUSINESS_VALIDATED_COUNTRY_SE, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: ITEMS_WITHOUT_RATE }, { dryRun: true }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({
+      vat_treatment: 'standard_25',
+      moms_ruta: '05',
+      reverse_charge_text: null,
+      vat_rate: 25,
+      subtotal: 2000,
+      vat_amount: 500,
+      total: 2500,
+    })
+    expect(body.data.preview.items[0]).toMatchObject({ vat_rate: 25, vat_amount: 500 })
+    expect(body.meta.warnings).toHaveLength(1)
+    expect(body.meta.warnings[0]).toMatchObject({
+      code: 'EU_BUSINESS_COUNTRY_IS_SE',
+      remediation: { tool: 'gnubok_update_customer', args: { customer_id: CUSTOMER_ID } },
+    })
+    expect(body.meta.warnings[0].message_en).toMatch(/customer's country is Sweden/)
+  })
+
+  it('writes the SE-country replacement with Swedish VAT and returns the warning on the live update too (#2783)', async () => {
+    const captures: Capture[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: DRAFT_INVOICE, error: null }, // pre-flight
+            { data: INTERNAL_COLUMNS, error: null }, // internal-only columns
+            { data: DRAFT_INVOICE, error: null }, // update
+            { data: { ...DRAFT_INVOICE, items: [] }, error: null }, // refetch with items
+          ],
+          customers: { data: EU_BUSINESS_VALIDATED_COUNTRY_SE, error: null },
+          company_settings: { data: { vat_registered: true }, error: null },
+          invoice_items: { data: [], error: null },
+        },
+        captures,
+      ),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: ITEMS_WITHOUT_RATE }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    // Warn, never refuse.
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.meta.warnings.map((w: { code: string }) => w.code)).toEqual(['EU_BUSINESS_COUNTRY_IS_SE'])
+
+    // What actually lands in the tables, not the mocked row echoed back.
+    const invoiceUpdate = captures.find((c) => c.table === 'invoices' && c.op === 'update')?.payload
+    expect(invoiceUpdate).toMatchObject({
+      vat_treatment: 'standard_25',
+      moms_ruta: '05',
+      reverse_charge_text: null,
+      vat_amount: 500,
+      total: 2500,
+    })
+    const itemInsert = captures.find((c) => c.table === 'invoice_items' && c.op === 'insert')?.payload as Array<{
+      vat_rate: number
+    }>
+    expect(itemInsert.map((row) => row.vat_rate)).toEqual([25])
+  })
+
+  it('still reverse-charges replaced lines to a genuinely foreign validated eu_business, silently (#2783)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null },
+          { data: INTERNAL_COLUMNS, error: null },
+        ],
+        customers: { data: { ...EU_BUSINESS_VALIDATED_COUNTRY_SE, country: 'DE' }, error: null },
+        company_settings: { data: { vat_registered: true }, error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: ITEMS_WITHOUT_RATE }, { dryRun: true }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview).toMatchObject({
+      vat_treatment: 'reverse_charge',
+      moms_ruta: '39',
+      vat_rate: 0,
+      vat_amount: 0,
+      total: 2000,
+    })
+    expect(body.data.preview.reverse_charge_text).toMatch(/Reverse charge/)
+    expect(body.data.preview.items[0]).toMatchObject({ vat_rate: 0, vat_amount: 0 })
+    // 0 % to a reverse-charge customer is the rule: nothing to explain.
+    expect(body.meta.warnings).toBeUndefined()
   })
 
   it('dry-run previews the replaced items without writing', async () => {

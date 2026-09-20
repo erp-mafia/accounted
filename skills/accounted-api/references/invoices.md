@@ -323,7 +323,7 @@ Partial update for invoices in draft status. Allowed fields: invoice_date, due_d
 - items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.
 - items are always built against the invoice's EXISTING customer: customer_id cannot change on PATCH.
 - default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.
-- When items are replaced, the 200 may carry meta.warnings about the VAT treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, ...). The update succeeded; the warning says why the rates are what they are.
+- When items are replaced, the VAT treatment is decided again from the customer's current row (customer_type, vat_number validation, country), so it can differ from the draft's stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

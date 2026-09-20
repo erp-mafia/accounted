@@ -17,6 +17,7 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
+import { VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
 
 const REPO_ROOT = path.resolve(__dirname, '../../..')
 
@@ -54,22 +55,26 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
  * but drops vat_number would tell an unvalidated EU customer that HAS a number
  * that it has none, with a remediation that lost the number.
  *
- * The route tests use table mocks that ignore the select() string, so they
- * cannot see this. Pinned at source level, like the gate above.
+ * `country` is the same story with a worse outcome (#2783): without it the
+ * rule itself is wrong, not just the sentence. countryPermitsReverseCharge()
+ * reads a missing country as "does not block", so an eu_business established
+ * in Sweden got 0 % reverse charge on the two v1 routes that never selected it.
+ *
+ * These paths decide the treatment by calling the rule functions directly, so
+ * the builder's typed customer parameter cannot see them, and route tests
+ * written against a mock that ignores select() cannot either. Pinned at source
+ * level, like the gate above.
  */
-const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
-  'app/api/v1/companies/[companyId]/invoices/route.ts',
-  'app/api/v1/companies/[companyId]/invoices/[id]/route.ts',
+const NARROW_CUSTOMER_SELECTS_OUTSIDE_THE_BUILDER = [
   'app/api/v1/companies/[companyId]/invoices/bulk-create/route.ts',
   'extensions/general/mcp-server/server.ts',
 ]
 
-describe('customer projections that feed explainVatTreatment carry vat_number', () => {
-  for (const relative of EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT) {
-    it(`${relative} selects vat_number wherever it selects vat_number_validated`, () => {
+describe('narrow customer projections that decide a VAT treatment carry every input', () => {
+  for (const relative of NARROW_CUSTOMER_SELECTS_OUTSIDE_THE_BUILDER) {
+    it(`${relative} selects vat_number and country wherever it selects vat_number_validated`, () => {
       const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
-      // Directly, or through the shared builder's result.
-      expect(source).toMatch(/explainVatTreatment\(|build\.warnings/)
+      expect(source).toContain('explainVatTreatment(')
       const selects = Array.from(source.matchAll(/\.select\(\s*'([^']*\bvat_number_validated\b[^']*)'/g)).map(
         (match) => match[1],
       )
@@ -77,7 +82,76 @@ describe('customer projections that feed explainVatTreatment carry vat_number', 
       for (const columns of selects) {
         // \b...\b does not match inside vat_number_validated: "_" is a word char.
         expect(columns, columns).toMatch(/\bvat_number\b(?!_)/)
+        expect(columns, columns).toMatch(/\bcountry\b/)
       }
     })
   }
 })
+
+/**
+ * The doors that go through buildInvoiceWriteData need no per-file pin: its
+ * customer parameter (InvoiceBuilderCustomer) makes every field it reads a
+ * required key, so a projection that drops one does not compile. Verified when
+ * this landed: deleting `country` from VAT_TREATMENT_CUSTOMER_COLUMNS fails
+ * `npm run check:types` with TS2322 at both v1 call sites.
+ *
+ * What the compiler cannot stop is the thing that hid #2783 in the first place:
+ * a cast. The builder used to take the full `Customer`, no narrow projection
+ * could satisfy that, so both v1 routes wrote `customer as unknown as Customer`
+ * and the cast erased the check. Two things are pinned instead: the one shared
+ * column list is complete, and nobody casts their way back in.
+ */
+describe('doors into buildInvoiceWriteData cannot omit a customer input', () => {
+  const BUILDER_DOORS_WITH_NARROW_SELECT = [
+    'app/api/v1/companies/[companyId]/invoices/route.ts',
+    'app/api/v1/companies/[companyId]/invoices/[id]/route.ts',
+  ]
+
+  it('VAT_TREATMENT_CUSTOMER_COLUMNS carries every column the VAT rule and its explanation read', () => {
+    const columns = VAT_TREATMENT_CUSTOMER_COLUMNS.split(',').map((column) => column.trim())
+    expect(columns.sort()).toEqual(
+      ['country', 'customer_type', 'id', 'vat_number', 'vat_number_validated'].sort(),
+    )
+  })
+
+  for (const relative of BUILDER_DOORS_WITH_NARROW_SELECT) {
+    it(`${relative} selects the shared column list, not one typed by hand`, () => {
+      const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
+      expect(source).toContain('build.warnings')
+      expect(source).toContain('.select(VAT_TREATMENT_CUSTOMER_COLUMNS)')
+      // A literal list naming vat_number_validated is a second, driftable copy.
+      expect(source).not.toMatch(/\.select\(\s*'[^']*\bvat_number_validated\b[^']*'/)
+    })
+  }
+
+  it('no caller of buildInvoiceWriteData double-casts its customer', () => {
+    // Code only: the builder's own doc comment quotes the old cast to explain
+    // why the parameter type changed, and prose is not an offence.
+    const codeOnly = (source: string) =>
+      source
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+        .join('\n')
+    const offenders = listSourceFiles(['app', 'lib', 'extensions'])
+      .filter((file) => {
+        const code = codeOnly(fs.readFileSync(file, 'utf8'))
+        return code.includes('buildInvoiceWriteData(') && /customer\s+as\s+unknown\s+as\b/.test(code)
+      })
+      .map((file) => path.relative(REPO_ROOT, file))
+    expect(offenders).toEqual([])
+  })
+})
+
+function listSourceFiles(roots: string[]): string[] {
+  const found: string[] = []
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '__tests__' || entry.name.startsWith('.')) continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) found.push(full)
+    }
+  }
+  for (const root of roots) walk(path.join(REPO_ROOT, root))
+  return found
+}

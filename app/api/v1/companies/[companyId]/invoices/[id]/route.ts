@@ -33,13 +33,13 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
-import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
+import { buildInvoiceWriteData, VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
-import type { Currency, Customer, InvoiceDocumentType } from '@/types'
+import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
 // document_type (structural: change via delete + recreate), invoice_number
@@ -238,7 +238,7 @@ registerEndpoint({
     'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
     'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
-    'When items are replaced, the 200 may carry meta.warnings about the VAT treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, ...). The update succeeded; the warning says why the rates are what they are.',
+    'When items are replaced, the VAT treatment is decided again from the customer\'s current row (customer_type, vat_number validation, country), so it can differ from the draft\'s stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.',
   ],
   example: {
     request: { due_date: '2026-07-15', notes: 'Förlängd förfallotid' },
@@ -389,14 +389,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         deduction_personnummer_last4: string | null
       }
 
-      // The builder reads customer_type + vat_number_validated, plus
-      // vat_number for the VAT-treatment explanation in meta.warnings (an
-      // unvalidated EU customer that HAS a number must not be told it has
-      // none). Narrow projection keeps customer PII out of this path;
-      // `country` is left out on purpose, see POST /invoices.
+      // Narrow projection keeps customer PII out of this path. The columns
+      // are the shared VAT_TREATMENT_CUSTOMER_COLUMNS, never a list typed
+      // here: see POST /invoices for how `country` went missing (#2783).
       const { data: customer, error: customerErr } = await ctx.supabase
         .from('customers')
-        .select('id, customer_type, vat_number, vat_number_validated')
+        .select(VAT_TREATMENT_CUSTOMER_COLUMNS)
         .eq('company_id', ctx.companyId!)
         .eq('id', cur.customer_id as string)
         .maybeSingle()
@@ -418,7 +416,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       const build = await buildInvoiceWriteData({
         supabase: ctx.supabase,
         companyId: ctx.companyId!,
-        customer: customer as unknown as Customer,
+        // personal_number withheld on purpose, as on POST /invoices: explicit
+        // null, so the ROT/RUT customer-card fallback is visibly off here.
+        customer: { ...customer, personal_number: null },
         documentType: ((cur.document_type as string) || 'invoice') as InvoiceDocumentType,
         input: {
           customer_id: cur.customer_id as string,
