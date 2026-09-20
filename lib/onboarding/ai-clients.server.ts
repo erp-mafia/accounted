@@ -9,16 +9,28 @@ import { connectedAiClients, type AiClient } from '@/lib/onboarding/ai-clients'
  *
  * The connection follows the person, not the company: the key's company_id
  * is whatever was active at sign-in (or null for a companyless signup), so
- * the lookup is by user. Revoked keys do not count. A failed read answers
- * an empty list rather than throwing: the readout only decorates a button.
+ * the lookup is by user. Revoked keys do not count. Throws when the read
+ * fails, for the caller that must tell "none connected" from "unknown".
  */
-export async function loadConnectedAiClients(supabase: SupabaseClient, userId: string): Promise<AiClient[]> {
+export async function readConnectedAiClients(supabase: SupabaseClient, userId: string): Promise<AiClient[]> {
   const { data, error } = await supabase
     .from('api_keys')
     .select('client')
     .eq('user_id', userId)
     .eq('name', OAUTH_MCP_KEY_NAME)
     .is('revoked_at', null)
-  if (error || !data) return []
-  return connectedAiClients(data as { client: string | null }[])
+  if (error) throw new Error(`Connected AI clients read failed: ${error.message}`)
+  return connectedAiClients((data ?? []) as { client: string | null }[])
+}
+
+/**
+ * The same read where the readout only decorates a button: a failed read
+ * answers an empty list rather than throwing.
+ */
+export async function loadConnectedAiClients(supabase: SupabaseClient, userId: string): Promise<AiClient[]> {
+  try {
+    return await readConnectedAiClients(supabase, userId)
+  } catch {
+    return []
+  }
 }
