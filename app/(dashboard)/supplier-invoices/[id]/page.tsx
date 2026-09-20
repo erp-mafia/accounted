@@ -42,7 +42,7 @@ import useSWR from 'swr'
 import { StageSteps } from '@/components/supplier-invoices/StagePipeline'
 import { stagesFor, type InvoiceLifecycle, type SupplierInvoiceLadderStage } from '@/lib/supplier-invoices/stages'
 import { formatAmount, formatCurrency } from '@/lib/utils'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
@@ -679,14 +679,14 @@ export default function SupplierInvoiceDetailPage() {
       credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } | null
     }).credited_original ?? null
 
-  // Display-only öresavrundning. The stored total/booked verifikat keep the
-  // exact öre; this only adjusts the rendered total. Supplier invoices never
-  // had rounding historically, so a null flag resolves to off (company arg
-  // false); only an explicit per-invoice `true` rounds the display.
-  const rounding = getDisplayTotal(
-    { total: invoice.total, currency: invoice.currency, ore_rounding: invoice.ore_rounding },
-    { ore_rounding: false },
-  )
+  // Display-only öresavrundning: the same figures the editor and the review
+  // step showed. The stored total/booked verifikat keep the exact öre; a null
+  // flag resolves to off (supplier invoices never had a company-wide setting).
+  const { rounding } = supplierInvoiceDisplayFigures({
+    total: invoice.total,
+    currency: invoice.currency,
+    ore_rounding: invoice.ore_rounding,
+  })
 
   // Document title: the supplier's own invoice number with the kind spelled
   // out ("Leverantörsfaktura 4711", "Kreditfaktura K-12"). The arrival number

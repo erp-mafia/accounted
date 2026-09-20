@@ -5215,6 +5215,7 @@
     "review_sek_amount_at_rate": "SEK-belopp (vid kurs {rate})",
     "review_voucher_preview_title": "Verifikation som bokförs",
     "review_voucher_in_sek_suffix": "(i SEK)",
+    "review_ore_rounding_note": "Verifikationen bokförs med det exakta beloppet {exact} på 2440. Öresavrundningen ({delta}) bokförs mot 3740 när fakturan betalas.",
     "review_vat_inline": "{rate}% moms ({amount})",
     "review_payment_reference_inline": "Betalningsreferens: {reference}",
     "debit_short": "D {amount}",
