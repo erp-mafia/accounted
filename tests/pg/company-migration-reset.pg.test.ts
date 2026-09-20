@@ -307,11 +307,14 @@ describe('company migration reset RPCs (pg)', () => {
       count: 1,
     })
 
+    // A bank file import, not a legacy SIE row: since 20260920190300 a
+    // sie_imports row without a durable job cannot claim 'pending' (#2566). An
+    // unfinished durable SIE job is pinned in lib/import/__tests__/sie-job.pg.test.ts.
     const importing = await seedCompany()
     await getPool().query(
-      `INSERT INTO public.sie_imports
-         (user_id, company_id, filename, file_hash, sie_type, status)
-       VALUES ($1, $2, 'pending.se', $3, 4, 'pending')`,
+      `INSERT INTO public.bank_file_imports
+         (user_id, company_id, filename, file_hash, file_format, status)
+       VALUES ($1, $2, 'pending.csv', $3, 'seb', 'pending')`,
       [importing.userId, importing.companyId, randomUUID()],
     )
     const importingPreview = await preview(importing.userId, importing.companyId)
