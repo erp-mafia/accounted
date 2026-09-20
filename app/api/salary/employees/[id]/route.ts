@@ -7,7 +7,12 @@ import { getCompanyEntityType } from '@/lib/company/context'
 import { encryptPersonnummer, extractLast4, maskEmployeeForResponse, validatePersonnummer } from '@/lib/salary/personnummer'
 import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/lib/salary/employment-rules'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
-import { jamkningIssueFromDbError, touchesJamkning, validateJamkning } from '@/lib/salary/jamkning-rules'
+import {
+  jamkningIssueFromDbError,
+  touchesJamkning,
+  validateJamkning,
+  type JamkningFields,
+} from '@/lib/salary/jamkning-rules'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -18,6 +23,32 @@ ensureInitialized()
 // key, never the writable `personnummer` key. This route both reads and writes
 // the same object shape, so a mask under the write key would round-trip
 // 'ÅÅÅÅMMDD-XXXX' straight into the encrypt path.
+
+/**
+ * Map a refused UPDATE of an employee row to the response the caller can act
+ * on. Shared by PATCH and DELETE so that no write on this route can collapse
+ * a database refusal into "not found" (#2697: DELETE did exactly that, and
+ * the client, seeing a 404, showed nothing).
+ *
+ *   - 23505: the personnummer is already on another employee (409).
+ *   - employees_jamkning_dates_check (#2256): the row on disk is refused,
+ *     either because a merged-state check ran against a snapshot another
+ *     request has since changed, or because this is a legacy incomplete row
+ *     (stored before #2240) whose next UPDATE, whatever columns it names, must
+ *     complete or clear the beslut. 400 with the validator's own sentence,
+ *     derived from `merged` (the row as the caller meant to store it).
+ *   - anything else: 500 through the normal user-facing mapping.
+ */
+function writeErrorResponse(error: { code?: string; message?: string }, merged: JamkningFields): NextResponse {
+  if (error.code === '23505') {
+    return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
+  }
+  const jamkningIssue = jamkningIssueFromDbError(error, merged)
+  if (jamkningIssue) {
+    return NextResponse.json({ error: jamkningIssue.message }, { status: 400 })
+  }
+  return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+}
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.get',
@@ -176,21 +207,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select()
       .single()
 
-    if (error) {
-      if (error.code === '23505') {
-        return NextResponse.json({ error: 'En anställd med detta personnummer finns redan' }, { status: 409 })
-      }
-      // The CHECK constraint refused the row (#2256): either the merged-state
-      // check above passed against a snapshot another request has since
-      // changed, or this is a legacy incomplete row (stored before #2240)
-      // whose next edit must complete or clear the beslut. Same 400 and
-      // sentence as that check, derived from the merged row.
-      const jamkningIssue = jamkningIssueFromDbError(error, merged)
-      if (jamkningIssue) {
-        return NextResponse.json({ error: jamkningIssue.message }, { status: 400 })
-      }
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-    }
+    if (error) return writeErrorResponse(error, merged)
 
     return NextResponse.json({ data: maskEmployeeForResponse(updated) })
   },
@@ -202,6 +219,23 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
+    // Read before write, as PATCH does: "not found" is decided here and only
+    // here. The jämkning columns come along because a legacy incomplete row
+    // (stored before #2240) is refused by employees_jamkning_dates_check on
+    // ANY update, this one included: the constraint is NOT VALID, so the row
+    // is checked on its next edit. The sentence that tells the user what to
+    // complete or clear is derived from the row itself. #2697
+    const { data: existing, error: fetchError } = await supabase
+      .from('employees')
+      .select('id, jamkning_percentage, jamkning_valid_from, jamkning_valid_to')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
+
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
+    }
+
     // Soft delete only, BFL 7 kap retention
     const { data, error } = await supabase
       .from('employees')
@@ -211,7 +245,8 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
       .select('id')
       .single()
 
-    if (error || !data) {
+    if (error) return writeErrorResponse(error, existing)
+    if (!data) {
       return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
     }
 

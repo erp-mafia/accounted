@@ -8104,6 +8104,7 @@
     "detail_deactivate_confirm": "Vill du inaktivera denna anställd?",
     "detail_deactivate_confirm_title": "Inaktivera anställd?",
     "detail_deactivated": "Anställd inaktiverad",
+    "detail_deactivate_failed": "Kunde inte inaktivera anställd",
     "detail_not_found": "Anställd hittades inte",
     "detail_deactivate": "Inaktivera",
     "detail_employment_start_hint": "Lönen proportioneras automatiskt om anställningen börjar eller slutar mitt i en löneperiod.",

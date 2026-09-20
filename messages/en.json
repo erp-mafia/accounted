@@ -8104,6 +8104,7 @@
     "detail_deactivate_confirm": "Do you want to deactivate this employee?",
     "detail_deactivate_confirm_title": "Deactivate employee?",
     "detail_deactivated": "Employee deactivated",
+    "detail_deactivate_failed": "Could not deactivate employee",
     "detail_not_found": "Employee not found",
     "detail_deactivate": "Deactivate",
     "detail_employment_start_hint": "The salary is prorated automatically if the employment starts or ends in the middle of a pay period.",

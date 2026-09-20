@@ -3,8 +3,11 @@
  *
  * Exercises the route through the real withRouteContext wrapper, mocking only
  * its auth/company/write dependencies and injecting a queued Supabase mock via
- * requireAuth. Covers 401 (unauth), 403 (viewer role), and a DELETE happy path
- * (soft delete, BFL retention).
+ * requireAuth. Covers 401 (unauth), 403 (viewer role), and DELETE: the happy
+ * path (soft delete, BFL retention), a genuine not-found (404), the
+ * employees_jamkning_dates_check refusal of a legacy incomplete row (400 with
+ * the validator's sentence, #2697) and any other write error (500). Before
+ * #2697 every one of those was a 404 "Anställd hittades inte".
  *
  * Plus the personnummer contract on this route, which handles encrypted PII on
  * both the read and the write side:
@@ -18,11 +21,11 @@
  * which loosens the Zod schema to prove the defence lives in the route.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
+import { JAMKNING_END_REQUIRED, JAMKNING_ROW_INCOMPLETE } from '@/lib/salary/jamkning-rules'
 import { NextResponse } from 'next/server'
 import { createQueuedMockSupabase, createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -109,6 +112,29 @@ function patchRequest(body: Record<string, unknown>) {
   return createMockRequest('/api/salary/employees/emp-1', { method: 'PATCH', body })
 }
 
+function deleteRequest() {
+  return createMockRequest('/api/salary/employees/emp-1', { method: 'DELETE' })
+}
+
+// The PostgREST error for employees_jamkning_dates_check (#2256), as
+// observed against a real PostgREST: the constraint name is in `message`,
+// `details` carries the failing row and must never reach the response.
+const CHECK_CONSTRAINT_ERROR = {
+  code: '23514',
+  message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
+  details: 'Failing row contains (...).',
+  hint: null,
+}
+
+// What DELETE reads before it writes: the id plus the jämkning columns the
+// refusal sentence is derived from. This one has no beslut.
+const DELETE_READ_ROW = {
+  id: 'emp-1',
+  jamkning_percentage: null,
+  jamkning_valid_from: null,
+  jamkning_valid_to: null,
+}
+
 describe('DELETE /api/salary/employees/[id]', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -124,7 +150,7 @@ describe('DELETE /api/salary/employees/[id]', () => {
       error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
     })
 
-    const response = await DELETE(createMockRequest('/api/salary/employees/emp-1', { method: 'DELETE' }), params)
+    const response = await DELETE(deleteRequest(), params)
     expect(response.status).toBe(401)
   })
 
@@ -134,18 +160,66 @@ describe('DELETE /api/salary/employees/[id]', () => {
       response: NextResponse.json({ error: 'Forbidden' }, { status: 403 }),
     })
 
-    const response = await DELETE(createMockRequest('/api/salary/employees/emp-1', { method: 'DELETE' }), params)
+    const response = await DELETE(deleteRequest(), params)
     expect(response.status).toBe(403)
   })
 
   it('soft-deletes the employee (happy path)', async () => {
+    enqueue({ data: DELETE_READ_ROW })
     enqueue({ data: { id: 'emp-1' } })
 
-    const response = await DELETE(createMockRequest('/api/salary/employees/emp-1', { method: 'DELETE' }), params)
+    const response = await DELETE(deleteRequest(), params)
     const { status, body } = await parseJsonResponse<{ data: { id: string; is_active: boolean } }>(response)
 
     expect(status).toBe(200)
     expect(body.data).toEqual({ id: 'emp-1', is_active: false })
+    // Soft delete only (BFL 7 kap retention): the write flips is_active and
+    // touches nothing else, in particular not the jämkning columns.
+    expect(findCall('employees', 'update')).toEqual([{ is_active: false }])
+  })
+
+  it('404 when no employee row matches (unknown id or another company), and nothing is written', async () => {
+    enqueue({ data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } })
+
+    const response = await DELETE(deleteRequest(), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(404)
+    expect(body.error).toBe('Anställd hittades inte')
+    expect(findCall('employees', 'update')).toBeUndefined()
+  })
+
+  it('400 with the jämkning sentence when the NOT VALID check refuses a legacy incomplete row (#2697)', async () => {
+    // The row from the issue: a percentage and start date stored before
+    // #2240, no end date. The constraint refuses ANY update of it, the
+    // deactivation included. The user must be told what to complete, in the
+    // validator's own words, not "not found" (the row exists) and not 500.
+    enqueue({ data: { id: 'emp-1', jamkning_percentage: 30, jamkning_valid_from: '2025-09-29', jamkning_valid_to: null } })
+    enqueue({ data: null, error: CHECK_CONSTRAINT_ERROR })
+
+    const response = await DELETE(deleteRequest(), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error).toBe(JAMKNING_END_REQUIRED)
+    expect(JSON.stringify(body)).not.toContain('Failing row')
+    expect(findCall('employees', 'update')).toEqual([{ is_active: false }])
+  })
+
+  it('500 through the generic mapper for any other write error, never 404', async () => {
+    // A 23514 from some other CHECK on the table: the jämkning branch must
+    // key on the constraint name, and the row does exist, so 404 is wrong.
+    enqueue({ data: DELETE_READ_ROW })
+    enqueue({
+      data: null,
+      error: { code: '23514', message: 'new row for relation "employees" violates check constraint "employees_tax_column_check"' },
+    })
+
+    const response = await DELETE(deleteRequest(), params)
+    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+    expect(status).toBe(500)
+    expect(body.error).not.toBe('Anställd hittades inte')
   })
 })
 
@@ -358,16 +432,6 @@ describe('jämkning on PATCH /api/salary/employees/[id]', () => {
     expect(response.status).toBe(200)
     expect(captured.updates).toEqual({ first_name: 'Ny' })
   })
-
-  // The PostgREST error for employees_jamkning_dates_check (#2256), as
-  // observed against a real PostgREST: the constraint name is in `message`,
-  // `details` carries the failing row and must never reach the response.
-  const CHECK_CONSTRAINT_ERROR = {
-    code: '23514',
-    message: 'new row for relation "employees" violates check constraint "employees_jamkning_dates_check"',
-    details: 'Failing row contains (...).',
-    hint: null,
-  }
 
   it('400 with the umbrella sentence when the CHECK constraint catches the race (#2256)', async () => {
     // The snapshot this handler validated against was empty, so nulling only
