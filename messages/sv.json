@@ -4103,7 +4103,6 @@
     "bank_missing_warning": "Betalningsuppgifter saknas: du behöver lägga till dem innan du skapar en faktura.",
     "bank_add_now": "Lägg till nu",
     "customer_card_title": "Kund",
-    "select_customer_placeholder": "Välj kund",
     "loading_customers": "Hämtar kunder ...",
     "no_customers_yet": "Inga kunder än",
     "create_customer": "Skapa kund",
@@ -4810,7 +4809,6 @@
     "name_label": "Namn",
     "name_placeholder": "t.ex. Månadsretainer Acme AB",
     "customer_label": "Kund",
-    "customer_placeholder": "Välj kund",
     "day_label": "Dag i månaden",
     "day_hint": "29-31 körs sista dagen i kortare månader.",
     "run_date_label": "Första faktureringsdatum",
@@ -6962,6 +6960,16 @@
     "col_city": "Stad",
     "col_created": "Skapad",
     "count_summary": "{count, plural, one {1 kund} other {# kunder}}"
+  },
+  "customer_picker": {
+    "search_placeholder": "Sök kund",
+    "no_match": "Ingen kund matchar",
+    "loading": "Hämtar kunder ...",
+    "empty": "Inga kunder än",
+    "capped": "Visar {shown} av {total}. Skriv mer för att förfina sökningen.",
+    "create_customer": "Skapa kund",
+    "create_customer_named": "Skapa kund \"{query}\"",
+    "archived": "Arkiverad"
   },
   "webshop_orders": {
     "title": "Order",
@@ -9267,7 +9275,6 @@
     "back": "Tillbaka till kundorder",
     "back_to_order": "Tillbaka till ordern",
     "section_customer": "Kund",
-    "select_customer_placeholder": "Välj kund",
     "loading_customers": "Laddar kunder...",
     "no_customers_yet": "Inga kunder ännu. Lägg till en kund först.",
     "section_details": "Uppgifter",

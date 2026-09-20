@@ -69,13 +69,24 @@ export function isSameDropdownPosition(
   )
 }
 
+export interface DropdownPositionOptions {
+  /**
+   * The width the panel wants when the anchor is narrower. Defaults to
+   * DROPDOWN_PREFERRED_WIDTH (the account list needs room for number + name +
+   * marker); a picker whose rows fit the trigger passes 0 to stay flush with it.
+   */
+  preferredWidth?: number
+}
+
 export function computeDropdownPosition(
   anchor: DropdownAnchorRect,
   viewport: DropdownViewportSize,
+  options: DropdownPositionOptions = {},
 ): DropdownPosition {
   const margin = DROPDOWN_VIEWPORT_MARGIN
+  const preferredWidth = options.preferredWidth ?? DROPDOWN_PREFERRED_WIDTH
   const maxWidth = Math.max(viewport.width - margin * 2, 0)
-  const width = Math.min(Math.max(anchor.width, DROPDOWN_PREFERRED_WIDTH), maxWidth)
+  const width = Math.min(Math.max(anchor.width, preferredWidth), maxWidth)
   const left = Math.max(margin, Math.min(anchor.left, viewport.width - width - margin))
 
   const spaceBelow = viewport.height - anchor.bottom - DROPDOWN_ANCHOR_GAP - margin

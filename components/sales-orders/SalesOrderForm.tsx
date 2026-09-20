@@ -21,6 +21,7 @@ import { useToast } from '@/components/ui/use-toast'
 import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { resolveLineVatRates, FALLBACK_VAT_RATE } from '@/components/invoices/line-vat-rates'
 import { useArticles, useCustomers } from '@/lib/reference-data/hooks'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { sortArticles } from '@/lib/articles/sort'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { UNIT_DATALIST_ID, UNIT_MAX_LENGTH } from '@/lib/invoices/units'
@@ -315,23 +316,18 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
     <form onSubmit={handleSubmit} className="space-y-8" noValidate>
       <DetailSection kicker={t('section_customer')}>
         <div className="max-w-md">
-          <Select value={customerId} onValueChange={handleCustomerChange}>
-            <SelectTrigger className="h-12 font-display text-base" aria-required="true" aria-invalid={errors.customer ? true : undefined}>
-              <SelectValue placeholder={t('select_customer_placeholder')} />
-            </SelectTrigger>
-            <SelectContent>
-              {customers.length === 0 && (
-                <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                  {customersLoading ? t('loading_customers') : t('no_customers_yet')}
-                </div>
-              )}
-              {customers.map((customer) => (
-                <SelectItem key={customer.id} value={customer.id}>
-                  {customer.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <CustomerCombobox
+            value={customerId}
+            customers={customers}
+            keepId={initial?.customer_id}
+            onChange={handleCustomerChange}
+            className="h-12 font-display text-base"
+            aria-required
+            aria-invalid={errors.customer ? true : undefined}
+            loading={customersLoading}
+            loadingLabel={t('loading_customers')}
+            emptyLabel={t('no_customers_yet')}
+          />
           {errors.customer && <p className="mt-2 text-sm text-destructive">{errors.customer}</p>}
         </div>
       </DetailSection>

@@ -4103,7 +4103,6 @@
     "bank_missing_warning": "Payment details missing: you need to add them before creating an invoice.",
     "bank_add_now": "Add now",
     "customer_card_title": "Customer",
-    "select_customer_placeholder": "Select customer",
     "loading_customers": "Loading customers ...",
     "no_customers_yet": "No customers yet",
     "create_customer": "Create customer",
@@ -4810,7 +4809,6 @@
     "name_label": "Name",
     "name_placeholder": "e.g. Monthly retainer Acme AB",
     "customer_label": "Customer",
-    "customer_placeholder": "Select customer",
     "day_label": "Day of month",
     "day_hint": "29-31 run on the last day in shorter months.",
     "run_date_label": "First invoice date",
@@ -6962,6 +6960,16 @@
     "col_city": "City",
     "col_created": "Created",
     "count_summary": "{count, plural, one {1 customer} other {# customers}}"
+  },
+  "customer_picker": {
+    "search_placeholder": "Search customer",
+    "no_match": "No customer matches",
+    "loading": "Loading customers ...",
+    "empty": "No customers yet",
+    "capped": "Showing {shown} of {total}. Type more to narrow the search.",
+    "create_customer": "Create customer",
+    "create_customer_named": "Create customer \"{query}\"",
+    "archived": "Archived"
   },
   "webshop_orders": {
     "title": "Orders",
@@ -9267,7 +9275,6 @@
     "back": "Back to sales orders",
     "back_to_order": "Back to the order",
     "section_customer": "Customer",
-    "select_customer_placeholder": "Select customer",
     "loading_customers": "Loading customers...",
     "no_customers_yet": "No customers yet. Add a customer first.",
     "section_details": "Details",

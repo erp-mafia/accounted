@@ -22,6 +22,7 @@ import {
 import { Deadline, DeadlineType, DeadlinePriority } from '@/types'
 import { formatDateISO, DEADLINE_TYPE_LABELS, PRIORITY_LABELS } from '@/lib/calendar/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { Lock } from 'lucide-react'
 
 /**
@@ -219,23 +220,15 @@ export function DeadlineForm({
           {/* Customer */}
           {customers.length > 0 && (
             <div className="space-y-2">
-              <Label>Kund (valfritt)</Label>
-              <Select
-                value={formData.customer_id || 'none'}
-                onValueChange={(v) => { if (v) updateField('customer_id', v === 'none' ? '' : v) }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Välj kund..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Ingen kund</SelectItem>
-                  {customers.map((customer) => (
-                    <SelectItem key={customer.id} value={customer.id}>
-                      {customer.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Label htmlFor="deadline-customer">Kund (valfritt)</Label>
+              <CustomerCombobox
+                id="deadline-customer"
+                value={formData.customer_id || ''}
+                customers={customers}
+                onChange={(v) => updateField('customer_id', v)}
+                placeholder="Välj kund..."
+                noneLabel="Ingen kund"
+              />
             </div>
           )}
 

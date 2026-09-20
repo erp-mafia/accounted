@@ -63,6 +63,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -519,6 +520,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [, setDefaultNotes] = useState<string | null>(null)
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false)
+  // Name typed into the picker when the user chose "Skapa kund" from its
+  // no-match state; '' when opened from the link below the picker.
+  const [createCustomerPrefill, setCreateCustomerPrefill] = useState('')
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   const [hasBankDetails, setHasBankDetails] = useState<boolean | null>(null)
   const [showBankSetup, setShowBankSetup] = useState(false)
@@ -578,7 +582,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // matching keyup (which arrives after compositionend with a real key) can
   // still act on an Android action-key press.
   const entryComposingKeyRef = useRef(false)
-  const customerTriggerRef = useRef<HTMLButtonElement>(null)
+  const customerTriggerRef = useRef<HTMLInputElement>(null)
   const entryListId = useId()
   const settingsPanelId = useId()
   // True only when the user had zero invoices when this page loaded. The
@@ -2304,29 +2308,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               name="customer_id"
               control={control}
               render={({ field }) => (
-                <Select value={field.value} onValueChange={field.onChange}>
-                  <SelectTrigger
-                    ref={customerTriggerRef}
-                    className="h-12 font-display text-base"
-                    aria-required="true"
-                  >
-                    <SelectValue placeholder={t('select_customer_placeholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Radix renders an empty viewport as a bare few-pixel
-                        sliver; give the zero-customer state real content. */}
-                    {customers.length === 0 && (
-                      <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                        {customersLoading ? t('loading_customers') : t('no_customers_yet')}
-                      </div>
-                    )}
-                    {customers.map((customer) => (
-                      <SelectItem key={customer.id} value={customer.id}>
-                        {customer.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <CustomerCombobox
+                  value={field.value}
+                  customers={customers}
+                  keepId={keepCustomerId}
+                  onChange={field.onChange}
+                  inputRef={customerTriggerRef}
+                  className="h-12 font-display text-base"
+                  aria-required
+                  loading={customersLoading}
+                  loadingLabel={t('loading_customers')}
+                  emptyLabel={t('no_customers_yet')}
+                  onCreateCustomer={(prefill) => {
+                    setCreateCustomerPrefill(prefill)
+                    setIsCreateCustomerOpen(true)
+                  }}
+                />
               )}
             />
             {selectedCustomer && (
@@ -2350,7 +2347,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <button
               type="button"
               className={cn(QUIET_LINK_CLASS, 'mt-3 inline-block')}
-              onClick={() => setIsCreateCustomerOpen(true)}
+              onClick={() => {
+                setCreateCustomerPrefill('')
+                setIsCreateCustomerOpen(true)
+              }}
             >
               + {t('create_customer')}
             </button>
@@ -3791,6 +3791,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <CustomerForm
             onSubmit={handleCreateCustomer}
             isLoading={isCreatingCustomer}
+            initialData={createCustomerPrefill ? { name: createCustomerPrefill } : undefined}
           />
         </DialogContent>
       </Dialog>

@@ -23,6 +23,16 @@ describe('computeDropdownPosition', () => {
     expect(pos.maxHeight).toBe(DROPDOWN_MAX_HEIGHT)
   })
 
+  it('stays flush with the anchor when a caller asks for no preferred width', () => {
+    const pos = computeDropdownPosition(
+      { top: 200, bottom: 232, left: 300, width: 160 },
+      desktop,
+      { preferredWidth: 0 },
+    )
+    expect(pos.width).toBe(160)
+    expect(pos.left).toBe(300)
+  })
+
   it('keeps the anchor width when the trigger is wider than the preferred width', () => {
     const pos = computeDropdownPosition(
       { top: 200, bottom: 232, left: 100, width: 700 },

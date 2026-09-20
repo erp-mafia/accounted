@@ -30,6 +30,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Plus, Trash2, Type } from 'lucide-react'
 import { CURRENCIES, type Customer, type Currency, type RecurringInvoiceSchedule } from '@/types'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
@@ -437,27 +438,19 @@ function NewRecurringScheduleForm({
               control={control}
               name="customer_id"
               render={({ field }) => (
-                <Select
+                <CustomerCombobox
+                  id="customer_id"
                   value={field.value}
-                  onValueChange={(v) => {
+                  customers={customers}
+                  keepId={schedule?.customer_id}
+                  onChange={(v) => {
                     field.onChange(v)
                     // Switching to a customer without email while auto-send is
                     // checked would create an unsendable schedule.
                     const c = customers.find((x) => x.id === v)
                     if (!c?.email) setValue('auto_send', false)
                   }}
-                >
-                  <SelectTrigger id="customer_id">
-                    <SelectValue placeholder={t('customer_placeholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {customers.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                />
               )}
             />
             {/* Same confirmation block as the one-off invoice editor: a
