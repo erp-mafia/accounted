@@ -116,7 +116,7 @@ function forgedLegacyState(consentId: string, provider: string) {
 }
 
 describe('white-label OAuth callback handoff', () => {
-  const BRAND_ORIGIN = 'https://solbo.accounted.se'
+  const BRAND_ORIGIN = 'https://brand-d.accounted.se'
   const path = '/api/extensions/ext/arcim-migration/callback'
   const state = { consentId: 'consent-1', provider: 'fortnox', companyId: 'company-1', userId: 'user-1', origin: BRAND_ORIGIN } as const
   const request = (origin: string, params: Record<string, string>) =>
@@ -264,10 +264,10 @@ describe('white-label OAuth callback handoff', () => {
     [APP_URL, false, APP_URL],
     [BRAND_ORIGIN, true, BRAND_ORIGIN],
     ['https://unknown.accounted.se', false, APP_URL],
-    ['http://solbo.accounted.se', true, APP_URL],
-    ['https://solbo.accounted.se:444', true, APP_URL],
+    ['http://brand-d.accounted.se', true, APP_URL],
+    ['https://brand-d.accounted.se:444', true, APP_URL],
   ])('connect from %s stores only an allowed origin', async (origin, knownBrand, expected) => {
-    vi.mocked(resolveBrandByHost).mockResolvedValue(knownBrand ? { domain: 'solbo.accounted.se' } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
+    vi.mocked(resolveBrandByHost).mockResolvedValue(knownBrand ? { domain: 'brand-d.accounted.se' } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
     vi.mocked(listConsents).mockResolvedValue([])
     vi.mocked(createConsent).mockResolvedValue({ id: 'consent-new' } as Awaited<ReturnType<typeof createConsent>>)
     vi.mocked(generateOtc).mockResolvedValue({ code: 'state', consentId: 'consent-new', expiresAt: '' })
@@ -285,12 +285,12 @@ describe('white-label OAuth callback handoff', () => {
   })
 
   it.each([
-    ['solbo.accounted.se', BRAND_ORIGIN],
+    ['brand-d.accounted.se', BRAND_ORIGIN],
     ['unknown.accounted.se', APP_URL],
     ['invalid host', APP_URL],
   ])('reconnect records the validated request Host %s', async (host, expected) => {
     vi.mocked(resolveBrandByHost).mockImplementation(async (value) =>
-      value === 'solbo.accounted.se' ? { domain: value } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
+      value === 'brand-d.accounted.se' ? { domain: value } as Awaited<ReturnType<typeof resolveBrandByHost>> : null)
     vi.mocked(listConsents).mockResolvedValue([{ id: 'consent-1', provider: 'fortnox', status: 1 }] as Awaited<ReturnType<typeof listConsents>>)
     vi.mocked(generateOtc).mockResolvedValue({ code: 'state', consentId: 'consent-1', expiresAt: '' })
     vi.mocked(getAuthUrl).mockResolvedValue({ url: 'https://provider.test/login' })

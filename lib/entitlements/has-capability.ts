@@ -341,7 +341,9 @@ export async function requireCapability(
 /**
  * Where the company sits in the paid lifecycle, derived from the same grant
  * rows that produce `capabilities`:
- *   'paid'                : an active non-trial grant (stripe/comp/manual/team).
+ *   'paid'                : an active non-trial grant (stripe/comp/manual/team)
+ *                           on any key except multi_user: a seat grant alone
+ *                           is not the paid product.
  *   'trial'               : the trial is the sole source of paid access.
  *   'lapsed_subscription' : no active grants, but a company_subscriptions row
  *                           in a non-paying status: a churned payer, so copy
@@ -356,6 +358,22 @@ export type EntitlementState =
   | 'lapsed_subscription'
   | 'paid'
   | 'none'
+
+/**
+ * HOW a paid company is covered, so every surface shares one definition of
+ * "paid" and none of them re-derives it from its own query:
+ *   'subscription' : a live Stripe subscription (status or stripe grant).
+ *   'team'         : an active team-scoped grant (byrå agreement).
+ *   'agreement'    : an active company-scoped manual/comp grant (invoice
+ *                    customers, comped accounts). `coveredUntil` is the
+ *                    earliest dated expiry among those grants, null when all
+ *                    of them are open-ended.
+ * multi_user grants never count here, same as for `entitlementState`.
+ */
+export interface EntitlementCoverage {
+  kind: 'subscription' | 'team' | 'agreement'
+  coveredUntil: string | null
+}
 
 export interface CompanyEntitlements {
   capabilities: CapabilityKey[]
@@ -380,6 +398,8 @@ export interface CompanyEntitlements {
    * multi-user.ts and the resolve_active_company_gated RPC).
    */
   multiUser: MultiUserAccess
+  /** Null unless the company is covered by something other than the trial. */
+  coverage: EntitlementCoverage | null
 }
 
 /** company_subscriptions.status values that count as a live subscription. */
@@ -407,7 +427,7 @@ function readGrants(
     : `company_id.eq.${companyId}`
   let grantsQuery = supabase
     .from('capability_grants')
-    .select('capability_key, expires_at, source')
+    .select('capability_key, expires_at, source, team_id')
     .in('capability_key', keys as unknown as string[])
     .or(scopeFilter)
   if (connectorGrantsOnly()) grantsQuery = grantsQuery.eq('source', 'connector')
@@ -445,6 +465,7 @@ export async function getCompanyEntitlements(
       entitlementState: 'paid',
       trialExpiredAt: null,
       multiUser: { state: 'entitled', graceEndsAt: null },
+      coverage: null,
     }
   }
   // Fail-closed: never interpolate a non-UUID.
@@ -455,6 +476,7 @@ export async function getCompanyEntitlements(
       entitlementState: 'none',
       trialExpiredAt: null,
       multiUser: { state: 'frozen', graceEndsAt: null },
+      coverage: null,
     }
   }
   // Self-hosted: every local capability is held outright; only the connector
@@ -515,12 +537,21 @@ export async function getCompanyEntitlements(
   let latestTrialExpiry: string | null = null
   let hasActiveNonTrialGrant = false
   let hasActiveConnectorGrant = false
+  let hasActiveStripeGrant = false
+  let hasActiveTeamGrant = false
+  let hasActiveAgreementGrant = false
+  let agreementCoveredUntil: string | null = null
   // multi_user rows feed the derived grace/frozen state below; the rows are
   // already in this read (multi_user is a PAID key), so the state costs no
   // extra query. Self-host never reaches this (multi_user is held outright).
   const multiUserRows: MultiUserGrantRow[] = []
   for (const g of grants ?? []) {
-    const row = g as { capability_key: string; expires_at: string | null; source: string | null }
+    const row = g as {
+      capability_key: string
+      expires_at: string | null
+      source: string | null
+      team_id?: string | null
+    }
     // Self-host: a trial-seeded (or any non-connector) row never unlocks a
     // connector capability; see connectorGrantsOnly().
     if (selfHosted && row.source !== 'connector') continue
@@ -537,8 +568,21 @@ export async function getCompanyEntitlements(
     const active = row.expires_at === null || new Date(row.expires_at).getTime() > now
     if (!active) continue
     entitled.add(row.capability_key)
-    if (row.source !== 'trial') hasActiveNonTrialGrant = true
     if (row.source === 'connector') hasActiveConnectorGrant = true
+    // A multi_user grant alone is a seat, not the paid product: it entitles
+    // the capability above but never marks the company as paid or covered.
+    if (row.source === 'trial' || row.capability_key === CAPABILITY.multi_user) continue
+    hasActiveNonTrialGrant = true
+    if (row.source === 'stripe') {
+      hasActiveStripeGrant = true
+    } else if (row.team_id) {
+      hasActiveTeamGrant = true
+    } else {
+      hasActiveAgreementGrant = true
+      if (row.expires_at && (!agreementCoveredUntil || row.expires_at < agreementCoveredUntil)) {
+        agreementCoveredUntil = row.expires_at
+      }
+    }
   }
 
   if (selfHosted) {
@@ -555,6 +599,7 @@ export async function getCompanyEntitlements(
       trialExpiredAt: null,
       // multi_user is a local capability: a self-host is never seat-gated.
       multiUser: { state: 'entitled', graceEndsAt: null },
+      coverage: null,
     }
   }
   // Paying/comped companies are not "on trial" even if the seeded trial rows
@@ -581,8 +626,23 @@ export async function getCompanyEntitlements(
 
   const multiUser = computeMultiUserState(multiUserRows, now)
 
+  // Subscription first: a Stripe customer who also holds a manual grant still
+  // manages their plan in the portal. A live subscription status counts even
+  // before its stripe grants land (deferred first charge: status 'trialing').
+  let coverage: EntitlementCoverage | null = null
+  if (
+    hasActiveStripeGrant ||
+    (subscriptionStatus !== null && PAYING_SUBSCRIPTION_STATUSES.includes(subscriptionStatus))
+  ) {
+    coverage = { kind: 'subscription', coveredUntil: null }
+  } else if (hasActiveTeamGrant) {
+    coverage = { kind: 'team', coveredUntil: null }
+  } else if (hasActiveAgreementGrant) {
+    coverage = { kind: 'agreement', coveredUntil: agreementCoveredUntil }
+  }
+
   if (entitled.size === 0) {
-    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser }
+    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser, coverage }
   }
 
   // Subtract any explicitly-disabled (enablement axis). multi_user is exempt
@@ -599,5 +659,6 @@ export async function getCompanyEntitlements(
     entitlementState,
     trialExpiredAt,
     multiUser,
+    coverage,
   }
 }

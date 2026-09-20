@@ -52,7 +52,7 @@ interface TeamInvitation {
  * The shareable accept link from the latest invite create/re-send response.
  * Raw tokens are never stored server-side (only their hash), so the link
  * exists exactly once: here, until the next navigation. It is kept visible
- * so a failed mail send never dead-ends the inviter (the Arbore case: the
+ * so a failed mail send never dead-ends the inviter (a reported case: the
  * invitation quietly waits for a mail that never arrives).
  */
 interface ShareableInvite {
@@ -280,7 +280,7 @@ export function TeamPanel() {
       const sent = payload?.email_sent
       // Persist the shareable link next to the pending list: a failed send
       // leaves the invitation valid, and the toast alone is too easy to miss
-      // (the Arbore case), so the recovery path stays visible on the page.
+      // (a reported case), so the recovery path stays visible on the page.
       if (payload?.inviteUrl) {
         setShareInvite({ email, url: payload.inviteUrl, sent: sent !== false })
       }
