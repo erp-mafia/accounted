@@ -6,7 +6,7 @@
 
 const ACCOUNT_NAMES: Record<string, string> = {
   // Assets (1xxx)
-  '1250': 'Inventarier',
+  '1220': 'Inventarier',
   '1510': 'Kundfordringar',
   '1630': 'Skattekonto',
   '1680': 'Fordringar hos ägare',

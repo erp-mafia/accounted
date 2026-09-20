@@ -1610,7 +1610,11 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'equipment',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '1250',
+    // BAS 2026 head account for inventarier, verktyg och installationer, the
+    // same asset account the fixed-asset module defaults an equipment asset to
+    // (DEFAULT_ACCOUNTS_BY_CATEGORY.equipment). 1250 became a "(Fritt konto)"
+    // in BAS 2026; template-accounts-exist.test.ts pins both facts.
+    debit_account: '1220',
     credit_account: '1930',
     vat_treatment: 'standard_25',
     vat_rate: 0.25,
