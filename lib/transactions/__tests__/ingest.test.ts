@@ -224,6 +224,54 @@ describe('ingestTransactions', () => {
     expect((txInserts[0] as { cash_account_id?: string | null }).cash_account_id).toBe('ca-1931')
   })
 
+  // desk crm#59: the v1 ingest endpoint binds by ledger without running
+  // ensureManualCashAccount, so the re-enable lives at this chokepoint too.
+  it('turns a disabled account no bank connection holds back on before binding rows to it', async () => {
+    const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: null }],
+      error: null,
+    }) // cash_accounts lookup: the seeded 1930, turned off
+    enqueue({ data: null, error: null }) // re-enable
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1930',
+    })
+
+    expect(result.imported).toBe(1)
+    expect(updates['cash_accounts']).toEqual([{ enabled: true }])
+    expect((inserts['transactions']?.[0] as { cash_account_id?: string | null }).cash_account_id).toBe('ca-1930')
+  })
+
+  it('does not touch a disabled account a bank connection holds', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: 'conn-1' }],
+      error: null,
+    })
+    enqueue({ data: makeTransaction({ id: 'tx-1', external_id: raw.external_id }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1930' })
+
+    expect(updates['cash_accounts'] ?? []).toHaveLength(0)
+  })
+
   it('inserts cash_account_id null when no settlementAccount is given', async () => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -100 })

@@ -18,7 +18,7 @@ import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shi
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
-import { physicalAccountKey, sameCashAccount } from '@/lib/cash-accounts/service'
+import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 /**
@@ -474,18 +474,31 @@ export async function ingestTransactions(
   if (options?.settlementAccount) {
     const { data: cashAccountRows } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, iban, currency')
+      .select('id, ledger_account, iban, currency, enabled, bank_connection_id')
       .eq('company_id', companyId)
-    for (const row of (cashAccountRows ?? []) as Array<{
+    type BoundRow = {
       id: string
       ledger_account: string
       iban: string | null
       currency: string
-    }>) {
-      if (row.ledger_account === options.settlementAccount) cashAccountId = row.id
+      enabled?: boolean | null
+      bank_connection_id?: string | null
+    }
+    let boundRow: BoundRow | null = null
+    for (const row of (cashAccountRows ?? []) as BoundRow[]) {
+      if (row.ledger_account === options.settlementAccount) {
+        cashAccountId = row.id
+        boundRow = row
+      }
       const key = physicalAccountKey(row)
       if (key) physicalKeyById.set(row.id, key)
     }
+    // Every ingest caller binds here, including the ones that never run
+    // ensureManualCashAccount (the v1 ingest endpoint). An account the company
+    // turned off as unused comes back on before rows land on it, so a hidden
+    // account never collects open transactions (desk crm#59). No-op for an
+    // enabled account and for one a bank connection holds.
+    if (boundRow) await reenableIfUnused(supabase, companyId, boundRow)
   }
 
   // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
