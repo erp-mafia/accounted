@@ -1,6 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
+import { createLogger } from '@/lib/logger'
 import { connectedAiClients, type AiClient } from '@/lib/onboarding/ai-clients'
+
+const log = createLogger('onboarding-ai-clients')
 
 /**
  * Which of Claude / ChatGPT / Grok this user has connected over MCP OAuth.
@@ -25,12 +28,14 @@ export async function readConnectedAiClients(supabase: SupabaseClient, userId: s
 
 /**
  * The same read where the readout only decorates a button: a failed read
- * answers an empty list rather than throwing.
+ * answers an empty list rather than throwing, and is logged so a degraded
+ * api_keys read stays visible to monitoring.
  */
 export async function loadConnectedAiClients(supabase: SupabaseClient, userId: string): Promise<AiClient[]> {
   try {
     return await readConnectedAiClients(supabase, userId)
-  } catch {
+  } catch (error) {
+    log.warn('connected AI clients read failed, answering none', { userId, error })
     return []
   }
 }
