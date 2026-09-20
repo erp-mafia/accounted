@@ -34,3 +34,26 @@
  * (the cron route) and client components (the settings form).
  */
 export const REMINDERS_SENDING_ENABLED = false as boolean
+
+/**
+ * Whether automatic reminders actually go out for a company: the product-wide
+ * switch above AND the company's own "Skicka automatiska påminnelser" toggle.
+ *
+ * A missing company value counts as on, mirroring processOverdueReminders
+ * (it skips only on `=== false`) and the setting's default.
+ *
+ * Every surface that tells a user "reminders are sent after N days" must read
+ * this, never the company setting alone: that setting defaults to on, so read
+ * by itself it promises a schedule the cron route never runs (crm#95). The
+ * settings form keeps reading REMINDERS_SENDING_ENABLED directly because its
+ * notice is about the product-wide state, whatever the toggle says.
+ *
+ * `sendingEnabled` is a parameter only so tests can pin the truth table for
+ * both switch states; callers never pass it.
+ */
+export function remindersActiveFor(
+  companySetting: boolean | null | undefined,
+  sendingEnabled: boolean = REMINDERS_SENDING_ENABLED,
+): boolean {
+  return sendingEnabled && companySetting !== false
+}
