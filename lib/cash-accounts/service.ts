@@ -1698,9 +1698,14 @@ export async function setEnabled(
  * Konton and the booking flows while its rows still need a decision.
  *
  * A NULL journal_entry_id alone overcounts: a row split over several
- * verifikat (transaction_voucher_links, #1553) or booked through a multi
- * allocation carries the same NULL but is not open work, so junction-anchored
- * rows are subtracted the same way lib/transactions/is-booked.ts does.
+ * verifikat (transaction_voucher_links, #1553) carries the same NULL but is
+ * not open work, so junction-anchored rows are subtracted.
+ *
+ * lib/transactions/is-booked.ts names a third anchor, invoice_payments and
+ * supplier_invoice_payments. It is not subtracted here on purpose:
+ * match_batch_allocate sets journal_entry_id itself (20260824120000), so only
+ * rows from before that can be payment-anchored alone, and counting one as
+ * open errs toward refusing the disable, never toward hiding open work.
  *
  * No row cap: an arbitrary `.limit()` here could return a page that happens
  * to be all junction-anchored while a genuinely open row sits past it,
