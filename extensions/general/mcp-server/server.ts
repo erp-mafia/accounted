@@ -3067,7 +3067,7 @@ export async function computeVatCloseCheck(
       severity: 'medium',
       count: missingUnderlag,
       message: `${missingUnderlag} verifikat över ${MISSING_UNDERLAG_MIN_GROSS_SEK} kr saknar underlag`,
-      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
+      hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
     })
   }
   // 4b) Is the DECLARATION itself complete? Everything above is about the
@@ -5932,6 +5932,10 @@ export const tools: McpTool[] = [
       },
     }),
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748, paying for the draft-invoice writes): a strict
+    // subset of gnubok_list_verifikat_without_documents; reachable through
+    // gnubok_call_tool.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
@@ -6006,6 +6010,11 @@ export const tools: McpTool[] = [
       },
     }),
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748, paying for the draft-invoice writes): the
+    // missing-underlag family is reached through gnubok_call_tool, like
+    // gnubok_receipt_hunt_worklist; the two listed tools that point here
+    // (link_document_to_voucher, the vat_close_check hint) name the bridge.
+    catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
@@ -7224,7 +7233,8 @@ export const tools: McpTool[] = [
     annotations: ANNOTATIONS_READ_ONLY,
     // Round-trip read surface for gnubok_update_invoice (issue #1642). Kept
     // out of the default tools/list: payload-size.bench.test.ts sits at its
-    // ceiling, and the update tool that needs it is search-only as well.
+    // ceiling, and as a READ it is reachable through gnubok_call_tool, which
+    // the update tool names (issue #2748).
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const invoiceId = args.invoice_id as string
@@ -11221,6 +11231,10 @@ export const tools: McpTool[] = [
     },
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748, paying for the draft-invoice writes): the
+    // open-item question stays one hop away in gnubok_list_invoices; the
+    // aging report is reached through gnubok_call_tool.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const asOfDate = args.as_of_date as string | undefined
       return await generateARLedger(supabase, companyId, asOfDate)
@@ -11241,6 +11255,9 @@ export const tools: McpTool[] = [
     },
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748): same footing as gnubok_get_ar_ledger; open
+    // items stay listed in gnubok_list_supplier_invoices.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase) {
       const asOfDate = args.as_of_date as string | undefined
       return await generateSupplierLedger(supabase, companyId, asOfDate)
@@ -14891,7 +14908,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_link_document_to_voucher',
     keywords: ['koppla underlag', 'verifikat', 'kvitto'],
     title: 'Link Document to Voucher',
-    description: 'Stage linking a document to an already-POSTED verifikation (no bank-tx row). For an unbooked handling prefer gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Call gnubok_list_verifikat_without_documents for targets.',
+    description: 'Stage linking a document to an already-POSTED verifikation (no bank-tx row). For an unbooked handling prefer gnubok_create_voucher with inbox_item_id (BFL 5 kap 6§). Targets: gnubok_list_verifikat_without_documents via gnubok_call_tool.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15569,6 +15586,9 @@ export const tools: McpTool[] = [
     },
     outputSchema: { type: 'object' },
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748, paying for the draft-invoice writes): a yearly
+    // rollup; the monthly flow reads gnubok_get_salary_run, which stays listed.
+    catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase) {
       const { generateSalaryJournal } = await import('@/lib/reports/salary-journal')
       return generateSalaryJournal(supabase, companyId, args.year as number)
@@ -17778,6 +17798,10 @@ export const tools: McpTool[] = [
       },
     },
     annotations: ANNOTATIONS_READ_ONLY,
+    // Search-only (issue #2748, paying for the draft-invoice writes): no skill
+    // or loadout names it, and a whole SIE file in a chat turn is the rare
+    // case; reachable through gnubok_call_tool, the v1 REST route serves files.
+    catalogVisibility: 'search',
     async execute(args, companyId, _userId, supabase) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw new Error('fiscal_period_id is required')
@@ -19534,20 +19558,20 @@ export const tools: McpTool[] = [
     name: 'gnubok_update_invoice',
     keywords: ['ändra faktura', 'kundfaktura', 'faktura'],
     title: 'Update Draft Invoice',
-    description: 'Stage an edit to a DRAFT invoice: header fields (incl. default_dimensions) and/or items (FULL REPLACE: read current lines with gnubok_get_invoice first; lines accept article_id). Drafts only, no verifikat, not self-billed, not a credit note; otherwise use gnubok_credit_invoice.',
+    description: 'Stage an edit to a DRAFT invoice: header fields and/or items (FULL REPLACE: read current lines with gnubok_get_invoice through gnubok_call_tool first; lines accept article_id). Drafts only, no verifikat, not self-billed, not a credit note; otherwise use gnubok_credit_invoice.',
     outputSchema: STAGED_OPERATION_SCHEMA,
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        invoice_id: { type: 'string', description: 'UUID of the draft invoice, from gnubok_list_invoices.' },
+        invoice_id: { type: 'string', description: 'Draft invoice UUID (gnubok_list_invoices).' },
         notes: { type: 'string' },
         invoice_date: { type: 'string', description: 'YYYY-MM-DD' },
         due_date: { type: 'string', description: 'YYYY-MM-DD' },
-        delivery_date: { type: ['string', 'null'], description: 'YYYY-MM-DD; null clears the delivery date.' },
+        delivery_date: { type: ['string', 'null'], description: 'YYYY-MM-DD; null clears.' },
         your_reference: { type: 'string' },
         our_reference: { type: 'string' },
-        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking/PO label), separate from your_reference.' },
+        invoice_marking: { type: 'string', description: 'Fakturamärkning (buyer marking), separate from your_reference.' },
         items: {
           type: 'array',
           items: {
@@ -19557,28 +19581,28 @@ export const tools: McpTool[] = [
               quantity: { type: 'number' },
               unit: { type: 'string', description: 'st, tim, dag, mån' },
               unit_price: { type: 'number', description: 'Price per unit excl. VAT' },
-              discount_percent: { type: 'number', description: 'Line discount 0-100 (rabatt); pass back to keep it, totals computed net of it.' },
+              discount_percent: { type: 'number', description: 'Line discount 0-100; pass back to keep it.' },
               vat_rate: { type: 'number', description: 'VAT rate 0-100 (optional override)' },
               article_id: {
                 type: 'string',
-                description: 'Optional article UUID from gnubok_list_articles. Prefills description, unit, unit_price, revenue account and, only when compatible with the customer VAT rules, vat_rate. Values set on the line win. Pass it back on every line that should keep its article linkage.',
+                description: 'Article UUID (gnubok_list_articles). Prefills description, unit, unit_price, revenue account and, when compatible with the customer VAT rules, vat_rate; line values win. Pass back to keep the linkage.',
               },
               line_type: {
                 type: 'string',
                 enum: ['product', 'text'],
-                description: 'text = free-text/spacer row: no amounts, never books; the quantity/description/unit/price rules are skipped.',
+                description: 'text = free-text row: no amounts, never books, quantity/price rules skipped.',
               },
               revenue_account: {
                 type: ['string', 'null'],
-                description: 'BAS class 1-3 posting-account override; null books by VAT treatment. Pass back to keep a manual override.',
+                description: 'BAS class 1-3 posting override; null books by VAT treatment. Pass back to keep.',
               },
-              deduction_type: { type: ['string', 'null'], description: 'rot or rut; pass back or the ROT/RUT-avdrag is removed by the replace.' },
+              deduction_type: { type: ['string', 'null'], description: 'rot or rut; pass back to keep the avdrag.' },
               labor_hours: { type: ['number', 'null'] },
               work_type: { type: ['string', 'null'], description: 'Skatteverket arbetstypskod for the deduction line.' },
               housing_designation: { type: ['string', 'null'], description: 'Fastighetsbeteckning; required on ROT lines.' },
               apartment_number: { type: ['string', 'null'] },
               brf_org_number: { type: ['string', 'null'] },
-              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue (periodisering). Pass back or the deferral is removed.' },
+              accrual_period_start: { type: ['string', 'null'], description: 'YYYY-MM-DD; with accrual_period_end defers the revenue. Pass back to keep.' },
               accrual_period_end: { type: ['string', 'null'] },
               accrual_balance_account: { type: ['string', 'null'], description: '29xx interim account; null = default.' },
               dimensions: {
@@ -19589,12 +19613,12 @@ export const tools: McpTool[] = [
             },
             required: ['quantity'],
           },
-          description: 'FULL REPLACE: every existing line is deleted and this array becomes the new line set. Read the current lines with gnubok_get_invoice first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back). Omit to keep the current lines.',
+          description: 'FULL REPLACE: this array becomes the whole line set; omit to keep the current lines. gnubok_get_invoice is not in tools/list: read the lines with gnubok_call_tool({tool: "gnubok_get_invoice"}) first and pass unchanged lines back verbatim (article, ROT/RUT, accrual and account fields survive only if passed back).',
         },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
-          description: 'Dims bag keyed by SIE dim no, value = code OR name. Replaces the whole stored bag; {} clears all tags. Omit to keep the current bag.',
+          description: 'Dims bag {sie_dim_no: code or name}; replaces the stored bag, {} clears it. Omit to keep.',
         },
         dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
         idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
@@ -19602,7 +19626,10 @@ export const tools: McpTool[] = [
       required: ['invoice_id'],
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
-    catalogVisibility: 'search',
+    // Default catalog on purpose (issue #2748): a WRITE marked search-only is
+    // absent from tools/list and refused by gnubok_call_tool, so the claude.ai
+    // connector had no way to edit a draft. Its pre-read gnubok_get_invoice
+    // stays search-only and is named through the bridge above.
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
@@ -19905,7 +19932,7 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        invoice_id: { type: 'string', description: 'UUID of the draft invoice, from gnubok_list_invoices.' },
+        invoice_id: { type: 'string', description: 'Draft invoice UUID (gnubok_list_invoices).' },
         dry_run: { type: 'boolean', description: 'Validate and preview without staging or changing data.' },
         idempotency_key: { type: 'string', description: 'Random per-operation UUID. Reusing it with the same payload returns the original staged response.' },
       },
@@ -19913,7 +19940,8 @@ export const tools: McpTool[] = [
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
-    catalogVisibility: 'search',
+    // Default catalog on purpose (issue #2748): see gnubok_update_invoice. A
+    // search-only WRITE is unreachable from the claude.ai connector.
     async execute(args, companyId, userId, supabase, actor) {
       const invoiceId = args.invoice_id as string
       if (!invoiceId) throw new Error('invoice_id is required. Use gnubok_list_invoices to find IDs.')
@@ -23619,7 +23647,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
-            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report / _ar_ledger / _supplier_ledger: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
+            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',

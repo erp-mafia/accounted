@@ -495,6 +495,24 @@ describe('tools/list payload size guard', () => {
     //     with; the item and write schemas were trimmed to bare formats first
     //     (measured 61 849 after the trim; 61 975 once merged with the
     //     cutover-balance step above).
+    //   * 2026-09-20, draft invoice edit/delete from the connector (#2748):
+    //     gnubok_update_invoice and gnubok_delete_draft_invoice were
+    //     search-only WRITES, so tools/list never showed them and
+    //     gnubok_call_tool refused them: the claude.ai connector could not
+    //     touch a draft at all. Both joined the default catalog (+1 763 before
+    //     trims). Paid for by the read-demotion rule above, six READ tools
+    //     to search-only, each reachable through the bridge: the two
+    //     missing-underlag lists (list_transactions_without_documents is a
+    //     strict subset of list_verifikat_without_documents, and the family
+    //     is already bridge-reached via gnubok_receipt_hunt_worklist), the
+    //     AR and AP aging ledgers (open items stay one hop away in
+    //     list_invoices / list_supplier_invoices), get_salary_journal (a
+    //     yearly rollup beside the listed get_salary_run) and export_sie
+    //     (named by no skill or loadout). The three listed places that named
+    //     a demoted read now say "via gnubok_call_tool". gnubok_get_invoice
+    //     stays search-only as a bridged READ, and update_invoice's text
+    //     names the bridge. Measured 62 082 on the accounted projection
+    //     (61 975 before). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(62_200)
   })
 

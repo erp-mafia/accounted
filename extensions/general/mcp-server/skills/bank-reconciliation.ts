@@ -99,8 +99,8 @@ For each fiscal period, Accounted stores the reconciliation state automatically.
 For a printed audit trail (BFL 8 kap), generate the supplier ledger and AR
 ledger after reconciliation:
 
-- \`gnubok_get_ar_ledger\`: open customer balances should match unpaid invoices
-- \`gnubok_get_supplier_ledger\`: open supplier balances should match unpaid leverantörsfakturor
+- \`gnubok_get_ar_ledger\` (via \`gnubok_call_tool\`): open customer balances should match unpaid invoices
+- \`gnubok_get_supplier_ledger\` (via \`gnubok_call_tool\`): open supplier balances should match unpaid leverantörsfakturor
 
 ## Critical rules
 
@@ -128,7 +128,7 @@ ledger after reconciliation:
 - \`gnubok_attach_document_to_transaction\` (file a receipt against a tx)
 - \`gnubok_reverse_journal_entry\` (storno)
 - \`gnubok_run_currency_revaluation\` (FX accounts only)
-- \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification)
+- \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification; the two ledgers via \`gnubok_call_tool\`)
 `
 
 export const bankReconciliationSkill: Skill = {

@@ -331,7 +331,12 @@ describe('gnubok_search_tools: callable_via per hit', () => {
     expect(bridged.callable_via).toBe('call_tool')
     expect(bridged).not.toHaveProperty('note')
 
-    const deadEnd = find(result, 'gnubok_update_invoice')
+    // gnubok_update_invoice was the dead-end example until #2748 promoted it;
+    // the kundorder invoicing write is still search-only (2026-09-02 entry).
+    const deadEnd = find(
+      await call({ query: 'create_invoice_from_sales_order', limit: 5 }),
+      'gnubok_create_invoice_from_sales_order',
+    )
     expect(isDefaultCatalogTool(tools.find((t) => t.name === deadEnd.name)!)).toBe(false)
     expect(deadEnd.callable_via).toBe('none')
     expect(deadEnd.note).toContain('not in tools/list')
@@ -339,8 +344,8 @@ describe('gnubok_search_tools: callable_via per hit', () => {
   })
 
   it('full: carries the same callable_via + note next to the schema', async () => {
-    const result = await call({ query: 'update_invoice', detail: 'full', limit: 5 })
-    const deadEnd = find(result, 'gnubok_update_invoice')
+    const result = await call({ query: 'create_invoice_from_sales_order', detail: 'full', limit: 5 })
+    const deadEnd = find(result, 'gnubok_create_invoice_from_sales_order')
     expect(deadEnd).toHaveProperty('inputSchema')
     expect(deadEnd.callable_via).toBe('none')
     expect(deadEnd.note).toContain('gnubok_call_tool')

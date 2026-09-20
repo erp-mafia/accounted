@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
-import { tools } from '../server'
+import { tools, isDefaultCatalogTool } from '../server'
 
 const INVOICE_ID = '22222222-2222-4222-8222-222222222222'
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
@@ -89,7 +89,12 @@ describe('gnubok_update_invoice: registration', () => {
     expect(tool().annotations.readOnlyHint).toBe(false)
     expect(tool().annotations.destructiveHint).toBe(false)
     expect(tool().annotations.idempotentHint).toBe(true)
-    expect(tool().catalogVisibility).toBe('search')
+    // Default catalog (issue #2748): a search-only WRITE is unreachable from
+    // the claude.ai connector. The pre-read stays search-only, so the tool
+    // must tell the agent to reach it through the bridge.
+    expect(isDefaultCatalogTool(tool())).toBe(true)
+    expect(tool().description).toContain('gnubok_call_tool')
+    expect(tool().description.length).toBeLessThanOrEqual(280)
     expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:write')
     expect(OPERATION_RISK_TIERS.update_invoice).toBe('medium')
   })

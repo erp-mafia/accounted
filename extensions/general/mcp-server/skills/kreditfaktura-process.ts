@@ -83,7 +83,7 @@ reference the document being credited: Accounted does this automatically.
 
 ### Step 5: Verify
 
-- \`gnubok_get_ar_ledger\`: customer balance should reflect the credit.
+- \`gnubok_get_ar_ledger\` (via \`gnubok_call_tool\`): customer balance should reflect the credit.
 - \`gnubok_get_vat_report(period_type='monthly', year, period)\`: the credit reduces ruta 05 + ruta 10/11/12 (output VAT) in the current period.
 - \`gnubok_get_general_ledger(account_number='1510')\` (or 3xxx revenue accounts): confirm the storno hit.
 
@@ -113,7 +113,7 @@ misread.
 - \`gnubok_credit_invoice\`: the main tool, stages the kreditfaktura
 - \`gnubok_send_invoice\`: deliver the credit note to the customer
 - \`gnubok_categorize_transaction\` / \`gnubok_match_transaction_to_invoice\`: book the refund payment (if any)
-- \`gnubok_get_ar_ledger\` / \`gnubok_get_vat_report\`: verification
+- \`gnubok_get_ar_ledger\` (via \`gnubok_call_tool\`) / \`gnubok_get_vat_report\`: verification
 `
 
 export const kreditfakturaProcessSkill: Skill = {
