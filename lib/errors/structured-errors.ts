@@ -1361,6 +1361,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kontot har obokförda transaktioner och kan inte stängas av förrän de är bokförda eller ignorerade.',
     message_en: 'The account has unbooked transactions and cannot be disabled until they are booked or ignored.',
   },
+  CASH_ACCOUNT_ENABLED_BANK_MANAGED: {
+    httpStatus: 409,
+    message_sv: 'Kontot hör till en bankkoppling. Slå på eller av det under bankkopplingen i stället.',
+    message_en: 'This account belongs to a bank connection. Turn it on or off from the bank connection instead.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces

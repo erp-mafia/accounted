@@ -1542,7 +1542,7 @@ export async function ensureManualCashAccount(
 ): Promise<string> {
   const existing = await supabase
     .from('cash_accounts')
-    .select('id, currency')
+    .select('id, currency, enabled, bank_connection_id')
     .eq('company_id', companyId)
     .eq('ledger_account', ledgerAccount)
     .maybeSingle()
@@ -1563,7 +1563,36 @@ export async function ensureManualCashAccount(
     return row.id
   }
   if (existing.data) {
-    return idIfSameCurrency(existing.data as { id: string; currency: string | null })
+    const row = existing.data as {
+      id: string
+      currency: string | null
+      enabled: boolean
+      bank_connection_id: string | null
+    }
+    const id = idIfSameCurrency(row)
+    // The company turned this account off as unused (setEnabled) and is now
+    // putting transactions on its ledger again: it is in use, so it comes back
+    // on. Binding the rows to a hidden account instead would recreate exactly
+    // what the disable guard refuses (open transactions on a disabled account),
+    // refusing would stall unattended callers (Stripe sync), and a second row
+    // is impossible under UNIQUE (company_id, ledger_account). A row a bank
+    // connection holds is left alone: its flag is the connection's, not ours.
+    if (row.enabled === false && row.bank_connection_id === null) {
+      const reenable = await supabase
+        .from('cash_accounts')
+        .update({ enabled: true })
+        .eq('company_id', companyId)
+        .eq('id', id)
+        .is('bank_connection_id', null)
+      if (reenable.error) {
+        throw new Error(`ensureManualCashAccount re-enable failed: ${reenable.error.message}`)
+      }
+      log.info('ensureManualCashAccount re-enabled a disabled manual account', {
+        companyId,
+        ledgerAccount,
+      })
+    }
+    return id
   }
 
   const insert = await supabase
@@ -1605,10 +1634,22 @@ export async function ensureManualCashAccount(
 }
 
 /**
- * Toggle a cash account's enabled flag: PATCH /api/cash-accounts/[id] for a
- * manual or SIE-sourced account the company has stopped using (the route
- * guards is_primary and open reconciliation work before calling this), and
- * the AccountPicker for a PSD2 account the user opts in or out of syncing.
+ * Toggle the enabled flag of a cash account no bank connection holds: the
+ * seeded manual row, a SIE-imported one, or one a disconnect released.
+ *
+ * The rules live in the UPDATE's own predicate, not in a read before it, so
+ * they hold for every caller and cannot go stale between check and write:
+ *   - never a row a bank connection holds (bank_connection_id set). Its flag
+ *     mirrors bank_connections.accounts_data[].enabled, which is also what the
+ *     sync reads; upsertFromPsd2 rewrites it from there. Flipping only this
+ *     copy would hide an account that keeps syncing, or show one the picker
+ *     turned off because another company claims it.
+ *   - never disable the primary: getPrimary() does not filter on enabled, so
+ *     the __PRIMARY_SEK__ counter account would keep routing to a hidden row.
+ *
+ * Returns null when no row qualified; the caller re-reads to say why. Open
+ * transactions are the caller's check (hasOpenTransactions): they live in
+ * another table, and ensureManualCashAccount re-enables on the ingest side.
  */
 export async function setEnabled(
   supabase: SupabaseClient,
@@ -1616,13 +1657,14 @@ export async function setEnabled(
   cashAccountId: string,
   enabled: boolean,
 ): Promise<CashAccount | null> {
-  const { data, error } = await supabase
+  let q = supabase
     .from('cash_accounts')
     .update({ enabled })
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
-    .select('*')
-    .maybeSingle()
+    .is('bank_connection_id', null)
+  if (!enabled) q = q.eq('is_primary', false)
+  const { data, error } = await q.select('*').maybeSingle()
   if (error) throw new Error(`cash_accounts setEnabled failed: ${error.message}`)
   return (data as CashAccount | null) ?? null
 }

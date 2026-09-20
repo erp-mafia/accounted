@@ -45,9 +45,11 @@ const PAYEE_KEYS = [
  *   - payee fields + invoice_payee + name: what customer invoices print
  *     (owner/admin only, same gate as the payment instructions on
  *     /api/settings; members never control where customers pay).
- *   - enabled: opt a manual/SIE-sourced account out of the Konton overview
- *     and the booking flows once the company stops using it (never the
- *     account currently primary, never one with unbooked transactions).
+ *   - enabled: opt an account no bank connection holds out of the Konton
+ *     overview and the booking flows once the company stops using it (never
+ *     a connection-held account, 409; never the account currently primary
+ *     or one with unbooked transactions, 400). setEnabled() enforces the
+ *     first two in its UPDATE; importing onto the ledger turns it back on.
  * Ledger account and primary flag have their own guarded flows.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -97,23 +99,40 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
     }
 
-    if (body.enabled === false) {
+    // Why setEnabled() would refuse this row, as a response; null when it would
+    // not. The rules themselves live in setEnabled()'s UPDATE predicate: this
+    // read only turns a refusal into the right message, so it runs up front
+    // for the common case and again if the guarded UPDATE matched nothing (the
+    // row changed in between, e.g. a bank connection claimed it).
+    const explainEnabledRefusal = async (): Promise<NextResponse | null> => {
       const { data: existing, error: existingError } = await supabase
         .from('cash_accounts')
-        .select('id, is_primary')
+        .select('id, is_primary, bank_connection_id')
         .eq('company_id', companyId)
         .eq('id', id)
         .maybeSingle()
       if (existingError) return errorResponse(existingError, log, { requestId })
       if (!existing) return notFound()
-      if ((existing as { is_primary: boolean }).is_primary) {
+      const row = existing as { is_primary: boolean; bank_connection_id: string | null }
+      if (row.bank_connection_id !== null) {
+        return errorResponseFromCode('CASH_ACCOUNT_ENABLED_BANK_MANAGED', log, {
+          requestId,
+          details: { cash_account_id: id },
+        })
+      }
+      if (body.enabled === false && row.is_primary) {
         return errorResponseFromCode('CASH_ACCOUNT_DISABLE_PRIMARY', log, {
           requestId,
           details: { cash_account_id: id },
         })
       }
-      const openWork = await hasOpenTransactions(supabase, companyId, id)
-      if (openWork) {
+      return null
+    }
+
+    if (body.enabled !== undefined) {
+      const refusal = await explainEnabledRefusal()
+      if (refusal) return refusal
+      if (body.enabled === false && (await hasOpenTransactions(supabase, companyId, id))) {
         return errorResponseFromCode('CASH_ACCOUNT_DISABLE_UNRESOLVED', log, {
           requestId,
           details: { cash_account_id: id },
@@ -132,7 +151,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
       if (body.enabled !== undefined) {
         updated = await setEnabled(supabase, companyId, id, body.enabled)
-        if (!updated) return notFound()
+        if (!updated) return (await explainEnabledRefusal()) ?? notFound()
       }
     } catch (err) {
       log.error('cash_accounts update failed', err as Error)

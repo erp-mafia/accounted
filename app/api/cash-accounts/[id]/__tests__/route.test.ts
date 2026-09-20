@@ -194,7 +194,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     })
 
     it('blocks disabling the primary cash account', async () => {
-      enqueue({ data: { id: CA_1, is_primary: true } })
+      enqueue({ data: { id: CA_1, is_primary: true, bank_connection_id: null } })
       const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
       const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
       expect(status).toBe(400)
@@ -203,7 +203,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     })
 
     it('blocks disabling an account with an open (unbooked, non-ignored) transaction', async () => {
-      enqueue({ data: { id: CA_1, is_primary: false } }) // existing-row guard lookup
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } }) // existing-row guard lookup
       enqueue({ data: [{ id: 'tx-1' }] }) // unbooked candidates
       enqueue({ data: [] }) // transaction_voucher_links: tx-1 is not junction-anchored
 
@@ -218,7 +218,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     // through transaction_voucher_links (PR crm-48), so it must not count as
     // open work and block the disable.
     it('does not treat a junction-anchored (split) transaction as open work', async () => {
-      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
       enqueue({ data: [{ id: 'tx-1' }] })
       enqueue({ data: [{ transaction_id: 'tx-1' }] })
       enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } }) // setEnabled update
@@ -235,7 +235,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       const candidates = Array.from({ length: 60 }, (_, i) => ({ id: `tx-${i}` }))
       const linked = candidates.slice(0, 59).map((c) => ({ transaction_id: c.id })) // tx-59 stays open
 
-      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
       enqueue({ data: candidates })
       enqueue({ data: linked })
 
@@ -246,7 +246,7 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
     })
 
     it('disables a manual, non-primary account with no open transactions', async () => {
-      enqueue({ data: { id: CA_1, is_primary: false } })
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
       enqueue({ data: [] }) // no unbooked candidates
       enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } })
 
@@ -257,12 +257,52 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
       expect(findCalls('cash_accounts', 'update')).toContainEqual([{ enabled: false }])
     })
 
-    it('re-enabling an account skips the primary/open-work guard entirely', async () => {
-      enqueue({ data: { id: CA_1, enabled: true, source: 'manual' } }) // setEnabled update only
+    it('re-enabling an account skips the primary and open-work guards', async () => {
+      enqueue({ data: { id: CA_1, is_primary: true, bank_connection_id: null } }) // refusal read
+      enqueue({ data: { id: CA_1, enabled: true, source: 'manual' } }) // setEnabled update
       const response = await PATCH(patchReq({ enabled: true }), createMockRouteParams({ id: CA_1 }))
       const { status, body } = await parseJsonResponse<{ data: { enabled: boolean } }>(response)
       expect(status).toBe(200)
       expect(body.data.enabled).toBe(true)
+      expect(findCalls('transactions', 'select')).toHaveLength(0)
+    })
+
+    // Superagent P2: the settings UI hiding the switch is not a boundary. A
+    // connection-held account's flag mirrors bank_connections.accounts_data,
+    // which the sync reads; flipping only this copy would desync the two.
+    it.each([false, true])(
+      'answers 409 for an account a bank connection holds (enabled: %s), without writing',
+      async (enabled) => {
+        enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: 'conn-1' } })
+        const response = await PATCH(patchReq({ enabled }), createMockRouteParams({ id: CA_1 }))
+        const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+        expect(status).toBe(409)
+        expect(body.error.code).toBe('CASH_ACCOUNT_ENABLED_BANK_MANAGED')
+        expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+      },
+    )
+
+    // The rules are setEnabled()'s UPDATE predicate, not only the read above
+    // it: a row that changes between the read and the write (a bank connection
+    // claims it, or it is promoted to primary) must not be written.
+    it('carries the connection and primary rules in the UPDATE itself', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } })
+      enqueue({ data: [] })
+      enqueue({ data: { id: CA_1, enabled: false, source: 'manual' } })
+      await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      expect(findCalls('cash_accounts', 'is')).toContainEqual(['bank_connection_id', null])
+      expect(findCalls('cash_accounts', 'eq')).toContainEqual(['is_primary', false])
+    })
+
+    it('answers 409, not 404, when a bank connection claims the row between the read and the write', async () => {
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: null } }) // refusal read: fine
+      enqueue({ data: [] }) // no unbooked candidates
+      enqueue({ data: null }) // guarded UPDATE matched nothing
+      enqueue({ data: { id: CA_1, is_primary: false, bank_connection_id: 'conn-1' } }) // re-read: claimed
+      const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_ENABLED_BANK_MANAGED')
     })
   })
 })

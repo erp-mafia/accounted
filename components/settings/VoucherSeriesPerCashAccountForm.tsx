@@ -1,13 +1,13 @@
 'use client'
 
 import { useMemo, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CashAccount, CompanySettings } from '@/types'
 
@@ -43,13 +43,15 @@ function accountLabel(account: CashAccount): string {
  */
 export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   const t = useTranslations('settings_voucher_series')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { cashAccounts, isLoading, refresh } = useCashAccounts({ enabledOnly: true })
-  // Same cache, unfiltered: only source to disabled manual/SIE accounts,
-  // which enabledOnly above hides, so a company can turn one back on.
+  // Same cache, unfiltered: only source to disabled accounts no bank
+  // connection holds, which enabledOnly above hides, so a company can turn
+  // one back on.
   const { cashAccounts: allCashAccounts } = useCashAccounts()
   const disabledAccounts = useMemo(
-    () => allCashAccounts.filter((a) => !a.enabled && a.source !== 'enable_banking'),
+    () => allCashAccounts.filter((a) => !a.enabled && a.bank_connection_id === null),
     [allCashAccounts],
   )
   const [savingId, setSavingId] = useState<string | null>(null)
@@ -87,7 +89,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
       if (!res.ok) {
         toast({
           title: t('per_account_save_failed'),
-          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
+          description: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -102,7 +104,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
     } catch (err) {
       toast({
         title: t('per_account_save_failed'),
-        description: getErrorMessage(err, { context: 'settings' }),
+        description: getErrorMessage(err, { context: 'settings', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -111,8 +113,9 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   }
 
   /**
-   * PATCH enabled on/off. Only offered for manual/SIE accounts (never a
-   * PSD2-synced one, which the AccountPicker owns): the seed migration plants
+   * PATCH enabled on/off. Only offered for accounts no bank connection holds
+   * (a connection-held one is the AccountPicker's, and the server answers 409
+   * for it; same bank_connection_id rule on both sides): the seed migration plants
    * a manual 1930 row on every new company so reconciliation works before any
    * bank is connected, and a company that never connects one, or books its
    * real account on a different ledger slot, needs a way to turn it off.
@@ -129,7 +132,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
       if (!res.ok) {
         toast({
           title: t('per_account_save_failed'),
-          description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
+          description: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -144,7 +147,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
     } catch (err) {
       toast({
         title: t('per_account_save_failed'),
-        description: getErrorMessage(err, { context: 'settings' }),
+        description: getErrorMessage(err, { context: 'settings', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
@@ -164,10 +167,10 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
           <p className="px-1 py-3 text-sm text-muted-foreground">{t('per_account_empty')}</p>
         ) : (
           cashAccounts.map((account, i) => {
-            // A PSD2-synced account's enabled state belongs to the
-            // AccountPicker; the primary account can't be turned off without
-            // first making another one primary (its own guarded flow).
-            const canDisable = account.source !== 'enable_banking' && !account.is_primary
+            // Mirrors setEnabled()'s own rule: a connection-held account's
+            // enabled state belongs to the AccountPicker, and the primary
+            // account is never turned off.
+            const canDisable = account.bank_connection_id === null && !account.is_primary
             return (
               <SettingsRow
                 key={account.id}
