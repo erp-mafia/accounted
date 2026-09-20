@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
 
 const log = createLogger('cash-accounts')
 
@@ -231,9 +232,32 @@ async function loadCashAccountTopology(
  * Identity of the physical bank account a row represents: normalized IBAN
  * plus currency, or null for rows without an IBAN (manual, CSV, kassa).
  */
-function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
+export function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
   const iban = normalizeIban(row.iban)
   return iban ? `${iban}|${currencyKey(row.currency)}` : null
+}
+
+/**
+ * Whether two cash_accounts row ids may be the same bank account, for the
+ * content-dedup account guard in lib/transactions/ingest.ts.
+ *
+ * A null id on either side stays compatible (legacy rows without a binding).
+ * Two different ids are the same account only when BOTH rows carry a physical
+ * key and the keys are equal: a broken reconnect leaves two rows for one
+ * (IBAN, currency), and a merge legitimately keeps the retired one as a manual
+ * row while booked transactions remain on it. A row WITHOUT a key (manual, CSV,
+ * kassa) never matches another id: a missing IBAN is not evidence of identity.
+ *
+ * @param physicalKeyById row id -> physicalAccountKey, rows without a key omitted
+ */
+export function sameCashAccount(
+  a: string | null,
+  b: string | null,
+  physicalKeyById: ReadonlyMap<string, string>,
+): boolean {
+  if (a === null || b === null || a === b) return true
+  const keyA = physicalKeyById.get(a)
+  return keyA !== undefined && keyA === physicalKeyById.get(b)
 }
 
 /**
@@ -921,6 +945,54 @@ export interface Psd2LedgerResolution {
 }
 
 /**
+ * The subset of `ledgers` that carry bookkeeping history: at least one line on
+ * a posted or reversed verifikat. Driven from the journal_entries side (see
+ * lib/bookkeeping/entry-lines.ts); only called when a company actually has
+ * twin rows, so the entry scan is paid on the rare path.
+ */
+export async function ledgersWithPostedLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgers: string[],
+): Promise<Set<string>> {
+  if (ledgers.length === 0) return new Set()
+  const lines = await fetchEntryLines<{ account_number: string }>({
+    supabase,
+    lineColumns: 'account_number',
+    filterEntries: (q) => q.eq('company_id', companyId).in('status', ['posted', 'reversed']),
+    filterLines: (q) => q.in('account_number', ledgers),
+    attachEntriesAs: null,
+  })
+  return new Set(lines.map((l) => l.account_number))
+}
+
+/** What {@link pickKeeper} needs to rank the rows of one physical account. */
+export type TwinCandidate = Pick<CashAccount, 'id' | 'ledger_account' | 'is_primary' | 'created_at'>
+
+/**
+ * Which of several rows for ONE physical account (same IBAN + currency) is the
+ * account going forward. The signal is bookkeeping HISTORY, not liveness (two
+ * liveness signals were contradicted by prod, see DECISIONS.md 2026-08-28):
+ * the row whose ledger already carries posted lines keeps the bank account on
+ * one ledger; then the primary row; then the oldest.
+ *
+ * Returns null when MORE than one ledger carries posted lines: the account is
+ * already split across two ledgers, no automatic choice is safe, and any
+ * correction there is a storno the user has to decide on.
+ */
+export function pickKeeper<T extends TwinCandidate>(
+  rows: readonly T[],
+  postedLedgers: ReadonlySet<string>,
+): T | null {
+  const withHistory = rows.filter((r) => postedLedgers.has(r.ledger_account))
+  if (withHistory.length > 1) return null
+  if (withHistory.length === 1) return withHistory[0]
+  const primary = rows.find((r) => r.is_primary)
+  if (primary) return primary
+  return [...rows].sort((a, b) => a.created_at.localeCompare(b.created_at))[0] ?? null
+}
+
+/**
  * Decide which BAS account a PSD2 account should book to, IBAN first.
  *
  * The IBAN identifies the physical bank account; the provider's account `uid`
@@ -953,12 +1025,14 @@ export async function resolvePsd2LedgerAccount(
   },
 ): Promise<Psd2LedgerResolution | null> {
   const exclude = input.exclude ?? new Set<string>()
-  const wanted = normalizeIban(input.iban)
+  // (IBAN, currency), never the IBAN alone: multi-currency accounts copy one
+  // IBAN onto every currency pocket, and a EUR pocket must not reuse the SEK row.
+  const wanted = physicalAccountKey({ iban: input.iban ?? null, currency: input.currency })
 
   if (wanted) {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, iban, ledger_account')
+      .select('id, iban, currency, ledger_account, is_primary, created_at')
       .eq('company_id', companyId)
       .not('iban', 'is', null)
 
@@ -970,12 +1044,29 @@ export async function resolvePsd2LedgerAccount(
         error: error.message,
       })
     } else {
-      const match = ((data ?? []) as Array<{ id: string; iban: string | null; ledger_account: string }>)
-        .find(row => normalizeIban(row.iban) === wanted)
       // A ledger already claimed earlier in the caller's loop cannot be handed
       // out twice, even on an IBAN hit: two rows on one ledger violate the
       // (company_id, ledger_account) UNIQUE constraint.
-      if (match && !exclude.has(match.ledger_account)) {
+      const matches = ((data ?? []) as Array<TwinCandidate & Pick<CashAccount, 'iban' | 'currency'>>)
+        .filter(row => physicalAccountKey(row) === wanted && !exclude.has(row.ledger_account))
+      let match: TwinCandidate | null = matches[0] ?? null
+      if (matches.length > 1) {
+        // Twin rows left by a broken reconnect: land on the row with the
+        // bookkeeping history instead of whichever PostgREST returned first.
+        // A group already split across two posted ledgers has no keeper; rank
+        // it by primary, then oldest, so the choice is at least stable.
+        let posted = new Set<string>()
+        try {
+          posted = await ledgersWithPostedLines(supabase, companyId, matches.map(r => r.ledger_account))
+        } catch (postedError) {
+          log.warn('resolvePsd2LedgerAccount posted-lines lookup failed', {
+            companyId,
+            error: postedError instanceof Error ? postedError.message : String(postedError),
+          })
+        }
+        match = pickKeeper(matches, posted) ?? pickKeeper(matches, new Set())
+      }
+      if (match) {
         return {
           ledgerAccount: match.ledger_account,
           reuseCashAccountId: match.id,
