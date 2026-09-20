@@ -1,3 +1,14 @@
+/**
+ * How far back an explicit backfill (POST /backfill) may reach. Our own floor,
+ * same as Zettle's: far enough to cover the years anyone still books, short
+ * enough that a mistyped year cannot ask for an unbounded scan. Note that
+ * Shopify itself only returns orders older than 60 days to apps holding the
+ * read_all_orders scope; a backfill past that on a read_orders-only app comes
+ * back empty, not as an error. Lives here so the client panel can bound its
+ * date picker without importing the server-side sync module.
+ */
+export const MAX_BACKFILL_YEARS = 3
+
 /** Row shape of public.shopify_connections. */
 export interface ShopifyConnection {
   id: string

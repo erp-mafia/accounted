@@ -17,6 +17,8 @@ import {
 } from './lib/payment-links'
 import { syncStripeBalanceTransactions } from './lib/transaction-sync'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
+import { MAX_BACKFILL_YEARS } from './types'
 import type { StripeConnection, StripeStatusResponse } from './types'
 
 // Per-user limits: connect/disconnect are outward-facing OAuth operations,
@@ -24,6 +26,7 @@ import type { StripeConnection, StripeStatusResponse } from './types'
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
 
 // A pending row younger than this blocks a second connect attempt so a
 // double-click cannot start two OAuth round-trips (only one state would
@@ -161,6 +164,102 @@ export const stripeExtension: Extension = {
           return NextResponse.json({ success: true, transactions })
         } catch (error) {
           log.error('[stripe] Manual sync failed', {
+            message: error instanceof Error ? error.message : String(error),
+            connection_id: connection.id,
+          })
+          return NextResponse.json(
+            { error: 'Synkroniseringen misslyckades. Försök igen.' },
+            { status: 502 },
+          )
+        }
+      },
+    },
+    {
+      method: 'POST',
+      path: '/backfill',
+      handler: async (request: Request, ctx?: ExtensionContext) => {
+        const log = ctx?.log ?? console
+        const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+        }
+        if (!ctx?.companyId) {
+          return NextResponse.json({ error: 'Company context required' }, { status: 400 })
+        }
+        const companyId = ctx.companyId
+
+        const capabilityBlocked = await requireCapability(
+          supabase,
+          companyId,
+          CAPABILITY.stripe_payments,
+        )
+        if (capabilityBlocked) return capabilityBlocked
+
+        const rl = await checkRateLimit({
+          prefix: 'stripe:backfill',
+          identifier: user.id,
+          ...RATE_LIMIT_BACKFILL,
+        })
+        if (!rl.ok) return rl.response!
+
+        const body = (await request.json().catch(() => ({}))) as { from?: unknown }
+        const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
+        if ('error' in parsed) {
+          return NextResponse.json(
+            { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
+            { status: 400 },
+          )
+        }
+
+        const { data: connection } = await supabase
+          .from('stripe_connections')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('status', 'active')
+          .maybeSingle()
+
+        if (!connection) {
+          return NextResponse.json({ error: 'Inget anslutet Stripe-konto.' }, { status: 404 })
+        }
+
+        // The cursor is the start date, so a backfill is just the cursor moved
+        // back: no second column that could disagree with it. The run advances
+        // it to the newest processed transaction again, and the ingest dedups
+        // on external_id, so re-reading an already imported range changes
+        // nothing. The sync itself still floors the window at the company
+        // lock date: rows behind the lock can never be booked.
+        const { error: cursorError } = await supabase
+          .from('stripe_connections')
+          .update({ last_balance_txn_synced_at: parsed.iso })
+          .eq('id', connection.id)
+          .eq('company_id', companyId)
+          .eq('status', 'active')
+        if (cursorError) {
+          log.error('[stripe] Failed to move balance-transaction cursor for backfill', {
+            message: cursorError.message,
+            connection_id: connection.id,
+          })
+          return NextResponse.json(
+            { error: 'Kunde inte spara startdatumet. Försök igen.' },
+            { status: 500 },
+          )
+        }
+
+        try {
+          const serviceClient = createServiceClientNoCookies()
+          // Same shape as /sync: no time budget (see the settings panel's
+          // STRIPE_SYNC_TIMEOUT_MS), and the cursor persists per ingest chunk,
+          // so a run cut off at the dispatcher ceiling resumes where it stopped.
+          const transactions = await syncStripeBalanceTransactions(serviceClient, {
+            ...(connection as StripeConnection),
+            last_balance_txn_synced_at: parsed.iso,
+          })
+          return NextResponse.json({ success: true, from: parsed.iso, transactions })
+        } catch (error) {
+          // The cursor stays at the chosen date on purpose: the next run
+          // resumes the backfill from where this one failed.
+          log.error('[stripe] Backfill sync failed', {
             message: error instanceof Error ? error.message : String(error),
             connection_id: connection.id,
           })

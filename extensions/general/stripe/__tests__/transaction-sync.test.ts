@@ -21,8 +21,8 @@ vi.mock('@/lib/import/account-sync', () => ({
 
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { syncMappedAccounts } from '@/lib/import/account-sync'
 import {
-  BACKFILL_DAYS,
   STRIPE_IMPORT_SOURCE,
   STRIPE_LEDGER_ACCOUNT,
   linkPayoutFeedRows,
@@ -331,27 +331,72 @@ describe('linkPayoutFeedRows', () => {
 })
 
 describe('syncStripeBalanceTransactions', () => {
-  it('backfills 90 days on the first run', async () => {
+  const CONNECTED_SEC = Math.floor(Date.parse(CONNECTION.connected_at!) / 1000)
+
+  it('starts the first run at the connection moment, not a day earlier', async () => {
+    // The OAuth callback seeds the cursor with connected_at; the 24h overlap
+    // must not drag the window back into money the user booked from the bank
+    // (issue #2631).
     stubList([makeCharge()])
     const { supabase } = createCaptureSupabase({
       company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
     })
 
-    await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+    await syncStripeBalanceTransactions(supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: CONNECTION.connected_at,
+    })
 
-    const expected = Math.floor(
-      (Date.parse('2026-07-23T10:00:00.000Z') - BACKFILL_DAYS * 86_400_000) / 1000,
-    )
-    expect(listWindowGte()).toBe(expected)
+    expect(listWindowGte()).toBe(CONNECTED_SEC)
   })
 
-  it('floors the first-run backfill at the day after the company lock date', async () => {
+  it('falls back to the connection moment when the cursor is null (legacy row)', async () => {
+    stubList([makeCharge()])
+    const { supabase } = createCaptureSupabase()
+
+    await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+
+    expect(listWindowGte()).toBe(CONNECTED_SEC)
+  })
+
+  it('clamps the overlap at the connection moment while still within a day of it', async () => {
+    stubList([makeCharge()])
+    const { supabase } = createCaptureSupabase()
+
+    await syncStripeBalanceTransactions(supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: '2026-07-01T12:00:00.000Z',
+    })
+
+    expect(listWindowGte()).toBe(CONNECTED_SEC)
+  })
+
+  it('honours an explicit backfill cursor exactly when nothing is locked', async () => {
+    stubList([makeCharge()])
+    const { supabase } = createCaptureSupabase({
+      company_settings: [{ data: { bookkeeping_locked_through: null }, error: null }],
+    })
+
+    await syncStripeBalanceTransactions(supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
+    })
+
+    expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-01-01T00:00:00Z') / 1000))
+  })
+
+  it('floors a backfill window at the day after the company lock date', async () => {
+    // Rows on/before the lock date can never be booked; a backfill reaching
+    // behind it would only leave permanent inbox noise.
     stubList([makeCharge()])
     const { supabase } = createCaptureSupabase({
       company_settings: [{ data: { bookkeeping_locked_through: '2026-06-30' }, error: null }],
     })
 
-    await syncStripeBalanceTransactions(supabase, { ...CONNECTION })
+    await syncStripeBalanceTransactions(supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z',
+    })
 
     expect(listWindowGte()).toBe(Math.floor(Date.parse('2026-07-01T00:00:00Z') / 1000))
   })
@@ -368,8 +413,27 @@ describe('syncStripeBalanceTransactions', () => {
     expect(listWindowGte()).toBe(
       Math.floor(Date.parse('2026-07-20T00:00:00Z') / 1000) - 86_400,
     )
-    // No cursor → no company_settings (lock date) lookup.
-    expect(queriesFor('company_settings')).toHaveLength(0)
+    // The lock-date floor sits on every resolved window now, not only on
+    // the first run: one indexed company_settings read per run.
+    expect(queriesFor('company_settings')).toHaveLength(1)
+  })
+
+  it('seeds 1686 into the chart until the cursor has passed the connection moment', async () => {
+    stubList([makeCharge()])
+
+    // First real run: the cursor is still the seeded connection moment.
+    await syncStripeBalanceTransactions(createCaptureSupabase().supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: CONNECTION.connected_at,
+    })
+    expect(vi.mocked(syncMappedAccounts)).toHaveBeenCalledTimes(1)
+
+    // Later run: the cursor has advanced past it, so the one-time setup stops.
+    await syncStripeBalanceTransactions(createCaptureSupabase().supabase, {
+      ...CONNECTION,
+      last_balance_txn_synced_at: '2026-07-10T00:00:00.000Z',
+    })
+    expect(vi.mocked(syncMappedAccounts)).toHaveBeenCalledTimes(1)
   })
 
   it('ingests the mapped rows onto the 1686 cash account without auto-categorization', async () => {

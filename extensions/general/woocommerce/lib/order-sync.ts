@@ -3,6 +3,7 @@ import { removeWebshopOrders, upsertWebshopOrders } from '@/lib/webshop-orders/i
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
+import { resolveWindowStartMs } from '@/lib/feed-sync/cursor-window'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import {
   listOrdersPage,
@@ -57,8 +58,9 @@ const defaultLog = createLogger('woocommerce/order-sync')
  * never advances past failed work: a page with refund-fetch failures, upsert
  * errors, or deadline-skipped refunds caps the persisted cursor just below
  * the earliest affected order's date_modified, so the next run re-lists
- * exactly the orders whose rows are incomplete. First run fetches
- * BACKFILL_DAYS back.
+ * exactly the orders whose rows are incomplete. Activation seeds the cursor
+ * with the connection moment, so the first run starts there; older history
+ * is an explicit choice (POST /backfill moves the cursor back).
  *
  * Rows behind company_settings.bookkeeping_locked_through import too (the
  * page is an order overview, not just a booking queue); the booking route
@@ -67,8 +69,6 @@ const defaultLog = createLogger('woocommerce/order-sync')
 
 /** transactions.import_source the retired feed used; kept for reference. */
 export const WOOCOMMERCE_IMPORT_SOURCE = 'woocommerce'
-/** First-run backfill window (matches the Enable Banking convention). */
-export const BACKFILL_DAYS = 90
 /** Cursor re-poll overlap; upsert-on-external_id makes overlaps idempotent. */
 const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000
 /**
@@ -579,15 +579,24 @@ async function buildPageRows(
 }
 
 /**
- * Window start (ISO, UTC) for the first modified_after list call. With a
- * cursor: cursor minus the 24h overlap. First run: BACKFILL_DAYS back.
+ * Window start (ISO, UTC) for the first modified_after list call. The cursor
+ * is the start date: cursor minus the 24h overlap, clamped so the overlap
+ * never reaches behind the point this connection is responsible for (the
+ * connection moment, or an explicit backfill cursor when that is earlier). A
+ * null cursor falls back to the connection's own start, never to a fixed
+ * number of days (see lib/feed-sync/cursor-window).
  */
-function resolveWindowStartIso(connection: WooCommerceConnection): string {
-  if (connection.last_order_synced_at) {
-    const cursorMs = Date.parse(connection.last_order_synced_at)
-    return new Date(Math.max(0, cursorMs - CURSOR_OVERLAP_MS)).toISOString()
-  }
-  return new Date(Date.now() - BACKFILL_DAYS * 86_400_000).toISOString()
+export function resolveWindowStartIso(connection: WooCommerceConnection): string {
+  return new Date(
+    resolveWindowStartMs(
+      {
+        cursor: connection.last_order_synced_at,
+        connectedAt: connection.connected_at,
+        createdAt: connection.created_at,
+      },
+      CURSOR_OVERLAP_MS,
+    ),
+  ).toISOString()
 }
 
 export async function syncWooCommerceOrders(

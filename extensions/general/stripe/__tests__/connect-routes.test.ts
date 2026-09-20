@@ -14,10 +14,21 @@ vi.mock('../lib/connect', async (importOriginal) => {
   return { ...actual, deauthorizeAccount: vi.fn().mockResolvedValue(undefined) }
 })
 
+// The balance-transaction sync has its own suite; here it only needs to be
+// callable, and the service client it runs on must be observable.
+vi.mock('../lib/transaction-sync', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/transaction-sync')>()
+  return { ...actual, syncStripeBalanceTransactions: vi.fn() }
+})
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: vi.fn(() => ({ service: true })),
+}))
+
 import { stripeExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { deauthorizeAccount } from '../lib/connect'
+import { syncStripeBalanceTransactions } from '../lib/transaction-sync'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -266,5 +277,85 @@ describe('stripe extension routes', () => {
       expect(body.configured).toBe(true)
       expect(body.connection?.id).toBe('conn-1')
     })
+  })
+})
+
+describe('stripe POST /backfill', () => {
+  const ACTIVE = {
+    id: 'conn-1',
+    status: 'active',
+    company_id: 'company-1',
+    user_id: 'user-1',
+    stripe_account_id: 'acct_1',
+    last_balance_txn_synced_at: '2026-09-14T00:00:00.000Z',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(requireCapability).mockResolvedValue(null)
+  })
+
+  it('returns 401 without a user', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(401)
+    expect(syncStripeBalanceTransactions).not.toHaveBeenCalled()
+  })
+
+  it('rejects a date it cannot honour with 400', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    const route = findRoute('POST', '/backfill')
+    for (const from of [undefined, 'igar', '2026-02-31', '3000-01-01', '1990-01-01']) {
+      const res = await route.handler(makeRequest('POST', { from }), makeContext(supabase))
+      expect(res.status, `from=${String(from)}`).toBe(400)
+    }
+    expect(syncStripeBalanceTransactions).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 without an active connection', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: null })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(404)
+    expect(syncStripeBalanceTransactions).not.toHaveBeenCalled()
+  })
+
+  it('moves the cursor to the chosen date and syncs from there', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: ACTIVE })
+    enqueue({ data: [] }) // cursor update
+    vi.mocked(syncStripeBalanceTransactions).mockResolvedValue({
+      fetched: 6,
+      imported: 9,
+      duplicates: 0,
+      linked: 1,
+      errors: 0,
+    })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-01-01' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.from).toBe('2026-01-01T00:00:00.000Z')
+    expect(body.transactions.imported).toBe(9)
+    const updates = findCalls('stripe_connections', 'update')
+    expect(updates[0][0]).toEqual({ last_balance_txn_synced_at: '2026-01-01T00:00:00.000Z' })
+    // The sync must see the moved cursor, not the stored one, and run on the
+    // service client like the manual sync.
+    expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][0]).toEqual({ service: true })
+    expect(vi.mocked(syncStripeBalanceTransactions).mock.calls[0][1].last_balance_txn_synced_at).toBe(
+      '2026-01-01T00:00:00.000Z',
+    )
   })
 })

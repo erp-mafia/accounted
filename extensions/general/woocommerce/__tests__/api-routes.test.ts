@@ -284,6 +284,9 @@ describe('woocommerce extension routes', () => {
       // Keys typed in under a session count as the browser confirmation the
       // activation CHECK (20260907143000) requires alongside the keys.
       expect(typeof inserted.browser_confirmed_at).toBe('string')
+      // The order cursor starts at the connection moment (issue #2631).
+      expect(inserted.last_order_synced_at).toBe(inserted.connected_at)
+      expect(typeof inserted.last_order_synced_at).toBe('string')
       // Scoped to the authenticated context, never to anything in the body.
       expect(inserted.company_id).toBe('company-1')
       expect(inserted.user_id).toBe(USER.id)
@@ -334,6 +337,97 @@ describe('woocommerce extension routes', () => {
       const body = await res.json()
       expect(body.transactions.inserted).toBe(4)
       expect(vi.mocked(syncWooCommerceOrders).mock.calls[0][0]).toEqual({ service: true })
+    })
+  })
+
+  describe('POST /backfill', () => {
+    const ACTIVE = {
+      id: 'conn-1',
+      status: 'active',
+      store_url: 'https://shop.example.se',
+      last_order_synced_at: '2026-09-14T00:00:00.000Z',
+    }
+    const SUMMARY = {
+      fetched: 4,
+      refundsFetched: 0,
+      inserted: 4,
+      updated: 0,
+      unchanged: 0,
+      removed: 0,
+      frozenFlagged: 0,
+      crossMarked: 0,
+      errors: 0,
+    }
+
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
+    })
+
+    it('rejects a date it cannot honour with 400', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      const route = findRoute('POST', '/backfill')
+      for (const from of [undefined, 'igar', '2026-02-31', '3000-01-01', '1990-01-01']) {
+        const res = await route.handler(makeRequest('POST', { from }), makeContext(supabase))
+        expect(res.status, `from=${String(from)}`).toBe(400)
+      }
+      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
+    })
+
+    it('returns 404 without an active connection', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [] })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(404)
+      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
+    })
+
+    it('refuses to guess the store when several are connected and none is named', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [ACTIVE, { ...ACTIVE, id: 'conn-2', store_url: 'https://b.example.se' }] })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(400)
+      expect(syncWooCommerceOrders).not.toHaveBeenCalled()
+    })
+
+    it('moves the named store cursor to the chosen date and syncs from there', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: [ACTIVE] })
+      enqueue({ data: [] }) // cursor update
+      vi.mocked(syncWooCommerceOrders).mockResolvedValue(SUMMARY)
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01', connection_id: 'conn-1' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.from).toBe('2026-01-01T00:00:00.000Z')
+      expect(body.connection_id).toBe('conn-1')
+      expect(body.transactions.inserted).toBe(4)
+      const updates = findCalls('woocommerce_connections', 'update')
+      expect(updates[0][0]).toMatchObject({ last_order_synced_at: '2026-01-01T00:00:00.000Z' })
+      // The sync must see the moved cursor, not the stored one, and run on
+      // the service client like the manual sync.
+      expect(vi.mocked(syncWooCommerceOrders).mock.calls[0][0]).toEqual({ service: true })
+      expect(vi.mocked(syncWooCommerceOrders).mock.calls[0][1].last_order_synced_at).toBe(
+        '2026-01-01T00:00:00.000Z',
+      )
     })
   })
 

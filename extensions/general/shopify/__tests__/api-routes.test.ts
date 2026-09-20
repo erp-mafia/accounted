@@ -227,6 +227,11 @@ describe('shopify extension routes', () => {
         string
       >
       expect(inserted.status).toBe('active')
+      // The order cursor starts at the connection moment: without this the
+      // first sync would backfill history the merchant already booked from
+      // the bank side (issue #2631).
+      expect(inserted.last_order_synced_at).toBe(inserted.connected_at)
+      expect(typeof inserted.last_order_synced_at).toBe('string')
       expect(inserted.shop_name).toBe('Testbutiken')
       // The bare handle was normalized before probing and storing.
       expect(inserted.shop_domain).toBe('minbutik.myshopify.com')
@@ -284,6 +289,77 @@ describe('shopify extension routes', () => {
       const body = await res.json()
       expect(body.transactions.inserted).toBe(4)
       expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toEqual({ service: true })
+    })
+  })
+
+  describe('POST /backfill', () => {
+    it('returns 401 without a user', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: null }, error: null })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(401)
+      expect(syncShopifyOrders).not.toHaveBeenCalled()
+    })
+
+    it('rejects a date it cannot honour with 400', async () => {
+      const { supabase } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      const route = findRoute('POST', '/backfill')
+      for (const from of [undefined, 'igar', '2026-02-31', '3000-01-01', '1990-01-01']) {
+        const res = await route.handler(makeRequest('POST', { from }), makeContext(supabase))
+        expect(res.status, `from=${String(from)}`).toBe(400)
+      }
+      expect(syncShopifyOrders).not.toHaveBeenCalled()
+    })
+
+    it('returns 404 without an active connection', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: null })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(404)
+      expect(syncShopifyOrders).not.toHaveBeenCalled()
+    })
+
+    it('moves the cursor to the chosen date and syncs from there', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({
+        data: { id: 'conn-1', status: 'active', last_order_synced_at: '2026-09-14T00:00:00.000Z' },
+      })
+      enqueue({ data: [] }) // cursor update
+      vi.mocked(syncShopifyOrders).mockResolvedValue({
+        fetched: 4,
+        refundsFetched: 0,
+        inserted: 4,
+        updated: 0,
+        unchanged: 0,
+        frozenFlagged: 0,
+        crossMarked: 0,
+        errors: 0,
+      })
+      const res = await findRoute('POST', '/backfill').handler(
+        makeRequest('POST', { from: '2026-01-01' }),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.from).toBe('2026-01-01T00:00:00.000Z')
+      expect(body.transactions.inserted).toBe(4)
+      const updates = findCalls('shopify_connections', 'update')
+      expect(updates[0][0]).toMatchObject({ last_order_synced_at: '2026-01-01T00:00:00.000Z' })
+      // The sync must see the moved cursor, not the stored one, and run on
+      // the service client like the manual sync.
+      expect(vi.mocked(syncShopifyOrders).mock.calls[0][0]).toEqual({ service: true })
+      expect(vi.mocked(syncShopifyOrders).mock.calls[0][1].last_order_synced_at).toBe(
+        '2026-01-01T00:00:00.000Z',
+      )
     })
   })
 

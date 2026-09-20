@@ -21,9 +21,9 @@ export const WOO_ACTION_TIMEOUT_MS = 15_000
 export const WOO_CONNECT_TIMEOUT_MS = 120_000
 
 /**
- * Deadline for "Synka nu": the route's own ceiling (maxDuration 300 on the
- * extension dispatcher) plus margin, same reasoning as the Stripe panel. A
- * first sync backfills 90 days from a slow host and legitimately takes
+ * Deadline for "Synka nu" and "Hämta äldre ordrar": the route's own ceiling
+ * (maxDuration 300 on the extension dispatcher) plus margin, same reasoning
+ * as the Stripe panel. A backfill from a slow host legitimately takes
  * minutes; the server keeps working and advances the cursor even if we
  * aborted, so aborting early would misreport a sync that landed.
  */
