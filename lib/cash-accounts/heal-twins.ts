@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { CashAccount } from '@/types'
+import { createHash, randomUUID } from 'node:crypto'
+import type { CashAccount, ProcessingHistoryActor } from '@/types'
 import { createLogger } from '@/lib/logger'
+import { appendProcessingHistoryWithClient } from '@/lib/processing-history/append'
 import {
   findMovableTransactionIds,
   ledgersWithPostedLines,
@@ -40,6 +42,18 @@ const log = createLogger('cash-accounts-heal')
  *
  * Posted journal entries and their lines are never touched. Booked or anchored
  * transactions keep their binding: their voucher carries the old 19xx line.
+ *
+ * The whole company is PLANNED before anything is written. A write run must
+ * name the fingerprint of the plan the operator reviewed; a plan that changed
+ * in between (a sync, a re-auth) aborts before the first write. The steps are
+ * PostgREST calls, not one transaction, so they are ordered to leave a safe
+ * state after every prefix (routing first, primary handover before any row is
+ * retired) and a re-run picks up where a failed run stopped.
+ *
+ * Each merged group writes one CashAccountTwinsMerged behandlingshistorik
+ * event (BFNAR 2013:2 p. 9.16): re-pointing accounts_data changes which BAS
+ * account future bank transactions land on, and a deleted row leaves no other
+ * durable trace that the twin existed.
  */
 
 export type TwinSkipReason =
@@ -72,7 +86,36 @@ export interface TwinGroupReport {
 export interface HealTwinsResult {
   companyId: string
   dryRun: boolean
+  /** Identifies this exact plan; a write run must echo it back. */
+  fingerprint: string
   groups: TwinGroupReport[]
+}
+
+export type HealTwinsOptions =
+  | { dryRun: true }
+  | {
+      dryRun: false
+      /** `fingerprint` of the dry run the operator reviewed. */
+      expectedFingerprint: string
+      /** Recorded on every CashAccountTwinsMerged event. */
+      actor: ProcessingHistoryActor
+    }
+
+/** Order-independent digest of what a plan would do. */
+export function planFingerprint(groups: readonly TwinGroupReport[]): string {
+  const canonical = groups
+    .map((g) => ({
+      key: g.physicalKey,
+      skipped: g.skipped,
+      keeper: g.keeper?.id ?? null,
+      live: g.liveRowId,
+      from: g.accountsDataLedgerFrom,
+      retired: g.retired
+        .map((r) => `${r.id}:${r.outcome}:${r.movable}:${r.staying}`)
+        .sort(),
+    }))
+    .sort((a, b) => a.key.localeCompare(b.key))
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex').slice(0, 12)
 }
 
 type ConnectionRow = {
@@ -84,10 +127,10 @@ type ConnectionRow = {
 export async function healTwinCashAccounts(
   supabase: SupabaseClient,
   companyId: string,
-  options: { dryRun: boolean },
+  options: HealTwinsOptions,
 ): Promise<HealTwinsResult> {
-  const { dryRun } = options
-  const result: HealTwinsResult = { companyId, dryRun, groups: [] }
+  const result: HealTwinsResult = { companyId, dryRun: options.dryRun, fingerprint: '', groups: [] }
+  result.fingerprint = planFingerprint(result.groups)
 
   const { data: rowData, error: rowError } = await supabase
     .from('cash_accounts')
@@ -105,6 +148,7 @@ export async function healTwinCashAccounts(
   }
   const twinGroups = [...byKey.entries()].filter(([, rows]) => rows.length > 1)
   if (twinGroups.length === 0) return result
+  const executions: Array<() => Promise<void>> = []
 
   const { data: connData, error: connError } = await supabase
     .from('bank_connections')
@@ -187,70 +231,103 @@ export async function healTwinCashAccounts(
                 : 'deleted',
       })
     }
-    if (dryRun) continue
+    executions.push(async () => {
+      // Primary handover first: a stale primary must never be retired while
+      // it still carries the flag, or a failure in between leaves the company
+      // without the intended primary. The RPC swaps atomically.
+      if (rows.some((r) => r.id !== keeper.id && r.is_primary)) {
+        await setPrimary(supabase, companyId, keeper.id)
+      }
 
-    // Step 3: route the next sync onto the keeper's ledger before anything else.
-    if (liveEntry?.ledger_account !== keeper.ledger_account) {
-      const nextAccounts = (liveConn.accounts_data ?? []).map((a) =>
-        a.uid === live.external_uid ? { ...a, ledger_account: keeper.ledger_account } : a,
-      )
-      const { error } = await supabase
-        .from('bank_connections')
-        .update({ accounts_data: nextAccounts })
-        .eq('id', liveConn.id)
-        .eq('company_id', companyId)
-      if (error) throw new Error(`accounts_data re-point failed: ${error.message}`)
-      liveConn.accounts_data = nextAccounts
-    }
+      // Step 3: route the next sync onto the keeper's ledger before any row moves.
+      if (liveEntry?.ledger_account !== keeper.ledger_account) {
+        const nextAccounts = (liveConn.accounts_data ?? []).map((a) =>
+          a.uid === live.external_uid ? { ...a, ledger_account: keeper.ledger_account } : a,
+        )
+        const { error } = await supabase
+          .from('bank_connections')
+          .update({ accounts_data: nextAccounts })
+          .eq('id', liveConn.id)
+          .eq('company_id', companyId)
+        if (error) throw new Error(`accounts_data re-point failed: ${error.message}`)
+        liveConn.accounts_data = nextAccounts
+      }
 
-    // Step 4: re-key the keeper to the live uid through the existing reuse path.
-    if (live.id !== keeper.id) {
-      await upsertFromPsd2(supabase, companyId, {
-        bank_connection_id: live.bank_connection_id as string,
-        external_uid: live.external_uid as string,
-        currency: live.currency,
-        ledger_account: keeper.ledger_account,
-        iban: live.iban,
-        bban: live.bban,
-        name: keeper.name ?? live.name,
-        balance: live.balance,
-        available_balance: live.available_balance,
-        balance_updated_at: live.balance_updated_at,
-        enabled: live.enabled,
-        reuse_cash_account_id: keeper.id,
+      // Step 4: re-key the keeper to the live uid through the existing reuse path.
+      if (live.id !== keeper.id) {
+        await upsertFromPsd2(supabase, companyId, {
+          bank_connection_id: live.bank_connection_id as string,
+          external_uid: live.external_uid as string,
+          currency: live.currency,
+          ledger_account: keeper.ledger_account,
+          iban: live.iban,
+          bban: live.bban,
+          name: keeper.name ?? live.name,
+          balance: live.balance,
+          available_balance: live.available_balance,
+          balance_updated_at: live.balance_updated_at,
+          enabled: live.enabled,
+          reuse_cash_account_id: keeper.id,
+        })
+      }
+
+      // Step 5: the remaining stale rows.
+      for (const row of rows) {
+        if (row.id === keeper.id || row.id === live.id) continue
+        await rebindMovableTransactions(supabase, companyId, row.id, keeper.id)
+        if (row.bank_connection_id === null) continue
+        const remaining = await countTransactions(supabase, companyId, row.id)
+        const { error } =
+          remaining > 0
+            ? await supabase
+                .from('cash_accounts')
+                .update({ bank_connection_id: null, external_uid: null })
+                .eq('id', row.id)
+                .eq('company_id', companyId)
+            : await supabase.from('cash_accounts').delete().eq('id', row.id).eq('company_id', companyId)
+        if (error) throw new Error(`retiring cash account ${row.id} failed: ${error.message}`)
+      }
+
+      // No IBAN in the payload: row ids and ledgers identify the accounts.
+      await appendProcessingHistoryWithClient(supabase, {
+        companyId,
+        correlationId,
+        aggregateType: 'System',
+        aggregateId: keeper.id,
+        eventType: 'CashAccountTwinsMerged',
+        payload: {
+          keeper: report.keeper,
+          live_row_id: live.id,
+          bank_connection_id: liveConn.id,
+          sync_ledger_before: liveEntry?.ledger_account ?? null,
+          sync_ledger_after: keeper.ledger_account,
+          retired: report.retired,
+          plan_fingerprint: result.fingerprint,
+        },
+        actor,
+        occurredAt: new Date(),
       })
-    }
 
-    // Step 5: the remaining stale rows.
-    let primaryRetired = false
-    for (const row of rows) {
-      if (row.id === keeper.id || row.id === live.id) continue
-      await rebindMovableTransactions(supabase, companyId, row.id, keeper.id)
-      // A stale primary hands the flag over even when the row itself stays:
-      // the primary sentinel must not keep resolving to a retired twin.
-      if (row.is_primary) primaryRetired = true
-      if (row.bank_connection_id === null) continue
-      const remaining = await countTransactions(supabase, companyId, row.id)
-      const { error } =
-        remaining > 0
-          ? await supabase
-              .from('cash_accounts')
-              .update({ bank_connection_id: null, external_uid: null })
-              .eq('id', row.id)
-              .eq('company_id', companyId)
-          : await supabase.from('cash_accounts').delete().eq('id', row.id).eq('company_id', companyId)
-      if (error) throw new Error(`retiring cash account ${row.id} failed: ${error.message}`)
-    }
-    if (primaryRetired) await setPrimary(supabase, companyId, keeper.id)
-
-    log.info('healed twin cash accounts', {
-      companyId,
-      keeperId: keeper.id,
-      keeperLedger: keeper.ledger_account,
-      retired: report.retired.map((r) => ({ id: r.id, outcome: r.outcome, movable: r.movable })),
-      accountsDataLedgerFrom: report.accountsDataLedgerFrom,
+      log.info('healed twin cash accounts', {
+        companyId,
+        keeperId: keeper.id,
+        keeperLedger: keeper.ledger_account,
+        retired: report.retired.map((r) => ({ id: r.id, outcome: r.outcome, movable: r.movable })),
+        accountsDataLedgerFrom: report.accountsDataLedgerFrom,
+      })
     })
   }
+
+  result.fingerprint = planFingerprint(result.groups)
+  if (options.dryRun) return result
+  if (options.expectedFingerprint !== result.fingerprint) {
+    throw new Error(
+      `plan changed since the reviewed dry run (expected ${options.expectedFingerprint}, now ${result.fingerprint}): nothing written, review the new dry run`,
+    )
+  }
+  const actor = options.actor
+  const correlationId = randomUUID()
+  for (const execute of executions) await execute()
 
   return result
 }

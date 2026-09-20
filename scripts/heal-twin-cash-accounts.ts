@@ -12,15 +12,19 @@
  *   npx tsx scripts/heal-twin-cash-accounts.ts
  *   npx tsx scripts/heal-twin-cash-accounts.ts --company <uuid>
  *
- * A write needs ONE company and a typed confirmation that repeats the group
- * count of a fresh dry run:
+ * A write needs ONE company, the actor to record, and a typed confirmation
+ * that repeats the fingerprint of a fresh dry run. The write is bound to that
+ * plan: if the twin groups changed in between (a sync, a re-auth), it aborts
+ * before the first write.
  *
- *   npx tsx scripts/heal-twin-cash-accounts.ts --company <uuid> --execute
+ *   npx tsx scripts/heal-twin-cash-accounts.ts --company <uuid> --actor-user-id <uuid> --execute
  *
  * Flags:
  *   --env <file>      env file to load (default .env.local; the banner prints
  *                     the URL so the target is never a guess)
  *   --company <uuid>  restrict to one company (required with --execute)
+ *   --actor-user-id <id>  the person running the merge, recorded as the actor
+ *                     on the CashAccountTwinsMerged behandlingshistorik event
  *   --execute         write; without it nothing is changed
  *
  * Never run by a loop: the founder decides per company.
@@ -42,6 +46,7 @@ const ENV_FILE = arg('env') ?? '.env.local'
 config({ path: ENV_FILE })
 
 const COMPANY_ID = arg('company') ?? null
+const ACTOR_USER_ID = arg('actor-user-id') ?? null
 const EXECUTE = process.argv.includes('--execute')
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -57,6 +62,10 @@ if (COMPANY_ID && !UUID_RE.test(COMPANY_ID)) {
 }
 if (EXECUTE && !COMPANY_ID) {
   console.error('--execute needs --company <uuid>: the merge is decided one company at a time')
+  process.exit(1)
+}
+if (EXECUTE && (!ACTOR_USER_ID || !UUID_RE.test(ACTOR_USER_ID))) {
+  console.error('--execute needs --actor-user-id <uuid> (recorded in behandlingshistorik)')
   process.exit(1)
 }
 
@@ -88,7 +97,7 @@ async function companiesWithTwins(): Promise<string[]> {
 }
 
 function print(result: HealTwinsResult): void {
-  console.log(`\nCompany ${result.companyId}: ${result.groups.length} twin group(s)`)
+  console.log(`\nCompany ${result.companyId}: ${result.groups.length} twin group(s), plan ${result.fingerprint}`)
   for (const group of result.groups) {
     // The IBAN is not printed: the report is pasted into tickets.
     const head = `  ledgers ${group.ledgers.join(' + ')} (posted lines on: ${group.postedLedgers.join(', ') || 'none'})`
@@ -115,13 +124,15 @@ async function main(): Promise<void> {
 
   const companyIds = COMPANY_ID ? [COMPANY_ID] : await companiesWithTwins()
   let healable = 0
+  let fingerprint = ''
   for (const companyId of companyIds) {
     const result = await healTwinCashAccounts(supabase, companyId, { dryRun: true })
     print(result)
+    fingerprint = result.fingerprint
     healable += result.groups.filter((g) => !g.skipped).length
   }
   console.log(`\n${companyIds.length} company(ies), ${healable} group(s) would be merged.`)
-  if (!EXECUTE || !COMPANY_ID) return
+  if (!EXECUTE || !COMPANY_ID || !ACTOR_USER_ID) return
   if (healable === 0) {
     console.log('Nothing to merge.')
     return
@@ -129,8 +140,8 @@ async function main(): Promise<void> {
 
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   try {
-    const answer = await rl.question(`\nType "MERGE ${healable}" to merge these ${healable} group(s): `)
-    if (answer.trim() !== `MERGE ${healable}`) {
+    const answer = await rl.question(`\nType "MERGE ${fingerprint}" to merge these ${healable} group(s): `)
+    if (answer.trim() !== `MERGE ${fingerprint}`) {
       console.log('Aborted, nothing written.')
       process.exit(2)
     }
@@ -138,7 +149,13 @@ async function main(): Promise<void> {
     rl.close()
   }
 
-  print(await healTwinCashAccounts(supabase, COMPANY_ID, { dryRun: false }))
+  print(
+    await healTwinCashAccounts(supabase, COMPANY_ID, {
+      dryRun: false,
+      expectedFingerprint: fingerprint,
+      actor: { type: 'user', id: ACTOR_USER_ID, label: 'heal-twin-cash-accounts script' },
+    }),
+  )
   console.log('\nDone. After-state (dry run):')
   print(await healTwinCashAccounts(supabase, COMPANY_ID, { dryRun: true }))
 }

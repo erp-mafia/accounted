@@ -19,7 +19,25 @@ vi.mock('@/lib/cash-accounts/service', async (importActual) => {
   }
 })
 
-import { healTwinCashAccounts } from '../heal-twins'
+const mockAppend = vi.fn()
+vi.mock('@/lib/processing-history/append', () => ({
+  appendProcessingHistoryWithClient: (...args: unknown[]) => mockAppend(...args),
+}))
+
+import { healTwinCashAccounts as heal } from '../heal-twins'
+
+const ACTOR = { type: 'user' as const, id: 'user-1', label: 'test' }
+
+/** A write run the way the script does it: dry run first, then echo its fingerprint. */
+async function healTwinCashAccounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: { dryRun: boolean },
+) {
+  const plan = await heal(supabase, companyId, { dryRun: true })
+  if (options.dryRun) return plan
+  return heal(supabase, companyId, { dryRun: false, expectedFingerprint: plan.fingerprint, actor: ACTOR })
+}
 
 const COMPANY = 'company-1'
 const IBAN = 'SE4550000000058398257466'
@@ -109,6 +127,7 @@ beforeEach(() => {
   mockRebind.mockResolvedValue(0)
   mockSetPrimary.mockResolvedValue(undefined)
   mockUpsertFromPsd2.mockResolvedValue(undefined)
+  mockAppend.mockResolvedValue('event-1')
 })
 
 describe('healTwinCashAccounts', () => {
@@ -297,5 +316,68 @@ describe('healTwinCashAccounts', () => {
     expect(result.groups[0].retired[0].outcome).toBe('kept-manual')
     expect(mockRebind).toHaveBeenCalledWith(expect.anything(), COMPANY, 'r1940', 'r1930')
     expect(stub.writes).toEqual([])
+  })
+
+  it('aborts before any write when the plan changed since the reviewed dry run', async () => {
+    const stub = classic()
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+    const supabase = makeSupabase(stub)
+    const reviewed = await heal(supabase, COMPANY, { dryRun: true })
+    // A sync lands one more movable transaction on the twin in between.
+    mockFindMovable.mockResolvedValue(['t-new'])
+
+    await expect(
+      heal(supabase, COMPANY, { dryRun: false, expectedFingerprint: reviewed.fingerprint, actor: ACTOR }),
+    ).rejects.toThrow(/plan changed/)
+
+    expect(stub.writes).toEqual([])
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+    expect(mockSetPrimary).not.toHaveBeenCalled()
+    expect(mockAppend).not.toHaveBeenCalled()
+  })
+
+  it('records one behandlingshistorik event per merged group, without the IBAN', async () => {
+    const stub = classic()
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+
+    await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+    expect(mockAppend).toHaveBeenCalledTimes(1)
+    const event = mockAppend.mock.calls[0][1]
+    expect(event).toMatchObject({
+      companyId: COMPANY,
+      aggregateId: 'r1930',
+      eventType: 'CashAccountTwinsMerged',
+      actor: ACTOR,
+      payload: {
+        keeper: { id: 'r1930', ledger_account: '1930' },
+        sync_ledger_before: '1931',
+        sync_ledger_after: '1930',
+        bank_connection_id: 'conn-1',
+      },
+    })
+    expect(JSON.stringify(event.payload)).not.toContain(IBAN)
+  })
+
+  it('hands the primary flag over before it retires a stale primary row', async () => {
+    const stub: Stub = {
+      rows: [
+        cashRow({ id: 'r1930', ledger_account: '1930' }),
+        cashRow({ id: 'r1931', ledger_account: '1931', is_primary: true }),
+      ],
+      connections: [activeConn([['uid-r1930', '1930']])],
+      txCount: {},
+      writes: [],
+    }
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+    mockSetPrimary.mockImplementation(async () => {
+      // Nothing has been retired yet when the flag moves.
+      expect(stub.writes).toEqual([])
+    })
+
+    await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+    expect(mockSetPrimary).toHaveBeenCalledTimes(1)
+    expect(stub.writes.map((w) => w.op)).toEqual(['delete'])
   })
 })
