@@ -65,6 +65,9 @@ const FILING_ERROR_CODES = [
   'VAT_FILING_PERIOD_NOT_ENDED',
   'VAT_FILING_DATE_BEFORE_PERIOD_END',
   'VAT_FILING_DATE_IN_FUTURE',
+  // The deadline row changed between the read and the guarded write for a
+  // reason other than a Skatteverket confirmation: safe to retry as is.
+  'CONFLICT',
 ]
 
 registerEndpoint({
@@ -122,6 +125,7 @@ registerEndpoint({
     'The period must have ended and `filed_on` must fall after the period\'s last day and no later than today (Swedish date): otherwise 400 with VAT_FILING_PERIOD_NOT_ENDED, VAT_FILING_DATE_BEFORE_PERIOD_END or VAT_FILING_DATE_IN_FUTURE.',
     'Omitting `reference` keeps a previously stored reference; pass null to clear it.',
     'This records a fact about the books, it does not verify anything at Skatteverket. Use /skatteverket/vat-declarations to check what was actually received.',
+    'A 409 CONFLICT means the deadline row changed while it was being marked (for example a deadline regeneration ran at the same moment). Nothing was written; retry the same request.',
   ],
   example: {
     request: { period_type: 'quarterly', year: 2026, period: 2, filed_on: '2026-08-10', reference: 'ABC123' },

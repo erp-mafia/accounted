@@ -7,20 +7,32 @@ import {
 } from '../filing-record-store'
 
 /**
- * Sequential query results plus the payloads handed to insert()/update(),
- * the only place the persisted state is observable.
+ * Sequential query results plus the payloads handed to insert()/update() and
+ * the filters each query carried: the payload is where the persisted state
+ * is observable, the filters are where the atomic guards are.
  */
 function createStoreSupabase(results: { data?: unknown; error?: unknown }[]) {
-  const captured: { table: string; insert?: Record<string, unknown>; update?: Record<string, unknown> }[] = []
+  const captured: {
+    table: string
+    insert?: Record<string, unknown>
+    update?: Record<string, unknown>
+    filters: unknown[][]
+  }[] = []
   let idx = 0
   const from = (table: string) => {
     const result = results[idx++] ?? { data: null, error: null }
-    const entry: (typeof captured)[number] = { table }
+    const entry: (typeof captured)[number] = { table, filters: [] }
     captured.push(entry)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const b: any = {}
-    for (const m of ['select', 'eq', 'in', 'is', 'order', 'limit', 'maybeSingle', 'single']) {
+    for (const m of ['select', 'order', 'limit', 'maybeSingle', 'single']) {
       b[m] = () => b
+    }
+    for (const m of ['eq', 'in', 'is', 'or']) {
+      b[m] = (...args: unknown[]) => {
+        entry.filters.push([m, ...args])
+        return b
+      }
     }
     b.insert = (payload: Record<string, unknown>) => {
       entry.insert = payload
@@ -179,6 +191,51 @@ describe('markVatPeriodFiled', () => {
       status: 'submitted',
       notes: 'Egen anteckning\nSkatteverkets referens: KV-1',
     })
+    // The guard rides on the UPDATE itself, not only on the read before it.
+    expect(captured[1].filters).toContainEqual([
+      'or',
+      'is_completed.eq.false,status.is.null,status.neq.confirmed',
+    ])
+  })
+
+  it('yields to a Skatteverket confirmation that lands between the read and the write', async () => {
+    const { supabase, captured } = createStoreSupabase([
+      { data: pendingRow }, // read: still pending
+      { data: null }, // guarded update matched zero rows: the cron got there first
+      {
+        data: {
+          ...pendingRow,
+          is_completed: true,
+          completed_at: '2026-08-11T09:00:00.000Z',
+          status: 'confirmed',
+        },
+      }, // re-read: confirmed
+    ])
+    const result = await markVatPeriodFiled(
+      supabase,
+      COMPANY,
+      { periodType: 'quarterly', year: 2026, period: 2, filedOn: '2026-08-10', reference: 'KV-1' },
+      { today: TODAY },
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      created: false,
+      changed: false,
+      record: { source: 'skatteverket', filed_on: '2026-08-11', reference: null },
+    })
+    expect(captured).toHaveLength(3)
+  })
+
+  it('raises a conflict when the row changed under it for any other reason', async () => {
+    const { supabase } = createStoreSupabase([{ data: pendingRow }, { data: null }, { data: null }])
+    await expect(
+      markVatPeriodFiled(
+        supabase,
+        COMPANY,
+        { periodType: 'quarterly', year: 2026, period: 2, filedOn: '2026-08-10' },
+        { today: TODAY },
+      ),
+    ).rejects.toMatchObject({ code: 'CONFLICT' })
   })
 
   it('leaves a Skatteverket-confirmed period untouched', async () => {
@@ -288,7 +345,7 @@ describe('unmarkVatPeriodFiled', () => {
           notes: 'Egen anteckning\nSkatteverkets referens: KV-1',
         },
       },
-      { data: null },
+      { data: { id: 'd-q2' } },
     ])
     await expect(unmarkVatPeriodFiled(supabase, COMPANY, input, { today: TODAY })).resolves.toEqual({
       ok: true,
@@ -301,5 +358,33 @@ describe('unmarkVatPeriodFiled', () => {
       status: 'overdue',
       notes: 'Egen anteckning',
     })
+    // Only a row that is still a completed, unconfirmed filing is unmarked.
+    expect(captured[1].filters).toContainEqual(['eq', 'is_completed', true])
+    expect(captured[1].filters).toContainEqual(['or', 'status.is.null,status.neq.confirmed'])
+  })
+
+  const manualRow = {
+    ...pendingRow,
+    is_completed: true,
+    completed_at: '2026-08-10T12:00:00.000Z',
+    status: 'submitted',
+  }
+
+  it('never reports success when the guarded update matched nothing', async () => {
+    // Confirmed in between: the refusal names the real reason.
+    const confirmedNow = createStoreSupabase([
+      { data: manualRow },
+      { data: null },
+      { data: { ...manualRow, completed_at: '2026-08-11T09:00:00.000Z', status: 'confirmed' } },
+    ])
+    await expect(
+      unmarkVatPeriodFiled(confirmedNow.supabase, COMPANY, input, { today: TODAY }),
+    ).resolves.toEqual({ ok: false, code: 'VAT_FILING_CONFIRMED_BY_SKATTEVERKET' })
+
+    // Already un-ticked elsewhere (the deadlines page, another tab).
+    const alreadyPending = createStoreSupabase([{ data: manualRow }, { data: null }, { data: pendingRow }])
+    await expect(
+      unmarkVatPeriodFiled(alreadyPending.supabase, COMPANY, input, { today: TODAY }),
+    ).resolves.toEqual({ ok: false, code: 'VAT_FILING_NOT_FOUND' })
   })
 })
