@@ -185,6 +185,19 @@ describe('PATCH /api/cash-accounts/[id] (verifikationsserie per bankkonto)', () 
   })
 
   describe('enabled toggle (crm#59: let a company disable an unused manual bank account)', () => {
+    // Compliance swarm (ISO 27001 A.8.3): enabled is one of the conditions for
+    // an account to print as invoice payee, and creating a bank account is
+    // owner/admin, so a member must not turn one on or off either.
+    it.each([false, true])('returns 403 for a member (enabled: %s), without reading or writing the account', async (enabled) => {
+      getCompanyRoleMock.mockResolvedValue({ ok: true, role: 'member', companyId: 'company-1' })
+      const response = await PATCH(patchReq({ enabled }), createMockRouteParams({ id: CA_1 }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+      expect(status).toBe(403)
+      expect(body.error.code).toBe('FORBIDDEN')
+      expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+    })
+
     it('returns 404 for an id that is not one of the company\'s bank accounts', async () => {
       enqueue({ data: null }) // existing-row guard lookup
       const response = await PATCH(patchReq({ enabled: false }), createMockRouteParams({ id: CA_1 }))

@@ -7,6 +7,7 @@ import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { CashAccount, CompanySettings } from '@/types'
@@ -44,6 +45,9 @@ function accountLabel(account: CashAccount): string {
 export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
   const t = useTranslations('settings_voucher_series')
   const errorLocale = useLocale() as ErrorLocale
+  // Same gate as the server: turning a bank account on or off is owner/admin.
+  const { role } = useCompany()
+  const canManageAccounts = role === 'owner' || role === 'admin'
   const { toast } = useToast()
   const { cashAccounts, isLoading, refresh } = useCashAccounts({ enabledOnly: true })
   // Same cache, unfiltered: only source to disabled accounts no bank
@@ -170,7 +174,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
             // Mirrors setEnabled()'s own rule: a connection-held account's
             // enabled state belongs to the AccountPicker, and the primary
             // account is never turned off.
-            const canDisable = account.bank_connection_id === null && !account.is_primary
+            const canDisable = canManageAccounts && account.bank_connection_id === null && !account.is_primary
             return (
               <SettingsRow
                 key={account.id}
@@ -214,7 +218,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
           })
         )}
       </SettingsGroup>
-      {disabledAccounts.length > 0 && (
+      {canManageAccounts && disabledAccounts.length > 0 && (
         <SettingsGroup label={t('per_account_disabled_heading')} help={t('per_account_disabled_help')}>
           {disabledAccounts.map((account, i) => (
             <SettingsRow

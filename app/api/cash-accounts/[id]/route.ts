@@ -45,11 +45,12 @@ const PAYEE_KEYS = [
  *   - payee fields + invoice_payee + name: what customer invoices print
  *     (owner/admin only, same gate as the payment instructions on
  *     /api/settings; members never control where customers pay).
- *   - enabled: opt an account no bank connection holds out of the Konton
- *     overview and the booking flows once the company stops using it (never
- *     a connection-held account, 409; never the account currently primary
- *     or one with unbooked transactions, 400). setEnabled() enforces the
- *     first two in its UPDATE; importing onto the ledger turns it back on.
+ *   - enabled (owner/admin only, like the payee fields): opt an account no
+ *     bank connection holds out of the Konton overview and the booking flows
+ *     once the company stops using it. Never a connection-held account
+ *     (409); never the primary or one with unbooked transactions (400).
+ *     setEnabled() enforces the first two in its UPDATE; importing onto
+ *     the ledger turns the account back on.
  * Ledger account and primary flag have their own guarded flows.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -72,7 +73,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     const touchesPayee = Object.keys(payeeUpdate).length > 0
 
-    if (touchesPayee) {
+    // enabled rides the payee gate: it is one of the three conditions for an
+    // account to print on invoices (isUsableInvoicePayee), so a member flipping
+    // it would decide whether an approved payee shows. Creating a bank account
+    // (POST /api/cash-accounts) is owner/admin for the same reason.
+    if (touchesPayee || body.enabled !== undefined) {
       const roleResult = await getCompanyRole(supabase, user.id, { companyId })
       if (!roleResult.ok) return roleResult.response
       if (!['owner', 'admin'].includes(roleResult.role)) {
@@ -81,6 +86,9 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
           details: { required_roles: ['owner', 'admin'] },
         })
       }
+    }
+
+    if (touchesPayee) {
       // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe, Woo and
       // Shopify clearing rows live in the same table and must stay out.
       const { data: existing, error: existingError } = await supabase
