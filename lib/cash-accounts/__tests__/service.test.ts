@@ -14,6 +14,8 @@ import {
   findFreeLedgerAccount,
   allocatePsd2LedgerAccount,
   resolvePsd2LedgerAccount,
+  pickKeeper,
+  sameCashAccount,
   normalizeIban,
   defaultLedgerForCurrency,
   getRevokedConnectionIds,
@@ -27,6 +29,9 @@ type CashRow = {
   bank_connection_id: string | null
   id?: string
   iban?: string | null
+  currency?: string
+  is_primary?: boolean
+  created_at?: string
 }
 type ConnRow = { id: string; status: string }
 
@@ -38,6 +43,8 @@ interface MakeSupabaseOpts {
   /** 19xx account numbers already present in the company's chart. */
   chart?: string[]
   chartError?: { message: string } | null
+  /** Ledgers that carry lines on a posted verifikat (the keeper signal). */
+  postedLedgers?: string[]
 }
 
 /**
@@ -48,7 +55,7 @@ interface MakeSupabaseOpts {
  */
 function chainable(result: { data: unknown; error: unknown }) {
   const chain: Record<string, unknown> = {}
-  for (const method of ['select', 'eq', 'neq', 'not', 'is', 'like', 'in', 'order', 'limit']) {
+  for (const method of ['select', 'eq', 'neq', 'not', 'is', 'like', 'in', 'order', 'limit', 'range']) {
     chain[method] = vi.fn(() => chain)
   }
   chain.then = (onFulfilled: (value: unknown) => unknown) =>
@@ -82,6 +89,19 @@ function makeSupabase(rows: CashRow[], opts: MakeSupabaseOpts = {}) {
             ? { data: null, error: opts.chartError }
             : { data: (opts.chart ?? []).map(n => ({ account_number: n })), error: null },
         )
+      }
+      if (table === 'journal_entries') {
+        return chainable({ data: opts.postedLedgers?.length ? [{ id: 'je-1' }] : [], error: null })
+      }
+      if (table === 'journal_entry_lines') {
+        return chainable({
+          data: (opts.postedLedgers ?? []).map((n, i) => ({
+            id: `line-${i}`,
+            journal_entry_id: 'je-1',
+            account_number: n,
+          })),
+          error: null,
+        })
       }
       return chainable({
         data: opts.error ? null : rows,
@@ -381,7 +401,7 @@ describe('resolvePsd2LedgerAccount', () => {
     // The reconnect case: the bank minted a new account uid (and possibly a
     // whole new connection row), but it is the same physical account.
     const supabase = makeSupabase([
-      { id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN },
+      { id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN, currency: 'SEK' },
     ])
 
     const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
@@ -405,6 +425,7 @@ describe('resolvePsd2LedgerAccount', () => {
         ledger_account: '1941',
         bank_connection_id: 'conn-old',
         iban: 'SE45 5000 0000 0583 9825 7466',
+        currency: 'eur',
       },
     ])
 
@@ -422,7 +443,7 @@ describe('resolvePsd2LedgerAccount', () => {
     // reads as a live claim. One IBAN is one account: the connection that just
     // authorized owns it.
     const supabase = makeSupabase(
-      [{ id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN }],
+      [{ id: 'row-1', ledger_account: '1930', bank_connection_id: 'conn-old', iban: IBAN, currency: 'SEK' }],
       { connections: [{ id: 'conn-old', status: 'active' }] },
     )
 
@@ -454,7 +475,7 @@ describe('resolvePsd2LedgerAccount', () => {
     // Two accounts cannot share a ledger: the UNIQUE (company_id,
     // ledger_account) constraint would reject the second write.
     const supabase = makeSupabase([
-      { id: 'row-1', ledger_account: '1930', bank_connection_id: null, iban: IBAN },
+      { id: 'row-1', ledger_account: '1930', bank_connection_id: null, iban: IBAN, currency: 'SEK' },
     ])
 
     const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
@@ -480,6 +501,96 @@ describe('resolvePsd2LedgerAccount', () => {
       reuseCashAccountId: null,
       source: 'allocated',
     })
+  })
+
+  it('does not reuse a same-IBAN row in another currency (multi-currency pocket)', async () => {
+    const supabase = makeSupabase([
+      { id: 'row-sek', ledger_account: '1930', bank_connection_id: 'conn-1', iban: IBAN, currency: 'SEK' },
+    ])
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', {
+      iban: IBAN,
+      currency: 'EUR',
+    })
+
+    expect(resolved?.source).toBe('allocated')
+    expect(resolved?.reuseCashAccountId).toBeNull()
+  })
+
+  it('among twin rows, reuses the one whose ledger has posted lines', async () => {
+    // The overflow twin comes back FIRST from PostgREST: the old first-hit
+    // lookup would have kept feeding 1931.
+    const supabase = makeSupabase(
+      [
+        { id: 'row-1931', ledger_account: '1931', bank_connection_id: 'conn-1', iban: IBAN, currency: 'SEK', is_primary: true, created_at: '2026-01-01T00:00:00Z' },
+        { id: 'row-1930', ledger_account: '1930', bank_connection_id: 'conn-1', iban: IBAN, currency: 'SEK', is_primary: false, created_at: '2026-02-01T00:00:00Z' },
+      ],
+      { postedLedgers: ['1930'] },
+    )
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { iban: IBAN, currency: 'SEK' })
+
+    expect(resolved).toEqual({ ledgerAccount: '1930', reuseCashAccountId: 'row-1930', source: 'iban' })
+  })
+
+  it('among twin rows split across two posted ledgers, falls back to the primary row', async () => {
+    const supabase = makeSupabase(
+      [
+        { id: 'row-1931', ledger_account: '1931', bank_connection_id: 'conn-1', iban: IBAN, currency: 'SEK', is_primary: false, created_at: '2026-01-01T00:00:00Z' },
+        { id: 'row-1930', ledger_account: '1930', bank_connection_id: 'conn-1', iban: IBAN, currency: 'SEK', is_primary: true, created_at: '2026-02-01T00:00:00Z' },
+      ],
+      { postedLedgers: ['1930', '1931'] },
+    )
+
+    const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { iban: IBAN, currency: 'SEK' })
+
+    expect(resolved?.reuseCashAccountId).toBe('row-1930')
+  })
+})
+
+describe('pickKeeper', () => {
+  const row = (id: string, ledger: string, isPrimary: boolean, createdAt: string) => ({
+    id,
+    ledger_account: ledger,
+    is_primary: isPrimary,
+    created_at: createdAt,
+  })
+  const a = row('a', '1930', false, '2026-02-01T00:00:00Z')
+  const b = row('b', '1931', true, '2026-03-01T00:00:00Z')
+  const c = row('c', '1932', false, '2026-01-01T00:00:00Z')
+
+  it('keeps the row whose ledger has posted lines, over primary and age', () => {
+    expect(pickKeeper([b, c, a], new Set(['1930']))?.id).toBe('a')
+  })
+
+  it('falls back to the primary row, then to the oldest', () => {
+    expect(pickKeeper([a, b, c], new Set())?.id).toBe('b')
+    expect(pickKeeper([a, c], new Set())?.id).toBe('c')
+  })
+
+  it('returns null when more than one ledger has posted lines', () => {
+    expect(pickKeeper([a, b], new Set(['1930', '1931']))).toBeNull()
+  })
+})
+
+describe('sameCashAccount', () => {
+  const keys = new Map([
+    ['a', 'SE1|SEK'],
+    ['b', 'SE1|SEK'],
+    ['c', 'SE2|SEK'],
+  ])
+
+  it('matches the same row, IBAN twins, and a null on either side', () => {
+    expect(sameCashAccount('a', 'a', keys)).toBe(true)
+    expect(sameCashAccount('a', 'b', keys)).toBe(true)
+    expect(sameCashAccount(null, 'c', keys)).toBe(true)
+    expect(sameCashAccount('c', null, keys)).toBe(true)
+  })
+
+  it('never matches different accounts, or two rows without a physical key', () => {
+    expect(sameCashAccount('a', 'c', keys)).toBe(false)
+    expect(sameCashAccount('a', 'manual-1', keys)).toBe(false)
+    expect(sameCashAccount('manual-1', 'manual-2', keys)).toBe(false)
   })
 })
 
