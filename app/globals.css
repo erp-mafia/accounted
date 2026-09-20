@@ -16,6 +16,23 @@
      and the panel's left offset both read it, so they stay in lockstep. */
   --nav-w: 220px;
 
+  /* Height the mobile bottom nav (DashboardNav) reserves at the viewport
+     bottom: its 4rem tab row plus the device safe-area inset. The nav sizes
+     itself from this token, and every fixed or sticky surface pinned to the
+     bottom of a page offsets by it: bottom-[calc(var(--bottom-nav-h)+1rem)]
+     for a floating bar, bottom-[var(--bottom-nav-h)] for a sticky one. A bar
+     at bottom-4 is fully covered by the nav on a phone (#2738). The token is
+     0px from md up (override below the :root block), where the nav is
+     hidden, so one class serves both viewports without an md: pair.
+
+     Bottom-edge stacking order, low to high: floating page bars z-30 and
+     z-40, the assistant handle z-[45], the mobile nav and its menu sheet
+     z-50 (the same layer as dialogs and popovers), the agent sheet and
+     system prompts z-[60], toasts z-[100]. Bars stay BELOW the nav on
+     purpose: the offset clears them, not stacking, so the menu sheet still
+     covers them. */
+  --bottom-nav-h: calc(4rem + env(safe-area-inset-bottom, 0px));
+
   /* Width the docked assistant panel claims from the page panel. Default is
      the plain frame gutter, so the layout is correct before any JS runs; the
      agent provider raises it while the panel is docked and clears it again. */
@@ -98,6 +115,14 @@
   --duration-fast: 150ms;
   --duration-base: 300ms;
   --duration-slow: 500ms;
+}
+
+/* From md the bottom nav is hidden (DashboardNav is md:hidden), so nothing
+   needs to clear it. Mirrors Tailwind's md breakpoint (48rem). */
+@media (min-width: 48rem) {
+  :root {
+    --bottom-nav-h: 0px;
+  }
 }
 
 /* While the assistant panel's width handle is being dragged, the page margin
@@ -444,9 +469,10 @@ summary,
   padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
 }
 
-/* Main content padding: clears bottom nav + safe area on mobile */
+/* Main content padding: clears the bottom nav (--bottom-nav-h) plus 1rem on
+   mobile; the panel resets it from md. */
 .safe-area-main-padding {
-  padding-bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  padding-bottom: calc(var(--bottom-nav-h) + 1rem);
 }
 
 /* Animation Keyframes */

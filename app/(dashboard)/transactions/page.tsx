@@ -4422,8 +4422,9 @@ export default function TransactionsPage() {
                   'flex items-center gap-x-5 gap-y-2 text-[12.5px] animate-fade-in',
                   // A floating bar centred over the panel (concept .floatbar),
                   // so it stays in view however far down the selection
-                  // reaches and the list does not shift under it.
-                  'fixed bottom-4 left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]',
+                  // reaches and the list does not shift under it. Offset by
+                  // --bottom-nav-h so it clears the mobile bottom nav (#2738).
+                  'fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 max-w-[calc(100vw-2rem)] -translate-x-1/2 overflow-x-auto whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 shadow-lg md:left-[calc(50%+var(--nav-w)/2)]',
                 )}
               >
                 {batchProgress ? (

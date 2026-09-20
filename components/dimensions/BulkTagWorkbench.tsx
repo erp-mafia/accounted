@@ -777,7 +777,7 @@ export default function BulkTagWorkbench() {
 
       {/* Apply panel: fixed footer bar while a selection is active */}
       {selected.size > 0 && (
-        <div className="fixed bottom-20 left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-lg md:bottom-6">
+        <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-40 w-[calc(100vw-2rem)] max-w-2xl -translate-x-1/2 rounded-lg border border-border bg-background p-4 shadow-lg md:bottom-6">
           {missingPairLineIds.length > 0 && (
             <div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-2">

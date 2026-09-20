@@ -86,7 +86,7 @@ export function SuggestionQueue({
           {/* Selection actions float: the header checkbox selects every row,
               and the bar below carries the rest. Nothing sits above the table. */}
           {count > 0 && (
-            <div className="fixed bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-lg animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
+            <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-lg animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
               <span className="tabular-nums">
                 <strong className="font-semibold">{count}</strong> {t('selected_n', { count }).replace(/^\d+\s*/, '')}
               </span>

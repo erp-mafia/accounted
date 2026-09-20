@@ -710,9 +710,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
           on branded hosts the brand style block re-tints the bar's tokens
           (--card/--border/--primary...) to the deep chrome, mirroring the
-          sidebar; on default hosts the attribute matches nothing. */}
-      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
-        <div className="flex items-center justify-around h-16 px-2">
+          sidebar; on default hosts the attribute matches nothing.
+          Height is --bottom-nav-h (globals.css): the tab row plus the safe
+          area inset, the same token every bottom-pinned bar offsets by, so
+          the nav and the bars cannot drift apart (#2738). */}
+      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+        <div className="flex items-center justify-around h-full px-2">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)

@@ -3656,11 +3656,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         {/* Sticky action bar: position sticky, NEVER fixed (DialogContent's
             transform re-anchors fixed children in bare mode). It binds to the
             dialog scroll container in bare mode and to the page panel /
-            window otherwise; the mobile page offset clears the bottom nav. */}
+            window otherwise; the page offset (--bottom-nav-h) clears the
+            mobile bottom nav. */}
         <div
           className={cn(
             'sticky z-20 mt-7 border-t border-border bg-background',
-            bare ? 'bottom-0 px-6' : 'bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] md:bottom-0',
+            bare ? 'bottom-0 px-6' : 'bottom-[var(--bottom-nav-h)]',
           )}
         >
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">

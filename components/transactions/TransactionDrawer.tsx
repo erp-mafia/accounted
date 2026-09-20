@@ -121,7 +121,7 @@ export function TransactionDrawer({
     <aside
       role="dialog"
       aria-label={transaction.description}
-      className="fixed bottom-2.5 right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)] animate-fade-in"
+      className="fixed bottom-[calc(var(--bottom-nav-h)+0.625rem)] right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)] animate-fade-in"
     >
       <div className="flex items-start gap-3 border-b border-border/70 px-5 pb-3 pt-4">
         <div className="min-w-0 flex-1">
