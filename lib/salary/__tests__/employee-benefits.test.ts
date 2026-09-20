@@ -399,16 +399,25 @@ describe('updateEmployeeBenefit', () => {
 describe('deleteEmployeeBenefit', () => {
   const args = { companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, benefitId: BENEFIT_ID }
 
+  // The NO ACTION foreign key's refusal, as PostgREST surfaces it (#2801).
+  const FK_VIOLATION = {
+    code: '23503',
+    message:
+      'update or delete on table "employee_benefits" violates foreign key constraint "salary_line_items_source_benefit_id_fkey" on table "salary_line_items"',
+  }
+  const NO_LINES = { data: null, count: 0 } // the pre-check saw no derived line
+
   it('reports a hit when a row came back from the delete', async () => {
-    mock.enqueue({ data: null, count: 0 }) // no payslip line derives from it
+    mock.enqueue(NO_LINES)
     mock.enqueue({ data: [{ id: BENEFIT_ID }] })
     const result = await deleteEmployeeBenefit(supabase, args)
     expect(result).toEqual({ ok: true, data: { committed: true, deleted: true } })
     expect(mock.findCall('employee_benefits', 'delete')).toBeDefined()
+    expect(mock.findCall('employee_benefits', 'update')).toBeUndefined()
   })
 
   it('reports a no-op when nothing matched', async () => {
-    mock.enqueue({ data: null, count: 0 })
+    mock.enqueue(NO_LINES)
     mock.enqueue({ data: [] })
     const result = await deleteEmployeeBenefit(supabase, args)
     expect(result).toEqual({ ok: true, data: { committed: true, deleted: false } })
@@ -441,19 +450,60 @@ describe('deleteEmployeeBenefit', () => {
     ])
   })
 
+  it('deactivates when a line is derived after the count: the foreign key refuses the delete (#2801)', async () => {
+    // The race the count could never close. It read 0, a recalculation then
+    // committed a derived line, and the delete met the NO ACTION key (23503).
+    // Before 20260920190100 the key was SET NULL and this delete succeeded,
+    // orphaning that line into an apparent manual one.
+    mock.enqueue(NO_LINES)
+    mock.enqueue({ data: null, error: FK_VIOLATION })
+    mock.enqueue({ data: [{ id: BENEFIT_ID }] })
+    const result = await deleteEmployeeBenefit(supabase, args)
+    expect(result).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: true } })
+    expect(mock.findCall('employee_benefits', 'delete')).toBeDefined()
+    expect(mock.findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
+    expect(fromCalls()).toEqual(['salary_line_items', 'employee_benefits', 'employee_benefits'])
+  })
+
   it('reports a deactivate that matched nothing as neither deleted nor deactivated', async () => {
     mock.enqueue({ data: null, count: 1 })
     mock.enqueue({ data: [] })
-    const result = await deleteEmployeeBenefit(supabase, args)
-    expect(result).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: false } })
+    const counted = await deleteEmployeeBenefit(supabase, args)
+    expect(counted).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: false } })
+
+    // Same answer when the refusal came from the key rather than the count.
+    mock.enqueue(NO_LINES)
+    mock.enqueue({ data: null, error: FK_VIOLATION })
+    mock.enqueue({ data: [] })
+    const refused = await deleteEmployeeBenefit(supabase, args)
+    expect(refused).toEqual({ ok: true, data: { committed: true, deleted: false, deactivated: false } })
   })
 
-  it('maps a delete failure to INTERNAL_ERROR', async () => {
-    mock.enqueue({ data: null, count: 0 })
+  it('maps a failed deactivate after a 23503 through the write-error mapper', async () => {
+    mock.enqueue(NO_LINES)
+    mock.enqueue({ data: null, error: FK_VIOLATION })
+    mock.enqueue({ data: null, error: { code: '42501', message: 'permission denied' } })
+    const result = await deleteEmployeeBenefit(supabase, args)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('DB_PERMISSION_DENIED')
+  })
+
+  it('maps a failure on the referencing-line count to INTERNAL_ERROR, without writing', async () => {
     mock.enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
     const result = await deleteEmployeeBenefit(supabase, args)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.code).toBe('INTERNAL_ERROR')
+    expect(mock.findCall('employee_benefits', 'delete')).toBeUndefined()
+    expect(mock.findCall('employee_benefits', 'update')).toBeUndefined()
+  })
+
+  it('maps a delete failure that is not a foreign key refusal to INTERNAL_ERROR, without deactivating', async () => {
+    mock.enqueue(NO_LINES)
+    mock.enqueue({ data: null, error: { code: '08006', message: 'connection failure' } })
+    const result = await deleteEmployeeBenefit(supabase, args)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('INTERNAL_ERROR')
+    expect(mock.findCall('employee_benefits', 'update')).toBeUndefined()
   })
 })
 
