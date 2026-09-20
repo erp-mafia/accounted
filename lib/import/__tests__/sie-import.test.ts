@@ -12,6 +12,8 @@ import {
   companyHasPriorActivity,
 } from '../sie-import'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { ParsedSIEFile, AccountMapping } from '../types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
@@ -1637,6 +1639,31 @@ describe('importVouchers: per-voucher series preservation', () => {
 
       expect(journalEntryInserts[0].source_type).toBe('import')
     })
+  })
+
+  it('closes a sub-krona gap on BAS 3740 Öres- och kronutjämning, never on a non-BAS number (#2687)', async () => {
+    const { supabase, journalEntryLineInserts } = buildCapturingSupabase()
+    // 100.00 debit against 99.63 credit: the importer adds an explicit 0.37
+    // credit on the rounding account instead of editing a source line.
+    const parsed = makeParsedFile({
+      vouchers: [
+        makeVoucher('A', 1, [
+          { account: '1510', amount: 100 },
+          { account: '3001', amount: -99.63 },
+        ]),
+      ],
+    })
+
+    const result = await importVouchers(supabase, 'company-1', 'user-1', 'period-1', parsed, baseMap, 'A')
+
+    expect(result.created).toBe(1)
+    expect(result.skippedUnbalanced).toBe(0)
+    const rounding = journalEntryLineInserts.filter((line) => line.line_description === 'Öresutjämning')
+    expect(rounding).toEqual([
+      expect.objectContaining({ account_number: ORE_ROUNDING_ACCOUNT, debit_amount: 0, credit_amount: 0.37 }),
+    ])
+    // The number the importer books on must be a real BAS 2026 account.
+    expect(getBASReference(rounding[0].account_number as string)?.account_name).toBe('Öres- och kronutjämning')
   })
 })
 

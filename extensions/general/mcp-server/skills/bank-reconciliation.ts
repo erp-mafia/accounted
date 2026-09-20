@@ -111,7 +111,7 @@ ledger after reconciliation:
 
 ## Common errors
 
-- *"Balances disagree by exactly N"*: usually a single rounding entry at year-end (öresavrundning, 3741/7741) wasn't booked. Verify with \`gnubok_get_general_ledger\` filtered to the rounding accounts.
+- *"Balances disagree by exactly N"*: usually a single rounding entry at year-end (öresavrundning, BAS 3740) wasn't booked. Verify with \`gnubok_get_general_ledger\` filtered to the rounding account.
 - *"Unmatched count is 0 but balances disagree"*: opening balance issue. Check the previous period's UB matches this period's IB via \`gnubok_get_trial_balance(period=prev)\` vs \`gnubok_get_trial_balance(period=current, opening=true)\`.
 - *"Same transaction shows twice"*: either two PSD2 feeds (manual + Enable Banking) imported the same row, or the user manually created a voucher AND the bank imported the row. Reverse the duplicate via \`gnubok_reverse_journal_entry\`.
 

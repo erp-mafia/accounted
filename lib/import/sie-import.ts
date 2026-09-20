@@ -22,7 +22,7 @@ import type {
 } from './types'
 import type { CreateJournalEntryInput, CreateJournalEntryLineInput, EntityType } from '@/types'
 import type { SIEPreparedEntry } from './sie-job-contract'
-import { roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
@@ -1543,7 +1543,7 @@ export async function importVouchers(
       continue
     }
 
-    // Validate balance, Fix 2: Tiered rounding with öresutjämning (3741)
+    // Validate balance, Fix 2: Tiered rounding with öresutjämning (ORE_ROUNDING_ACCOUNT, BAS 3740)
     const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
     const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
@@ -1568,14 +1568,14 @@ export async function importVouchers(
       const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
       if (roundedDiff > 0) {
         lines.push({
-          account_number: '3741',
+          account_number: ORE_ROUNDING_ACCOUNT,
           debit_amount: 0,
           credit_amount: Math.abs(roundedDiff),
           line_description: 'Öresutjämning',
         })
       } else {
         lines.push({
-          account_number: '3741',
+          account_number: ORE_ROUNDING_ACCOUNT,
           debit_amount: Math.abs(roundedDiff),
           credit_amount: 0,
           line_description: 'Öresutjämning',
@@ -1930,14 +1930,14 @@ export function buildSIEMigrationAdjustmentEntry(
     const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
     if (roundedDiff > 0) {
       lines.push({
-        account_number: '3741',
+        account_number: ORE_ROUNDING_ACCOUNT,
         debit_amount: 0,
         credit_amount: Math.abs(roundedDiff),
         line_description: 'Öresutjämning omföringsverifikation',
       })
     } else {
       lines.push({
-        account_number: '3741',
+        account_number: ORE_ROUNDING_ACCOUNT,
         debit_amount: Math.abs(roundedDiff),
         credit_amount: 0,
         line_description: 'Öresutjämning omföringsverifikation',
@@ -3107,8 +3107,10 @@ export async function executeSIEImport(
         }
       }
 
-      // Ensure öresutjämning account 3741 exists in the user's chart
-      await ensureAccountExists(supabase, companyId, userId, '3741', 'Öresutjämning vid import')
+      // Ensure the öresutjämning account (BAS 3740) exists in the user's chart.
+      // It is a catalogue account, so ensureAccountExists inserts the BAS row;
+      // the name here is only the non-BAS fallback and never applies.
+      await ensureAccountExists(supabase, companyId, userId, ORE_ROUNDING_ACCOUNT, 'Öres- och kronutjämning')
 
       const voucherResults = await importVouchers(
         supabase,

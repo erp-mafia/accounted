@@ -119,6 +119,17 @@ export const ORE_TOLERANCE = 0.005
 export const ORE_ROUNDING_SETTLEMENT_MAX = 1.0
 
 /**
+ * The BAS account that absorbs öre rounding so a verifikat balances:
+ * 3740 Öres- och kronutjämning (BAS 2026, lib/bookkeeping/bas-data/class-3-revenue.ts).
+ *
+ * Import this instead of spelling the number in each module: a literal has
+ * nothing tying it to the catalogue, which is how the SIE importer booked its
+ * rounding line on 3741, a number BAS does not have (#2687). The constant is
+ * pinned to the catalogue entry by lib/__tests__/money.test.ts.
+ */
+export const ORE_ROUNDING_ACCOUNT = '3740'
+
+/**
  * True when two amounts are equal to the öre (within `ORE_TOLERANCE`). Prefer
  * this over `a === b` for money: direct equality on floats fails on drift.
  */

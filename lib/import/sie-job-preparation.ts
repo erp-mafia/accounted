@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryInput } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { buildSIEAccountRows } from './account-sync'
 import { mappingsToMap } from './account-mapper'
 import { collectSIEDimensionUsage } from './sie-dimensions'
@@ -158,9 +158,10 @@ async function snapshotSource(supabase: SupabaseClient, job: SIEJob, deadline: n
 
 async function createMetadata(supabase: SupabaseClient, job: SIEJob, snapshot: Snapshot, deadline: number, differenceAccount: string): Promise<boolean> {
   const input = jobInput(job)
-  // 3741 takes the migration adjustment's öre; the difference account takes
-  // the IB imbalance. Both must exist in the chart before the entries post.
-  const extras = ['3741',differenceAccount].map(number => ({ sourceAccount:number,targetAccount:number,sourceName:'',targetName:'',confidence:1,matchType:'exact' as const,isOverride:false }))
+  // The öresutjämning account (BAS 3740) takes the migration adjustment's öre;
+  // the difference account takes the IB imbalance. Both must exist in the
+  // chart before the entries post.
+  const extras = [ORE_ROUNDING_ACCOUNT,differenceAccount].map(number => ({ sourceAccount:number,targetAccount:number,sourceName:'',targetName:'',confidence:1,matchType:'exact' as const,isOverride:false }))
   const rows = buildSIEAccountRows(job.company_id,job.user_id,[...extras,...input.mappings])
   for (let n = Number(job.manifest.accountsThrough ?? 0); n < rows.length; n += 100) {
     if (Date.now() > deadline) return false
