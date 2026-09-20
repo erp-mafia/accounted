@@ -1089,6 +1089,22 @@ export async function getAssetDeleteBlock(
  * only admits rows with journal_entry_id IS NULL, which is why the drafts are
  * removed explicitly before the parent row rather than left to the FK cascade
  * (a cascade runs as table owner and would not consult that policy).
+ *
+ * KNOWN GAP (not closed here, see DECISIONS.md 2026-09-20): the check and the
+ * delete are separate statements, so a planenlig avskrivning posted for this
+ * asset at the same moment can slip past. Two windows:
+ *   1. A schedule row turns posted between the check and the delete: the FK
+ *      cascade then removes a posted row. Needs a DB guard on posted
+ *      depreciation_schedules rows (one that joins the gnubok.allow_delete /
+ *      sandbox-teardown bypass chain).
+ *   2. commitAnnualPostings() commits the voucher and writes the schedule
+ *      link in two statements. In between there is no posted row to see or
+ *      guard, and its draft UPDATE matches zero rows without erroring. Only
+ *      atomic depreciation posting (as commit_asset_disposal did for
+ *      disposal) closes this.
+ * Either way the ledger is untouched (vouchers are immutable); what is lost
+ * is the register link, and the remedy is a storno of the stray voucher. The
+ * disposal race is different and IS closed: see disposed_at IS NULL below.
  */
 export async function deleteNeverPostedAsset(
   supabase: SupabaseClient,
