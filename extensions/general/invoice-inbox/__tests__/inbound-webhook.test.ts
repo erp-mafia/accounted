@@ -180,8 +180,8 @@ describe('POST /inbound', () => {
     const res = await webhookRoute.handler(request)
     const body = await res.json()
     expect(res.status).toBe(200)
-    // A body-only mail now becomes a text/html document for company-9:
-    // proves the custom-domain routing reached the processing stage.
+    // A body-only mail becomes a PDF underlag for company-9: proves the
+    // custom-domain routing reached the processing stage.
     expect(body.data.reason).toBe('email_body')
     expect(vi.mocked(uploadAndExtract).mock.calls[0][2]).toBe('company-9')
   })
@@ -479,7 +479,7 @@ describe('POST /inbound', () => {
     expect(res.status).toBe(500)
   })
 
-  it('stores the mail body as a text/html document when the mail has no attachments', async () => {
+  it('renders the mail body to a PDF underlag when the mail has no attachments (#2751)', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ attachments: [] }) as never
     )
@@ -516,14 +516,317 @@ describe('POST /inbound', () => {
     expect(body.data.inbox_item_id).toBe('item-body-1')
     expect(fetchInboundAttachment).not.toHaveBeenCalled()
 
-    const [, , companyId, file, source] = vi.mocked(uploadAndExtract).mock.calls[0]
+    const [, , companyId, file, source, emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
     expect(companyId).toBe('company-1')
     expect(source).toBe('email')
-    expect(file.type).toBe('text/html')
-    expect(file.name).toMatch(/^mail-.*\.html$/)
-    const stored = new TextDecoder().decode(new Uint8Array(file.buffer))
-    expect(stored.toLowerCase().startsWith('<!doctype html')).toBe(true)
-    expect(stored).toContain('<div>Att betala: <b>1 234,56 kr</b></div>')
+    expect(file.type).toBe('application/pdf')
+    // Header fields come from the webhook event, the body from the fetched mail.
+    expect(file.name).toBe('mail-Invoice__5678.pdf')
+    expect(new TextDecoder('latin1').decode(new Uint8Array(file.buffer.slice(0, 5)))).toBe('%PDF-')
+    // The message id reaches the inbox row (raw_email_payload) through the
+    // same meta as an attachment; the PDF carries it in its header block.
+    expect(emailMeta?.messageId).toBe('<msg-id@supplier.com>')
+    expect(emailMeta?.bodyText).toBe('Att betala: 1 234,56 kr')
+  })
+
+  it('files the body, not the logos, when a forwarded receipt carries only signature images (#2751)', async () => {
+    // The reporter's mail: the receipt was the text, the only "attachments"
+    // were the inline images of the forwarding signature. Before, the logo
+    // was filed and extracted and the body never looked at.
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({
+        from: 'anna@example.se',
+        subject: 'Fwd: Ditt kvitto',
+        message_id: '<fwd-1@example.se>',
+        created_at: '2026-09-18T12:03:00Z',
+        attachments: [],
+      }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // body-document dedupe check finds nothing
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-2' } as never)
+    const receipt =
+      '---------- Forwarded message ---------\nFrån: Spotify <no-reply@spotify.com>\nSubject: Ditt kvitto\n\n' +
+      'Spotify Premium 119,00 kr\nMoms 25% 23,80 kr\nTotalt 119,00 kr\nOrdernummer 4711-2026\nBetalt med kort som slutar på 1234'
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'anna@example.se',
+      created_at: '2026-09-18T12:03:00Z',
+      subject: 'Fwd: Ditt kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: `<div>${receipt.replace(/\n/g, '<br>')}</div><img src="cid:logo@x"><img src="cid:pixel@x">`,
+      text: receipt,
+      headers: {},
+      message_id: '<fwd-1@example.se>',
+      raw: null,
+      attachments: [
+        { id: 'att_logo', filename: 'image001.png', size: 18_442, content_type: 'image/png', content_id: 'logo@x', content_disposition: 'inline' },
+        { id: 'att_pixel', filename: null, size: 43, content_type: 'image/gif', content_id: 'pixel@x', content_disposition: 'inline' },
+      ],
+    } as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('email_body')
+    expect(body.data.inbox_item_id).toBe('item-body-2')
+    // Never downloaded, never a row.
+    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+    expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+
+    const [, , , file] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(file.type).toBe('application/pdf')
+    expect(file.name).toBe('mail-Fwd__Ditt_kvitto.pdf')
+    expect(receivedEvents()[0].payload).toMatchObject({
+      outcome: 'email_body',
+      inbox_item_id: 'item-body-2',
+      attachment_count: 2,
+      attachments: [
+        { id: 'att_logo', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+        { id: 'att_pixel', outcome: 'ignored', reason: 'signature_image', mime: 'image/gif' },
+      ],
+    })
+  })
+
+  it('keeps the guard for a mail whose only attachments are signature images and whose text is a note', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({ from: 'anna@example.se', subject: 'Kvitto', message_id: '<note-1@example.se>', attachments: [] }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // error-row insert
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'anna@example.se',
+      created_at: '2026-09-18T12:03:00Z',
+      subject: 'Kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<div>Skickat från min iPhone</div><img src="cid:logo@x">',
+      text: 'Skickat från min iPhone',
+      headers: {},
+      message_id: '<note-1@example.se>',
+      raw: null,
+      attachments: [
+        { id: 'att_logo', filename: 'image001.png', size: 18_442, content_type: 'image/png', content_id: 'logo@x', content_disposition: 'inline' },
+      ],
+    } as never)
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.reason).toBe('no_attachments')
+    expect(uploadAndExtract).not.toHaveBeenCalled()
+    expect(fetchInboundAttachment).not.toHaveBeenCalled()
+    const insert = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')
+    expect(insert?.args[0]).toMatchObject({
+      status: 'error',
+      error_message: 'Mejlet innehöll bara signaturbilder och ingen mejltext att spara som underlag',
+      email_body_text: 'Skickat från min iPhone',
+      raw_email_payload: { messageId: '<note-1@example.se>' },
+    })
+    expect(receivedEvents()[0].payload).toMatchObject({
+      outcome: 'no_attachments',
+      attachments: [{ id: 'att_logo', outcome: 'ignored', reason: 'signature_image' }],
+    })
+  })
+
+  it('files the document attachment and ignores the signature image next to it', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check for the PDF
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-pdf-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'billing@supplier.com',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Faktura 5678',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<p>Se bifogad faktura.</p><img src="cid:logo@x">',
+      text: 'Se bifogad faktura.',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [
+        { id: 'att_logo', filename: 'logo.png', size: 9_000, content_type: 'image/png', content_id: 'logo@x', content_disposition: 'inline' },
+        { id: 'att_1', filename: 'faktura.pdf', size: 100, content_type: 'application/pdf', content_id: null, content_disposition: 'attachment' },
+      ],
+    } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_1',
+      filename: 'faktura.pdf',
+      contentType: 'application/pdf',
+      buffer: new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer as ArrayBuffer,
+    })
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.processed).toBe(1)
+    expect(body.data.results).toEqual([{ attachment_id: 'att_1', inbox_item_id: 'item-pdf-1' }])
+    expect(fetchInboundAttachment).toHaveBeenCalledTimes(1)
+    expect(fetchInboundAttachment).toHaveBeenCalledWith('em_123', 'att_1')
+    expect(receivedEvents()[0].payload).toMatchObject({
+      outcome: 'attachments',
+      attachments: [
+        { id: 'att_logo', outcome: 'ignored', reason: 'signature_image' },
+        { id: 'att_1', outcome: 'filed', inbox_item_id: 'item-pdf-1' },
+      ],
+    })
+  })
+
+  it('applies the same rule inside a Gmail "forward as attachment" (.eml) whose body is the receipt', async () => {
+    // The forwarded mail arrives as one message/rfc822 attachment; inside it
+    // the receipt is the HTML body and the only part is the sender's logo.
+    vi.mocked(verifyInboundWebhook).mockReturnValue(
+      mockReceivedEvent({
+        subject: 'Fwd: Ditt kvitto',
+        attachments: [
+          { id: 'att_eml', filename: 'Ditt kvitto.eml', size: 4_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' },
+        ],
+      }) as never,
+    )
+    const { supabase, enqueue, calls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check for the .eml
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-inner-body' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'anna@example.se',
+      created_at: '2026-09-18T12:03:00Z',
+      subject: 'Fwd: Ditt kvitto',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: null,
+      text: '',
+      headers: {},
+      message_id: '<msg-id@supplier.com>',
+      raw: null,
+      attachments: [
+        { id: 'att_eml', filename: 'Ditt kvitto.eml', size: 4_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' },
+      ],
+    } as never)
+    const receiptHtml =
+      '<div>Spotify Premium 119,00 kr<br>Moms 25% 23,80 kr<br>Totalt 119,00 kr<br>' +
+      'Ordernummer 4711-2026<br>Betalt med kort som slutar på 1234<br>' +
+      'Spotify AB, Regeringsgatan 19, 111 53 Stockholm, org.nr 556703-7485</div>' +
+      '<img src="cid:logo@spotify">'
+    const eml = [
+      'From: Spotify <no-reply@spotify.com>',
+      'To: anna@example.se',
+      'Subject: Ditt kvitto',
+      'Date: Thu, 18 Sep 2026 14:03:00 +0200',
+      'Message-ID: <inner-1@spotify.com>',
+      'MIME-Version: 1.0',
+      'Content-Type: multipart/related; boundary="B1"',
+      '',
+      '--B1',
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      receiptHtml,
+      '--B1',
+      'Content-Type: image/png; name="logo.png"',
+      'Content-Transfer-Encoding: base64',
+      'Content-ID: <logo@spotify>',
+      'Content-Disposition: inline; filename="logo.png"',
+      '',
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString('base64'),
+      '--B1--',
+      '',
+    ].join('\r\n')
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_eml',
+      filename: 'Ditt kvitto.eml',
+      contentType: 'message/rfc822',
+      buffer: new Uint8Array(Buffer.from(eml, 'utf8')).buffer as ArrayBuffer,
+    })
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results).toEqual([{ attachment_id: 'att_eml', inbox_item_id: 'item-inner-body' }])
+    expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+
+    const [, , , file, , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+    expect(file.type).toBe('application/pdf')
+    // Named and attributed after the forwarded mail, not the forward.
+    expect(file.name).toBe('mail-Ditt_kvitto.pdf')
+    // mailparser quotes the display name.
+    expect(emailMeta?.from).toBe('"Spotify" <no-reply@spotify.com>')
+    expect(emailMeta?.subject).toBe('Ditt kvitto')
+    expect(emailMeta?.resendAttachmentId).toBe('att_eml')
+    expect(receivedEvents()[0].payload).toMatchObject({
+      outcome: 'attachments',
+      attachments: [
+        { id: 'att_eml#0', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+        { id: 'att_eml', outcome: 'filed', inbox_item_id: 'item-inner-body' },
+      ],
+    })
+  })
+
+  it('still files an inline image that is large enough to be a receipt photo', async () => {
+    vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+    enqueue({ data: { created_by: 'user-owner-1' } })
+    enqueue({ data: null }) // per-attachment dup check
+    vi.mocked(createClient).mockReturnValue(supabase as never)
+    vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-photo-1' } as never)
+    vi.mocked(fetchReceivingEmail).mockResolvedValue({
+      object: 'email',
+      id: 'em_123',
+      to: ['acme-ab-x7f2@arcim.io'],
+      from: 'anna@example.se',
+      created_at: '2026-04-20T10:00:00Z',
+      subject: 'Kvitto lunch',
+      bcc: null,
+      cc: null,
+      reply_to: null,
+      html: '<div>Skickat från min iPhone</div><img src="cid:photo@x">',
+      text: 'Skickat från min iPhone',
+      headers: {},
+      message_id: '<msg@x>',
+      raw: null,
+      attachments: [
+        { id: 'att_photo', filename: 'IMG_0042.jpeg', size: 2_400_000, content_type: 'image/jpeg', content_id: 'photo@x', content_disposition: 'inline' },
+      ],
+    } as never)
+    vi.mocked(fetchInboundAttachment).mockResolvedValue({
+      id: 'att_photo',
+      filename: 'IMG_0042.jpeg',
+      contentType: 'image/jpeg',
+      buffer: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]).buffer as ArrayBuffer,
+    })
+
+    const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+    const body = await res.json()
+    expect(res.status).toBe(200)
+    expect(body.data.results).toEqual([{ attachment_id: 'att_photo', inbox_item_id: 'item-photo-1' }])
+    expect(fetchInboundAttachment).toHaveBeenCalledWith('em_123', 'att_photo')
   })
 
   it('keeps the error row for a no-attachment mail with an empty body', async () => {

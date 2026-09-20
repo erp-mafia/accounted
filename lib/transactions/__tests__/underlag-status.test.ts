@@ -24,6 +24,18 @@ describe('computeJeUnderlagStatus', () => {
     expect(result).toEqual({ 'je-1': 'missing', 'je-2': 'missing', 'je-3': 'missing' })
   })
 
+  it('flags an inbox booking without a document (#1317)', () => {
+    const result = computeJeUnderlagStatus(
+      [
+        { id: 'je-1', source_type: 'inbox_item' },
+        { id: 'je-2', source_type: 'inbox_item' },
+      ],
+      new Set(['je-2']),
+      new Set(),
+    )
+    expect(result).toEqual({ 'je-1': 'missing', 'je-2': 'has' })
+  })
+
   it('respects journal_entry_no_doc_required exemptions', () => {
     const result = computeJeUnderlagStatus(
       [{ id: 'je-1', source_type: 'manual' }],
