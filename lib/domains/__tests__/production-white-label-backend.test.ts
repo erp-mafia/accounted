@@ -5,23 +5,22 @@ const STAGING_URL = 'https://metjnjrhvujscngnpzdv.supabase.co'
 const THIRD_PROJECT_URL = 'https://qqqqqqqqqqqqqqqqqqqq.supabase.co'
 const PRODUCTION_URL = 'https://pwxtzglxptnnvjrpixpg.supabase.co'
 
-// app.gnubok.se is the one entry that the hosted-namespace rule cannot derive:
-// it is Accounted's legacy canonical host, live on production today, and it
-// only stays protected while it is in the approved inventory.
+// Invented hosts only: this repository is public, so no real customer
+// hostname belongs in it. app.gnubok.se is Accounted's own legacy canonical
+// host, the one checked-in entry the hosted-namespace rule cannot derive.
 const APPROVED_PRODUCTION_HOSTS = [
-  'acount.accounted.se',
-  'amnas.accounted.se',
+  'app.accounted.se',
   'app.gnubok.se',
-  'app.ziffr.se',
-  'arbore.accounted.se',
-  'elma.accounted.se',
-  'improveone.accounted.se',
-  'm360.accounted.se',
-  'redovisningskompaniet.accounted.se',
-  'solbo.accounted.se',
-  'willem.accounted.se',
-  'ziffr.accounted.se',
+  'brand-a.accounted.se',
+  'brand-b.accounted.se',
 ]
+
+// What PRODUCTION_CUSTOM_DOMAIN_HOSTS carries on the hosted deployment.
+const CUSTOM_DOMAIN_HOSTS = 'app.brand-g.se, APP.Brand-H.se. ,'
+
+// VERCEL_PROJECT_ID on the hosted product, and on somebody else's deployment.
+const HOSTED_PROJECT_ID = 'prj_zOvCFaOMXS166cUY5VYEGHKke00X'
+const FORK_PROJECT_ID = 'prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
 describe('production white-label backend guard', () => {
   it.each(APPROVED_PRODUCTION_HOSTS)(
@@ -41,13 +40,13 @@ describe('production white-label backend guard', () => {
   )
 
   // The 2026-08-26 incident: a preview build wired to staging answered
-  // improveone.accounted.se, a customer host that was not on the protected
-  // list. Nothing inside the hosted namespace needs listing any more.
+  // a customer host under the namespace that was not on the protected list.
+  // Nothing inside the hosted namespace needs listing any more.
   it.each([
     'app.accounted.se',
     'accounted.se',
-    'improveone.accounted.se',
-    'notacount.accounted.se',
+    'brand-e.accounted.se',
+    'notbrand-a.accounted.se',
     'a-byra-that-does-not-exist-yet.accounted.se',
   ])('blocks the unlisted hosted host %s on the staging project', hostname => {
     expect(usesForbiddenWhiteLabelBackend(hostname, STAGING_URL)).toBe(true)
@@ -55,7 +54,7 @@ describe('production white-label backend guard', () => {
 
   it('blocks a third project it has never heard of', () => {
     expect(
-      usesForbiddenWhiteLabelBackend('willem.accounted.se', THIRD_PROJECT_URL),
+      usesForbiddenWhiteLabelBackend('brand-c.accounted.se', THIRD_PROJECT_URL),
     ).toBe(true)
   })
 
@@ -68,7 +67,7 @@ describe('production white-label backend guard', () => {
     '__NEXT_PUBLIC_SUPABASE_URL__',
     'https://pwxtzglxptnnvjrpixpg.supabase.co.attacker.test',
   ])('blocks a production host on the unusable backend %s', url => {
-    expect(usesForbiddenWhiteLabelBackend('acount.accounted.se', url)).toBe(
+    expect(usesForbiddenWhiteLabelBackend('brand-a.accounted.se', url)).toBe(
       true,
     )
   })
@@ -76,13 +75,13 @@ describe('production white-label backend guard', () => {
   it('normalizes case and a trailing dot before the exact host checks', () => {
     expect(
       usesForbiddenWhiteLabelBackend(
-        'ACOUNT.ACCOUNTED.SE.',
+        'BRAND-A.ACCOUNTED.SE.',
         'https://METJNJRHVUJSCNGNPZDV.SUPABASE.CO./rest/v1',
       ),
     ).toBe(true)
     expect(
       usesForbiddenWhiteLabelBackend(
-        'ACOUNT.ACCOUNTED.SE.',
+        'BRAND-A.ACCOUNTED.SE.',
         'https://PWXTZGLXPTNNVJRPIXPG.SUPABASE.CO./rest/v1',
       ),
     ).toBe(false)
@@ -95,18 +94,103 @@ describe('production white-label backend guard', () => {
     '[::1]',
     'app.localhost',
     'accounted.test',
-    'acount.accounted.se.attacker.test',
+    'brand-a.accounted.se.attacker.test',
   ])('leaves the preview or local host %s alone', hostname => {
     expect(usesForbiddenWhiteLabelBackend(hostname, STAGING_URL)).toBe(false)
   })
 
   // A customer that brings its own domain is not derivable from the hosted
-  // namespace, so it stays out of scope until it is classified in the approved
-  // host inventory. Self-hosted deployments depend on exactly that: their own
-  // backend on their own domain has to keep working.
+  // namespace, so it stays out of scope until it is classified through
+  // PRODUCTION_CUSTOM_DOMAIN_HOSTS. Self-hosted deployments depend on exactly
+  // that: their own backend on their own domain has to keep working.
   it('does not classify a domain outside the hosted namespace', () => {
     expect(
       usesForbiddenWhiteLabelBackend('demo.partner-brand.se', STAGING_URL),
+    ).toBe(false)
+    expect(
+      usesForbiddenWhiteLabelBackend('demo.partner-brand.se', STAGING_URL, {
+        customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        vercelProjectId: HOSTED_PROJECT_ID,
+      }),
+    ).toBe(false)
+  })
+
+  it.each(['app.brand-g.se', 'app.brand-h.se', 'APP.BRAND-G.SE.'])(
+    'classifies the env-listed custom domain %s as production',
+    hostname => {
+      expect(
+        usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+          customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        }),
+      ).toBe(true)
+      expect(
+        usesForbiddenWhiteLabelBackend(hostname, PRODUCTION_URL, {
+          customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        }),
+      ).toBe(false)
+    },
+  )
+
+  // Fail closed, not open: the hosted project without a usable inventory
+  // cannot rule any host out, so a custom domain it has never heard of still
+  // requires the production backend. Absent, empty and malformed all count.
+  describe.each([undefined, '', ' , '])(
+    'when the custom-domain inventory is %j',
+    customDomainHosts => {
+      it.each(['app.brand-g.se', 'demo.partner-brand.se'])(
+        'blocks %s on the hosted project with a non-production backend',
+        hostname => {
+          expect(
+            usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId: HOSTED_PROJECT_ID,
+            }),
+          ).toBe(true)
+        },
+      )
+
+      it('still serves the hosted project from the production backend', () => {
+        expect(
+          usesForbiddenWhiteLabelBackend('app.brand-g.se', PRODUCTION_URL, {
+            customDomainHosts,
+            vercelProjectId: HOSTED_PROJECT_ID,
+          }),
+        ).toBe(false)
+      })
+
+      it('keeps preview and local hosts reachable on the hosted project', () => {
+        for (const hostname of ['erp-base-git-some-branch.vercel.app', 'localhost']) {
+          expect(
+            usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId: HOSTED_PROJECT_ID,
+            }),
+          ).toBe(false)
+        }
+      })
+
+      // A fork on its own Vercel project, and a Docker install with no
+      // VERCEL_PROJECT_ID at all, run their own backend on their own domain.
+      it.each([FORK_PROJECT_ID, undefined, ''])(
+        'leaves the deployment with project id %j alone',
+        vercelProjectId => {
+          expect(
+            usesForbiddenWhiteLabelBackend('app.brand-g.se', STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId,
+            }),
+          ).toBe(false)
+        },
+      )
+    },
+  )
+
+  it('does not match an env-listed host by suffix', () => {
+    expect(
+      usesForbiddenWhiteLabelBackend('evil-app.brand-g.se', STAGING_URL, {
+        customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        vercelProjectId: HOSTED_PROJECT_ID,
+      }),
     ).toBe(false)
   })
 })

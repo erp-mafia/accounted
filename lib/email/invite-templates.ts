@@ -86,7 +86,7 @@ export interface TeamInviteEmailData {
 
 export function generateTeamInviteEmailSubject(data?: Pick<TeamInviteEmailData, 'appName'>): string {
   // Branded byrå: the invite is to THE BYRÅ, by name and in its own casing
-  // ("Du har blivit inbjuden till Willem"), no platform wording. Brandless
+  // ("Du har blivit inbjuden till Byrånamn"), no platform wording. Brandless
   // teams keep the platform phrasing byte-identical.
   if (data?.appName) {
     return `Du har blivit inbjuden till ${data.appName}`

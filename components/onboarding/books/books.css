@@ -48,7 +48,7 @@
    account: the name above, the claimant quietly under it (issue #2647). */
 .pills.is-col .acct-lbl { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: 1px; text-align: left; }
 /* Both lines wrap rather than truncate: which company books the account is
-   the whole point of the label, and "Bokförs redan i Redovisningskompaniet i
+   the whole point of the label, and "Bokförs redan i Exempelbyrån Redovisning i
    Stockholm AB" is exactly the length an ellipsis would eat. */
 .pills.is-col .acct-lbl > span { max-width: 100%; overflow-wrap: anywhere; }
 .acct-claim { font-size: 11px; line-height: 1.35; color: hsl(var(--muted-foreground)); }

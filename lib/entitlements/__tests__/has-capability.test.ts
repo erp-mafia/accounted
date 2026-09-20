@@ -369,6 +369,126 @@ describe('getCompanyEntitlements', () => {
     expect(result.entitlementState).toBe('trial_expired')
   })
 
+  it('a lone comp multi_user grant is a seat, not the paid product', async () => {
+    const trialExpiry = iso(-60_000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: trialExpiry, source: 'trial', team_id: null },
+          { capability_key: CAPABILITY.multi_user, expires_at: null, source: 'comp', team_id: null },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('trial_expired')
+    expect(result.coverage).toBeNull()
+    // The seat itself is still entitled.
+    expect(result.capabilities).toContain(CAPABILITY.multi_user)
+  })
+
+  it('covers an invoice customer by agreement with the grant expiry', async () => {
+    const until = iso(200 * 24 * 3600 * 1000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'trial', team_id: null },
+          { capability_key: CAPABILITY.ai, expires_at: until, source: 'manual', team_id: null },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('paid')
+    expect(result.coverage).toEqual({ kind: 'agreement', coveredUntil: until })
+  })
+
+  it('agreement coveredUntil is the earliest dated expiry, ignoring open-ended and multi_user rows', async () => {
+    const sooner = iso(30 * 24 * 3600 * 1000)
+    const later = iso(300 * 24 * 3600 * 1000)
+    const soonest = iso(5 * 24 * 3600 * 1000)
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: later, source: 'comp', team_id: null },
+          { capability_key: CAPABILITY.bank_sync, expires_at: sooner, source: 'comp', team_id: null },
+          { capability_key: CAPABILITY.skatteverket, expires_at: null, source: 'comp', team_id: null },
+          { capability_key: CAPABILITY.multi_user, expires_at: soonest, source: 'comp', team_id: null },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.coverage).toEqual({ kind: 'agreement', coveredUntil: sooner })
+  })
+
+  it('an all open-ended agreement has no end date', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: null, source: 'comp', team_id: null }],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.coverage).toEqual({ kind: 'agreement', coveredUntil: null })
+  })
+
+  it('an expired manual grant covers nothing', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(-60_000), source: 'manual', team_id: null }],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.coverage).toBeNull()
+    expect(result.entitlementState).not.toBe('paid')
+  })
+
+  it('a stripe grant wins over a manual grant', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: iso(10 * 24 * 3600 * 1000), source: 'manual', team_id: null },
+          { capability_key: CAPABILITY.ai, expires_at: iso(20 * 24 * 3600 * 1000), source: 'stripe', team_id: null },
+        ],
+      },
+      company_subscriptions: { data: { status: 'active' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.coverage).toEqual({ kind: 'subscription', coveredUntil: null })
+  })
+
+  it('a trialing subscription is subscription coverage before any stripe grant lands', async () => {
+    const supabase = makeSupabase({
+      companies: { data: { team_id: null } },
+      capability_grants: {
+        data: [{ capability_key: CAPABILITY.ai, expires_at: iso(10 * 24 * 3600 * 1000), source: 'trial', team_id: null }],
+      },
+      company_subscriptions: { data: { status: 'trialing' } },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.coverage).toEqual({ kind: 'subscription', coveredUntil: null })
+    expect(result.entitlementState).toBe('trial')
+  })
+
+  it('a team-scoped grant is team coverage and wins over a company agreement', async () => {
+    const teamId = '22222222-2222-4222-8222-222222222222'
+    const supabase = makeSupabase({
+      companies: { data: { team_id: teamId } },
+      capability_grants: {
+        data: [
+          { capability_key: CAPABILITY.ai, expires_at: null, source: 'manual', team_id: teamId },
+          { capability_key: CAPABILITY.ai, expires_at: iso(10 * 24 * 3600 * 1000), source: 'comp', team_id: null },
+        ],
+      },
+    })
+    const result = await getCompanyEntitlements(supabase, companyId)
+    expect(result.entitlementState).toBe('paid')
+    expect(result.coverage).toEqual({ kind: 'team', coveredUntil: null })
+  })
+
   it('reports none when no grant rows exist at all', async () => {
     const supabase = makeSupabase({
       companies: { data: { team_id: null } },

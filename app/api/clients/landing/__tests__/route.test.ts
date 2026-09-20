@@ -47,7 +47,7 @@ describe('GET /api/clients/landing', () => {
 
     const res = await GET(
       createMockRequest('/api/clients/landing', {
-        headers: { 'x-forwarded-host': 'app.amnas.se' },
+        headers: { 'x-forwarded-host': 'app.brand-f.se' },
       })
     )
     const { status, body } = await parseJsonResponse<{ data: { destination: string } }>(res)
@@ -56,6 +56,6 @@ describe('GET /api/clients/landing', () => {
     expect(body.data.destination).toBe('/clients')
     // No active-company requirement: byrå staff without a company of their
     // own (the cockpit's primary persona) must still get a destination.
-    expect(resolveLandingDestinationMock).toHaveBeenCalledWith(supabase, 'user-1', 'app.amnas.se')
+    expect(resolveLandingDestinationMock).toHaveBeenCalledWith(supabase, 'user-1', 'app.brand-f.se')
   })
 })

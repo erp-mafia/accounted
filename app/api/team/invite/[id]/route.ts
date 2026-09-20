@@ -70,7 +70,7 @@ async function loadInviteForManagement(
 
 /**
  * POST /api/team/invite/[id]
- * Re-send a pending byrå-team invitation (WL-08 follow-up: the Arbore case,
+ * Re-send a pending byrå-team invitation (WL-08 follow-up: a reported case
  * where the original mail never reached the invitee and the inviter had no
  * recovery path).
  *

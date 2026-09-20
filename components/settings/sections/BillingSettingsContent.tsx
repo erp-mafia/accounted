@@ -48,6 +48,13 @@ interface BillingView {
    * read-only "Ingår i <teamName>s avtal" state.
    */
   teamAgreement: { teamName: string } | null
+  /**
+   * Covered without a Stripe subscription or a named byrå agreement: an
+   * invoice or comp grant (coverage 'agreement'), or a team grant whose team
+   * has no name to show. `until` is null for an open-ended grant. Anyone in
+   * this state has paid, so the sell view is never rendered for them.
+   */
+  agreement: { until: string | null } | null
 }
 
 function UnlockList({ className }: { className?: string }) {
@@ -133,6 +140,7 @@ function BillingCoreContent() {
           trialEndsAt?: unknown
           isDemo?: unknown
           teamAgreement?: unknown
+          coverage?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -155,6 +163,11 @@ function BillingCoreContent() {
           rawAgreement && typeof rawAgreement.teamName === 'string' && rawAgreement.teamName.length > 0
             ? { teamName: rawAgreement.teamName }
             : null
+        const rawCoverage = d.coverage as { kind?: unknown; coveredUntil?: unknown } | null | undefined
+        const agreement =
+          rawCoverage && (rawCoverage.kind === 'agreement' || rawCoverage.kind === 'team')
+            ? { until: typeof rawCoverage.coveredUntil === 'string' ? rawCoverage.coveredUntil : null }
+            : null
         setView({
           isPaying: d.isPaying,
           configured: d.configured,
@@ -164,6 +177,7 @@ function BillingCoreContent() {
           paidJustNow,
           isDemo: d.isDemo === true,
           teamAgreement,
+          agreement,
         })
       } catch {
         if (active) {
@@ -283,6 +297,30 @@ function BillingCoreContent() {
               {t('team_agreement_status', { teamName: view.teamAgreement.teamName })}
             </span>
             <SettingsRowNote>{t('team_agreement_note')}</SettingsRowNote>
+          </SettingsRow>
+        </SettingsGroup>
+        <SettingsGroup label={t('group_included')}>
+          <UnlockList className="pt-3" />
+        </SettingsGroup>
+      </div>
+    )
+  }
+
+  // Covered by the company's own agreement (invoice or comp grant) → same
+  // read-only state. No checkout and no manage button: there is no Stripe
+  // customer behind this cover.
+  if (view.agreement) {
+    return (
+      <div>
+        {header}
+        <SettingsGroup label={t('group_yours')}>
+          <SettingsRow label={t('row_status')} borderless>
+            <span className="font-medium">{t('agreement_status')}</span>
+            <SettingsRowNote>
+              {view.agreement.until
+                ? t('agreement_note_until', { date: formatDateLong(view.agreement.until) })
+                : t('agreement_note_open')}
+            </SettingsRowNote>
           </SettingsRow>
         </SettingsGroup>
         <SettingsGroup label={t('group_included')}>
