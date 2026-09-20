@@ -2856,6 +2856,47 @@ export const CreateDeadlineSchema = z.object({
 })
 
 // ============================================================
+// VAT filing record (issue #2746)
+// ============================================================
+
+/**
+ * A calendar VAT period: the two cadences whose deadline rows carry the
+ * filing record (lib/vat/filing-record.ts). Helårsmoms is deliberately not
+ * accepted: its deadline is labelled per räkenskapsår and is completed from
+ * the calendar instead.
+ */
+const vatFilingPeriodShape = {
+  period_type: z.enum(['monthly', 'quarterly']),
+  year: z.coerce.number().int().min(2000).max(2100),
+  period: z.coerce.number().int().min(1).max(12),
+}
+
+function refineVatFilingPeriod(
+  data: { period_type: 'monthly' | 'quarterly'; period: number },
+  ctx: z.RefinementCtx,
+) {
+  if (data.period_type === 'quarterly' && data.period > 4) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['period'],
+      message: 'For quarterly period_type, period must be 1-4.',
+    })
+  }
+}
+
+export const VatFilingPeriodSchema = z.object(vatFilingPeriodShape).superRefine(refineVatFilingPeriod)
+
+export const MarkVatFilingSchema = z
+  .object({
+    ...vatFilingPeriodShape,
+    /** Swedish calendar date the declaration was filed. */
+    filed_on: saneIsoDate,
+    /** Skatteverket's reference (kvittensnummer); null clears a stored one. */
+    reference: z.string().trim().max(200).nullable().optional(),
+  })
+  .superRefine(refineVatFilingPeriod)
+
+// ============================================================
 // Account schemas
 // ============================================================
 

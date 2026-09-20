@@ -2280,6 +2280,39 @@ const VAT_REPORT: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Marking a momsperiod as filed by hand (issue #2746): the record is the
+// period's moms deadline, so these guard the dates a manual filing may carry
+// and the one state a manual action must not touch (a Skatteverket kvittens).
+const VAT_FILING: Record<string, StructuredErrorEntry> = {
+  VAT_FILING_PERIOD_NOT_ENDED: {
+    httpStatus: 400,
+    message_sv: 'Perioden har inte avslutats än och kan inte markeras som inlämnad.',
+    message_en: 'The period has not ended yet and cannot be marked as filed.',
+  },
+  VAT_FILING_DATE_BEFORE_PERIOD_END: {
+    httpStatus: 400,
+    message_sv: 'Inlämningsdatumet ligger före periodens slut.',
+    message_en: 'The filing date is before the end of the period.',
+  },
+  VAT_FILING_DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Inlämningsdatumet kan inte ligga i framtiden.',
+    message_en: 'The filing date cannot be in the future.',
+  },
+  VAT_FILING_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Perioden är inte markerad som inlämnad.',
+    message_en: 'The period is not recorded as filed.',
+  },
+  VAT_FILING_CONFIRMED_BY_SKATTEVERKET: {
+    httpStatus: 409,
+    message_sv:
+      'Perioden är inlämnad via Skatteverket-kopplingen med kvittens och kan inte avmarkeras.',
+    message_en:
+      'The period was filed through the Skatteverket connection with a receipt and cannot be unmarked.',
+  },
+}
+
 const PS_REPORT: Record<string, StructuredErrorEntry> = {
   PS_REPORT_MISSING_PARAMS: {
     httpStatus: 400,
@@ -5026,6 +5059,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...FX,
   ...REPORT,
   ...VAT_REPORT,
+  ...VAT_FILING,
   ...PS_REPORT,
   ...SIE_EXPORT,
   ...TAX_DECL,
