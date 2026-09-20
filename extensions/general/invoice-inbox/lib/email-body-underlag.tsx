@@ -250,64 +250,76 @@ export function emailBodyUnderlagFilename(subject: string | null | undefined): s
 
 // ── PDF ─────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  page: {
-    paddingTop: 40,
-    paddingHorizontal: 44,
-    paddingBottom: 56,
-    fontSize: 9.5,
-    fontFamily: 'Helvetica',
-    color: '#1a1a1a',
-  },
-  title: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    marginBottom: 10,
-  },
-  headerBlock: {
-    borderBottomWidth: 1,
-    borderBottomColor: '#d4d4d4',
-    paddingBottom: 10,
-    marginBottom: 14,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    marginBottom: 2,
-  },
-  headerLabel: {
-    width: 72,
-    fontSize: 7.5,
-    fontWeight: 'bold',
-    color: '#666',
-    textTransform: 'uppercase',
-    paddingTop: 1,
-  },
-  headerValue: {
-    flex: 1,
-    fontSize: 9,
-  },
-  // Tight on purpose: a long receipt should not spill onto more pages than
-  // the extraction page budget reads (maxPagesForAutoExtract).
-  line: {
-    lineHeight: 1.1,
-  },
-  blank: {
-    height: 5,
-  },
-  footer: {
-    position: 'absolute',
-    bottom: 24,
-    left: 44,
-    right: 44,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    fontSize: 7.5,
-    color: '#888',
-  },
-})
+// Built on first render, not at import. The extension registry imports this
+// module into every route that loads extensions, and many route tests mock
+// '@react-pdf/renderer' with renderToBuffer only: a top-level StyleSheet.create
+// made those files fail to load.
+function buildStyles() {
+  return StyleSheet.create({
+    page: {
+      paddingTop: 40,
+      paddingHorizontal: 44,
+      paddingBottom: 56,
+      fontSize: 9.5,
+      fontFamily: 'Helvetica',
+      color: '#1a1a1a',
+    },
+    title: {
+      fontSize: 14,
+      fontWeight: 'bold',
+      marginBottom: 10,
+    },
+    headerBlock: {
+      borderBottomWidth: 1,
+      borderBottomColor: '#d4d4d4',
+      paddingBottom: 10,
+      marginBottom: 14,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      marginBottom: 2,
+    },
+    headerLabel: {
+      width: 72,
+      fontSize: 7.5,
+      fontWeight: 'bold',
+      color: '#666',
+      textTransform: 'uppercase',
+      paddingTop: 1,
+    },
+    headerValue: {
+      flex: 1,
+      fontSize: 9,
+    },
+    // Tight on purpose: a long receipt should not spill onto more pages than
+    // the extraction page budget reads (maxPagesForAutoExtract).
+    line: {
+      lineHeight: 1.1,
+    },
+    blank: {
+      height: 5,
+    },
+    footer: {
+      position: 'absolute',
+      bottom: 24,
+      left: 44,
+      right: 44,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      fontSize: 7.5,
+      color: '#888',
+    },
+  })
+}
+
+let cachedStyles: ReturnType<typeof buildStyles> | null = null
+function getStyles(): ReturnType<typeof buildStyles> {
+  return (cachedStyles ??= buildStyles())
+}
 
 function HeaderRow({ label, value }: { label: string; value: string }) {
   if (!value) return null
+  const styles = getStyles()
   return (
     <View style={styles.headerRow}>
       <Text style={styles.headerLabel}>{label}</Text>
@@ -317,6 +329,7 @@ function HeaderRow({ label, value }: { label: string; value: string }) {
 }
 
 export function EmailBodyUnderlagPDF({ model, generatedAt }: { model: EmailBodyUnderlagModel; generatedAt: string }) {
+  const styles = getStyles()
   return (
     <Document
       title={model.subject}
