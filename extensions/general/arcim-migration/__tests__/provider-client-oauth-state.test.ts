@@ -197,7 +197,7 @@ describe('generateOtc', () => {
     const { calls } = useResults([{ data: null }])
     const before = Date.now()
 
-    const { expiresAt } = await generateOtc('consent-1', 'user-1', 'https://solbo.accounted.se')
+    const { expiresAt } = await generateOtc('consent-1', 'user-1', 'https://brand-d.accounted.se')
 
     const after = Date.now()
     expect(calls[0].table).toBe('provider_otc')
@@ -206,7 +206,7 @@ describe('generateOtc', () => {
     // The initiator travels with the row: the callback binds the completing
     // session to it, so it must be written here and nowhere else.
     expect(inserted.user_id).toBe('user-1')
-    expect(inserted).toHaveProperty('origin', 'https://solbo.accounted.se')
+    expect(inserted).toHaveProperty('origin', 'https://brand-d.accounted.se')
 
     const tenMinutes = 10 * 60 * 1000
     const expiry = new Date(expiresAt).getTime()
@@ -217,7 +217,7 @@ describe('generateOtc', () => {
 })
 
 describe('OAuth handoff storage', () => {
-  const origin = 'https://solbo.accounted.se'
+  const origin = 'https://brand-d.accounted.se'
 
   beforeEach(() => {
     vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-only-handoff-encryption-key')
