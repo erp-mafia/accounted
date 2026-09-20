@@ -4146,7 +4146,6 @@
     "unit_label": "Enhet",
     "unit_price_label": "à-pris",
     "vat_label": "Moms",
-    "vat_taxed_where_performed_hint": "Svensk moms på en faktura till ett utländskt företag gäller bara tjänster som beskattas där de utförs, till exempel hotell, restaurang, persontransport, fastighetstjänst eller entré till kultur- och sportevenemang (ML 6 kap.).",
     "row_label": "Rad {index}",
     "add_text_row": "Lägg till textrad",
     "text_row_label": "Fritext",
@@ -10113,5 +10112,19 @@
     "rows_invalid": "Vissa rader har valideringsfel (markerade i rött). Åtgärda eller ta bort dem innan du fortsätter.",
     "vat_reinterpreted": "{count, plural, one {# rad} other {# rader}} fick momssatsen omtolkad. Kontrollera de markerade raderna: fel momssats ger fel moms på fakturan.",
     "bank_duplicate_rows": "{count, plural, one {# rad finns redan} other {# rader finns redan}} i bokföringen och hoppas över automatiskt."
+  },
+  "vat_treatment_notice": {
+    "validate_action": "Validera momsnummer",
+    "validating": "Validerar...",
+    "open_customer_action": "Öppna kundkortet",
+    "edit_draft_action": "Redigera utkastet",
+    "validated_title": "Momsnumret är validerat",
+    "validated_description": "Momsnumret tillhör {name} enligt VIES.",
+    "validated_description_no_name": "Momsnumret finns i VIES.",
+    "invalid_title": "Momsnumret kunde inte valideras",
+    "invalid_default": "VIES känner inte igen momsnumret. Kontrollera numret på kundkortet.",
+    "error_title": "Kunde inte nå VIES",
+    "error_description": "Försök igen om en stund, eller validera från kundkortet.",
+    "acknowledge_swedish_vat": "Jag vill fakturera med svensk moms trots att kunden är ett EU-företag utan validerat momsnummer."
   }
 }

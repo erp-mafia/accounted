@@ -30,15 +30,20 @@ vi.mock('@/lib/auth/require-write', () => ({
 const mockGetVatRules = vi.fn()
 const mockCalculateVat = vi.fn()
 const mockGetAvailableVatRates = vi.fn()
-vi.mock('@/lib/invoices/vat-rules', () => ({
-  getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
-  calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
-  getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
-  // The builder gates on the permitted set (taxed-where-performed exceptions);
-  // these route tests only care that the gate reads the stubbed rates.
-  getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
-  calculateTotal: vi.fn(),
-}))
+vi.mock('@/lib/invoices/vat-rules', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
+  return {
+    getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
+    calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
+    getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    // The builder gates on the permitted set (taxed-where-performed exceptions);
+    // these route tests only care that the gate reads the stubbed rates.
+    getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    calculateTotal: vi.fn(),
+    // Real: the warnings channel is what the response-shape test below pins.
+    explainVatTreatment: actual.explainVatTreatment,
+  }
+})
 
 vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: vi.fn().mockResolvedValue(null),
@@ -329,9 +334,61 @@ describe('POST /api/invoices (create invoice)', () => {
 
     expect(status).toBe(200)
     expect(body.data).toBeTruthy()
+    // A domestic customer has nothing to explain: no warnings key at all.
+    expect(body).not.toHaveProperty('warnings')
     expect(emitSpy).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'invoice.created' })
     )
+  })
+
+  it('creates the invoice with 25 % for an EU business without a validated VAT number and says why (#2749)', async () => {
+    const customer = makeCustomer({
+      id: VALID_UUID,
+      customer_type: 'eu_business',
+      vat_number: 'DE123456789',
+      vat_number_validated: false,
+      country: 'DE',
+    })
+    const createdInvoice = makeInvoice({ id: 'inv-1', invoice_number: null })
+
+    mockGetVatRules.mockReturnValue({ treatment: 'standard_25', rate: 25, momsRuta: '05', reverseChargeText: null })
+    mockCalculateVat.mockReturnValue(2500)
+    mockGetAvailableVatRates.mockReturnValue([
+      { rate: 25, label: '25%', treatment: 'standard_25' },
+      { rate: 0, label: '0% (momsfri)', treatment: 'exempt' },
+    ])
+
+    enqueue({ data: customer, error: null }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings
+    enqueue({ data: createdInvoice, error: null }) // insert invoice
+    enqueue({ data: null, error: null }) // insert items
+    enqueue({ data: '2026001', error: null }) // generate_invoice_number
+    enqueue({ data: { ...createdInvoice, invoice_number: '2026001', customer, items: [] }, error: null })
+
+    const request = createMockRequest('/api/invoices', {
+      method: 'POST',
+      body: {
+        customer_id: VALID_UUID,
+        invoice_date: '2024-06-15',
+        due_date: '2024-07-15',
+        currency: 'SEK',
+        items: [{ description: 'Consulting', quantity: 10, unit: 'tim', unit_price: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({}))
+    const { status, body } = await parseJsonResponse<{
+      data: unknown
+      warnings: Array<{ code: string; message_sv: string; remediation?: { tool?: string } }>
+    }>(response)
+
+    // The rule is unchanged (the draft exists, with Swedish VAT); the caller
+    // is told which reverse-charge condition failed, and how to fix it.
+    expect(status).toBe(200)
+    expect(body.data).toBeTruthy()
+    expect(body.warnings).toHaveLength(1)
+    expect(body.warnings[0].code).toBe('EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED')
+    expect(body.warnings[0].message_sv).toMatch(/^Omvänd skattskyldighet tillämpas inte: momsnumret är inte validerat/)
+    expect(body.warnings[0].remediation?.tool).toBe('gnubok_update_customer')
   })
 
   it('saves an unnumbered draft without a number or event when save_as_draft is true', async () => {

@@ -26,6 +26,10 @@ interface ConfirmationDialogProps {
   // When true, initial focus lands on the confirm button so Enter fires the
   // primary action. Opt-in: never arm Enter on unrelated/destructive dialogs.
   autoFocusConfirm?: boolean
+  // Holds the confirm button until the caller's own gate opens (e.g. an
+  // explicit acknowledgement checkbox rendered in children). Back stays
+  // enabled: the dialog never traps the user.
+  confirmDisabled?: boolean
 }
 
 export function ConfirmationDialog({
@@ -42,6 +46,7 @@ export function ConfirmationDialog({
   extraActions,
   children,
   autoFocusConfirm,
+  confirmDisabled = false,
 }: ConfirmationDialogProps) {
   const confirmRef = useRef<HTMLButtonElement>(null)
   return (
@@ -87,7 +92,12 @@ export function ConfirmationDialog({
               Tillbaka
             </Button>
             {extraActions}
-            <Button ref={confirmRef} onClick={onConfirm} disabled={isSubmitting} className="min-h-11 w-full sm:w-auto">
+            <Button
+              ref={confirmRef}
+              onClick={onConfirm}
+              disabled={isSubmitting || confirmDisabled}
+              className="min-h-11 w-full sm:w-auto"
+            >
               {isSubmitting ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />

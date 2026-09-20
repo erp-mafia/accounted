@@ -76,6 +76,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
   InvoiceDeliveryHistory,
   type InvoiceDeliveryView,
@@ -2085,6 +2086,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      {/* Why the VAT treatment is what it is (#2749, #2558): the page's one
+          ochre sentence, with the VIES check inline. Drafts only: an issued
+          invoice is what it is. A non-momsregistrerad seller charges nothing
+          and has nothing to explain. After a successful check the invoice is
+          refetched so the sentence flips to what the lines still carry. */}
+      {isEditableDraft && vatRegistered !== false && (
+        <VatTreatmentNotice
+          customer={customer}
+          lineVatRates={invoice.items
+            .filter((item) => item.line_type !== 'text')
+            .map((item) => item.vat_rate ?? 0)}
+          onValidated={() => void fetchInvoice()}
+          editHref={`/invoices/${invoice.id}/edit`}
+        />
+      )}
 
       {/* Kund and Detaljer side by side like an invoice head: who it is for
           on the left, the facts on the right. */}

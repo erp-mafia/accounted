@@ -105,7 +105,13 @@ import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { canApproveSupplierInvoice } from '@/lib/supplier-invoices/lifecycle'
 import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { eventBus } from '@/lib/events/bus'
-import { getVatRules, getPermittedVatRates, getArticleVatRateAdoptionSet } from '@/lib/invoices/vat-rules'
+import {
+  explainVatTreatment,
+  getVatRules,
+  getPermittedVatRates,
+  getArticleVatRateAdoptionSet,
+  type InvoiceVatWarning,
+} from '@/lib/invoices/vat-rules'
 import { validateDeductionLines } from '@/lib/invoices/rot-rut-rules'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { resolveSupplierInvoiceExchangeRate } from '@/lib/currency/supplier-invoice-rate'
@@ -1035,6 +1041,19 @@ interface StageOptions {
    * triggers and the approver stay authoritative.
    */
   complianceNote?: string
+}
+
+/**
+ * Fold the invoice VAT-treatment explanation (explainVatTreatment, #2749 and
+ * #2558) into the staging message as the existing WARNING channel. The
+ * structured list itself is staged as preview.vat_warnings; this is the
+ * prose the agent reads in the tool result. English: the surrounding message
+ * is English and the approval card renders the Swedish sentence from the
+ * structured field, not from compliance_warning.
+ */
+function vatWarningsStageOptions(warnings: InvoiceVatWarning[]): Pick<StageOptions, 'complianceNote'> {
+  if (warnings.length === 0) return {}
+  return { complianceNote: warnings.map((warning) => `${warning.code}: ${warning.message_en}`).join(' ') }
 }
 
 // Keys that can stage typically lack pending_operations:approve (segregation
@@ -7551,6 +7570,19 @@ export const tools: McpTool[] = [
       }
       const total = subtotal + vatAmount
 
+      // Why the treatment is what it is (#2749, #2558): the gate above is
+      // silent about WHICH reverse-charge condition failed, so an eu_business
+      // customer whose number was never VIES-validated got 25 % with no
+      // explanation. Same helper every surface renders. Staged structured
+      // (preview.vat_warnings, for the approval card and the agent) and
+      // folded into the tool message as a WARNING through complianceNote.
+      const vatWarnings = explainVatTreatment(
+        customer,
+        items
+          .filter((item) => item.line_type !== 'text')
+          .map((item) => (item.vat_rate !== undefined ? item.vat_rate : vatRules.rate)),
+      )
+
       // Due date from payment terms if not provided. A quote has no payment
       // due date: due_date mirrors valid_until (build-invoice-write parity).
       let dueDate = args.due_date as string | undefined
@@ -7610,6 +7642,7 @@ export const tools: McpTool[] = [
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
+          ...(vatWarnings.length > 0 ? { vat_warnings: vatWarnings } : {}),
         },
         actor,
         isQuote
@@ -7620,7 +7653,8 @@ export const tools: McpTool[] = [
           : {
               description: 'Once approved, the invoice is created as a draft. Send it with gnubok_send_invoice or use gnubok_mark_invoice_as_sent if delivered outside the system.',
               tool: 'gnubok_send_invoice',
-            }
+            },
+        vatWarningsStageOptions(vatWarnings),
       )
     },
   },
@@ -19704,19 +19738,24 @@ export const tools: McpTool[] = [
       let subtotal = 0
       let vatAmount = 0
       let currentItems: Array<Record<string, unknown>> | undefined
+      // The customer row the items branch fetches; feeds the VAT-treatment
+      // explanation below. A header-only edit changes no rate, so it stays
+      // undefined there and nothing is explained.
+      let updateCustomer: Parameters<typeof explainVatTreatment>[0] | undefined
       if (rawItems !== undefined) {
         // personal_number is fetched ONLY as a presence check for the ROT/RUT
         // staging gate below (commit falls back to the kundkort personnummer
         // for individuals); never decrypted, staged, or returned here.
         const { data: customer, error: custError } = await supabase
           .from('customers')
-          .select('customer_type, vat_number_validated, country, personal_number')
+          .select('id, customer_type, vat_number, vat_number_validated, country, personal_number')
           .eq('id', invoice.customer_id)
           .eq('company_id', companyId)
           .single()
         if (custError || !customer) {
           throw new Error('Customer not found: they may have been deleted. The draft cannot be edited without its customer.')
         }
+        updateCustomer = customer
 
         const vatRules = getVatRules(customer.customer_type, customer.vat_number_validated, customer.country)
         defaultVatRate = vatRules.rate
@@ -19870,6 +19909,18 @@ export const tools: McpTool[] = [
         throw new Error(`Invalid invoice update: ${issue ? `${issue.path.join('.')}: ${issue.message}` : 'validation failed'}`)
       }
 
+      // Same VAT-treatment explanation as gnubok_create_invoice (#2749,
+      // #2558), on the effective rates of the staged replacement lines.
+      const vatWarnings: InvoiceVatWarning[] =
+        updateCustomer && items
+          ? explainVatTreatment(
+              updateCustomer,
+              items
+                .filter((item) => item.line_type !== 'text')
+                .map((item) => item.vat_rate ?? defaultVatRate),
+            )
+          : []
+
       return stagePendingOperation(supabase, companyId, userId, 'update_invoice',
         `Uppdatera fakturautkast: ${customerName ?? invoice.invoice_number ?? invoice.id}`,
         parsed.data,
@@ -19909,6 +19960,7 @@ export const tools: McpTool[] = [
               }
             : {}),
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
+          ...(vatWarnings.length > 0 ? { vat_warnings: vatWarnings } : {}),
         },
         actor,
         {
@@ -19918,6 +19970,7 @@ export const tools: McpTool[] = [
         {
           dryRun: Boolean(args.dry_run),
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
+          ...vatWarningsStageOptions(vatWarnings),
         },
       )
     },

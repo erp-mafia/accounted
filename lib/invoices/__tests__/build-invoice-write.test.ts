@@ -679,3 +679,87 @@ describe('buildInvoiceWriteData article company scope (issue #2059)', () => {
     expect('dbError' in result).toBe(true)
   })
 })
+
+describe('buildInvoiceWriteData: VAT-treatment warnings (#2749, #2558)', () => {
+  const euUnvalidated = () =>
+    makeCustomer({
+      id: 'cust-de',
+      customer_type: 'eu_business',
+      vat_number: 'DE123456789',
+      vat_number_validated: false,
+      country: 'DE',
+    })
+
+  it('explains why an eu_business customer without a validated number gets 25 %', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, euUnvalidated(), {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The write itself is unchanged: Swedish VAT, ruta 05, as the rule says.
+    expect(result.invoiceFields.vat_treatment).toBe('standard_25')
+    expect(result.invoiceFields.vat_amount).toBe(250)
+    // ... but the caller is told which of the three conditions failed.
+    expect(result.warnings.map((w) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
+    expect(result.warnings[0].remediation?.args).toMatchObject({ customer_id: 'cust-de' })
+  })
+
+  it('reads the rates off the stored rows: text rows are ignored, absent rates resolve to the default', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { vat_registered: true }, error: null })
+
+    const customer = makeCustomer({ customer_type: 'eu_business', vat_number: 'DE1', vat_number_validated: true, country: 'DE' })
+    const result = await call(enqueue, supabase as unknown as SupabaseClient, customer, {
+      ...baseHeader,
+      items: [
+        { line_type: 'text', description: 'Rubrik', quantity: 0, unit: '', unit_price: 0, vat_rate: 25 },
+        { description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 },
+        { description: 'Hotellnatt', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 12 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.warnings.map((w) => w.code)).toEqual(['SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER'])
+    // Only the 12 % hotel line is named: the text row's stray 25 never counts.
+    expect(result.warnings[0].message_sv).toContain('Svensk moms (12 %)')
+  })
+
+  it('is empty for a domestic customer, a non-momsregistrerad seller, and a delivery note', async () => {
+    const domestic = createQueuedMockSupabase()
+    domestic.enqueue({ data: { vat_registered: true }, error: null })
+    const domesticResult = await call(domestic.enqueue, domestic.supabase as unknown as SupabaseClient, makeCustomer(), {
+      ...baseHeader,
+      items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+    })
+    expect(domesticResult.ok && domesticResult.warnings).toEqual([])
+
+    // Not VAT registered: every rate is zeroed and nothing is charged, so a
+    // "you are charging Swedish VAT" sentence would be false.
+    const unregistered = createQueuedMockSupabase()
+    unregistered.enqueue({ data: { vat_registered: false }, error: null })
+    const unregisteredResult = await call(
+      unregistered.enqueue,
+      unregistered.supabase as unknown as SupabaseClient,
+      euUnvalidated(),
+      { ...baseHeader, items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }] },
+    )
+    expect(unregisteredResult.ok && unregisteredResult.warnings).toEqual([])
+
+    const deliveryNote = createQueuedMockSupabase()
+    deliveryNote.enqueue({ data: { vat_registered: true }, error: null })
+    const deliveryNoteResult = await call(
+      deliveryNote.enqueue,
+      deliveryNote.supabase as unknown as SupabaseClient,
+      euUnvalidated(),
+      { ...baseHeader, items: [{ description: 'Konsult', quantity: 1, unit: 'tim', unit_price: 1000 }] },
+      'delivery_note',
+    )
+    expect(deliveryNoteResult.ok && deliveryNoteResult.warnings).toEqual([])
+  })
+})

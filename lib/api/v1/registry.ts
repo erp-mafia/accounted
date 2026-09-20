@@ -34,17 +34,39 @@ const ResponseAuditSchema = z.object({
 })
 
 /**
+ * A non-blocking warning attached to a successful write (see `ResponseWarning`
+ * in `lib/api/v1/response.ts`). The write went through; the warning says what
+ * deserves a look, in both languages, with an optional remediation.
+ */
+const ResponseWarningSchema = z.object({
+  code: z.string(),
+  message_sv: z.string(),
+  message_en: z.string(),
+  remediation: z
+    .object({
+      description: z.string(),
+      tool: z.string().optional(),
+      args: z.record(z.string(), z.unknown()).optional(),
+      resource: z.string().optional(),
+    })
+    .optional(),
+})
+
+/**
  * The `meta` block echoed in every v1 response envelope (see
  * `lib/api/v1/response.ts`). List endpoints additionally populate
  * `next_cursor`; it is absent on the final page. Writes may surface an
- * `audit` block, and soft-degraded `?expand=` responses a `partial_expansions`
- * list: both optional, so reads and lists omit them.
+ * `audit` block and a `warnings` list, and soft-degraded `?expand=` responses
+ * a `partial_expansions` list: all optional, so reads and lists omit them.
  */
 export const ResponseMetaSchema = z.object({
   request_id: z.string(),
   api_version: z.string(),
   next_cursor: z.string().nullable().optional(),
   audit: ResponseAuditSchema.optional(),
+  // Non-blocking warnings about a write that succeeded (e.g. invoices.create
+  // EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED). Absent when there are none.
+  warnings: z.array(ResponseWarningSchema).optional(),
   partial_expansions: z.array(z.string()).optional(),
   // Endpoint-specific register-coverage disclosure (e.g. invoices.list:
   // { covers_from, has_pre_register_invoices }). Documented per endpoint.

@@ -451,6 +451,16 @@ const SWEDISH_BUSINESS_CUSTOMER = {
   vat_number_validated: true,
 }
 
+// An eu_business customer whose number was never VIES-validated: the rule
+// gives Swedish VAT, and the response has to say why (#2749).
+const EU_BUSINESS_UNVALIDATED_CUSTOMER = {
+  id: CUSTOMER_ID,
+  customer_type: 'eu_business',
+  vat_number: 'DE123456789',
+  vat_number_validated: false,
+  country: 'DE',
+}
+
 describe('POST /api/v1/companies/:companyId/invoices', () => {
   it('creates a draft invoice with computed totals', async () => {
     withInvoiceWriteScope()
@@ -493,6 +503,83 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.data.customer_id).toBe(CUSTOMER_ID)
     expect(body.data.total).toBe(12500)
+    // A domestic customer has nothing to explain: meta carries no warnings.
+    expect(body.meta.warnings).toBeUndefined()
+  })
+
+  it('creates with Swedish VAT for an EU business without a validated number and explains it in meta.warnings (#2749)', async () => {
+    withInvoiceWriteScope()
+    const createdInvoice = {
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      invoice_number: null,
+      customer_id: CUSTOMER_ID,
+      status: 'draft',
+      currency: 'SEK',
+      subtotal: 10000,
+      vat_amount: 2500,
+      total: 12500,
+      document_type: 'invoice',
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: EU_BUSINESS_UNVALIDATED_CUSTOMER, error: null },
+        invoices: { data: createdInvoice, error: null },
+        invoice_items: { data: null, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`, {
+        customer_id: CUSTOMER_ID,
+        invoice_date: '2026-05-12',
+        due_date: '2026-06-11',
+        currency: 'SEK',
+        items: [{ description: 'Konsultation', quantity: 8, unit: 'tim', unit_price: 1250 }],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    // The API warns and never refuses: 201, the draft exists with 25 %.
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.total).toBe(12500)
+    expect(body.meta.warnings).toHaveLength(1)
+    expect(body.meta.warnings[0]).toMatchObject({
+      code: 'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED',
+      remediation: { tool: 'gnubok_update_customer', args: { customer_id: CUSTOMER_ID, vat_number: 'DE123456789' } },
+    })
+    expect(body.meta.warnings[0].message_en).toMatch(/Reverse charge is not applied/)
+  })
+
+  it('returns the same warning on a dry run, so an agent can see it before committing', async () => {
+    withInvoiceWriteScope()
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: EU_BUSINESS_UNVALIDATED_CUSTOMER, error: null },
+      }),
+    )
+
+    const res = await createInvoice(
+      makePostInvoice(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices`,
+        {
+          customer_id: CUSTOMER_ID,
+          invoice_date: '2026-05-12',
+          due_date: '2026-06-11',
+          currency: 'SEK',
+          items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000 }],
+        },
+        { 'X-Dry-Run': 'true' },
+      ),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.meta.warnings?.map((w: { code: string }) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
   })
 
   it('returns 404 INVOICE_CUSTOMER_NOT_FOUND when customer does not belong to company', async () => {
