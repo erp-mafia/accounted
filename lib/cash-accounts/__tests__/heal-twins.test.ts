@@ -219,6 +219,18 @@ describe('healTwinCashAccounts', () => {
     expect(stub.writes).toEqual([])
   })
 
+  it('skips a group whose sync routing points at a ledger outside the group', async () => {
+    const stub = classic()
+    stub.connections = [activeConn([['uid-r1931', '1940']])]
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+
+    const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+    expect(result.groups[0]).toMatchObject({ skipped: 'routing-outside-group', accountsDataLedgerFrom: '1940' })
+    expect(stub.writes).toEqual([])
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+  })
+
   it('keeps the live row when it already has the history and retires the stale twin', async () => {
     const stub: Stub = {
       rows: [
