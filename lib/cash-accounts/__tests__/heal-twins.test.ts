@@ -359,6 +359,33 @@ describe('healTwinCashAccounts', () => {
     expect(JSON.stringify(event.payload)).not.toContain(IBAN)
   })
 
+  it('writes the event before the first mutation, and mutates nothing when it fails', async () => {
+    const stub = classic()
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+    mockAppend.mockRejectedValue(new Error('insert failed'))
+
+    await expect(healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })).rejects.toThrow('insert failed')
+
+    expect(stub.writes).toEqual([])
+    expect(mockSetPrimary).not.toHaveBeenCalled()
+    expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+  })
+
+  it('aborts when a ledger changed since the reviewed dry run', async () => {
+    const stub = classic()
+    mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+    const supabase = makeSupabase(stub)
+    const reviewed = await heal(supabase, COMPANY, { dryRun: true })
+    // Same rows, same counts, but the twin was remapped in between.
+    stub.rows[1].ledger_account = '1936'
+    stub.connections = [activeConn([['uid-r1931', '1936']])]
+
+    await expect(
+      heal(supabase, COMPANY, { dryRun: false, expectedFingerprint: reviewed.fingerprint, actor: ACTOR }),
+    ).rejects.toThrow(/plan changed/)
+    expect(stub.writes).toEqual([])
+  })
+
   it('hands the primary flag over before it retires a stale primary row', async () => {
     const stub: Stub = {
       rows: [

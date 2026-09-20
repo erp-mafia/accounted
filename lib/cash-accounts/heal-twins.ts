@@ -51,7 +51,7 @@ const log = createLogger('cash-accounts-heal')
  * retired) and a re-run picks up where a failed run stopped.
  *
  * Each merged group writes one CashAccountTwinsMerged behandlingshistorik
- * event (BFNAR 2013:2 p. 9.16): re-pointing accounts_data changes which BAS
+ * event (BFNAR 2013:2 p. 9.16), before its first mutation: re-pointing accounts_data changes which BAS
  * account future bank transactions land on, and a deleted row leaves no other
  * durable trace that the twin existed.
  */
@@ -107,11 +107,11 @@ export function planFingerprint(groups: readonly TwinGroupReport[]): string {
     .map((g) => ({
       key: g.physicalKey,
       skipped: g.skipped,
-      keeper: g.keeper?.id ?? null,
+      keeper: g.keeper ? `${g.keeper.id}:${g.keeper.ledger_account}` : null,
       live: g.liveRowId,
       from: g.accountsDataLedgerFrom,
       retired: g.retired
-        .map((r) => `${r.id}:${r.outcome}:${r.movable}:${r.staying}`)
+        .map((r) => `${r.id}:${r.ledger_account}:${r.outcome}:${r.movable}:${r.staying}`)
         .sort(),
     }))
     .sort((a, b) => a.key.localeCompare(b.key))
@@ -232,6 +232,31 @@ export async function healTwinCashAccounts(
       })
     }
     executions.push(async () => {
+      // The behandlingshistorik record is written BEFORE the first mutation.
+      // An event whose merge then fails half-way is recoverable: the re-run
+      // plans what is left and records that too. A finished merge whose event
+      // failed is not: the rows are no longer a twin group, so nothing would
+      // ever write it. No IBAN in the payload: row ids and ledgers identify
+      // the accounts.
+      await appendProcessingHistoryWithClient(supabase, {
+        companyId,
+        correlationId,
+        aggregateType: 'System',
+        aggregateId: keeper.id,
+        eventType: 'CashAccountTwinsMerged',
+        payload: {
+          keeper: report.keeper,
+          live_row_id: live.id,
+          bank_connection_id: liveConn.id,
+          sync_ledger_before: liveEntry?.ledger_account ?? null,
+          sync_ledger_after: keeper.ledger_account,
+          retired: report.retired,
+          plan_fingerprint: result.fingerprint,
+        },
+        actor,
+        occurredAt: new Date(),
+      })
+
       // Primary handover first: a stale primary must never be retired while
       // it still carries the flag, or a failure in between leaves the company
       // without the intended primary. The RPC swaps atomically.
@@ -287,26 +312,6 @@ export async function healTwinCashAccounts(
             : await supabase.from('cash_accounts').delete().eq('id', row.id).eq('company_id', companyId)
         if (error) throw new Error(`retiring cash account ${row.id} failed: ${error.message}`)
       }
-
-      // No IBAN in the payload: row ids and ledgers identify the accounts.
-      await appendProcessingHistoryWithClient(supabase, {
-        companyId,
-        correlationId,
-        aggregateType: 'System',
-        aggregateId: keeper.id,
-        eventType: 'CashAccountTwinsMerged',
-        payload: {
-          keeper: report.keeper,
-          live_row_id: live.id,
-          bank_connection_id: liveConn.id,
-          sync_ledger_before: liveEntry?.ledger_account ?? null,
-          sync_ledger_after: keeper.ledger_account,
-          retired: report.retired,
-          plan_fingerprint: result.fingerprint,
-        },
-        actor,
-        occurredAt: new Date(),
-      })
 
       log.info('healed twin cash accounts', {
         companyId,
