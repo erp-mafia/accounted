@@ -336,14 +336,20 @@ describe('healTwinCashAccounts', () => {
     expect(mockAppend).not.toHaveBeenCalled()
   })
 
-  it('records one behandlingshistorik event per merged group, without the IBAN', async () => {
+  it('records a started and a completed behandlingshistorik event per merged group, without the IBAN', async () => {
     const stub = classic()
     mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
 
     await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
 
-    expect(mockAppend).toHaveBeenCalledTimes(1)
+    expect(mockAppend).toHaveBeenCalledTimes(2)
     const event = mockAppend.mock.calls[0][1]
+    expect(event.payload.phase).toBe('started')
+    expect(mockAppend.mock.calls[1][1]).toMatchObject({
+      causationId: 'event-1',
+      correlationId: event.correlationId,
+      payload: { phase: 'completed' },
+    })
     expect(event).toMatchObject({
       companyId: COMPANY,
       aggregateId: 'r1930',

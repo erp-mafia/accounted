@@ -50,10 +50,11 @@ const log = createLogger('cash-accounts-heal')
  * state after every prefix (routing first, primary handover before any row is
  * retired) and a re-run picks up where a failed run stopped.
  *
- * Each merged group writes one CashAccountTwinsMerged behandlingshistorik
- * event (BFNAR 2013:2 p. 9.16), before its first mutation: re-pointing accounts_data changes which BAS
- * account future bank transactions land on, and a deleted row leaves no other
- * durable trace that the twin existed.
+ * Each merged group writes a CashAccountTwinsMerged behandlingshistorik event
+ * (BFNAR 2013:2 p. 9.16) before its first mutation (phase 'started') and one
+ * after the last (phase 'completed', caused by the first): re-pointing
+ * accounts_data changes which BAS account future bank transactions land on,
+ * and a deleted row leaves no other durable trace that the twin existed.
  */
 
 export type TwinSkipReason =
@@ -238,7 +239,7 @@ export async function healTwinCashAccounts(
       // failed is not: the rows are no longer a twin group, so nothing would
       // ever write it. No IBAN in the payload: row ids and ledgers identify
       // the accounts.
-      await appendProcessingHistoryWithClient(supabase, {
+      const startedEventId = await appendProcessingHistoryWithClient(supabase, {
         companyId,
         correlationId,
         aggregateType: 'System',
@@ -252,6 +253,7 @@ export async function healTwinCashAccounts(
           sync_ledger_after: keeper.ledger_account,
           retired: report.retired,
           plan_fingerprint: result.fingerprint,
+          phase: 'started',
         },
         actor,
         occurredAt: new Date(),
@@ -312,6 +314,21 @@ export async function healTwinCashAccounts(
             : await supabase.from('cash_accounts').delete().eq('id', row.id).eq('company_id', companyId)
         if (error) throw new Error(`retiring cash account ${row.id} failed: ${error.message}`)
       }
+
+      // Completion marker, caused by the started event: the log then never
+      // reads as asserting a finished merge that a crash interrupted. A started
+      // event without this marker is a merge to re-run.
+      await appendProcessingHistoryWithClient(supabase, {
+        companyId,
+        correlationId,
+        causationId: startedEventId,
+        aggregateType: 'System',
+        aggregateId: keeper.id,
+        eventType: 'CashAccountTwinsMerged',
+        payload: { keeper: report.keeper, plan_fingerprint: result.fingerprint, phase: 'completed' },
+        actor,
+        occurredAt: new Date(),
+      })
 
       log.info('healed twin cash accounts', {
         companyId,
