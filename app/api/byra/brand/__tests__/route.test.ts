@@ -100,7 +100,7 @@ describe('GET /api/byra/brand', () => {
   it('returns the brand with canEdit false for a plain member', async () => {
     authed()
     getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'member' })
-    brandRow = { domain: 'willem.accounted.se', app_name: 'Siffra', logo_url: null }
+    brandRow = { domain: 'brand-c.accounted.se', app_name: 'Siffra', logo_url: null }
     const res = await GET()
     const { status, body } = await parseJsonResponse<{
       data: { hasBrand: boolean; domain: string; appName: string; logoUrl: string | null; canEdit: boolean }
@@ -108,7 +108,7 @@ describe('GET /api/byra/brand', () => {
     expect(status).toBe(200)
     expect(body.data).toEqual({
       hasBrand: true,
-      domain: 'willem.accounted.se',
+      domain: 'brand-c.accounted.se',
       appName: 'Siffra',
       logoUrl: null,
       canEdit: false,
@@ -127,14 +127,14 @@ describe('GET /api/byra/brand', () => {
 describe('PATCH /api/byra/brand', () => {
   it('returns 401 when unauthenticated', async () => {
     unauthed()
-    const res = await PATCH(patchRequest({ appName: 'Willem' }))
+    const res = await PATCH(patchRequest({ appName: 'Brand C' }))
     expect(res.status).toBe(401)
   })
 
   it('returns 403 for a plain member', async () => {
     authed()
     getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'member' })
-    const res = await PATCH(patchRequest({ appName: 'Willem' }))
+    const res = await PATCH(patchRequest({ appName: 'Brand C' }))
     expect(res.status).toBe(403)
   })
 
@@ -150,7 +150,7 @@ describe('PATCH /api/byra/brand', () => {
     authed()
     getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'owner' })
     brandRow = null
-    const res = await PATCH(patchRequest({ appName: 'Willem' }))
+    const res = await PATCH(patchRequest({ appName: 'Brand C' }))
     expect(res.status).toBe(404)
   })
 
@@ -158,12 +158,12 @@ describe('PATCH /api/byra/brand', () => {
     authed()
     getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'admin' })
     brandRow = { id: 'brand-1' }
-    const res = await PATCH(patchRequest({ appName: '  Willem  ' }))
+    const res = await PATCH(patchRequest({ appName: '  Brand C  ' }))
     const { status, body } = await parseJsonResponse<{ data: { app_name: string } }>(res)
 
     expect(status).toBe(200)
-    expect(body.data.app_name).toBe('Willem')
-    expect(updateMock).toHaveBeenCalledWith({ app_name: 'Willem' })
+    expect(body.data.app_name).toBe('Brand C')
+    expect(updateMock).toHaveBeenCalledWith({ app_name: 'Brand C' })
     expect(clearBrandCacheMock).toHaveBeenCalled()
   })
 
@@ -172,7 +172,7 @@ describe('PATCH /api/byra/brand', () => {
     getByraMembershipMock.mockResolvedValue({ teamId: 'team-1', teamName: 'Siffra', role: 'owner' })
     brandRow = { id: 'brand-1' }
     updateError = { message: 'nope' }
-    const res = await PATCH(patchRequest({ appName: 'Willem' }))
+    const res = await PATCH(patchRequest({ appName: 'Brand C' }))
     expect(res.status).toBe(500)
     expect(clearBrandCacheMock).not.toHaveBeenCalled()
   })

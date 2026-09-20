@@ -268,7 +268,7 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
 
     const request = new NextRequest(
       'http://localhost:3000/auth/callback?token_hash=abc&type=magiclink',
-      { headers: { 'x-forwarded-host': 'app.amnas.se' } }
+      { headers: { 'x-forwarded-host': 'app.brand-f.se' } }
     )
     const response = await GET(request)
 
@@ -276,7 +276,7 @@ describe('GET /auth/callback: WL-14 cockpit landing', () => {
     expect(resolveLandingDestinationMock).toHaveBeenCalledWith(
       expect.anything(),
       'user-1',
-      'app.amnas.se'
+      'app.brand-f.se'
     )
   })
 
@@ -325,7 +325,7 @@ describe('GET /auth/callback: byrå-team invite acceptance', () => {
 
     const request = new NextRequest(
       'http://localhost:3000/auth/callback?token_hash=abc&type=signup',
-      { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team', 'x-forwarded-host': 'app.amnas.se' } }
+      { headers: { cookie: 'gnubok-invite-token=gnubok_inv_team', 'x-forwarded-host': 'app.brand-f.se' } }
     )
     const response = await GET(request)
 
