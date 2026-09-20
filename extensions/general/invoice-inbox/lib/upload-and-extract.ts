@@ -12,7 +12,6 @@ import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import type { InvoiceExtractionResult } from '@/types'
 import { PDFDocument } from 'pdf-lib'
 import path from 'node:path'
-import { escapeHtml } from '@/lib/email/user-text'
 
 // Verdicts decidable before touching the file. `ai_unconfigured` is the
 // deployment-level "no AI backend" state (self-host without a key), distinct
@@ -159,21 +158,6 @@ export function ensureHtmlDocument(html: string): ArrayBuffer {
   const out = new ArrayBuffer(bytes.byteLength)
   new Uint8Array(out).set(bytes)
   return out
-}
-
-/**
- * Build a text/html document from a mail's body parts, preferring the HTML
- * part. A plain-text-only mail is escaped into a <pre> so whitespace, amounts
- * and OCR numbers survive verbatim. Returns null when the mail has no body
- * worth storing.
- */
-export function buildEmailBodyHtmlDocument(
-  html: string | null,
-  text: string | null
-): ArrayBuffer | null {
-  if (html?.trim()) return ensureHtmlDocument(html)
-  if (text?.trim()) return ensureHtmlDocument(`<pre>${escapeHtml(text)}</pre>`)
-  return null
 }
 
 export interface EmailMeta {

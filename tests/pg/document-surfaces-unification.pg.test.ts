@@ -387,6 +387,67 @@ describe('document surfaces unification', () => {
     expect(ids).not.toContain(jeWithUnderlag)
   })
 
+  it('inbox_item: flagged without underlag, silenced by the linked inbox document, on both surfaces (#1317)', async () => {
+    // book-direct links the item's document to the new verifikat; an item
+    // that had no document (error row) books a verifikat with nothing behind
+    // it. The transactions surface sees the same entries: book-direct keeps
+    // source_type inbox_item when it settles the item's pre-matched bank
+    // line without a transaction_id in the request.
+    const s = await seedCompany()
+    const cashAccountId = await insertCashAccount({ companyId: s.companyId, ledgerAccount: '1930' })
+    const mkInboxJe = (n: number) =>
+      insertPostedJournalEntry({
+        userId: s.userId,
+        companyId: s.companyId,
+        fiscalPeriodId: s.fiscalPeriodId,
+        voucherNumber: n,
+        entryDate: '2026-06-15',
+        description: `inbox item ${n}`,
+        sourceType: 'inbox_item',
+        lines: [
+          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
+          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+        ],
+      })
+    const jeWithUnderlag = await mkInboxJe(1)
+    const jeWithoutUnderlag = await mkInboxJe(2)
+    await attachDocument({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeWithUnderlag,
+    })
+    const txWithUnderlag = await insertTransaction({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeWithUnderlag,
+      cashAccountId,
+      date: '2026-06-15',
+      amount: -100,
+      description: 'inbox item 1 settled',
+    })
+    const txWithoutUnderlag = await insertTransaction({
+      userId: s.userId,
+      companyId: s.companyId,
+      journalEntryId: jeWithoutUnderlag,
+      cashAccountId,
+      date: '2026-06-15',
+      amount: -200,
+      description: 'inbox item 2 settled',
+    })
+
+    const ver = await verifikatSurface(s.companyId)
+    expect(ver.ok).toBe(true)
+    const verIds = (ver.verifikat ?? []).map((v) => v.journal_entry_id)
+    expect(verIds).toContain(jeWithoutUnderlag)
+    expect(verIds).not.toContain(jeWithUnderlag)
+
+    const tx = await transactionsSurface(s.companyId)
+    expect(tx.ok).toBe(true)
+    const txIds = (tx.transactions ?? []).map((t) => t.transaction_id)
+    expect(txIds).toContain(txWithoutUnderlag)
+    expect(txIds).not.toContain(txWithUnderlag)
+  })
+
   it('tenant guard on the transactions surface (NULL + foreign company)', async () => {
     const { rows } = await getPool().query<{ r: TransactionsResult }>(
       `SELECT public.transactions_without_documents(NULL, NULL, 20, 0) AS r`,

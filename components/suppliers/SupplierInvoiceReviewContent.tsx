@@ -14,6 +14,7 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
+import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Supplier } from '@/types'
 
@@ -55,6 +56,9 @@ interface SupplierInvoiceReviewContentProps {
   subtotal: number
   totalVat: number
   total: number
+  /** The editor's öresavrundning switch (SEK only). Rounds the payable shown
+   *  here, never the verifikat: the exact öre is settled against 3740 at payment. */
+  oreRounding: boolean
 }
 
 interface JournalPreviewLine {
@@ -245,6 +249,7 @@ export function SupplierInvoiceReviewContent({
   subtotal,
   totalVat,
   total,
+  oreRounding,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
@@ -271,6 +276,10 @@ export function SupplierInvoiceReviewContent({
   const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
+  // Same figures as the editor summary (and the detail page and list after
+  // registration): the payable rounds to whole kronor when öresavrundning is
+  // on, while the verifikat below keeps the exact öre on 2440.
+  const figures = supplierInvoiceDisplayFigures({ total, currency, ore_rounding: oreRounding })
 
   // No account-label lookup any more: the BESKRIVNING column shows the
   // line_description that will actually be posted. A hardcoded label map
@@ -416,10 +425,16 @@ export function SupplierInvoiceReviewContent({
           <span className="text-muted-foreground">{reverseCharge ? t('vat_reverse_charge') : t('vat_label_short')}</span>
           <span className="tabular-nums">{formatCurrency(totalVat, currency)}</span>
         </div>
+        {figures.rounding.applies && (
+          <div className="flex justify-between">
+            <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
+            <span className="tabular-nums">{formatCurrency(figures.rounding.roundingDelta, currency)}</span>
+          </div>
+        )}
         <Separator />
         <div className="flex justify-between font-bold text-xl sm:text-2xl">
-          <span>{t('total_label')}</span>
-          <span className="tabular-nums">{formatCurrency(total, currency)}</span>
+          <span>{t('total_payable_label')}</span>
+          <span className="tabular-nums">{formatCurrency(figures.toPay, currency)}</span>
         </div>
         {currency !== 'SEK' && exchangeRate && (
           <div className="flex justify-between text-muted-foreground">
@@ -495,6 +510,14 @@ export function SupplierInvoiceReviewContent({
             <span>{t('debit_credit_short', { debit: formatAmount(totalDebit), credit: formatAmount(totalCredit) })}</span>
           </div>
         </div>
+        {figures.rounding.applies && (
+          <p className="text-xs text-muted-foreground">
+            {t('review_ore_rounding_note', {
+              exact: formatCurrency(figures.exactTotal, currency),
+              delta: formatCurrency(figures.rounding.roundingDelta, currency),
+            })}
+          </p>
+        )}
       </div>
 
       {/* Payment reference */}

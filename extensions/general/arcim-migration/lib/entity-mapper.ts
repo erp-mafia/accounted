@@ -15,6 +15,7 @@ import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
 import type {
   AmountType,
+  CreditedInvoiceRefDto,
   CustomerDto,
   SupplierDto,
   SalesInvoiceDto,
@@ -576,22 +577,27 @@ export interface MappedInvoice {
    */
   vatUnresolved: boolean
   /**
-   * True for an imported kreditfaktura that carries no pointer at the invoice
-   * it credits.
+   * True for an imported kreditfaktura: the row AS MAPPED carries no pointer
+   * at the invoice it credits.
    *
-   * `invoices` models that relation only through `credited_invoice_id`, and no
-   * provider DTO carries a reference to the credited invoice: SalesInvoiceDto
-   * and SupplierInvoiceDto (lib/providers/dto.ts) state the type through
-   * `invoiceTypeCode` 381 and nothing else. So every credit note the migration
-   * imports lands unlinked, and guessing the original from a number in a note
-   * or from the amount would put a wrong pair in the AR ledger. The row itself
-   * is complete räkenskapsinformation (reversed amounts, terminal status);
-   * only the pairing is missing. Meant to be counted into the migration
-   * summary the way `vatUnresolved` is, so the user is told instead of finding
-   * it out in the ledger; the orchestrator does not read it yet, and the copy
-   * that reports it waits in `ext_arcim_credit_notes_unlinked_detail`.
+   * `invoices` models that relation only through `credited_invoice_id`, an
+   * Accounted id the mapper cannot know: the original may be inserted in the
+   * same run, a chunk later, or by an earlier run. So the importer pairs the
+   * rows afterwards, from `creditedInvoiceRef`, when the provider named the
+   * credited invoice (Bokio's invoiceRef does; the arcim gateway, Visma and
+   * Fortnox send nothing), and counts what stayed unpaired into the migration
+   * summary (`ext_arcim_credit_notes_unlinked_detail`). Guessing the original
+   * from an amount would put a wrong pair in the AR ledger, so no reference
+   * means unpaired. The row itself is complete räkenskapsinformation either
+   * way (reversed amounts, terminal status, the credited number in notes).
    */
   creditNoteUnlinked: boolean
+  /**
+   * The credited invoice as the provider named it, for the importer's pairing
+   * pass. null when the row is not a credit note or the provider sent no
+   * reference.
+   */
+  creditedInvoiceRef: CreditedInvoiceRefDto | null
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -840,8 +846,13 @@ export function mapSalesInvoice(
   // terminal status regardless of the provider's lifecycle status:
   // invoiceTypeCode is the only signal that the document IS a credit note, and
   // the arcim gateway is not guaranteed to also send status='credited'. Same
-  // reasoning as mapSupplierInvoice.
-  const status = isCreditNote ? 'credited' : (statusMap[dto.status] || 'sent')
+  // reasoning as mapSupplierInvoice. The one exception is a draft: a credit
+  // note the source never issued (Bokio's draft | published enum) is not a
+  // credit yet and stays a draft here too, the state an in-app credit note
+  // starts in, so it neither reverses AR nor marks the original credited.
+  const status = isCreditNote
+    ? (dto.status === 'draft' ? 'draft' : 'credited')
+    : (statusMap[dto.status] || 'sent')
 
   // Nothing is ever collected on a kreditfaktura: it reduces what the customer
   // owes rather than settling anything. This also keeps the row clear of
@@ -893,7 +904,7 @@ export function mapSalesInvoice(
     vat_rate: vat.rate,
     your_reference: null,
     our_reference: null,
-    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
+    notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
     // Always 'invoice'. invoices_document_type_check allows only
     // ('invoice', 'proforma', 'delivery_note'), and Accounted models a
     // kreditfaktura as an invoice row with reversed amounts plus
@@ -917,26 +928,32 @@ export function mapSalesInvoice(
     fxUnresolved: fx.unresolved,
     vatUnresolved: vat.unresolved,
     creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: isCreditNote ? (dto.creditedInvoiceRef ?? null) : null,
   }
 }
 
 /**
- * Durable note for a migrated kreditfaktura that carries no pointer at the
- * invoice it credits.
+ * Durable note for a migrated kreditfaktura.
  *
  * ML 17 kap 22-23 § requires a kreditfaktura to reference the original
  * invoice, and BFL 5 kap 6-7 § requires a verifikation to reference its
- * underlag. No provider DTO carries that reference (lib/providers/dto.ts), so
- * the pairing cannot be resolved at import time and guessing it would corrupt
- * the AR ledger. The wizard reports the count, but a wizard result screen is
- * not rakenskapsinformation: the gap has to be legible on the record itself,
- * years later, to whoever opens the invoice. So it is written into `notes`,
- * preserving whatever note the provider sent.
+ * underlag. The wizard reports what could not be paired, but a wizard result
+ * screen is not räkenskapsinformation: the reference has to be legible on
+ * the record itself, years later, to whoever opens the invoice. So the
+ * credited invoice's number is written into `notes` when the provider sent
+ * it, whether or not the pairing pass then finds that invoice here, and the
+ * absence of any reference is disclosed when it did not. Whatever note the
+ * provider sent is preserved above it.
  */
-function creditNoteUnlinkedNote(providerNote: string | null | undefined): string {
-  const disclosure =
-    'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
-    + 'saknas: kallsystemet skickade ingen sadan referens vid migreringen.'
+function creditNoteNote(
+  providerNote: string | null | undefined,
+  ref: CreditedInvoiceRefDto | null | undefined,
+): string {
+  const creditedNumber = ref?.invoiceNumber?.trim()
+  const disclosure = creditedNumber
+    ? `Kreditfaktura importerad vid systembyte. Krediterar faktura ${creditedNumber} i källsystemet.`
+    : 'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
+      + 'saknas: källsystemet skickade ingen sådan referens vid migreringen.'
   const existing = (providerNote || '').trim()
   return existing ? `${existing}\n\n${disclosure}` : disclosure
 }
@@ -1092,7 +1109,7 @@ export function mapSupplierInvoice(
     paid_amount: amounts.paidAmount,
     remaining_amount: amounts.remainingAmount,
     is_credit_note: isCreditNote,
-    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
+    notes: isCreditNote ? creditNoteNote(dto.note, null) : (dto.note || null),
   }
 
   const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
@@ -1104,8 +1121,10 @@ export function mapSupplierInvoice(
     vatUnresolved: vat.unresolved,
     // supplier_invoices carries is_credit_note, so the row still reads as a
     // kreditfaktura on its own; what is missing is the same pointer at the
-    // original that the sales side lacks.
+    // original that the sales side lacks. No provider names the credited
+    // supplier invoice yet, so there is nothing to pair by.
     creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: null,
   }
 }
 

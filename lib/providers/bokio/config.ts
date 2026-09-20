@@ -2,6 +2,7 @@ import { ResourceType } from '../dto';
 import type { BokioResourceConfig, RateLimitConfig } from '../types';
 import {
   mapBokioToSalesInvoice,
+  mapBokioToCreditNote,
   mapBokioToCustomer,
   mapBokioToSupplier,
   mapBokioToSupplierInvoice,
@@ -19,6 +20,16 @@ export const BOKIO_RESOURCE_CONFIGS: Partial<Record<ResourceType, BokioResourceC
     detailEndpoint: '/invoices/{id}',
     idField: 'id',
     mapper: mapBokioToSalesInvoice,
+    paginated: true,
+  },
+  // Kreditfakturor are a resource of their own in Bokio's company API
+  // (scope credit-notes:read). The fetcher lists them beside /invoices and
+  // hydrates a credit note from this detail endpoint, never /invoices/{id}.
+  [ResourceType.CreditNotes]: {
+    listEndpoint: '/credit-notes',
+    detailEndpoint: '/credit-notes/{id}',
+    idField: 'id',
+    mapper: mapBokioToCreditNote,
     paginated: true,
   },
   [ResourceType.Customers]: {

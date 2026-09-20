@@ -36,6 +36,7 @@ function makeDto(over: {
   paid?: boolean
   balance?: number
   note?: string
+  creditedInvoiceRef?: SalesInvoiceDto['creditedInvoiceRef']
 } = {}): SalesInvoiceDto {
   const s = over.signOfAmounts ?? 1
   const net = (over.net ?? 1000) * s
@@ -73,6 +74,7 @@ function makeDto(over: {
       balance: { value: over.balance ?? gross, currencyCode: 'SEK' },
     },
     note: over.note,
+    creditedInvoiceRef: over.creditedInvoiceRef,
   }
 }
 
@@ -127,12 +129,22 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     expect(vatUnresolved).toBe(false)
   })
 
-  it('forces the terminal status whatever lifecycle status the provider sends', () => {
-    for (const status of ['draft', 'sent', 'booked', 'paid', 'overdue'] as InvoiceStatusCode[]) {
+  it('forces the terminal status whatever issued lifecycle status the provider sends', () => {
+    for (const status of ['sent', 'booked', 'paid', 'overdue', 'cancelled'] as InvoiceStatusCode[]) {
       const { invoice } = map({ invoiceTypeCode: '381', status, paid: true, balance: 0 })
       expect(invoice.status, `status=${status}`).toBe('credited')
       expect(STATUSES).toContain(invoice.status as string)
     }
+  })
+
+  it('keeps a credit note the source never issued a draft', () => {
+    // Bokio's credit-note enum is draft | published. A draft has not reduced
+    // anything yet: it lands the way an in-app credit note starts, as a draft
+    // with reversed amounts, and does not mark the original credited.
+    const { invoice } = map({ invoiceTypeCode: '381', status: 'draft' })
+    expect(invoice.status).toBe('draft')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.paid_amount).toBe(0)
   })
 
   it('collects nothing on a credit note', () => {
@@ -159,6 +171,34 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     // has to be legible on the record itself years later.
     const { invoice } = map({ invoiceTypeCode: '381' })
     expect(invoice.notes).toContain('Referens till ursprungsfakturan')
+  })
+
+  it('carries the credited invoice the provider named, for the pairing pass', () => {
+    // Bokio's invoiceRef names the credited invoice by its own id and number.
+    // The mapper cannot turn that into an Accounted id (the original may be
+    // inserted later in the run, or by an earlier run), so it hands the
+    // reference on and reports the row unpaired as written.
+    const ref = { id: 'a419cf69-db6f-4de9-992c-b1a60942a443', invoiceNumber: 'IN-2024-001' }
+    const { invoice, creditNoteUnlinked, creditedInvoiceRef } = map({ invoiceTypeCode: '381', creditedInvoiceRef: ref })
+    expect(creditedInvoiceRef).toEqual(ref)
+    expect(creditNoteUnlinked).toBe(true)
+    expect(invoice).not.toHaveProperty('credited_invoice_id')
+  })
+
+  it('names the credited invoice in notes when the provider sent its number', () => {
+    // Whether or not the pairing pass finds that invoice here, the number
+    // must be legible on the record (ML 17 kap 22-23 §).
+    const { invoice } = map({
+      invoiceTypeCode: '381',
+      creditedInvoiceRef: { id: 'a419cf69-db6f-4de9-992c-b1a60942a443', invoiceNumber: 'IN-2024-001' },
+    })
+    expect(invoice.notes).toContain('Krediterar faktura IN-2024-001')
+    expect(invoice.notes).not.toContain('Referens till ursprungsfakturan saknas')
+  })
+
+  it('does not carry a reference for an ordinary invoice', () => {
+    const { creditedInvoiceRef } = map({ status: 'sent', creditedInvoiceRef: { invoiceNumber: 'stray' } })
+    expect(creditedInvoiceRef).toBeNull()
   })
 
   it('preserves the provider note alongside the disclosure', () => {

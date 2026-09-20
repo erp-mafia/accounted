@@ -240,4 +240,8 @@ export const NEEDS_DOC_SOURCE_TYPES = [
   // Webshop order bookings rest on the generated orderunderlag (#1881); an
   // entry whose underlag failed to attach must surface here.
   'webshop_order',
+  // An inbox item booked directly (book-direct) rests on the item's archived
+  // document; an item without one (error row, upload that never completed)
+  // books a verifikat with no underlag and must surface here (#1317).
+  'inbox_item',
 ] as const

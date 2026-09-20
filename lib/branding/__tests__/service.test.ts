@@ -46,7 +46,7 @@ describe('branding service', () => {
     expect(b.legalEntity).toBe('Arcim Technology AB')
     expect(b.supportEmail).toBe('support@gnubok.se')
     expect(b.privacyEmail).toBe('privacy@gnubok.se')
-    expect(b.securityEmail).toBe('security@arcim.io')
+    expect(b.securityEmail).toBe('support@accounted.se')
     expect(b.authEmailFrom).toBe('noreply@gnubok.se')
     expect(b.logoPath).toBe('/accounted-icon.png')
     expect(b.faviconPath).toBe('/favicon.ico')

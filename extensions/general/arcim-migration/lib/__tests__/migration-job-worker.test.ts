@@ -17,7 +17,7 @@ vi.mock('../entity-mapper', () => ({
   mapSupplierInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
 }))
 import { mapSalesInvoice, mapSupplierInvoice } from '../entity-mapper'
-import { invoicePartySourceId, migrationRpc, runProviderMigrationWorker, withinMigrationDeadline } from '../migration-job-worker'
+import { invoicePartySourceId, migrationRpc, pairMigratedCreditNotes, runProviderMigrationWorker, withinMigrationDeadline, type MigrationChunk } from '../migration-job-worker'
 
 function database(overrides: Partial<ProviderMigrationJob> = {}) {
   const job = { id: 'job', company_id: 'company', user_id: 'user', consent_id: 'consent', provider: 'visma',
@@ -105,7 +105,7 @@ describe('bounded durable worker', () => {
     vi.mocked(mapper).mockReturnValueOnce({
       invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 },
       items: [{ line_total: 100, vat_amount: 0 }],
-      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false,
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: false, creditedInvoiceRef: null,
     })
     db.rows.push({ id: dto.id, source_id: dto.id, resource, state: 'pending', ...sealMigrationPayload(dto) })
     mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
@@ -291,4 +291,107 @@ it('recognizes the consent resolver’s structured authorization errors', async 
   await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
   expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
   expect(mocks.page).not.toHaveBeenCalled()
+})
+
+/**
+ * Credit-note pairing (crm#110). Chunks import in id order, so the invoice a
+ * kreditfaktura credits may be inserted after it: the pairing runs in the
+ * link phase, resolving the provider's reference through this job's chunks
+ * first and the company's invoice numbers second, and pairs nothing it
+ * cannot resolve unambiguously.
+ */
+describe('pairMigratedCreditNotes', () => {
+  type Update = { table: string; payload: unknown; filters: unknown[][] }
+  function pairingDb(answers: { chunkTarget?: string | null; invoicesByNumber?: { id: string }[] } = {}) {
+    const updates: Update[] = []
+    const reads: { table: string; filters: unknown[][] }[] = []
+    const from = vi.fn((table: string) => {
+      const filters: unknown[][] = []
+      let payload: unknown
+      const chain: Record<string, unknown> = {}
+      for (const name of ['select', 'eq', 'neq', 'not', 'is', 'limit', 'order']) {
+        chain[name] = (...args: unknown[]) => { filters.push([name, ...args]); return chain }
+      }
+      chain.maybeSingle = () => chain
+      chain.update = (value: unknown) => { payload = value; return chain }
+      chain.then = (resolve: (value: unknown) => void) => {
+        if (payload !== undefined) { updates.push({ table, payload, filters }); return resolve({ data: null, error: null }) }
+        reads.push({ table, filters })
+        if (table === 'migration_job_chunks') return resolve({ data: answers.chunkTarget ? { target_id: answers.chunkTarget } : null, error: null })
+        if (table === 'invoices') return resolve({ data: answers.invoicesByNumber ?? [], error: null })
+        return resolve({ data: null, error: null })
+      }
+      return chain
+    })
+    return { supabase: { from } as unknown as SupabaseClient, updates, reads }
+  }
+  const job = { id: 'job', company_id: 'company' } as ProviderMigrationJob
+  const chunk = (over: Partial<MigrationChunk>): MigrationChunk => ({
+    id: 'chunk-cn', resource: 'salesInvoices', source_id: 'cn-src', payload: '', target_id: 'cn-row',
+    receipt: { link: { kind: 'customer', sourceVoucher: null, invoiceDate: '2024-10-15', totalSek: -6375,
+      creditedInvoiceRef: { id: 'inv-src', invoiceNumber: 'IN-2024-001' } } }, ...over,
+  })
+  const deadline = () => Date.now() + 5000
+
+  it('resolves the credited invoice through the job\'s own chunks and pairs the rows', async () => {
+    const db = pairingDb({ chunkTarget: 'inv-row' })
+    await pairMigratedCreditNotes(db.supabase, job, [chunk({})], deadline())
+    expect(db.updates).toEqual([{ table: 'invoices', payload: { credited_invoice_id: 'inv-row' }, filters: [
+      ['eq', 'id', 'cn-row'], ['eq', 'company_id', 'company'], ['is', 'credited_invoice_id', null],
+    ] }])
+    expect(db.reads[0]).toMatchObject({ table: 'migration_job_chunks', filters: expect.arrayContaining([['eq', 'source_id', 'inv-src']]) })
+  })
+
+  it('falls back to the invoice number when the source id is unknown to this job', async () => {
+    const db = pairingDb({ chunkTarget: null, invoicesByNumber: [{ id: 'inv-from-earlier-run' }] })
+    await pairMigratedCreditNotes(db.supabase, job, [chunk({})], deadline())
+    expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'inv-from-earlier-run' }])
+    expect(db.reads[1]).toMatchObject({ table: 'invoices', filters: expect.arrayContaining([
+      ['eq', 'company_id', 'company'], ['eq', 'invoice_number', 'IN-2024-001'], ['neq', 'id', 'cn-row'],
+    ]) })
+  })
+
+  it('pairs nothing when the number is ambiguous, when nothing matches, or when the row is not a referenced credit note', async () => {
+    const ambiguous = pairingDb({ invoicesByNumber: [{ id: 'a' }, { id: 'b' }] })
+    await pairMigratedCreditNotes(ambiguous.supabase, job, [chunk({})], deadline())
+    expect(ambiguous.updates).toEqual([])
+
+    const nothing = pairingDb({})
+    await pairMigratedCreditNotes(nothing.supabase, job, [chunk({})], deadline())
+    expect(nothing.updates).toEqual([])
+
+    const untouched = pairingDb({ chunkTarget: 'inv-row' })
+    await pairMigratedCreditNotes(untouched.supabase, job, [
+      chunk({ resource: 'supplierInvoices' }),
+      chunk({ receipt: { link: { kind: 'customer', sourceVoucher: null, invoiceDate: '2024-10-15', totalSek: 1250 } } }),
+      chunk({ target_id: null }),
+    ], deadline())
+    expect(untouched.updates).toEqual([])
+    expect(untouched.reads).toEqual([])
+  })
+
+  it('carries the provider\'s reference into the receipt and reports only a reference-less credit note as unlinked', async () => {
+    const db = database({ phase: 'import', resources: ['salesInvoices'] })
+    const raw = { id: 'cn-1', creditDate: '2024-10-15', invoiceRef: { id: 'inv-1', invoiceNumber: 'IN-2024-001' },
+      customerRef: { id: 'customer', name: 'Customer' }, totalAmount: 125, totalTax: 25, status: 'published',
+      lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100, taxRate: 25 }] }
+    const dto = mapBokioToSalesInvoice(raw)
+    expect(dto.invoiceTypeCode).toBe('381')
+    vi.mocked(mapSalesInvoice).mockReturnValueOnce({
+      invoice: { subtotal: -100, vat_amount: -25, total_sek: -125 },
+      items: [{ line_total: -100, vat_amount: -25 }],
+      fxUnresolved: null, vatUnresolved: false, creditNoteUnlinked: true,
+      creditedInvoiceRef: { id: 'inv-1', invoiceNumber: 'IN-2024-001' },
+    })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'salesInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [expect.objectContaining({
+        id: 'cn-1',
+        link: expect.objectContaining({ creditedInvoiceRef: { id: 'inv-1', invoiceNumber: 'IN-2024-001' } }),
+        warnings: expect.objectContaining({ creditNoteUnlinked: false }),
+      })],
+    }))
+  })
 })

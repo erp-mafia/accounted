@@ -32,7 +32,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
@@ -1064,18 +1064,20 @@ export default function NewSupplierInvoiceForm({
   const payableVat = watchedReverseCharge ? 0 : totalVat
   const total = Math.round((subtotal + payableVat) * 100) / 100
 
-  // Öresavrundning live preview: same helper as the detail page. Display-only;
-  // the registered amount and the booked verifikat keep the exact öre.
-  const displayRounding = getDisplayTotal(
-    { total, currency: watchedCurrency || 'SEK', ore_rounding: oreRounding },
-    { ore_rounding: false },
-  )
+  // Öresavrundning live preview: the same figures the review step, the detail
+  // page and the list show. Display-only; the registered amount and the
+  // booked verifikat keep the exact öre (settled against 3740 at payment).
+  const figures = supplierInvoiceDisplayFigures({
+    total,
+    currency: watchedCurrency || 'SEK',
+    ore_rounding: oreRounding,
+  })
 
   // Total cross-check (change 2): client-only compare against the displayed
   // payable; a mismatch renders field-adjacent, never blocks, never travels.
   const enteredFakturaTotal = parseFlexibleNumber(fakturaTotalStr)
   const crosscheckDiff =
-    enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - displayRounding.displayed)
+    enteredFakturaTotal == null ? null : roundOre(enteredFakturaTotal - figures.toPay)
   const crosscheckMatches = crosscheckDiff != null && Math.abs(crosscheckDiff) <= 0.005
 
   // Show the AI-suggested supplier card when we have an extraction, the AI
@@ -2339,18 +2341,18 @@ export default function NewSupplierInvoiceForm({
                 </div>
               </>
             )}
-            {displayRounding.applies && (
+            {figures.rounding.applies && (
               <div className="flex items-baseline justify-between border-b border-border py-2 text-[13px]">
                 <span className="text-muted-foreground">{t('ore_rounding_label')}</span>
                 <span className="tabular-nums">
-                  {formatCurrency(displayRounding.roundingDelta, watchedCurrency)}
+                  {formatCurrency(figures.rounding.roundingDelta, watchedCurrency)}
                 </span>
               </div>
             )}
             <div className="flex items-baseline justify-between pt-4">
               <span className="font-display text-lg">{t('total_payable_label')}</span>
               <span className="font-display text-xl tabular-nums">
-                {formatCurrency(displayRounding.displayed, watchedCurrency)}
+                {formatCurrency(figures.toPay, watchedCurrency)}
               </span>
             </div>
 
@@ -2454,7 +2456,7 @@ export default function NewSupplierInvoiceForm({
             <div className="whitespace-nowrap text-[13px] text-muted-foreground">
               {t('total_label')}
               <strong className="ml-2 text-[15px] font-semibold tabular-nums text-foreground">
-                {formatCurrency(displayRounding.displayed, watchedCurrency)}
+                {formatCurrency(figures.toPay, watchedCurrency)}
               </strong>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-3">
@@ -2523,19 +2525,22 @@ export default function NewSupplierInvoiceForm({
               subtotal={subtotal}
               totalVat={totalVat}
               total={total}
+              oreRounding={oreRounding}
             />
           </ConfirmationDialog>
         )
       })()}
 
-      {/* Bank transaction picker for "Registrera & markera som betald" */}
+      {/* Bank transaction picker for "Registrera & markera som betald". The
+          target is the rounded "att betala": a Bankgiro/Swish row carries whole
+          kronor, and the match settles the öre residual against 3740. */}
       <BankTransactionPicker
         open={showBankPicker}
         onOpenChange={(open) => {
           setShowBankPicker(open)
           if (!open) setPendingTransactionId(null)
         }}
-        targetAmount={total}
+        targetAmount={figures.toPay}
         targetCurrency={watchedCurrency}
         onPick={handlePickTransaction}
       />
