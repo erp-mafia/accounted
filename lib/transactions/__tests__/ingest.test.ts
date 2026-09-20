@@ -239,7 +239,7 @@ describe('ingestTransactions', () => {
       data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: null }],
       error: null,
     }) // cash_accounts lookup: the seeded 1930, turned off
-    enqueue({ data: null, error: null }) // re-enable
+    enqueue({ data: [{ id: 'ca-1930' }], error: null }) // re-enable matched the row
     enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 

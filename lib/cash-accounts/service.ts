@@ -1529,8 +1529,8 @@ export async function upsertFromPsd2(
  * row is impossible under UNIQUE (company_id, ledger_account). A row a bank
  * connection holds is left alone: its flag is the connection's, not ours.
  *
- * Returns whether it wrote. Throws if the write fails, so the caller binds
- * nothing to an account that stayed hidden.
+ * Returns whether it wrote. Throws if the write fails or matches no row, so
+ * the caller never binds rows to an account that stayed hidden.
  */
 export async function reenableIfUnused(
   supabase: SupabaseClient,
@@ -1538,13 +1538,21 @@ export async function reenableIfUnused(
   row: { id: string; enabled?: boolean | null; bank_connection_id?: string | null },
 ): Promise<boolean> {
   if (row.enabled !== false || (row.bank_connection_id ?? null) !== null) return false
-  const { error } = await supabase
+  const { data, error } = await supabase
     .from('cash_accounts')
     .update({ enabled: true })
     .eq('company_id', companyId)
     .eq('id', row.id)
     .is('bank_connection_id', null)
+    .select('id')
   if (error) throw new Error(`cash_accounts re-enable failed: ${error.message}`)
+  // The guarded UPDATE matched nothing: a bank connection claimed the row (or
+  // it went away) between the caller's read and this write. Fail closed rather
+  // than let the caller bind rows after a re-enable that did not happen; a
+  // retry reads the row as connection-held and takes the no-op path above.
+  if (!data || data.length === 0) {
+    throw new Error('cash_accounts re-enable failed: the account changed while it was being turned back on, try again')
+  }
   log.info('re-enabled a disabled cash account: transactions are being put on it', {
     companyId,
     cashAccountId: row.id,

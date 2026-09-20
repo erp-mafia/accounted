@@ -189,7 +189,7 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
       enqueue({ data: movableTx(), error: null }) // tx fetch
       enqueue({ data: [], error: null }) // tvl pre-check clean
       enqueue({ data: { ...targetAccount, enabled: false, bank_connection_id: null }, error: null })
-      enqueue({ data: null, error: null }) // re-enable
+      enqueue({ data: [{ id: 'ca-2' }], error: null }) // re-enable matched the row
       enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null }) // move
 
       const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
@@ -207,6 +207,17 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
       const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
       expect(res.status).toBe(200)
       expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+    })
+
+    it('moves nothing when the re-enable matches no row (a bank connection claimed the account)', async () => {
+      enqueue({ data: movableTx(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: { ...targetAccount, enabled: false, bank_connection_id: null }, error: null })
+      enqueue({ data: [], error: null }) // guarded UPDATE matched nothing
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBeGreaterThanOrEqual(500)
+      expect(findCalls('transactions', 'update')).toHaveLength(0)
     })
 
     it('moves nothing when the re-enable fails', async () => {

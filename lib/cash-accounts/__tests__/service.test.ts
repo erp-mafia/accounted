@@ -1230,7 +1230,7 @@ interface ManualStub {
     error?: { message: string } | null
   }
   /** Result of the re-enable UPDATE; every payload it was called with lands in `updated`. */
-  reenable?: { error: { message: string } | null }
+  reenable?: { error?: { message: string } | null; rows?: Array<{ id: string }> }
   updated?: Array<Record<string, unknown>>
   insert?: { data: { id: string } | null; error?: { message: string; code?: string } | null }
   reread?: { data: { id: string; currency?: string } | null; error?: { message: string } | null }
@@ -1262,7 +1262,14 @@ function makeManualSupabase(stub: ManualStub): SupabaseClient {
           return {
             eq: vi.fn(() => ({
               eq: vi.fn(() => ({
-                is: vi.fn(() => Promise.resolve({ error: stub.reenable?.error ?? null })),
+                is: vi.fn(() => ({
+                  select: vi.fn(() =>
+                    Promise.resolve({
+                      data: stub.reenable?.error ? null : (stub.reenable?.rows ?? [{ id: 'ca-1' }]),
+                      error: stub.reenable?.error ?? null,
+                    }),
+                  ),
+                })),
               })),
             })),
           }
@@ -1335,6 +1342,20 @@ describe('ensureManualCashAccount', () => {
         ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK'),
       ).rejects.toThrow(/denominated in USD/)
       expect(stub.updated ?? []).toHaveLength(0)
+    })
+
+    // Superagent P2: the guarded UPDATE can match nothing when a bank connection
+    // claims the row between the read and the write. That is not a success.
+    it('fails closed when the re-enable matches no row', async () => {
+      const stub: ManualStub = {
+        lookup: { data: { id: 'ca-1', currency: 'SEK', enabled: false, bank_connection_id: null } },
+        reenable: { rows: [] },
+        inserted: [],
+        lookupCount: 0,
+      }
+      await expect(
+        ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK'),
+      ).rejects.toThrow(/account changed while it was being turned back on/)
     })
 
     it('fails loudly when the re-enable write fails, instead of binding to a hidden account', async () => {
