@@ -19,6 +19,7 @@ import { config, proxy } from './proxy'
 const STAGING_URL = 'https://metjnjrhvujscngnpzdv.supabase.co'
 const PRODUCTION_URL = 'https://pwxtzglxptnnvjrpixpg.supabase.co'
 const ANON_KEY = 'anon-key'
+const HOSTED_PROJECT_ID = 'prj_zOvCFaOMXS166cUY5VYEGHKke00X'
 
 // Both vars are stubbed explicitly in every suite below. The unit project has
 // no setup file and loads no dotenv, so leaning on a developer's exported
@@ -26,6 +27,8 @@ const ANON_KEY = 'anon-key'
 function stubConfiguredEnvironment(supabaseUrl: string): void {
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', supabaseUrl)
   vi.stubEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY', ANON_KEY)
+  vi.stubEnv('PRODUCTION_CUSTOM_DOMAIN_HOSTS', undefined)
+  vi.stubEnv('VERCEL_PROJECT_ID', undefined)
 }
 
 describe('supabase environment proxy guard', () => {
@@ -206,6 +209,31 @@ describe('production white-label proxy guard', () => {
 
     expect((await proxy(request)).status).toBe(204)
     expect(updateSessionMock).toHaveBeenCalledOnce()
+  })
+
+  it('blocks an env-listed custom domain', async () => {
+    vi.stubEnv('PRODUCTION_CUSTOM_DOMAIN_HOSTS', 'app.brand-g.se')
+
+    const response = await proxy(new NextRequest('https://app.brand-g.se/login'))
+
+    expect(response.status).toBe(503)
+    expect(updateSessionMock).not.toHaveBeenCalled()
+  })
+
+  // Fail closed: the hosted project without PRODUCTION_CUSTOM_DOMAIN_HOSTS
+  // cannot tell which custom domains are customers, so it serves none of them
+  // from a non-production backend.
+  it('blocks every custom domain on the hosted project without an inventory', async () => {
+    vi.stubEnv('VERCEL_PROJECT_ID', HOSTED_PROJECT_ID)
+
+    const response = await proxy(new NextRequest('https://app.brand-g.se/login'))
+
+    expect(response.status).toBe(503)
+    expect(updateSessionMock).not.toHaveBeenCalled()
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      'Blocked production white-label host from a non-production backend',
+      expect.objectContaining({ operation: 'white_label_backend_guard' }),
+    )
   })
 
   it.each([

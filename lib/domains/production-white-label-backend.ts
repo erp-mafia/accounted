@@ -27,14 +27,26 @@ const PRODUCTION_SUPABASE_HOST = 'pwxtzglxptnnvjrpixpg.supabase.co'
 // (docs/WHITELABEL.md step 1) is classified through the
 // PRODUCTION_CUSTOM_DOMAIN_HOSTS env var instead (comma-separated hostnames):
 // this repository is public and a customer hostname identifies the customer.
-// The var must be set in every hosting environment, preview included, because
-// a preview build answering a customer host is exactly what the guard stops.
+// Set it in every hosting environment, preview included. A hosted deployment
+// that lacks it fails closed, see HOSTED_VERCEL_PROJECT_ID below.
 //
 // This is an owner-approved production classification, not an auth callback
 // registry. Do not derive it from the brands table (the registry auth links
 // resolve against, lib/domains/trusted-app-origin.ts), which can also hold
 // demo, pilot, or staging-only brands.
 const OWN_PRODUCTION_HOSTS_OUTSIDE_NAMESPACE = new Set(['app.gnubok.se'])
+
+// The Vercel project behind the hosted product, compared against the
+// VERCEL_PROJECT_ID system variable. It is what lets a missing custom-domain
+// inventory fail closed without bricking anyone else: a fork or a self-hosted
+// deployment also runs its own backend on its own domain with no inventory,
+// and the request alone cannot tell the two apart. On this project an absent,
+// empty or malformed PRODUCTION_CUSTOM_DOMAIN_HOSTS means "inventory unknown",
+// so every host that is not a preview or local name requires the production
+// backend. Production itself is unaffected, it is on that backend already.
+// Moving the hosted product to another Vercel project means updating this id,
+// like PRODUCTION_SUPABASE_HOST above.
+const HOSTED_VERCEL_PROJECT_ID = 'prj_zOvCFaOMXS166cUY5VYEGHKke00X'
 
 // Hosts that are never customer-facing: Vercel's per-deployment preview
 // domains, and local or throwaway development names. Everything else inside
@@ -91,25 +103,46 @@ function isHostedNamespaceHostname(hostname: string): boolean {
 }
 
 /**
+ * What the deployment knows about itself, read from the environment by the
+ * caller so each read stays a static property read.
+ */
+export interface WhiteLabelDeploymentEnv {
+  /** Raw PRODUCTION_CUSTOM_DOMAIN_HOSTS value. */
+  customDomainHosts?: string
+  /** Raw VERCEL_PROJECT_ID value. */
+  vercelProjectId?: string
+}
+
+/**
  * Whether a request host is customer-facing production traffic, and so may be
  * served only by the production Supabase project.
  *
  * Hosts outside the hosted namespace stay out of scope unless they are an
  * approved customer domain: a self-hosted deployment runs its own backend on
- * its own domain, and demanding Accounted's project there would brick it.
+ * its own domain, and demanding Accounted's project there would brick it. The
+ * one exception is the hosted project without a usable inventory, which cannot
+ * rule any host out and so treats all of them as production.
  */
 function requiresProductionBackend(
   requestHostname: string,
-  customDomainHosts: string | undefined,
+  deployment: WhiteLabelDeploymentEnv,
 ): boolean {
   const hostname = normalizeHostname(requestHostname)
   if (isPreviewHostname(hostname) || isLocalHostname(hostname)) return false
 
-  return (
+  if (
     isHostedNamespaceHostname(hostname) ||
-    OWN_PRODUCTION_HOSTS_OUTSIDE_NAMESPACE.has(hostname) ||
-    parseCustomDomainHosts(customDomainHosts).includes(hostname)
-  )
+    OWN_PRODUCTION_HOSTS_OUTSIDE_NAMESPACE.has(hostname)
+  ) {
+    return true
+  }
+
+  const customDomainHosts = parseCustomDomainHosts(deployment.customDomainHosts)
+  if (customDomainHosts.length === 0) {
+    return deployment.vercelProjectId === HOSTED_VERCEL_PROJECT_ID
+  }
+
+  return customDomainHosts.includes(hostname)
 }
 
 /**
@@ -122,15 +155,15 @@ function requiresProductionBackend(
  * build cannot serve a customer host either way: it would otherwise reach
  * updateSession and throw straight out of the Web Handler on every path.
  *
- * customDomainHosts is the raw PRODUCTION_CUSTOM_DOMAIN_HOSTS value, passed in
- * by the caller like supabaseUrl so the env read stays a static property read.
+ * deployment carries the raw env values, passed in by the caller like
+ * supabaseUrl so each env read stays a static property read.
  */
 export function usesForbiddenWhiteLabelBackend(
   requestHostname: string,
   supabaseUrl: string | undefined,
-  customDomainHosts?: string,
+  deployment: WhiteLabelDeploymentEnv = {},
 ): boolean {
-  if (!requiresProductionBackend(requestHostname, customDomainHosts)) {
+  if (!requiresProductionBackend(requestHostname, deployment)) {
     return false
   }
 

@@ -18,6 +18,10 @@ const APPROVED_PRODUCTION_HOSTS = [
 // What PRODUCTION_CUSTOM_DOMAIN_HOSTS carries on the hosted deployment.
 const CUSTOM_DOMAIN_HOSTS = 'app.brand-g.se, APP.Brand-H.se. ,'
 
+// VERCEL_PROJECT_ID on the hosted product, and on somebody else's deployment.
+const HOSTED_PROJECT_ID = 'prj_zOvCFaOMXS166cUY5VYEGHKke00X'
+const FORK_PROJECT_ID = 'prj_aaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
 describe('production white-label backend guard', () => {
   it.each(APPROVED_PRODUCTION_HOSTS)(
     'blocks %s when it uses the staging project',
@@ -104,11 +108,10 @@ describe('production white-label backend guard', () => {
       usesForbiddenWhiteLabelBackend('demo.partner-brand.se', STAGING_URL),
     ).toBe(false)
     expect(
-      usesForbiddenWhiteLabelBackend(
-        'demo.partner-brand.se',
-        STAGING_URL,
-        CUSTOM_DOMAIN_HOSTS,
-      ),
+      usesForbiddenWhiteLabelBackend('demo.partner-brand.se', STAGING_URL, {
+        customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        vercelProjectId: HOSTED_PROJECT_ID,
+      }),
     ).toBe(false)
   })
 
@@ -116,41 +119,78 @@ describe('production white-label backend guard', () => {
     'classifies the env-listed custom domain %s as production',
     hostname => {
       expect(
-        usesForbiddenWhiteLabelBackend(
-          hostname,
-          STAGING_URL,
-          CUSTOM_DOMAIN_HOSTS,
-        ),
+        usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+          customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        }),
       ).toBe(true)
       expect(
-        usesForbiddenWhiteLabelBackend(
-          hostname,
-          PRODUCTION_URL,
-          CUSTOM_DOMAIN_HOSTS,
-        ),
+        usesForbiddenWhiteLabelBackend(hostname, PRODUCTION_URL, {
+          customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        }),
       ).toBe(false)
     },
   )
 
-  // The cost of moving the list out of the repo: an environment that lacks
-  // the var does not know the custom domain exists. Pinned so the trade-off
-  // is visible; the var must be set in every hosting environment.
-  it.each([undefined, '', ' , '])(
-    'leaves a custom domain unclassified when the env value is %s',
-    value => {
-      expect(
-        usesForbiddenWhiteLabelBackend('app.brand-g.se', STAGING_URL, value),
-      ).toBe(false)
+  // Fail closed, not open: the hosted project without a usable inventory
+  // cannot rule any host out, so a custom domain it has never heard of still
+  // requires the production backend. Absent, empty and malformed all count.
+  describe.each([undefined, '', ' , '])(
+    'when the custom-domain inventory is %j',
+    customDomainHosts => {
+      it.each(['app.brand-g.se', 'demo.partner-brand.se'])(
+        'blocks %s on the hosted project with a non-production backend',
+        hostname => {
+          expect(
+            usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId: HOSTED_PROJECT_ID,
+            }),
+          ).toBe(true)
+        },
+      )
+
+      it('still serves the hosted project from the production backend', () => {
+        expect(
+          usesForbiddenWhiteLabelBackend('app.brand-g.se', PRODUCTION_URL, {
+            customDomainHosts,
+            vercelProjectId: HOSTED_PROJECT_ID,
+          }),
+        ).toBe(false)
+      })
+
+      it('keeps preview and local hosts reachable on the hosted project', () => {
+        for (const hostname of ['erp-base-git-some-branch.vercel.app', 'localhost']) {
+          expect(
+            usesForbiddenWhiteLabelBackend(hostname, STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId: HOSTED_PROJECT_ID,
+            }),
+          ).toBe(false)
+        }
+      })
+
+      // A fork on its own Vercel project, and a Docker install with no
+      // VERCEL_PROJECT_ID at all, run their own backend on their own domain.
+      it.each([FORK_PROJECT_ID, undefined, ''])(
+        'leaves the deployment with project id %j alone',
+        vercelProjectId => {
+          expect(
+            usesForbiddenWhiteLabelBackend('app.brand-g.se', STAGING_URL, {
+              customDomainHosts,
+              vercelProjectId,
+            }),
+          ).toBe(false)
+        },
+      )
     },
   )
 
   it('does not match an env-listed host by suffix', () => {
     expect(
-      usesForbiddenWhiteLabelBackend(
-        'evil-app.brand-g.se',
-        STAGING_URL,
-        CUSTOM_DOMAIN_HOSTS,
-      ),
+      usesForbiddenWhiteLabelBackend('evil-app.brand-g.se', STAGING_URL, {
+        customDomainHosts: CUSTOM_DOMAIN_HOSTS,
+        vercelProjectId: HOSTED_PROJECT_ID,
+      }),
     ).toBe(false)
   })
 })
