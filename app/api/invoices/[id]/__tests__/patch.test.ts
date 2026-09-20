@@ -29,13 +29,18 @@ vi.mock('@/lib/auth/require-write', () => ({
 
 const mockGetVatRules = vi.fn()
 const mockGetAvailableVatRates = vi.fn()
-vi.mock('@/lib/invoices/vat-rules', () => ({
-  getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
-  getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
-  // The builder gates on the permitted set (taxed-where-performed exceptions);
-  // these route tests only care that the gate reads the stubbed rates.
-  getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
-}))
+vi.mock('@/lib/invoices/vat-rules', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
+  return {
+    getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
+    getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    // The builder gates on the permitted set (taxed-where-performed exceptions);
+    // these route tests only care that the gate reads the stubbed rates.
+    getPermittedVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
+    // Real: the warnings channel is what the EU-customer test below pins.
+    explainVatTreatment: actual.explainVatTreatment,
+  }
+})
 
 vi.mock('@/lib/currency/riksbanken', () => ({
   fetchExchangeRate: vi.fn().mockResolvedValue(null),
@@ -173,6 +178,40 @@ describe('PATCH /api/invoices/[id]', () => {
     expect(body.data.status).toBe('draft')
     expect(body.data.invoice_number).toBe('F-1')
     expect(emitSpy).not.toHaveBeenCalled()
+    // A domestic customer has nothing to explain: no warnings key at all.
+    expect(body).not.toHaveProperty('warnings')
+  })
+
+  it('returns the VAT-treatment warning when the draft belongs to an EU business without a validated number (#2749)', async () => {
+    enqueue({
+      data: { id: 'inv-1', status: 'draft', invoice_number: null, journal_entry_id: null, is_self_billed: false },
+      error: null,
+    }) // existing
+    enqueue({
+      data: makeCustomer({
+        id: 'customer-1',
+        customer_type: 'eu_business',
+        vat_number: 'DE123456789',
+        vat_number_validated: false,
+        country: 'DE',
+      }),
+      error: null,
+    }) // customer
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings.vat_registered
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // update ... select('id')
+    enqueue({ data: [], error: null }) // snapshot existing invoice_items
+    enqueue({ data: [], error: null }) // delete invoice_items
+    enqueue({ data: null, error: null }) // insert invoice_items
+    enqueue({ data: makeInvoice({ id: 'inv-1', status: 'draft', invoice_number: null }), error: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string }
+      warnings: Array<{ code: string }>
+    }>(await patch('inv-1'))
+
+    expect(status).toBe(200)
+    expect(body.data.id).toBe('inv-1')
+    expect(body.warnings.map((w) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
   })
 
   it('returns 409 INVOICE_UPDATE_DROPS_ORDER_LINK when the new lines drop a kundorder link', async () => {

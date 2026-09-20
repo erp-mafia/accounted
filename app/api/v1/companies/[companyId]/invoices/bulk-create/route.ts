@@ -46,7 +46,12 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
-import { getPermittedVatRates, getVatRules } from '@/lib/invoices/vat-rules'
+import {
+  explainVatTreatment,
+  getPermittedVatRates,
+  getVatRules,
+  type InvoiceVatWarning,
+} from '@/lib/invoices/vat-rules'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { eventBus } from '@/lib/events'
 import type { Logger } from '@/lib/logger'
@@ -143,6 +148,8 @@ interface ResultItem {
   request_index: number
   data?: unknown
   error?: { code: string; message: string; details?: unknown }
+  /** Non-blocking VAT-treatment warnings for a created item (POST /invoices meta.warnings parity). */
+  warnings?: InvoiceVatWarning[]
 }
 
 /**
@@ -191,7 +198,7 @@ async function createOneInvoice(
   // immune to refactoring drift.
   const { data: customer } = await supabase
     .from('customers')
-    .select('id, customer_type, vat_number_validated, country')
+    .select('id, customer_type, vat_number, vat_number_validated, country')
     .eq('company_id', companyId)
     .eq('id', input.customer_id)
     .maybeSingle()
@@ -315,10 +322,23 @@ async function createOneInvoice(
     }
   })
 
+  // Why the treatment is what it is (#2749, #2558): same helper as the
+  // builder, read off the stored rates. Nothing to explain when the seller
+  // charges no VAT or the document carries none.
+  const warnings =
+    notVatRegistered || documentType === 'delivery_note'
+      ? []
+      : explainVatTreatment(
+          customer as Parameters<typeof explainVatTreatment>[0],
+          itemRows.map((row) => row.vat_rate),
+        )
+  const warningsField = warnings.length > 0 ? { warnings } : {}
+
   if (dryRun) {
     return {
       ok: true,
       request_index: index,
+      ...warningsField,
       data: {
         preview: {
           invoice_number: null,
@@ -442,7 +462,7 @@ async function createOneInvoice(
     }
   }
 
-  return { ok: true, request_index: index, data: invoice }
+  return { ok: true, request_index: index, ...warningsField, data: invoice }
 }
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(

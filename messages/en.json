@@ -4146,7 +4146,6 @@
     "unit_label": "Unit",
     "unit_price_label": "Unit price",
     "vat_label": "VAT",
-    "vat_taxed_where_performed_hint": "Swedish VAT on an invoice to a foreign business applies only to services taxed where they are performed, for example hotel, restaurant, passenger transport, property services or admission to cultural and sports events (ML 6 kap.).",
     "row_label": "Row {index}",
     "add_text_row": "Add text row",
     "text_row_label": "Free text",
@@ -10098,5 +10097,19 @@
     "rows_invalid": "Some rows have validation errors (marked in red). Fix or remove them before you continue.",
     "vat_reinterpreted": "{count, plural, one {# row} other {# rows}} had its VAT rate reinterpreted. Check the marked rows: a wrong VAT rate gives wrong VAT on the invoice.",
     "bank_duplicate_rows": "{count, plural, one {# row already exists} other {# rows already exist}} in the bookkeeping and will be skipped automatically."
+  },
+  "vat_treatment_notice": {
+    "validate_action": "Validate VAT number",
+    "validating": "Validating...",
+    "open_customer_action": "Open the customer card",
+    "edit_draft_action": "Edit the draft",
+    "validated_title": "VAT number validated",
+    "validated_description": "The VAT number belongs to {name} according to VIES.",
+    "validated_description_no_name": "The VAT number is registered in VIES.",
+    "invalid_title": "The VAT number could not be validated",
+    "invalid_default": "VIES does not recognise the VAT number. Check it on the customer card.",
+    "error_title": "Could not reach VIES",
+    "error_description": "Try again in a moment, or validate from the customer card.",
+    "acknowledge_swedish_vat": "Invoice with Swedish VAT even though the customer is an EU business without a validated VAT number."
   }
 }

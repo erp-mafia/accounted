@@ -22,11 +22,37 @@ export interface AuditBlock {
   immutable_at?: string
 }
 
+/**
+ * A non-blocking, structured warning attached to a successful write: the
+ * request went through, but something about it deserves the caller's eye
+ * (e.g. an EU customer whose VAT number is not VIES-validated got Swedish
+ * VAT). Same shape as the invoice VAT warnings in lib/invoices/vat-rules.ts;
+ * `code` is stable, both languages travel with it, `remediation` names the
+ * fix for an agent.
+ */
+export interface ResponseWarning {
+  code: string
+  message_sv: string
+  message_en: string
+  remediation?: {
+    description: string
+    tool?: string
+    args?: Record<string, unknown>
+    resource?: string
+  }
+}
+
 export interface ResponseMeta {
   request_id: string
   api_version: string
   next_cursor?: string
   audit?: AuditBlock
+  /**
+   * Non-blocking warnings about the write that succeeded. Present only when
+   * there is at least one, so reads and clean writes omit it; never a reason
+   * to treat the response as a failure.
+   */
+  warnings?: ResponseWarning[]
   /**
    * Names of `?expand=` keys whose underlying data fetch failed during a
    * soft-degraded response. Present only when at least one expansion was
@@ -53,6 +79,8 @@ interface ResponseOptions {
   nextCursor?: string
   /** Names of `?expand=` keys whose data fetch failed (soft-degrade). */
   partialExpansions?: string[]
+  /** Non-blocking warnings about a write that succeeded (see ResponseMeta.warnings). */
+  warnings?: ResponseWarning[]
   /** Endpoint-specific register-coverage disclosure (see ResponseMeta.coverage). */
   coverage?: Record<string, unknown>
   /** Marks the response as a replay of a previously-cached idempotent call. */
@@ -94,6 +122,7 @@ function buildMeta(opts: ResponseOptions): ResponseMeta {
   if (opts.partialExpansions && opts.partialExpansions.length > 0) {
     meta.partial_expansions = opts.partialExpansions
   }
+  if (opts.warnings && opts.warnings.length > 0) meta.warnings = opts.warnings
   return meta
 }
 

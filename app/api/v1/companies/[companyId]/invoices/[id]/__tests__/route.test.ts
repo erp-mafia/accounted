@@ -295,6 +295,45 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     ])
   })
 
+  it('explains in meta.warnings why replaced lines to an unvalidated EU business carry Swedish VAT (#2749)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: [
+          { data: DRAFT_INVOICE, error: null }, // pre-flight
+          { data: INTERNAL_COLUMNS, error: null }, // internal-only columns
+          { data: { ...DRAFT_INVOICE, subtotal: 2000, vat_amount: 500, total: 2500 }, error: null }, // update
+          { data: { ...DRAFT_INVOICE, total: 2500, items: [] }, error: null }, // refetch with items
+        ],
+        customers: {
+          data: {
+            id: CUSTOMER_ID,
+            customer_type: 'eu_business',
+            vat_number: 'DE123456789',
+            vat_number_validated: false,
+            country: 'DE',
+          },
+          error: null,
+        },
+        company_settings: { data: { vat_registered: true }, error: null },
+        invoice_items: { data: [], error: null },
+      }),
+    )
+
+    const res = await patchInvoice(
+      makePatchRequest({ items: NEW_ITEMS }),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    // Warn, never refuse: the update goes through with 25 %.
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.total).toBe(2500)
+    expect(body.meta.warnings.map((w: { code: string }) => w.code)).toEqual([
+      'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED',
+    ])
+  })
+
   it('dry-run previews the replaced items without writing', async () => {
     const captures: Capture[] = []
     mockServiceClient.mockReturnValue(
@@ -355,6 +394,8 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.due_date).toBe('2026-08-15')
+    // No line changed, so there is no rate to explain.
+    expect(body.meta.warnings).toBeUndefined()
     // No items were touched.
     expect(captures.filter((c) => c.table === 'invoice_items')).toEqual([])
   })

@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { JournalEntryReviewContent } from '@/components/bookkeeping/JournalEntryReviewContent'
@@ -29,9 +30,11 @@ import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
+import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
+import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import type { EntityType } from '@/types'
+import type { Customer, EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
@@ -74,6 +77,7 @@ export default function SendInvoiceDialog({
   const canCustomizeRecipients = role === 'owner' || role === 'admin'
   const canEmail = useCapability(CAPABILITY.email_send)
   const t = useTranslations('invoice_send_dialog')
+  const tVat = useTranslations('vat_treatment_notice')
   const locale = useLocale() as 'sv' | 'en'
   const isCreditNote = !!invoice.credited_invoice_id
   const isCreditRepair = isCreditNote && invoice.status === 'sent'
@@ -136,11 +140,41 @@ export default function SendInvoiceDialog({
   const editable =
     !isCreditNote && shouldBookOnIssue && !hasAccrualItems && invoice.currency === 'SEK'
 
+  // Why the VAT treatment is what it is (#2749, #2558), off the stored lines.
+  // Sending Swedish VAT to an EU customer whose reverse charge is blocked
+  // needs an explicit tick; a Swedish rate to a validated EU or non-EU
+  // business is only warned about. A one-click VIES check inside the dialog
+  // validates the customer server-side; the local copy mirrors it so the
+  // sentence flips to "the lines still carry Swedish VAT" with the edit
+  // link, and the page refetches after the dialog closes. Credit notes
+  // mirror their original and are left alone; a non-momsregistrerad seller
+  // charges nothing and has nothing to explain.
+  const [validatedCustomer, setValidatedCustomer] = useState<Customer | null>(null)
+  const vatCustomer = validatedCustomer ?? invoice.customer
+  const invoiceLineVatRates = useMemo(
+    () =>
+      (invoice.items ?? [])
+        .filter((item) => item.line_type !== 'text')
+        .map((item) => item.vat_rate ?? 0),
+    [invoice.items],
+  )
+  const vatWarnings = useMemo(
+    () =>
+      isCreditNote || companySettings?.vat_registered === false
+        ? []
+        : explainVatTreatment(vatCustomer, invoiceLineVatRates),
+    [isCreditNote, companySettings?.vat_registered, vatCustomer, invoiceLineVatRates],
+  )
+  const needsSwedishVatAcknowledgement = requiresSwedishVatAcknowledgement(vatWarnings, invoiceLineVatRates)
+  const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
+
   useEffect(() => {
     if (!open) {
       setIsInitialized(false)
       setAdditionalCcText('')
       setAdditionalBccText('')
+      setSwedishVatAcknowledged(false)
+      setValidatedCustomer(null)
       return
     }
 
@@ -345,6 +379,7 @@ export default function SendInvoiceDialog({
   const handleConfirm = async () => {
     if (editable && (!isBalanced || hasOrphanAmounts)) return
     if (mode === 'email' && recipientError) return
+    if (needsSwedishVatAcknowledgement && !swedishVatAcknowledged) return
     setIsSubmitting(true)
 
     try {
@@ -783,6 +818,37 @@ export default function SendInvoiceDialog({
           </div>
         )}
 
+        {vatWarnings.length > 0 && (
+          <div className="space-y-3">
+            <VatTreatmentNotice
+              customer={vatCustomer}
+              lineVatRates={invoiceLineVatRates}
+              onValidated={(result) =>
+                setValidatedCustomer({
+                  ...vatCustomer,
+                  vat_number: result.vat_number,
+                  vat_number_validated: true,
+                  vat_number_validated_at: new Date().toISOString(),
+                })
+              }
+              editHref={`/invoices/${invoice.id}/edit`}
+            />
+            {needsSwedishVatAcknowledgement && (
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="send-swedish-vat-acknowledged"
+                  checked={swedishVatAcknowledged}
+                  onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
+                  className="mt-0.5"
+                />
+                <Label htmlFor="send-swedish-vat-acknowledged" className="text-sm font-normal leading-5">
+                  {tVat('acknowledge_swedish_vat')}
+                </Label>
+              </div>
+            )}
+          </div>
+        )}
+
         <DialogFooter>
           <Button
             variant="outline"
@@ -794,7 +860,13 @@ export default function SendInvoiceDialog({
           </Button>
           <Button
             onClick={handleConfirm}
-            disabled={isSubmitting || !isInitialized || (editable && (!isBalanced || hasOrphanAmounts)) || (mode === 'email' && (isSandbox || !canEmail || !!recipientError))}
+            disabled={
+              isSubmitting ||
+              !isInitialized ||
+              (editable && (!isBalanced || hasOrphanAmounts)) ||
+              (mode === 'email' && (isSandbox || !canEmail || !!recipientError)) ||
+              (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
+            }
             className="w-full sm:w-auto min-h-11"
             title={
               mode === 'email' && isSandbox

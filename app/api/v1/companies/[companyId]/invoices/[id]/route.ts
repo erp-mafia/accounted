@@ -238,6 +238,7 @@ registerEndpoint({
     'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
     'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
+    'When items are replaced, the 200 may carry meta.warnings about the VAT treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, ...). The update succeeded; the warning says why the rates are what they are.',
   ],
   example: {
     request: { due_date: '2026-07-15', notes: 'Förlängd förfallotid' },
@@ -388,11 +389,14 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         deduction_personnummer_last4: string | null
       }
 
-      // The builder only reads customer_type + vat_number_validated: narrow
-      // projection keeps customer PII out of this path.
+      // The builder reads customer_type + vat_number_validated, plus
+      // vat_number for the VAT-treatment explanation in meta.warnings (an
+      // unvalidated EU customer that HAS a number must not be told it has
+      // none). Narrow projection keeps customer PII out of this path;
+      // `country` is left out on purpose, see POST /invoices.
       const { data: customer, error: customerErr } = await ctx.supabase
         .from('customers')
-        .select('id, customer_type, vat_number_validated')
+        .select('id, customer_type, vat_number, vat_number_validated')
         .eq('company_id', ctx.companyId!)
         .eq('id', cur.customer_id as string)
         .maybeSingle()
@@ -476,10 +480,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // Never echo the encrypted personnummer blob in a preview.
       const { deduction_personnummer_encrypted: _omit, ...previewFields } = build.invoiceFields
 
+      // meta.warnings on every return of this branch: the builder's
+      // VAT-treatment explanation (#2749, #2558). Non-blocking, absent when
+      // there is nothing to say; the dry run carries the same list.
       if (ctx.dryRun) {
         return dryRunPreview(
           { ...current, ...previewFields, ...updateData, items: build.items },
-          { requestId: ctx.requestId, log: ctx.log },
+          { requestId: ctx.requestId, log: ctx.log, warnings: build.warnings },
         )
       }
 
@@ -536,10 +543,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           invoiceId,
           pgCode: (refetchErr as { code?: string } | null)?.code,
         })
-        return ok(updatedRow, { requestId: ctx.requestId })
+        return ok(updatedRow, { requestId: ctx.requestId, warnings: build.warnings })
       }
 
-      return ok(complete, { requestId: ctx.requestId })
+      return ok(complete, { requestId: ctx.requestId, warnings: build.warnings })
     }
 
     if (ctx.dryRun) {
@@ -567,6 +574,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
+    // Metadata-only update: no line changed, so no rate to explain.
     return ok(data, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },

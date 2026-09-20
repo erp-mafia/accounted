@@ -45,3 +45,39 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
     })
   }
 })
+
+/**
+ * The same write paths also EXPLAIN the treatment (explainVatTreatment, #2749):
+ * which of the three reverse-charge conditions failed. The explanation reads
+ * vat_number off the customers row the path fetched, to tell "no number" from
+ * "number not validated". A narrow projection that carries vat_number_validated
+ * but drops vat_number would tell an unvalidated EU customer that HAS a number
+ * that it has none, with a remediation that lost the number.
+ *
+ * The route tests use table mocks that ignore the select() string, so they
+ * cannot see this. Pinned at source level, like the gate above.
+ */
+const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
+  'app/api/v1/companies/[companyId]/invoices/route.ts',
+  'app/api/v1/companies/[companyId]/invoices/[id]/route.ts',
+  'app/api/v1/companies/[companyId]/invoices/bulk-create/route.ts',
+  'extensions/general/mcp-server/server.ts',
+]
+
+describe('customer projections that feed explainVatTreatment carry vat_number', () => {
+  for (const relative of EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT) {
+    it(`${relative} selects vat_number wherever it selects vat_number_validated`, () => {
+      const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
+      // Directly, or through the shared builder's result.
+      expect(source).toMatch(/explainVatTreatment\(|build\.warnings/)
+      const selects = Array.from(source.matchAll(/\.select\(\s*'([^']*\bvat_number_validated\b[^']*)'/g)).map(
+        (match) => match[1],
+      )
+      expect(selects.length).toBeGreaterThan(0)
+      for (const columns of selects) {
+        // \b...\b does not match inside vat_number_validated: "_" is a word char.
+        expect(columns, columns).toMatch(/\bvat_number\b(?!_)/)
+      }
+    })
+  }
+})

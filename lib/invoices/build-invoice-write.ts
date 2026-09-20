@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
-import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import {
+  explainVatTreatment,
+  getVatRules,
+  getPermittedVatRates,
+  type InvoiceVatWarning,
+} from '@/lib/invoices/vat-rules'
 import { isBalanceSheetAccount } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
@@ -163,7 +168,19 @@ export type InvoiceWriteItemRow = {
 }
 
 export type BuildInvoiceWriteResult =
-  | { ok: true; invoiceFields: InvoiceWriteFields; items: InvoiceWriteItemRow[] }
+  | {
+      ok: true
+      invoiceFields: InvoiceWriteFields
+      items: InvoiceWriteItemRow[]
+      /**
+       * Non-blocking, structured: why the VAT treatment is what it is when
+       * that is not what the customer type suggests (explainVatTreatment).
+       * Empty when there is nothing to say. Every write surface forwards
+       * these unchanged (dashboard `warnings`, v1 `meta.warnings`, staged
+       * `vat_warnings`) instead of composing its own sentence.
+       */
+      warnings: InvoiceVatWarning[]
+    }
   // Domain validation failure: map via errorResponseFromCode(code, { details }).
   | { ok: false; code: string; details?: Record<string, unknown> }
   // Unexpected DB error from an internal lookup: map via errorResponse(dbError).
@@ -707,5 +724,17 @@ export async function buildInvoiceWriteData(params: {
     }
   })
 
-  return { ok: true, invoiceFields, items: itemRows }
+  // Why the treatment is what it is (#2749, #2558). Read off the stored item
+  // rows so the rates the warning names are the rates the invoice carries.
+  // A non-momsregistrerad seller charges no VAT (every rate was zeroed above)
+  // and a delivery note carries none, so neither has anything to explain.
+  const warnings =
+    notVatRegistered || documentType === 'delivery_note'
+      ? []
+      : explainVatTreatment(
+          customer,
+          itemRows.filter((row) => row.line_type !== 'text').map((row) => row.vat_rate),
+        )
+
+  return { ok: true, invoiceFields, items: itemRows, warnings }
 }
