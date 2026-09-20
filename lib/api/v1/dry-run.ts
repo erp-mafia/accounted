@@ -38,7 +38,7 @@
 
 import { NextResponse } from 'next/server'
 import type { Logger } from '@/lib/logger'
-import { ok } from './response'
+import { ok, type ResponseWarning } from './response'
 
 export interface DryRunPreviewBase<T> {
   /** Always `true` so agents can dispatch on this without parsing headers. */
@@ -50,6 +50,8 @@ export interface DryRunPreviewBase<T> {
 interface DryRunResponseOptions {
   requestId: string
   log: Logger
+  /** Non-blocking warnings the real write would carry in meta.warnings. */
+  warnings?: ResponseWarning[]
 }
 
 /**
@@ -62,5 +64,5 @@ interface DryRunResponseOptions {
 export function dryRunPreview<T>(preview: T, opts: DryRunResponseOptions): NextResponse {
   const body: DryRunPreviewBase<T> = { dry_run: true, preview }
   opts.log.info('dry-run preview returned', { stage: 'validation-only' })
-  return ok(body, { requestId: opts.requestId, dryRun: true })
+  return ok(body, { requestId: opts.requestId, dryRun: true, warnings: opts.warnings })
 }

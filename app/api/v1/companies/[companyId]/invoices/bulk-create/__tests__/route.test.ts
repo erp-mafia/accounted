@@ -275,6 +275,38 @@ describe('POST /api/v1/companies/:companyId/invoices/bulk-create', () => {
     expect(body.data.summary.succeeded).toBe(1)
   })
 
+  it('flags the Swedish rate per item without failing it (#2558), and stays silent on a clean item', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: EU_CUSTOMER, error: null },
+        invoices: { data: { id: 'inv-1', invoice_number: null, status: 'draft', total: 1120 }, error: null },
+        invoice_items: { data: null, error: null },
+      }),
+    )
+
+    const base = { customer_id: CUSTOMER_ID, invoice_date: '2026-05-12', due_date: '2026-06-11', currency: 'SEK' }
+    const res = await bulkCreate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/bulk-create`, {
+        invoices: [
+          { ...base, items: [{ ...SAMPLE_ITEM('Hotellnatt Stockholm'), vat_rate: 12 }] },
+          { ...base, items: [{ ...SAMPLE_ITEM('Konsultarvode'), vat_rate: 0 }] },
+        ],
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.summary.succeeded).toBe(2)
+    expect(body.data.results[0].ok).toBe(true)
+    expect(body.data.results[0].warnings.map((w: { code: string }) => w.code)).toEqual([
+      'SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER',
+    ])
+    // 0 % to a validated EU business is the rule: nothing to say.
+    expect(body.data.results[1].warnings).toBeUndefined()
+  })
+
   it('still rejects a non-Swedish rate for a validated EU business', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

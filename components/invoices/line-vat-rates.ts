@@ -125,18 +125,6 @@ export function planCustomerSwitchVatSnap(params: {
   return snaps
 }
 
-/**
- * True when a Swedish rate is actually selected on an invoice whose customer
- * defaults to 0% (validated EU business or non-EU business). That is lawful
- * only for the supplies taxed where they are performed, so it earns the single
- * ochre attention sentence. Silent otherwise: 0% is the normal case and needs
- * no commentary.
- */
-export function hasSwedishVatToForeignBusiness(params: {
-  plan: LineVatRatePlan
-  items: VatRateLine[]
-}): boolean {
-  const { plan, items } = params
-  if (!plan.hasSingleDefault || plan.defaultRate !== 0) return false
-  return items.some((item) => item?.line_type !== 'text' && (item?.vat_rate ?? 0) > 0)
-}
+// The "Swedish VAT to a foreign business" sentence used to be derived here
+// (hasSwedishVatToForeignBusiness). It now comes from explainVatTreatment()
+// in lib/invoices/vat-rules.ts, the one source every surface renders.

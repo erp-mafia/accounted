@@ -195,6 +195,12 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/general-ledger': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/journal-register': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/vat-declaration': 'reports:read',
+  // The company's own record of which VAT periods are filed (#2746). Marking a
+  // period is bookkeeping state, not a Skatteverket submission, so it rides
+  // bookkeeping:write rather than skatteverket:write.
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/filings': 'reports:read',
+  'POST /api/v1/companies/:companyId/reports/vat-declaration/filings': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/reports/vat-declaration/filings': 'bookkeeping:write',
   'GET /api/v1/companies/:companyId/reports/monthly-breakdown': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/ar-ledger': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/supplier-ledger': 'reports:read',

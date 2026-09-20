@@ -49,6 +49,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -112,6 +113,7 @@ Creates an invoice in draft status. The F-series invoice_number is allocated ato
 - Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
 - ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.
 - Articles: pass items[].article_id (from the artikelregister, GET /articles) to link a line to a catalog article; price/description are still taken from the request body (the API never auto-fills from the article: send the values you want on the invoice). items[].revenue_account is the legacy wire name for an optional BAS class 1-3 posting-account override and is validated against the chart of accounts.
+- EU customers: reverse charge (0 %, ruta 39) needs customer_type eu_business, a VIES-validated vat_number and a country other than SE. When any of those is missing the invoice is created WITH Swedish VAT and the 201 carries meta.warnings (codes EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, each with a remediation). A Swedish rate set explicitly on a line to a validated EU or non-EU business is accepted (taxed-where-performed supplies) but flagged as SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER / SWEDISH_VAT_TO_EXPORT_CUSTOMER. Warnings never fail the request; read them before sending. Dry-run returns the same list.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -193,6 +195,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -269,6 +272,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -319,6 +323,7 @@ Partial update for invoices in draft status. Allowed fields: invoice_date, due_d
 - items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.
 - items are always built against the invoice's EXISTING customer: customer_id cannot change on PATCH.
 - default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.
+- When items are replaced, the 200 may carry meta.warnings about the VAT treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, ...). The update succeeded; the warning says why the rates are what they are.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -374,6 +379,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -429,6 +435,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -502,6 +509,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -589,6 +597,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -655,6 +664,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -757,6 +767,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -849,6 +860,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -944,6 +956,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }

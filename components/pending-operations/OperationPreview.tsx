@@ -251,11 +251,41 @@ function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; cur
   )
 }
 
+// The staging tools' VAT-treatment explanation (explainVatTreatment): why an
+// EU customer got Swedish VAT, or a Swedish rate on a reverse-charge invoice.
+// Rendered as the card's one ochre sentence per warning; the list is at most
+// one entry today. Older ops without the field render unchanged.
+interface PreviewVatWarning {
+  code: string
+  message_sv: string
+}
+
+function readVatWarnings(value: unknown): PreviewVatWarning[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(
+    (row): row is PreviewVatWarning =>
+      row != null && typeof row === 'object' && typeof (row as PreviewVatWarning).message_sv === 'string',
+  )
+}
+
+function VatWarningLines({ data }: { data: Record<string, unknown> }) {
+  const warnings = readVatWarnings(data.vat_warnings)
+  if (warnings.length === 0) return null
+  return (
+    <>
+      {warnings.map((warning) => (
+        <AttnLine key={warning.code}>{warning.message_sv}</AttnLine>
+      ))}
+    </>
+  )
+}
+
 function InvoicePreview({ data }: { data: Record<string, unknown> }) {
   const items = isPreviewInvoiceLines(data.items) ? data.items : []
 
   return (
     <div className="space-y-3 text-sm">
+      <VatWarningLines data={data} />
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Kund</span>
         <span>{String(data.customer_name ?? '')}</span>
@@ -303,6 +333,7 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
 
   return (
     <div className="space-y-3 text-sm">
+      <VatWarningLines data={data} />
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
         <span className="text-muted-foreground">Kund</span>
         <span>{String(data.customer_name ?? '')}</span>

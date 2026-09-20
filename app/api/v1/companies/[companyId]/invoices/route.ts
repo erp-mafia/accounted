@@ -472,6 +472,7 @@ registerEndpoint({
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.',
     'Articles: pass items[].article_id (from the artikelregister, GET /articles) to link a line to a catalog article; price/description are still taken from the request body (the API never auto-fills from the article: send the values you want on the invoice). items[].revenue_account is the legacy wire name for an optional BAS class 1-3 posting-account override and is validated against the chart of accounts.',
+    'EU customers: reverse charge (0 %, ruta 39) needs customer_type eu_business, a VIES-validated vat_number and a country other than SE. When any of those is missing the invoice is created WITH Swedish VAT and the 201 carries meta.warnings (codes EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, each with a remediation). A Swedish rate set explicitly on a line to a validated EU or non-EU business is accepted (taxed-where-performed supplies) but flagged as SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER / SWEDISH_VAT_TO_EXPORT_CUSTOMER. Warnings never fail the request; read them before sending. Dry-run returns the same list.',
   ],
   example: {
     request: {
@@ -617,12 +618,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
-    // Customer fetch (scoped to company). The builder only reads
-    // customer_type + vat_number_validated (VAT rules / allowed rates);
-    // select exactly those instead of '*' to keep PII out of this path.
+    // Customer fetch (scoped to company). The builder reads customer_type +
+    // vat_number_validated (VAT rules / allowed rates) and, for the
+    // VAT-treatment explanation in meta.warnings, vat_number: without it an
+    // unvalidated EU customer that HAS a number would be told it has none.
+    // Select exactly those instead of '*' to keep PII out of this path.
+    // `country` is deliberately NOT added in this change: the builder would
+    // then start refusing reverse charge for an eu_business row with country
+    // SE on this surface (#2025 parity), which changes the VAT a public API
+    // charges and needs its own decision. The explanation reads the same
+    // object as the rule, so the two cannot disagree either way.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number_validated')
+      .select('id, customer_type, vat_number, vat_number_validated')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -703,7 +711,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           payment_details: payeeChoice.fields.payment_details,
           items: itemRows,
         },
-        { requestId: ctx.requestId, log: ctx.log },
+        { requestId: ctx.requestId, log: ctx.log, warnings: build.warnings },
       )
     }
 
@@ -839,7 +847,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       }
     }
 
-    return created(complete ?? invoice, { requestId: ctx.requestId })
+    // meta.warnings: why an EU customer got Swedish VAT, or a Swedish rate on
+    // a reverse-charge invoice (#2749, #2558). Non-blocking; absent when clean.
+    return created(complete ?? invoice, { requestId: ctx.requestId, warnings: build.warnings })
   },
   { requireIdempotencyKey: true },
 )

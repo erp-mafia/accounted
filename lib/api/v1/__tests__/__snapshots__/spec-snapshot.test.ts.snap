@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `170`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `173`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -15,6 +15,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/invoices/:id",
   "DELETE /api/v1/companies/:companyId/journal-entries/:id",
   "DELETE /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/links/:linkId",
+  "DELETE /api/v1/companies/:companyId/reports/vat-declaration/filings",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
@@ -68,6 +69,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/reports/trial-balance",
   "GET /api/v1/companies/:companyId/reports/vacation-liability",
   "GET /api/v1/companies/:companyId/reports/vat-declaration",
+  "GET /api/v1/companies/:companyId/reports/vat-declaration/filings",
   "GET /api/v1/companies/:companyId/salary-runs",
   "GET /api/v1/companies/:companyId/salary-runs/:id",
   "GET /api/v1/companies/:companyId/salary-runs/:id/employees",
@@ -141,6 +143,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff",
   "POST /api/v1/companies/:companyId/reconciliation/accounts/:accountKey/signoff/:signoffId/reopen",
   "POST /api/v1/companies/:companyId/reconciliation/bank/run",
+  "POST /api/v1/companies/:companyId/reports/vat-declaration/filings",
   "POST /api/v1/companies/:companyId/salary-runs",
   "POST /api/v1/companies/:companyId/salary-runs/:id/approve",
   "POST /api/v1/companies/:companyId/salary-runs/:id/book",

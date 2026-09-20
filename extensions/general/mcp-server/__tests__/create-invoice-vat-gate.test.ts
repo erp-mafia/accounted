@@ -106,3 +106,94 @@ describe('gnubok_create_invoice: VAT-rate gate for a foreign business', () => {
     expect(result.preview.total).toBe(1000)
   })
 })
+
+describe('gnubok_create_invoice: says why the VAT treatment is what it is (#2749, #2558)', () => {
+  type StagedWithWarnings = {
+    staged: boolean
+    message: string
+    preview: {
+      vat_amount?: number
+      vat_treatment?: string
+      vat_warnings?: Array<{ code: string; message_sv: string; message_en: string }>
+      compliance_warning?: string
+    }
+  }
+
+  it('stages 25 % for an EU business without a validated number and names the failed condition', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: { ...EU_CUSTOMER, vat_number: 'DE123456789', vat_number_validated: false, country: 'DE' },
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-unvalidated' }, error: null })
+
+    const result = (await createInvoice.execute(
+      {
+        customer_id: 'cust-eu',
+        invoice_date: '2026-05-12',
+        items: [{ description: 'Konsultarvode', quantity: 1, unit: 'tim', unit_price: 1000 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedWithWarnings
+
+    // Never blocks: the rule gives Swedish VAT and the operation stages.
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_treatment).toBe('standard_25')
+    expect(result.preview.vat_amount).toBe(250)
+    // Structured for the approval card and the agent ...
+    expect(result.preview.vat_warnings?.map((w) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
+    // ... and in the message the agent reads, through the existing WARNING channel.
+    expect(result.message).toMatch(/WARNING: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED: Reverse charge is not applied/)
+    expect(result.preview.compliance_warning).toContain('EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED')
+  })
+
+  it('warns, without blocking, about a Swedish rate to a VIES-validated EU business (#2558)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EU_CUSTOMER, vat_number: 'DE123456789', country: 'DE' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-hotel-warned' }, error: null })
+
+    const result = (await createInvoice.execute(
+      {
+        customer_id: 'cust-eu',
+        invoice_date: '2026-05-12',
+        items: [{ description: 'Hotellnatt Stockholm', quantity: 1, unit: 'st', unit_price: 1000, vat_rate: 12 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedWithWarnings
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_warnings?.map((w) => w.code)).toEqual(['SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER'])
+    expect(result.preview.vat_warnings?.[0].message_sv).toContain('Svensk moms (12 %)')
+  })
+
+  it('stays silent on the normal reverse-charge case', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EU_CUSTOMER, vat_number: 'DE123456789', country: 'DE' }, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-clean' }, error: null })
+
+    const result = (await createInvoice.execute(
+      {
+        customer_id: 'cust-eu',
+        invoice_date: '2026-05-12',
+        items: [{ description: 'Konsultarvode', quantity: 1, unit: 'tim', unit_price: 1000 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedWithWarnings
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_warnings).toBeUndefined()
+    expect(result.message).not.toContain('WARNING')
+  })
+})

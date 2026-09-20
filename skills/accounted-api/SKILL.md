@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 170 endpoints.
+  pagination, scopes), and all 173 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 170 operations. Paths are shown without
+API version `2026-05-12`, 173 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -354,7 +354,7 @@ GET /companies/{companyId}/salary-runs/{id}/payment-files : List the archived ba
 GET /companies/{companyId}/salary-runs/{id}/payslips/{employeeId}/pdf : Download one employee's payslip as PDF [scope:payroll:read risk:low idempotent]
 ```
 
-### Reports (16)
+### Reports (19)
 
 Full detail: [references/reports.md](references/reports.md)
 
@@ -375,6 +375,9 @@ GET /companies/{companyId}/reports/supplier-ledger : Supplier ledger: unpaid sup
 GET /companies/{companyId}/reports/trial-balance : Trial balance (huvudboksrapport) for a fiscal period [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/reports/vacation-liability : Vacation liability (semesterlöneskuld) per employee at year-end [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/reports/vat-declaration : Swedish VAT declaration (momsdeklaration) for a period [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/reports/vat-declaration/filings : List the calendar VAT periods the company has recorded as filed [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/reports/vat-declaration/filings : Record that a VAT period was filed outside the Skatteverket connection [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/reports/vat-declaration/filings : Undo a manual "filed" mark on a VAT period [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 ```
 
 ### Fixed assets (6)

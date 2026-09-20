@@ -61,3 +61,31 @@ export function mostRecentEndedVatPeriod(
   const quarter = Math.ceil(month / 3)
   return quarter === 1 ? { year: year - 1, period: 4 } : { year, period: quarter - 1 }
 }
+
+/** The period that is running today: the first one that cannot be filed yet. */
+export function currentVatPeriod(
+  periodType: 'monthly' | 'quarterly',
+  today: Date = new Date(),
+): VatPeriodDefault {
+  const year = today.getFullYear()
+  const month = today.getMonth() + 1
+  return periodType === 'monthly'
+    ? { year, period: month }
+    : { year, period: Math.ceil(month / 3) }
+}
+
+/** The period immediately after `period`, rolling over the year boundary. */
+export function nextVatPeriod(
+  periodType: 'monthly' | 'quarterly',
+  period: VatPeriodDefault,
+): VatPeriodDefault {
+  const periodsPerYear = periodType === 'monthly' ? 12 : 4
+  return period.period >= periodsPerYear
+    ? { year: period.year + 1, period: 1 }
+    : { year: period.year, period: period.period + 1 }
+}
+
+/** Negative when `a` ends before `b`, zero when equal, positive otherwise. */
+export function compareVatPeriods(a: VatPeriodDefault, b: VatPeriodDefault): number {
+  return a.year !== b.year ? a.year - b.year : a.period - b.period
+}

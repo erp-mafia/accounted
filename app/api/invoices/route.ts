@@ -293,7 +293,14 @@ export const POST = withRouteContext(
       })
     }
 
-    return NextResponse.json({ data: maskEmbeddedCustomer(completeInvoice) })
+    // Non-blocking VAT-treatment warnings ride next to the row (absent when
+    // there are none): why an EU customer got 25 %, or a Swedish rate on a
+    // reverse-charge invoice (#2749, #2558). Same list the v1 route puts in
+    // meta.warnings and the MCP preview in vat_warnings.
+    return NextResponse.json({
+      data: maskEmbeddedCustomer(completeInvoice),
+      ...(build.warnings.length > 0 ? { warnings: build.warnings } : {}),
+    })
   },
   { requireWrite: true },
 )

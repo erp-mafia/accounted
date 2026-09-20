@@ -18,7 +18,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
-import { getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import { explainVatTreatment, getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -2164,6 +2164,16 @@ async function commitCreateInvoice(
     vatAmount += Math.round(lineTotal * itemRate / 100 * 100) / 100
   }
 
+  // Why the treatment is what it is (#2749, #2558): echoed on the commit
+  // result so an agent that auto-approved still sees it. The staging tool
+  // put the same list in preview.vat_warnings for the approval card.
+  const vatWarnings = notVatRegistered
+    ? []
+    : explainVatTreatment(
+        customer,
+        billableItems.map((item) => (item.vat_rate !== undefined ? item.vat_rate : vatRules.rate)),
+      )
+
   // Validate any per-line posting-account override (defense in depth: the legacy field
   // is frozen onto invoice_items and flows to generatePerRateLines()).
   const overrideAccounts = Array.from(
@@ -2425,7 +2435,13 @@ async function commitCreateInvoice(
     }
   }
 
-  return { data: { invoice_id: invoice.id, invoice_number: invoice.invoice_number ?? quoteNumber } }
+  return {
+    data: {
+      invoice_id: invoice.id,
+      invoice_number: invoice.invoice_number ?? quoteNumber,
+      ...(vatWarnings.length > 0 ? { vat_warnings: vatWarnings } : {}),
+    },
+  }
 }
 
 /**
@@ -2639,6 +2655,8 @@ async function commitUpdateInvoice(
       total: build.invoiceFields.total,
       item_count: build.items.length,
       items_replaced: Boolean(changes.items),
+      // Same non-blocking VAT-treatment warnings as every other write path.
+      ...(build.warnings.length > 0 ? { vat_warnings: build.warnings } : {}),
     },
   }
 }

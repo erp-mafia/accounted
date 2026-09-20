@@ -861,3 +861,54 @@ describe('gnubok_update_invoice: accrual and override pass-back (issue #1642)', 
     })
   })
 })
+
+describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749, #2558)', () => {
+  /** eu_business whose number was never VIES-validated: the rule gives Swedish VAT. */
+  const EU_UNVALIDATED_CUSTOMER = {
+    id: CUSTOMER_ID,
+    customer_type: 'eu_business',
+    vat_number: 'DE123456789',
+    vat_number_validated: false,
+    country: 'DE',
+  }
+
+  it('stages the replacement lines at 25 % and names the failed reverse-charge condition', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, EU_UNVALIDATED_CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult & {
+      message: string
+      preview: { vat_warnings?: Array<{ code: string }> }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.[0]).toMatchObject({ vat_rate: 25 })
+    expect(result.preview.vat_warnings?.map((w) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
+    expect(result.message).toContain('WARNING: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED')
+  })
+
+  it('explains nothing on a header-only edit: no line changes, no rates to explain', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: { id: 'op-header' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'Ny anteckning' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult & { message: string; preview: { vat_warnings?: unknown } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_warnings).toBeUndefined()
+    expect(result.message).not.toContain('WARNING')
+  })
+})
