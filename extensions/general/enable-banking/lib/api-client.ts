@@ -360,6 +360,10 @@ export class SessionExpiredError extends Error {
  *    account has fetched successfully before (StoredAccount.accepted_history_days),
  *    so width is not the problem; the bank is refusing for its own reasons.
  *  - 'ladder-exhausted': every narrower window was refused too.
+ *  - 'rate-limited': the bank answered 429. A quota, not a broken connection:
+ *    an untyped 429 used to park the row in 'error', which the cron never
+ *    selects again. `dailyQuota` and `retryAfterSeconds` size the cooldown
+ *    (lib/sync-lease.ts).
  *
  * Either way the sync should say "try again later" and must not flip the
  * connection to expired/error or prompt a consent renewal. The message keeps
@@ -370,8 +374,9 @@ export class AspspUnavailableError extends Error {
   constructor(
     readonly status: number,
     readonly body: string,
-    readonly reason: 'window-already-accepted' | 'ladder-exhausted',
-    readonly dateFrom: string | undefined
+    readonly reason: 'window-already-accepted' | 'ladder-exhausted' | 'rate-limited',
+    readonly dateFrom: string | undefined,
+    readonly rateLimit?: { dailyQuota: boolean; retryAfterSeconds?: number }
   ) {
     super(`Failed to get transactions (${status}), bank unavailable [${reason}]: ${body}`)
     this.name = 'AspspUnavailableError'
@@ -1020,6 +1025,7 @@ export async function getAccountTransactions(
     if (isSessionExpiredResponse(response.status, body)) {
       throw new SessionExpiredError(response.status, body)
     }
+    if (response.status === 429) throw bankRateLimited(response, body, dateFrom)
     throw new TransactionsFetchError(response.status, body)
   }
 
@@ -1263,6 +1269,19 @@ function bankUnavailable(
   return new AspspUnavailableError(status, body, reason, activeDateFrom)
 }
 
+/** Build the error both transaction fetch paths throw on a 429. */
+function bankRateLimited(
+  response: Response,
+  body: string,
+  activeDateFrom: string | undefined
+): AspspUnavailableError {
+  const retryAfter = Number(response.headers.get('retry-after'))
+  return new AspspUnavailableError(response.status, body, 'rate-limited', activeDateFrom, {
+    dailyQuota: /daily limit/i.test(body),
+    ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {}),
+  })
+}
+
 /**
  * Get all transactions with raw JSON responses for archival.
  * Returns both parsed transactions and the raw response strings.
@@ -1376,6 +1395,10 @@ export async function getAllTransactionsWithRaw(
       if (sessionExpired) {
         console.warn('[enable-banking] getAllTransactionsWithRaw: bank session expired', logLine)
         throw new SessionExpiredError(response.status, body)
+      }
+      if (response.status === 429) {
+        console.warn('[enable-banking] getAllTransactionsWithRaw: bank rate limit', logLine)
+        throw bankRateLimited(response, body, activeDateFrom)
       }
       console.error('[enable-banking] getAllTransactionsWithRaw failed', logLine)
       throw new Error(`Failed to get transactions (${response.status}): ${body}`)
