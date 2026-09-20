@@ -1,6 +1,4 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { resolveMissingUnderlagEntries } from '@/lib/bookkeeping/missing-underlag'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
 
@@ -58,43 +56,18 @@ export interface BooksFindings {
   }
 }
 
-interface LineRow {
-  account_number: string
-  debit_amount: number | string
-  credit_amount: number | string
+/** Payload of the get_onboarding_books_summary RPC; sums are exact numerics. */
+interface BooksSummary {
+  period_name: string | null
+  revenue: number | string | null
+  result: number | string | null
+  vat_balance: number | string | null
+  ledger_1630: number | string | null
 }
 
-const num = (v: number | string | null | undefined) => (typeof v === 'string' ? Number(v) : (v ?? 0))
 const round2 = (x: number) => Math.round(x * 100) / 100
-
-/**
- * Revenue and result from a period's lines. Revenue: class 3 credit minus
- * debit. Result: the same sign convention across classes 3 to 8 (income
- * positive, costs negative). Pure so the test can pin the signs.
- */
-export function summarizeLines(lines: LineRow[]): { revenue: number; result: number } {
-  let revenue = 0
-  let result = 0
-  for (const l of lines) {
-    const cls = l.account_number.charAt(0)
-    const net = num(l.credit_amount) - num(l.debit_amount)
-    if (cls === '3') revenue += net
-    if (cls >= '3' && cls <= '8') result += net
-  }
-  return { revenue: round2(revenue), result: round2(result) }
-}
-
-/** Balance of an asset-side account range: debit minus credit. */
-export function assetBalance(lines: LineRow[]): number {
-  let bal = 0
-  for (const l of lines) bal += num(l.debit_amount) - num(l.credit_amount)
-  return round2(bal)
-}
-
-/** Balance of a liability-side range (26xx): credit minus debit, positive = owed to SKV. */
-export function liabilityBalance(lines: LineRow[]): number {
-  return round2(-assetBalance(lines))
-}
+/** -0 would survive JSON as 0 but not toBe(0); keep the API value canonical. */
+const toOre = (v: number | string) => round2(Number(v)) + 0
 
 const TAX_DEADLINES_OF_INTEREST = ['moms_monthly', 'moms_quarterly', 'moms_yearly', 'arbetsgivardeklaration']
 
@@ -158,15 +131,24 @@ export async function loadBooksFindings(
       .in('status', ['posted', 'reversed'])
       .order('entry_date', { ascending: false })
       .limit(1),
+    // Revenue, result, 26xx and 1630 in one company-first pass. The previous
+    // journal_entry_lines + journal_entries!inner embed could only be planned
+    // from the line side and walked every tenant's lines (statement timeouts).
+    supabase.rpc('get_onboarding_books_summary', { p_company_id: companyId }),
+    // Same predicate as the journal list and the worklist; p_limit only sizes
+    // the page, total_count covers the full set.
+    supabase.rpc('verifikat_without_documents', { p_company_id: companyId, p_limit: 1, p_offset: 0 }),
     loadConnectedAiClients(supabase, userId),
   ])
-  for (const result of results.slice(0, 9)) {
+  // A failed read stays an error: it must never surface as a zero balance.
+  for (const result of results.slice(0, 11)) {
     if ('error' in result && result.error) throw result.error
   }
   const [
     { count: entryCount }, { data: periodRows }, { count: overdueCount },
     { count: uncategorizedCount }, { data: bankRows }, { count: txCount },
-    { data: skvRows }, { data: deadlineRows }, { data: lastEntryRows }, connectedAi,
+    { data: skvRows }, { data: deadlineRows }, { data: lastEntryRows },
+    { data: summaryData }, { data: underlagData }, connectedAi,
   ] = results
 
   const periods = ((periodRows ?? []) as {
@@ -185,67 +167,24 @@ export async function loadBooksFindings(
     continuityVerified: p.continuity_verified ?? null,
   }))
 
+  const summary = summaryData as BooksSummary | null
+  if (!summary) throw new Error('get_onboarding_books_summary returned no payload')
+  const underlag = underlagData as { ok?: boolean; code?: string; total_count?: number } | null
+  if (!underlag?.ok || typeof underlag.total_count !== 'number') {
+    throw new Error(`verifikat_without_documents failed: ${underlag?.code ?? 'no payload'}`)
+  }
+
   // Figures for the latest period that actually has entries: for a migrated
   // company that is the last closed year, for a running one the current year.
-  let revenue: number | null = null
-  let result: number | null = null
-  let periodName: string | null = null
-  if ((entryCount ?? 0) > 0) {
-    for (const p of [...periods].reverse()) {
-      const lines = await fetchAllRows<LineRow>((range) =>
-        supabase
-          .from('journal_entry_lines')
-          .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, status, entry_date)')
-          .eq('journal_entries.company_id', companyId)
-          .in('journal_entries.status', ['posted', 'reversed'])
-          .gte('journal_entries.entry_date', p.start)
-          .lte('journal_entries.entry_date', p.end)
-          .order('id')
-          .range(range.from, range.to),
-      )
-      if (lines.length === 0) continue
-      const s = summarizeLines(lines)
-      revenue = s.revenue
-      result = s.result
-      periodName = p.name
-      break
-    }
-  }
-
-  let vatBalance: number | null = null
-  let ledger1630: number | null = null
-  if ((entryCount ?? 0) > 0) {
-    const [vatLines, skvLines] = await Promise.all([
-      fetchAllRows<LineRow>((range) =>
-        supabase
-          .from('journal_entry_lines')
-          .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, status)')
-          .eq('journal_entries.company_id', companyId)
-          .in('journal_entries.status', ['posted', 'reversed'])
-          .gte('account_number', '2600')
-          .lte('account_number', '2699')
-          .order('id')
-          .range(range.from, range.to),
-      ),
-      fetchAllRows<LineRow>((range) =>
-        supabase
-          .from('journal_entry_lines')
-          .select('account_number, debit_amount, credit_amount, journal_entries!inner(company_id, status)')
-          .eq('journal_entries.company_id', companyId)
-          .in('journal_entries.status', ['posted', 'reversed'])
-          .eq('account_number', '1630')
-          .order('id')
-          .range(range.from, range.to),
-      ),
-    ])
-    vatBalance = liabilityBalance(vatLines)
-    ledger1630 = assetBalance(skvLines)
-  }
-
-  let missingUnderlag = 0
-  if ((entryCount ?? 0) > 0) {
-    missingUnderlag = (await resolveMissingUnderlagEntries(supabase, companyId, {}, { idOnly: true })).length
-  }
+  // A company without books shows no balances at all, not zeros.
+  const hasBooks = (entryCount ?? 0) > 0
+  const hasPeriod = hasBooks && summary.period_name !== null
+  const revenue = hasPeriod && summary.revenue !== null ? toOre(summary.revenue) : null
+  const result = hasPeriod && summary.result !== null ? toOre(summary.result) : null
+  const periodName = hasPeriod ? summary.period_name : null
+  const vatBalance = hasBooks ? toOre(summary.vat_balance ?? 0) : null
+  const ledger1630 = hasBooks ? toOre(summary.ledger_1630 ?? 0) : null
+  const missingUnderlag = hasBooks ? underlag.total_count : 0
 
   const bank = (bankRows ?? [])[0] as
     | { bank_name: string | null; status: string; last_sie_sweep: { auto_linked?: number; suggested?: number; unmatched?: number } | null }
