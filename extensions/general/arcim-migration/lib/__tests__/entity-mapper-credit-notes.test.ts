@@ -199,6 +199,8 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     expect(invoice.status).toBe('paid')
     expect(invoice.paid_amount).toBe(1250)
     expect(invoice.remaining_amount).toBe(0)
-    expect(invoice.paid_at).toBe('2026-03-10')
+    // The fixture names no payment date, so none is written: the issue date
+    // is not a settlement date (#2719).
+    expect(invoice.paid_at).toBeNull()
   })
 })

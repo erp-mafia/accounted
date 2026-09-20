@@ -30,7 +30,13 @@ const mFetchAll = fetchAllRows as Mock
 const mFetchProvider = fetchSupplierInvoicesDirect as Mock
 
 /** A Bokio-shaped supplier invoice DTO: balance-derived payment state, no enum. */
-function providerInvoice(invoiceNumber: string, issueDate: string, total: number, remaining: number) {
+function providerInvoice(
+  invoiceNumber: string,
+  issueDate: string,
+  total: number,
+  remaining: number,
+  lastPaymentDate?: string,
+) {
   return {
     id: `p-${invoiceNumber}`,
     invoiceNumber,
@@ -40,6 +46,7 @@ function providerInvoice(invoiceNumber: string, issueDate: string, total: number
     paymentStatus: {
       paid: total > 0 && remaining <= 0,
       balance: { value: remaining, currencyCode: 'SEK' },
+      lastPaymentDate,
       source: 'balance' as const,
     },
   }
@@ -109,7 +116,10 @@ describe('refreshMigratedSupplierPaymentState', () => {
       status: 'paid',
       paid_amount: 1250,
       remaining_amount: 0,
-      paid_at: '2020-08-03',
+      // Bokio's list payload names no payment date, so none is written: the
+      // repair must not fabricate the issue date any more than the import
+      // does (#2719).
+      paid_at: null,
     })
     // Company-scoped and row-scoped: never a blanket update.
     expect(updates[0].filters).toMatchObject({ table: 'supplier_invoices', id: 'si-1', company_id: 'company-1' })
@@ -121,6 +131,18 @@ describe('refreshMigratedSupplierPaymentState', () => {
       unmatched: 0,
       dryRun: false,
     })
+  })
+
+  it('writes the payment date when the provider names one', async () => {
+    mFetchProvider.mockResolvedValue([providerInvoice('L-100', '2020-08-03', 1250, 0, '2020-09-15')])
+    mFetchAll.mockResolvedValue([openRow('si-1', 'L-100', '2020-08-03', 1250)])
+    const { supabase, updates } = trackingSupabase()
+
+    await refreshMigratedSupplierPaymentState({
+      supabase, companyId: 'company-1', consentId: 'consent-1',
+    })
+
+    expect(updates[0].values).toMatchObject({ status: 'paid', paid_at: '2020-09-15' })
   })
 
   it('writes a partial payment as partially_paid', async () => {

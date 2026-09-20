@@ -62,6 +62,7 @@ function makeSalesDto(over: {
   paid?: boolean
   balance?: number
   total?: number
+  lastPaymentDate?: string
   source?: 'enum' | 'balance'
 }): SalesInvoiceDto {
   const total = over.total ?? 1000
@@ -82,6 +83,7 @@ function makeSalesDto(over: {
     paymentStatus: {
       paid: over.paid ?? false,
       balance: { value: over.balance ?? total, currencyCode: 'SEK' },
+      lastPaymentDate: over.lastPaymentDate,
       source: over.source,
     },
   }
@@ -121,7 +123,14 @@ describe('mapSupplierInvoice: status/paid consistency', () => {
     expect(inv.status).toBe('partially_paid')
     expect(inv.paid_amount).toBe(700)
     expect(inv.remaining_amount).toBe(300)
-    expect(inv.paid_at).not.toBeNull()
+    // No provider date in the fixture: the date is unknown, not the issue date.
+    expect(inv.paid_at).toBeNull()
+  })
+
+  it('a partial payment carries the provider payment date when there is one', () => {
+    const inv = map({ status: 'booked', paid: false, balance: 300, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('partially_paid')
+    expect(inv.paid_at).toBe('2026-02-05')
   })
 
   it('credit note with zero balance stays credited: never flipped to paid', () => {
@@ -285,7 +294,7 @@ describe('resolveSupplierSettlement', () => {
   })
 
   it('settles a fully paid invoice and dates it from the provider payment date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0, '2026-02-05'), 1000, '2026-01-10')).toEqual({
+    expect(resolveSupplierSettlement(balanceStatus(false, 0, '2026-02-05'), 1000)).toEqual({
       status: 'paid',
       paidAmount: 1000,
       remainingAmount: 0,
@@ -293,12 +302,21 @@ describe('resolveSupplierSettlement', () => {
     })
   })
 
-  it('falls back to the issue date when the provider names no payment date', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 1000, '2026-01-10').paidAt).toBe('2026-01-10')
+  it('leaves paidAt null when the provider names no payment date: unknown is not the issue date', () => {
+    expect(resolveSupplierSettlement(balanceStatus(false, 0), 1000)).toEqual({
+      status: 'paid',
+      paidAmount: 1000,
+      remainingAmount: 0,
+      paidAt: null,
+    })
+  })
+
+  it('normalises an empty payment date string to null rather than writing it', () => {
+    expect(resolveSupplierSettlement(balanceStatus(false, 0, ''), 1000).paidAt).toBeNull()
   })
 
   it('reports a partial payment as partially_paid with both amounts', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 300), 1000, '2026-01-10')).toMatchObject({
+    expect(resolveSupplierSettlement(balanceStatus(false, 300), 1000)).toMatchObject({
       status: 'partially_paid',
       paidAmount: 700,
       remainingAmount: 300,
@@ -306,7 +324,7 @@ describe('resolveSupplierSettlement', () => {
   })
 
   it('says nothing about a still-open invoice, so the caller keeps its lifecycle status', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 1000), 1000, '2026-01-10')).toEqual({
+    expect(resolveSupplierSettlement(balanceStatus(false, 1000), 1000)).toEqual({
       status: null,
       paidAmount: 0,
       remainingAmount: 1000,
@@ -315,7 +333,7 @@ describe('resolveSupplierSettlement', () => {
   })
 
   it('never settles a zero total', () => {
-    expect(resolveSupplierSettlement(balanceStatus(false, 0), 0, '2026-01-10').status).toBeNull()
+    expect(resolveSupplierSettlement(balanceStatus(false, 0), 0).status).toBeNull()
   })
 
   it('never lets a zero balance override an explicit unpaid enum', () => {
@@ -324,11 +342,62 @@ describe('resolveSupplierSettlement', () => {
       balance: { value: 0, currencyCode: 'SEK' },
       source: 'enum',
     }
-    expect(resolveSupplierSettlement(enumStatus, 1000, '2026-01-10')).toEqual({
+    expect(resolveSupplierSettlement(enumStatus, 1000)).toEqual({
       status: null,
       paidAmount: 0,
       remainingAmount: 1000,
       paidAt: null,
     })
+  })
+})
+
+/**
+ * #2719: every Fortnox-migrated paid invoice carried paid_at = invoice_date.
+ * The Fortnox mapper builds paymentStatus as { paid, balance } and never sets
+ * lastPaymentDate (Visma and WINT do), and both mappers fell back to the
+ * issue date, turning "the source did not say when" into a confident wrong
+ * date the UI rendered as fact. The settlement date is now the provider's or
+ * null, on both ledgers.
+ */
+describe('paid_at is the provider payment date or null, never the issue date (#2719)', () => {
+  it('customer invoice: paid with no provider date (the Fortnox shape) stays settled but undated', () => {
+    const inv = mapSales({ status: 'paid', paid: true, balance: 0, total: 1000 })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_amount).toBe(1000)
+    expect(inv.remaining_amount).toBe(0)
+    expect(inv.paid_at).toBeNull()
+  })
+
+  it('customer invoice: the provider date passes through (Visma, WINT)', () => {
+    const inv = mapSales({ status: 'paid', paid: true, balance: 0, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_at).toBe('2026-02-05')
+  })
+
+  it('customer invoice: an unpaid invoice never carries a date whatever the provider sent', () => {
+    const inv = mapSales({ status: 'sent', paid: false, balance: 1000, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('sent')
+    expect(inv.paid_at).toBeNull()
+  })
+
+  it('supplier invoice: paid with no provider date stays settled but undated', () => {
+    const inv = map({ status: 'paid', paid: true, balance: 0, total: 1000 })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_amount).toBe(1000)
+    expect(inv.remaining_amount).toBe(0)
+    expect(inv.paid_at).toBeNull()
+  })
+
+  it('supplier invoice: the provider date passes through', () => {
+    const inv = map({ status: 'paid', paid: true, balance: 0, total: 1000, lastPaymentDate: '2026-02-05' })
+    expect(inv.status).toBe('paid')
+    expect(inv.paid_at).toBe('2026-02-05')
+  })
+
+  it('never writes the issue date as a payment date on either ledger', () => {
+    const sales = mapSales({ status: 'paid', paid: true, balance: 0, total: 1000 })
+    const supplier = map({ status: 'paid', paid: true, balance: 0, total: 1000 })
+    expect(sales.paid_at).not.toBe(sales.invoice_date)
+    expect(supplier.paid_at).not.toBe(supplier.invoice_date)
   })
 })

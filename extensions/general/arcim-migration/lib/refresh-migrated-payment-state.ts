@@ -127,7 +127,7 @@ export async function refreshMigratedSupplierPaymentState(
       continue
     }
 
-    const settlement = resolveSupplierSettlement(dto.paymentStatus, total, row.invoice_date)
+    const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
     if (settlement.status !== 'paid' && settlement.status !== 'partially_paid') {
       unchanged++
       continue

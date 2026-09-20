@@ -750,7 +750,11 @@ export interface SupplierSettlement {
   status: 'paid' | 'partially_paid' | null
   paidAmount: number
   remainingAmount: number
-  /** Non-null exactly when `status` is. */
+  /**
+   * The settlement date the provider named, or null: when `status` is null
+   * and also when the provider gave no date (Fortnox never does). Never
+   * derived from the invoice date: an unknown date stays unknown (#2719).
+   */
   paidAt: string | null
 }
 
@@ -768,11 +772,16 @@ export interface SupplierSettlement {
  * not a payment (384 such rows across two migrated companies were written as
  * "paid" for 0 kr on 2026-09-14). An explicit paid = false from an enum is
  * never overridden by a zero either: see trustedBalance.
+ *
+ * The settlement date is the provider's `lastPaymentDate` or nothing. It
+ * used to fall back to the issue date, which turned "the provider did not
+ * say when" into a confident wrong date on every Fortnox-migrated invoice,
+ * rendered as fact in the UI (#2719). The invoice date is deliberately not
+ * a parameter any more so the fallback cannot creep back in.
  */
 export function resolveSupplierSettlement(
   paymentStatus: PaymentStatusDto,
   total: number,
-  issueDate: string,
 ): SupplierSettlement {
   const balance = trustedBalance(paymentStatus, total)
   // Treat the balance numerically (never strict === 0) so floating drift or a
@@ -786,7 +795,7 @@ export function resolveSupplierSettlement(
       status: 'paid',
       paidAmount: total,
       remainingAmount: 0,
-      paidAt: paymentStatus.lastPaymentDate || issueDate,
+      paidAt: paymentStatus.lastPaymentDate || null,
     }
   }
 
@@ -795,7 +804,7 @@ export function resolveSupplierSettlement(
     status: partial ? 'partially_paid' : null,
     paidAmount: Math.max(0, paidAmount),
     remainingAmount: Math.max(0, balance),
-    paidAt: partial ? paymentStatus.lastPaymentDate || issueDate : null,
+    paidAt: partial ? paymentStatus.lastPaymentDate || null : null,
   }
 }
 
@@ -842,9 +851,12 @@ export function mapSalesInvoice(
   const settlement = isCreditNote
     ? { paidAt: null as string | null, paidAmount: 0, remainingAmount: 0 }
     : {
-        paidAt: dto.paymentStatus.paid
-          ? dto.paymentStatus.lastPaymentDate || dto.issueDate
-          : null,
+        // The provider's settlement date or nothing. The old issue-date
+        // fallback wrote every Fortnox-migrated invoice as paid on the day
+        // it was issued (#2719): Fortnox never sends lastPaymentDate, Visma
+        // and WINT do. A null paid_at on a paid invoice is a state the detail
+        // page already renders honestly (classifyPaymentHistoryGap).
+        paidAt: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || null : null,
         paidAmount: dto.paymentStatus.paid ? total : round2(total - balance),
         remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
       }
@@ -1010,7 +1022,7 @@ export function mapSupplierInvoice(
   const isCreditNote = dto.invoiceTypeCode === '381'
 
   // Payment-derived status and amounts, by the rule the repair pass shares.
-  const settlement = resolveSupplierSettlement(dto.paymentStatus, total, dto.issueDate)
+  const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
 
   // Status MUST stay consistent with the payment amounts. The provider's
   // lifecycle status (dto.status) and its payment status are computed
