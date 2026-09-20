@@ -1353,8 +1353,13 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   CASH_ACCOUNT_DISABLE_PRIMARY: {
     httpStatus: 400,
-    message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Gör ett annat konto primärt först.',
-    message_en: 'This is the company’s primary bank account and cannot be disabled. Make another account primary first.',
+    message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
+    message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
+  },
+  CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
+    httpStatus: 400,
+    message_sv: 'Kontot kan inte vara primärt. Det primära kontot måste vara ett aktivt bankkonto i SEK (konto 1920-1999).',
+    message_en: 'This account cannot be the primary. The primary account must be an active bank account in SEK (account 1920-1999).',
   },
   CASH_ACCOUNT_DISABLE_UNRESOLVED: {
     httpStatus: 400,

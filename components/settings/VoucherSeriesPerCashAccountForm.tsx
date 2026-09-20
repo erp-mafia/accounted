@@ -4,12 +4,15 @@ import { useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Loader2 } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
+import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSelect } from '@/components/settings/SettingsRows'
+import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsRowNote, SettingsSelect } from '@/components/settings/SettingsRows'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { useCompany } from '@/contexts/CompanyContext'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { buildVoucherSeriesOptions } from '@/lib/bookkeeping/voucher-series-resolver'
+import { primaryIneligibleReason } from '@/lib/cash-accounts/primary'
 import type { CashAccount, CompanySettings } from '@/types'
 
 // Sentinel for "no override" in the <select>: an empty option value renders
@@ -59,6 +62,8 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
     [allCashAccounts],
   )
   const [savingId, setSavingId] = useState<string | null>(null)
+  // The account whose "make primary" confirmation is open.
+  const [primaryTarget, setPrimaryTarget] = useState<CashAccount | null>(null)
 
   // Presets first, then any configured or already-assigned letter the presets
   // do not cover, so a Select never renders blank on a value it does not offer.
@@ -159,6 +164,40 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
     }
   }
 
+  /**
+   * POST the make-primary action. The way out for a company whose seeded 1930
+   * is primary but unused: make the account it really banks on primary, then
+   * turn 1930 off (the server never disables the primary).
+   */
+  const handleMakePrimary = async (account: CashAccount) => {
+    setSavingId(account.id)
+    try {
+      const res = await fetch(`/api/cash-accounts/${account.id}/primary`, { method: 'POST' })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({
+          title: t('per_account_save_failed'),
+          description: getErrorMessage(json, { context: 'settings', statusCode: res.status, locale: errorLocale }),
+          variant: 'destructive',
+        })
+        return
+      }
+      await refresh()
+      toast({
+        title: t('per_account_primary_changed_title'),
+        description: t('per_account_primary_changed_body', { account: accountLabel(account) }),
+      })
+    } catch (err) {
+      toast({
+        title: t('per_account_save_failed'),
+        description: getErrorMessage(err, { context: 'settings', locale: errorLocale }),
+        variant: 'destructive',
+      })
+    } finally {
+      setSavingId(null)
+    }
+  }
+
   return (
     <>
       <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
@@ -175,6 +214,10 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
             // enabled state belongs to the AccountPicker, and the primary
             // account is never turned off.
             const canDisable = canManageAccounts && account.bank_connection_id === null && !account.is_primary
+            // Same predicate the server applies (makePrimary), so the button
+            // is never offered on an account the server would refuse.
+            const canMakePrimary =
+              canManageAccounts && !account.is_primary && primaryIneligibleReason(account) === null
             return (
               <SettingsRow
                 key={account.id}
@@ -196,21 +239,38 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
                     </option>
                   ))}
                 </SettingsSelect>
-                {canDisable && (
+                {(account.is_primary || canMakePrimary || canDisable) && (
                   <SettingsRowEnd>
-                    <Switch
-                      id={`enabled-cash-account-${account.id}`}
-                      checked={account.enabled}
-                      onCheckedChange={(next) => void handleToggleEnabled(account, next)}
-                      disabled={savingId === account.id}
-                      aria-label={t('per_account_disable_aria', { account: accountLabel(account) })}
-                    />
-                    <label
-                      htmlFor={`enabled-cash-account-${account.id}`}
-                      className="cursor-pointer text-xs text-muted-foreground"
-                    >
-                      {t('per_account_enabled_label')}
-                    </label>
+                    {account.is_primary && <SettingsRowNote>{t('per_account_primary_label')}</SettingsRowNote>}
+                    {canMakePrimary && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setPrimaryTarget(account)}
+                        disabled={savingId === account.id}
+                        aria-label={t('per_account_make_primary_aria', { account: accountLabel(account) })}
+                      >
+                        {t('per_account_make_primary')}
+                      </Button>
+                    )}
+                    {canDisable && (
+                      <>
+                        <Switch
+                          id={`enabled-cash-account-${account.id}`}
+                          checked={account.enabled}
+                          onCheckedChange={(next) => void handleToggleEnabled(account, next)}
+                          disabled={savingId === account.id}
+                          aria-label={t('per_account_disable_aria', { account: accountLabel(account) })}
+                        />
+                        <label
+                          htmlFor={`enabled-cash-account-${account.id}`}
+                          className="cursor-pointer text-xs text-muted-foreground"
+                        >
+                          {t('per_account_enabled_label')}
+                        </label>
+                      </>
+                    )}
                   </SettingsRowEnd>
                 )}
               </SettingsRow>
@@ -245,6 +305,20 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
           ))}
         </SettingsGroup>
       )}
+      <ConfirmDialog
+        open={primaryTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setPrimaryTarget(null)
+        }}
+        title={primaryTarget ? t('per_account_make_primary_confirm_title', { account: accountLabel(primaryTarget) }) : ''}
+        description={
+          primaryTarget ? t('per_account_make_primary_confirm_body', { account: accountLabel(primaryTarget) }) : undefined
+        }
+        confirmLabel={t('per_account_make_primary')}
+        onConfirm={async () => {
+          if (primaryTarget) await handleMakePrimary(primaryTarget)
+        }}
+      />
     </>
   )
 }
