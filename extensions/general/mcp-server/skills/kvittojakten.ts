@@ -79,7 +79,7 @@ For each document you are confident about:
 - \`kind: "verifikat"\`: \`gnubok_link_document_to_voucher({ document_id, journal_entry_id })\`
 - \`kind: "transaction"\`: \`gnubok_attach_document_to_transaction({ document_id, transaction_id })\`
 
-Both stage a pending operation and return \`staged: true\`. Nothing is linked until the user approves. A document you are not sure about stays unlinked in the inbox: say which item you think it belongs to and let the user decide.
+Both stage a pending operation and return \`staged: true\`. Nothing is linked until the user approves. The response carries \`period_status\`: when it says \`locked\` or \`closed\`, the link cannot be committed until the user unlocks the period, so say that in the report instead of presenting it as ready to approve. A document you are not sure about stays unlinked in the inbox: say which item you think it belongs to and let the user decide.
 
 ### Step 6: Approval and report
 
