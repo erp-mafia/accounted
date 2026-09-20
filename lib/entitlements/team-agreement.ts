@@ -51,6 +51,8 @@ export async function getTeamAgreement(
     .select('expires_at')
     .eq('team_id', teamId)
     .eq('source', 'manual')
+    // A seat grant alone is not an agreement (same rule as getCompanyEntitlements).
+    .neq('capability_key', 'multi_user')
 
   // Fail-closed on a read error: no fabricated agreement state.
   if (grantsError) return null
