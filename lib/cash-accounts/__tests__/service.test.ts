@@ -1226,7 +1226,13 @@ describe('upsertFromPsd2', () => {
 
 interface ManualStub {
   lookup: {
-    data: { id: string; currency?: string; enabled?: boolean; bank_connection_id?: string | null } | null
+    data: {
+      id: string
+      currency?: string
+      enabled?: boolean
+      bank_connection_id?: string | null
+      invoice_payee?: boolean | null
+    } | null
     error?: { message: string } | null
   }
   /** Result of the re-enable UPDATE; every payload it was called with lands in `updated`. */
@@ -1342,6 +1348,25 @@ describe('ensureManualCashAccount', () => {
         ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK'),
       ).rejects.toThrow(/denominated in USD/)
       expect(stub.updated ?? []).toHaveLength(0)
+    })
+
+    // Swedish compliance review: enabled is one of isUsableInvoicePayee's
+    // conditions and the toggle is owner/admin. A payee may have been turned
+    // off because its printed details are stale; an import must not put them
+    // back on customer invoices.
+    it('refuses to turn an invoice payee back on, and writes nothing', async () => {
+      const stub: ManualStub = {
+        lookup: {
+          data: { id: 'ca-1', currency: 'SEK', enabled: false, bank_connection_id: null, invoice_payee: true },
+        },
+        inserted: [],
+        lookupCount: 0,
+      }
+      await expect(
+        ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1930', 'SEK'),
+      ).rejects.toMatchObject({ code: 'CASH_ACCOUNT_DISABLED_PAYEE' })
+      expect(stub.updated ?? []).toHaveLength(0)
+      expect(stub.inserted).toHaveLength(0)
     })
 
     // Superagent P2: the guarded UPDATE can match nothing when a bank connection

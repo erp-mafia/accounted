@@ -1356,6 +1356,11 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
     message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
   },
+  CASH_ACCOUNT_DISABLED_PAYEE: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
+    message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
+  },
   CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
     httpStatus: 400,
     message_sv: 'Kontot kan inte vara primärt. Det primära kontot måste vara ett aktivt bankkonto i SEK (konto 1920-1999).',

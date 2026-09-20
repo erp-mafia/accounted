@@ -209,6 +209,22 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
       expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
     })
 
+    it('answers 409 and moves nothing when the disabled target is an invoice payee', async () => {
+      enqueue({ data: movableTx(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({
+        data: { ...targetAccount, enabled: false, bank_connection_id: null, invoice_payee: true },
+        error: null,
+      })
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_DISABLED_PAYEE')
+      expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
+      expect(findCalls('transactions', 'update')).toHaveLength(0)
+    })
+
     it('moves nothing when the re-enable matches no row (a bank connection claimed the account)', async () => {
       enqueue({ data: movableTx(), error: null })
       enqueue({ data: [], error: null })

@@ -1529,15 +1529,35 @@ export async function upsertFromPsd2(
  * row is impossible under UNIQUE (company_id, ledger_account). A row a bank
  * connection holds is left alone: its flag is the connection's, not ours.
  *
+ * The one account it never turns on is an invoice payee. `enabled` is one of
+ * isUsableInvoicePayee's conditions and flipping it by hand is owner/admin
+ * only: a payee may have been turned off because its printed payment details
+ * are stale (an account closed at the bank), and an import must not put them
+ * back on customer invoices. That refuses with CASH_ACCOUNT_DISABLED_PAYEE and
+ * binds nothing; an owner or admin turns the account on in settings first.
+ * Only a giro or bank account (1920-1999) can be a payee, so the unattended
+ * Stripe sync (1686) never meets this.
+ *
  * Returns whether it wrote. Throws if the write fails or matches no row, so
  * the caller never binds rows to an account that stayed hidden.
  */
 export async function reenableIfUnused(
   supabase: SupabaseClient,
   companyId: string,
-  row: { id: string; enabled?: boolean | null; bank_connection_id?: string | null },
+  row: {
+    id: string
+    enabled?: boolean | null
+    bank_connection_id?: string | null
+    invoice_payee?: boolean | null
+  },
 ): Promise<boolean> {
   if (row.enabled !== false || (row.bank_connection_id ?? null) !== null) return false
+  if (row.invoice_payee === true) {
+    throw Object.assign(
+      new Error('cash_accounts re-enable refused: the account is an invoice payee, an owner or admin must turn it on'),
+      { code: 'CASH_ACCOUNT_DISABLED_PAYEE' },
+    )
+  }
   const { data, error } = await supabase
     .from('cash_accounts')
     .update({ enabled: true })
@@ -1586,7 +1606,7 @@ export async function ensureManualCashAccount(
 ): Promise<string> {
   const existing = await supabase
     .from('cash_accounts')
-    .select('id, currency, enabled, bank_connection_id')
+    .select('id, currency, enabled, bank_connection_id, invoice_payee')
     .eq('company_id', companyId)
     .eq('ledger_account', ledgerAccount)
     .maybeSingle()
@@ -1612,6 +1632,7 @@ export async function ensureManualCashAccount(
       currency: string | null
       enabled: boolean
       bank_connection_id: string | null
+      invoice_payee: boolean | null
     }
     const id = idIfSameCurrency(row)
     await reenableIfUnused(supabase, companyId, { ...row, id })

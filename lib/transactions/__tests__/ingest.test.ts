@@ -252,6 +252,26 @@ describe('ingestTransactions', () => {
     expect((inserts['transactions']?.[0] as { cash_account_id?: string | null }).cash_account_id).toBe('ca-1930')
   })
 
+  it('refuses to bind rows to a disabled invoice payee instead of turning it back on', async () => {
+    const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: null, invoice_payee: true }],
+      error: null,
+    })
+
+    await expect(
+      ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1930' }),
+    ).rejects.toMatchObject({ code: 'CASH_ACCOUNT_DISABLED_PAYEE' })
+    expect(updates['cash_accounts'] ?? []).toHaveLength(0)
+    expect(inserts['transactions'] ?? []).toHaveLength(0)
+  })
+
   it('does not touch a disabled account a bank connection holds', async () => {
     const { supabase, enqueue, updates } = createQueueMockSupabase()
     const raw = makeRaw({ amount: -100 })

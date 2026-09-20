@@ -474,7 +474,7 @@ export async function ingestTransactions(
   if (options?.settlementAccount) {
     const { data: cashAccountRows } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, iban, currency, enabled, bank_connection_id')
+      .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
       .eq('company_id', companyId)
     type BoundRow = {
       id: string
@@ -483,6 +483,7 @@ export async function ingestTransactions(
       currency: string
       enabled?: boolean | null
       bank_connection_id?: string | null
+      invoice_payee?: boolean | null
     }
     let boundRow: BoundRow | null = null
     for (const row of (cashAccountRows ?? []) as BoundRow[]) {
@@ -497,7 +498,8 @@ export async function ingestTransactions(
     // ensureManualCashAccount (the v1 ingest endpoint). An account the company
     // turned off as unused comes back on before rows land on it, so a hidden
     // account never collects open transactions (desk crm#59). No-op for an
-    // enabled account and for one a bank connection holds.
+    // enabled account and for one a bank connection holds; refuses, binding
+    // nothing, for a disabled invoice payee (owner/admin turns that on).
     if (boundRow) await reenableIfUnused(supabase, companyId, boundRow)
   }
 

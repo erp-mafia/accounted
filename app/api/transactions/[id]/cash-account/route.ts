@@ -80,7 +80,7 @@ export const PATCH = withRouteContext(
 
     const { data: targetAccount, error: accountError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, currency, enabled, bank_connection_id')
+      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee')
       .eq('company_id', companyId)
       .eq('ledger_account', accountNumber)
       .maybeSingle<{
@@ -89,6 +89,7 @@ export const PATCH = withRouteContext(
         currency: string
         enabled: boolean | null
         bank_connection_id: string | null
+        invoice_payee: boolean | null
       }>()
 
     if (accountError) {
