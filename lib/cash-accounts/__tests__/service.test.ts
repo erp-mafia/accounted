@@ -568,6 +568,12 @@ describe('pickKeeper', () => {
     expect(pickKeeper([a, c], new Set())?.id).toBe('c')
   })
 
+  it('breaks a created_at tie by id, whatever order the rows arrive in', () => {
+    const x = row('x', '1935', false, '2026-01-01T00:00:00Z')
+    expect(pickKeeper([x, c], new Set())?.id).toBe('c')
+    expect(pickKeeper([c, x], new Set())?.id).toBe('c')
+  })
+
   it('returns null when more than one ledger has posted lines', () => {
     expect(pickKeeper([a, b], new Set(['1930', '1931']))).toBeNull()
   })

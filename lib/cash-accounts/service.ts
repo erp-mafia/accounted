@@ -989,7 +989,11 @@ export function pickKeeper<T extends TwinCandidate>(
   if (withHistory.length === 1) return withHistory[0]
   const primary = rows.find((r) => r.is_primary)
   if (primary) return primary
-  return [...rows].sort((a, b) => a.created_at.localeCompare(b.created_at))[0] ?? null
+  return (
+    [...rows].sort(
+      (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+    )[0] ?? null
+  )
 }
 
 /**
