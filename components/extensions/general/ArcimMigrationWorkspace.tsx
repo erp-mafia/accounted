@@ -3556,6 +3556,7 @@ export default function ArcimMigrationWorkspace({
           skipReasons: { failed: count.needs_attention },
           ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
             fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,
+            creditNotesLinked: count.credit_notes_linked ?? 0,
           } : {}),
         }
       }

@@ -143,8 +143,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
       invoiceDate: invoice.issueDate, totalSek: mapped.invoice.total_sek, currencyCode: invoice.currencyCode,
       invoiceNumber: invoice.invoiceNumber, creditedInvoiceRef: mapped.creditedInvoiceRef },
     // A credit note whose provider named the credited invoice is paired in
-    // the link phase (pairMigratedCreditNotes); only one with no reference
-    // at all is reported as unlinked here.
+    // the link phase (pairMigratedCreditNotes), so only one with no reference
+    // at all is flagged unlinked here. One whose reference the link phase
+    // cannot resolve is counted too, by provider_migration_counts, from the
+    // row itself: credited_invoice_id still NULL once the link phase has run.
     warnings: { fxUnresolved: !!mapped.fxUnresolved, vatUnresolved: mapped.vatUnresolved,
       creditNoteUnlinked: mapped.creditNoteUnlinked && !mapped.creditedInvoiceRef },
   }
@@ -161,7 +163,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
  * invoices, which also covers an original imported by an earlier run.
  * Nothing is guessed from amounts, and a number two invoices share is
  * ambiguous, so it pairs nothing. Idempotent: an already-paired row is left
- * alone, so a replay after a timeout is harmless.
+ * alone, so a replay after a timeout is harmless. Whatever stays unpaired is
+ * counted by provider_migration_counts from the row itself
+ * (credited_invoice_id still NULL once this phase has run), so this function
+ * reports nothing back.
  */
 export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[], deadline: number): Promise<void> {
   for (const c of chunks) {
@@ -187,6 +192,15 @@ export async function pairMigratedCreditNotes(supabase: SupabaseClient, job: Pro
     }
     const { error } = await withinMigrationDeadline(supabase.from('invoices').update({ credited_invoice_id: target })
       .eq('id', c.target_id).eq('company_id', job.company_id).is('credited_invoice_id', null), deadline)
+    // The schema refuses a pair that would over-credit the original or mix
+    // currencies (enforce_credit_note_total_within_original, 23514). That is
+    // a verdict on this pair, not a fault to retry: replaying it would wedge
+    // the whole job on one document. The credit note stays unpaired, with the
+    // number it names in its notes, and provider_migration_counts reports it.
+    if (error?.code === '23514') {
+      log.warn('credit note left unpaired: the pair was refused by the credit cap', { jobId: job.id, chunkId: c.id })
+      continue
+    }
     if (error) throw new Error(error.message)
   }
 }

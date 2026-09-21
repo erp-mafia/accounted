@@ -37,7 +37,15 @@ export interface MigrationResourceCounts {
   pending: number
   fx_unresolved: number
   vat_unresolved: number
+  /**
+   * Credit notes without a credited_invoice_id once their link phase has run:
+   * the provider sent no reference, or named an invoice the import could not
+   * resolve. Derived from the invoice row, not from a flag
+   * (migration 20260920190600).
+   */
   credit_notes_unlinked: number
+  /** Credit notes paired with the invoice they credit. Absent before migration 20260920190600. */
+  credit_notes_linked?: number
 }
 
 export interface ProviderMigrationStatus {

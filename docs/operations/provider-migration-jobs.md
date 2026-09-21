@@ -55,8 +55,12 @@ candidates in different batches cannot each consume the same voucher.
 ## Accounting and retention boundaries
 
 The provider worker imports registers and links existing posted vouchers; it
-does not create journal entries. VAT, FX and unlinked-credit warnings are stored
-in receipts and shown in the result. These warnings do not by themselves put
+does not create journal entries. VAT and FX warnings are stored in receipts and
+shown in the result. The unlinked-credit count is derived from the invoice rows
+instead (`provider_migration_counts`, migration 20260920190600): a credit note
+counts as unlinked when its provider sent no reference, or when its link phase
+has run and `credited_invoice_id` is still NULL because the invoice it names is
+not among the imported ones. These warnings do not by themselves put
 every record into `needs_attention` and must be reviewed before later accounting
 actions. The existing mapper is reused without changing its VAT rules.
 

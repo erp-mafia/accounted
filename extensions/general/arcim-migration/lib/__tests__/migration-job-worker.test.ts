@@ -302,7 +302,7 @@ it('recognizes the consent resolver’s structured authorization errors', async 
  */
 describe('pairMigratedCreditNotes', () => {
   type Update = { table: string; payload: unknown; filters: unknown[][] }
-  function pairingDb(answers: { chunkTarget?: string | null; invoicesByNumber?: { id: string }[] } = {}) {
+  function pairingDb(answers: { chunkTarget?: string | null; invoicesByNumber?: { id: string }[]; updateError?: { code: string; message: string } } = {}) {
     const updates: Update[] = []
     const reads: { table: string; filters: unknown[][] }[] = []
     const from = vi.fn((table: string) => {
@@ -315,7 +315,7 @@ describe('pairMigratedCreditNotes', () => {
       chain.maybeSingle = () => chain
       chain.update = (value: unknown) => { payload = value; return chain }
       chain.then = (resolve: (value: unknown) => void) => {
-        if (payload !== undefined) { updates.push({ table, payload, filters }); return resolve({ data: null, error: null }) }
+        if (payload !== undefined) { updates.push({ table, payload, filters }); return resolve({ data: null, error: answers.updateError ?? null }) }
         reads.push({ table, filters })
         if (table === 'migration_job_chunks') return resolve({ data: answers.chunkTarget ? { target_id: answers.chunkTarget } : null, error: null })
         if (table === 'invoices') return resolve({ data: answers.invoicesByNumber ?? [], error: null })
@@ -368,6 +368,19 @@ describe('pairMigratedCreditNotes', () => {
     ], deadline())
     expect(untouched.updates).toEqual([])
     expect(untouched.reads).toEqual([])
+  })
+
+  it('leaves a pair the credit cap refuses unpaired and carries on, but still fails on any other write error', async () => {
+    // enforce_credit_note_total_within_original answers 23514 when the pair
+    // would over-credit the original or mix currencies. At Fortnox volumes one
+    // such document must not wedge the link phase of the whole job (#2789).
+    const refused = pairingDb({ chunkTarget: 'inv-row', updateError: { code: '23514', message: 'Credit notes for invoice would total 2500' } })
+    await expect(pairMigratedCreditNotes(refused.supabase, job, [chunk({}), chunk({ id: 'chunk-cn-2', target_id: 'cn-row-2' })], deadline()))
+      .resolves.toBeUndefined()
+    expect(refused.updates).toHaveLength(2)
+
+    const broken = pairingDb({ chunkTarget: 'inv-row', updateError: { code: '57014', message: 'canceling statement due to statement timeout' } })
+    await expect(pairMigratedCreditNotes(broken.supabase, job, [chunk({})], deadline())).rejects.toThrow('statement timeout')
   })
 
   it('carries the provider\'s reference into the receipt and reports only a reference-less credit note as unlinked', async () => {
