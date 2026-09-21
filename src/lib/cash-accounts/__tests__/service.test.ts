@@ -257,6 +257,26 @@ describe('findFreeLedgerAccount', () => {
 })
 
 describe('allocatePsd2LedgerAccount', () => {
+  it('prepares an available ledger without creating a chart row', async () => {
+    const supabase = makeSupabase([])
+    expect(await allocatePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true })).toBe('1930')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'chartError'] as const)('aborts preparation on %s without chart writes', async key => {
+    const supabase = makeSupabase([], { [key]: { message: 'Lookup unavailable' } })
+    await expect(allocatePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true }))
+      .rejects.toThrow('Lookup unavailable')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it('does not allocate after a failed physical-account lookup during preparation', async () => {
+    const supabase = makeSupabase([], { error: { message: 'Identity lookup unavailable' } })
+    await expect(resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { iban: 'SE1234', currency: 'SEK', prepareOnly: true }))
+      .rejects.toThrow('Identity lookup unavailable')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
   it('allocates a slot and ensures it exists in the chart of accounts', async () => {
     const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }])
 

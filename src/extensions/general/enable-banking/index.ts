@@ -43,6 +43,8 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
+import { readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
 // Sliding 60s windows: generous enough for legitimate retry, tight enough
@@ -1288,16 +1290,13 @@ export const enableBankingExtension: Extension = {
           return Math.min(365, Math.max(30, Math.round(n)))
         })()
 
-        const { data: connection, error: connectionError } = await supabase
-          .from('bank_connections')
-          .select('id, status, accounts_data, bank_name, session_id')
-          .eq('id', connection_id)
-          .eq('company_id', companyId)
-          .single()
-
-        if (connectionError || !connection) {
-          return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
+        let snapshot: Awaited<ReturnType<typeof readBankConfiguration>>
+        try {
+          snapshot = await readBankConfiguration(supabase, companyId, connection_id)
+        } catch (error) {
+          return errorResponse(error, log)
         }
+        const connection = snapshot.connection
 
         if (connection.status !== 'pending_selection' && connection.status !== 'active') {
           return NextResponse.json(
@@ -1335,11 +1334,12 @@ export const enableBankingExtension: Extension = {
           .map(m => m.ledger_account)
           .filter((a): a is string => typeof a === 'string')
         if (requestedLedgerAccounts.length > 0) {
-          const { data: chartRows } = await supabase
+          const { data: chartRows, error: chartReadError } = await supabase
             .from('chart_of_accounts')
             .select('account_number')
             .eq('company_id', companyId)
             .in('account_number', requestedLedgerAccounts)
+          if (chartReadError) return errorResponse(chartReadError, log)
           const validAccountNumbers = new Set((chartRows || []).map(r => r.account_number as string))
           const invalid = requestedLedgerAccounts.filter(a => !validAccountNumbers.has(a))
           if (invalid.length > 0) {
@@ -1355,7 +1355,7 @@ export const enableBankingExtension: Extension = {
 
         const enabledSet = new Set(enabled_uids)
         const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
-        const updatedAccounts: StoredAccount[] = existing.map(a => {
+        let updatedAccounts: StoredAccount[] = existing.map(a => {
           const mapping = mappingsByUid.get(a.uid)
           const next: StoredAccount = {
             ...a,
@@ -1391,24 +1391,24 @@ export const enableBankingExtension: Extension = {
         // must still flip off.
         const neverMirroredDisabledUids = new Set<string>()
 
-        // Resolve the effective mirror ledger for every account up front and
-        // reject collisions with a 400 — the mirror pass below writes into
-        // cash_accounts, whose UNIQUE (company_id, ledger_account) constraint
-        // would otherwise fail per-account and get swallowed, leaving accounts
-        // silently unmirrored.
-        const { resolvePsd2LedgerAccount, upsertFromPsd2, getRevokedConnectionIds, normalizeIban } =
+        // Resolve the effective ledger for every account and report obvious
+        // collisions before submitting the complete selection. The database
+        // rechecks all claims and physical identities under its locks.
+        const { resolvePsd2LedgerAccount, getRevokedConnectionIds, normalizeIban } =
           await import('@/lib/cash-accounts/service')
 
-        const { data: companyCashRows } = await supabase
+        const { data: companyCashRows, error: cashReadError } = await supabase
           .from('cash_accounts')
-          .select('id, external_uid, bank_connection_id, ledger_account, iban, enabled')
+          .select('id, external_uid, bank_connection_id, ledger_account, iban, currency, enabled')
           .eq('company_id', companyId)
+        if (cashReadError) return errorResponse(cashReadError, log)
         const cashRows = (companyCashRows ?? []) as Array<{
           id: string
           external_uid: string | null
           bank_connection_id: string | null
           ledger_account: string
           iban: string | null
+          currency: string
           enabled: boolean | null
         }>
 
@@ -1418,20 +1418,15 @@ export const enableBankingExtension: Extension = {
         // row), these are the user's own mappings wearing a stale owner: they
         // must not be treated as another bank's territory, and the mirror pass
         // below promotes them in place instead of inserting a second row.
-        const rowByIban = new Map<string, { id: string; ledger_account: string }>()
-        for (const r of cashRows) {
-          const normalized = normalizeIban(r.iban)
-          if (normalized && !rowByIban.has(normalized)) {
-            rowByIban.set(normalized, { id: r.id, ledger_account: r.ledger_account })
-          }
-        }
         const reuseRowByUid = new Map<string, { id: string; ledger_account: string }>()
+        const ownIbanRowIds = new Set<string>()
         for (const a of updatedAccounts) {
           const normalized = normalizeIban(a.iban)
-          const row = normalized ? rowByIban.get(normalized) : undefined
+          const matches = normalized ? cashRows.filter(r => normalizeIban(r.iban) === normalized && r.currency === a.currency) : []
+          for (const match of matches) ownIbanRowIds.add(match.id)
+          const row = matches.find(r => r.ledger_account === a.ledger_account) ?? matches[0]
           if (row) reuseRowByUid.set(a.uid, row)
         }
-        const ownIbanRowIds = new Set([...reuseRowByUid.values()].map(r => r.id))
         const existingLedgerByUid = new Map(
           cashRows
             .filter(r => r.bank_connection_id === connection.id && r.external_uid)
@@ -1554,10 +1549,8 @@ export const enableBankingExtension: Extension = {
         // Second pass: allocate a free slot for CHECKED accounts with no ledger
         // at all (legacy connections mirrored before allocation existed, or
         // mappings explicitly cleared). Unchecked accounts were all settled
-        // above: kept, yielded, or never mirrored. Allocation failure must
-        // never block selection save — fall back to the pre-allocator behavior
-        // (1930) and let the mirror pass surface any collision per-account, as
-        // before.
+        // above: kept, yielded, or never mirrored. This is preparation only;
+        // allocation failure aborts before any configuration or chart write.
         for (const a of updatedAccounts) {
           if (!enabledSet.has(a.uid) || effectiveLedgerByUid.has(a.uid)) continue
           let allocated: string | null = null
@@ -1567,16 +1560,17 @@ export const enableBankingExtension: Extension = {
               currency: a.currency,
               accountName: a.name,
               exclude: usedLedgers,
+              prepareOnly: true,
             })
             allocated = resolved?.ledgerAccount ?? null
+            if (resolved?.reuseCashAccountId) {
+              reuseRowByUid.set(a.uid, { id: resolved.reuseCashAccountId, ledger_account: resolved.ledgerAccount })
+            }
           } catch (allocErr) {
-            log.warn('[enable-banking] ledger allocation failed on selection save', {
-              connectionId: connection.id,
-              uid: a.uid,
-              error: allocErr instanceof Error ? allocErr.message : String(allocErr),
-            })
+            return errorResponse(allocErr, log)
           }
-          const ledger = allocated ?? '1930'
+          if (!allocated) return errorResponse({ code: 'CONFLICT' }, log)
+          const ledger = allocated
           usedLedgers.add(ledger)
           effectiveLedgerByUid.set(a.uid, ledger)
         }
@@ -1595,129 +1589,25 @@ export const enableBankingExtension: Extension = {
           a.ledger_account = effectiveLedgerByUid.get(a.uid)
         }
 
-        // Release pass: rows that hold a ledger a checked account is about to
-        // take must stop being PSD2-bound first, or the mirror's upsert trips
-        // UNIQUE (company_id, ledger_account) and the failure is swallowed
-        // per-account (accounts_data ahead of cash_accounts). Demoting them to
-        // manual (bank_connection_id/external_uid NULL) keeps the row id, so
-        // transactions.cash_account_id links and the ledger's history stay
-        // put, and upsertFromPsd2 then promotes the manual holder in place for
-        // the claimant. Three kinds of holder are released: this connection's
-        // own row for an account that yielded (unchecked) or moved (two
-        // checked accounts swapping ledgers), and another connection's row for
-        // an account unchecked there. Manual and revoked holders are already
-        // promotable; a live foreign holder was rejected above.
-        const claimantByLedger = new Map<string, string>()
-        for (const a of updatedAccounts) {
-          if (!enabledSet.has(a.uid)) continue
-          const ledger = effectiveLedgerByUid.get(a.uid)
-          if (ledger) claimantByLedger.set(ledger, a.uid)
+        // Release, chart creation, account promotion and routing commit together.
+        // The database retains observations that arrived after this read and
+        // refuses the complete save if its configuration snapshot changed.
+        let saved: Awaited<ReturnType<typeof saveBankAccountSelection>>
+        try {
+          saved = await saveBankAccountSelection(supabase, companyId, user.id, connection.id, snapshot.token,
+            updatedAccounts.map(account => {
+              const reuse = reuseRowByUid.get(account.uid)
+              return {
+                uid: account.uid, enabled: account.enabled !== false, currency: account.currency,
+                ledger_account: account.ledger_account,
+                reuse_cash_account_id: reuse && reuse.ledger_account === account.ledger_account ? reuse.id : null,
+              }
+            }))
+        } catch (error) {
+          return errorResponse(error, log)
         }
-        const releaseRowIds = cashRows
-          .filter(r => {
-            const claimant = claimantByLedger.get(r.ledger_account)
-            if (!claimant) return false
-            if (r.bank_connection_id === null) return false
-            if (revokedConnectionIds.has(r.bank_connection_id)) return false
-            // The claimant's own row under a stale uid (re-authorization
-            // changed the provider ids): promoted via reuse, not released.
-            if (reuseRowByUid.get(claimant)?.id === r.id) return false
-            if (r.bank_connection_id === connection.id) return r.external_uid !== claimant
-            return r.enabled === false
-          })
-          .map(r => r.id)
-        if (releaseRowIds.length > 0) {
-          const { error: releaseError } = await supabase
-            .from('cash_accounts')
-            .update({ bank_connection_id: null, external_uid: null })
-            .in('id', releaseRowIds)
-          if (releaseError) {
-            // Nothing persisted yet (accounts_data is written below): fail
-            // loudly rather than save a selection the mirror cannot honor.
-            log.error('[enable-banking] Failed to release ledger claims on selection save', {
-              errorMessage: releaseError.message,
-              connectionId: connection.id,
-              releaseRowIds,
-              userId: user.id,
-              companyId,
-            })
-            return NextResponse.json(
-              { error: 'Kunde inte frigöra bokföringskontot från det tidigare bankkontot. Försök igen.' },
-              { status: 500 }
-            )
-          }
-        }
-
-        // State machine: only transition pending_selection → active. Once
-        // active, the status field is omitted from the update so the same
-        // endpoint can be reused to change account selection without
-        // re-asserting a transition that has already happened.
-        const updatePayload: { accounts_data: StoredAccount[]; status?: 'active' } = {
-          accounts_data: updatedAccounts,
-        }
-        if (connection.status === 'pending_selection') {
-          updatePayload.status = 'active'
-        }
-
-        const { error: updateError } = await supabase
-          .from('bank_connections')
-          .update(updatePayload)
-          .eq('id', connection.id)
-
-        if (updateError) {
-          log.error('[enable-banking] Failed to update account selection', {
-            errorMessage: updateError.message,
-            connectionId: connection.id,
-            userId: user.id,
-            companyId,
-          })
-          return NextResponse.json({ error: 'Kunde inte spara kontoval' }, { status: 500 })
-        }
-
-        // Mirror the user's selection into cash_accounts so routing decisions
-        // and reconciliation pick up the new enabled state + ledger mapping
-        // without reading the JSONB column.
-        {
-          for (const a of updatedAccounts) {
-            // Never-mirrored disabled accounts (callback-guard leftovers the
-            // user did not enable) get no cash_accounts row: see above.
-            // Yielded accounts have no ledger any more; their old row was
-            // released above and is promoted by the claimant's upsert.
-            if (neverMirroredDisabledUids.has(a.uid) || yieldedUids.has(a.uid)) continue
-            const ledgerAccount = a.ledger_account ?? '1930'
-            // Only reuse the IBAN-matched row when it already sits on the
-            // ledger we are about to write. If the user deliberately remapped
-            // the account to a different BAS number, promoting the old row
-            // would move a row out from under the ledger it still holds.
-            const reuseRow = reuseRowByUid.get(a.uid)
-            const reuseCashAccountId =
-              reuseRow && reuseRow.ledger_account === ledgerAccount ? reuseRow.id : null
-            try {
-              await upsertFromPsd2(supabase, companyId, {
-                bank_connection_id: connection.id,
-                external_uid: a.uid,
-                currency: a.currency,
-                ledger_account: ledgerAccount,
-                iban: a.iban ?? null,
-                bban: a.bban ?? null,
-                name: a.name ?? null,
-                balance: a.balance ?? null,
-                available_balance: a.available_balance ?? null,
-                balance_updated_at: a.balance_updated_at ?? null,
-                enabled: a.enabled ?? true,
-                reuse_cash_account_id: reuseCashAccountId,
-              })
-            } catch (cashErr) {
-              log.error('[enable-banking] Failed to mirror cash_account on selection save', {
-                connectionId: connection.id,
-                uid: a.uid,
-                error: cashErr instanceof Error ? cashErr.message : String(cashErr),
-              })
-            }
-          }
-        }
-
-        const newStatus = updatePayload.status ?? connection.status
+        updatedAccounts = saved.accounts as StoredAccount[]
+        const newStatus = saved.status
         log.info('[enable-banking] Account selection saved', {
           connectionId: connection.id,
           enabledCount: enabled_uids.length,

@@ -804,6 +804,7 @@ export async function findFreeLedgerAccount(
   companyId: string,
   currency: string,
   exclude: ReadonlySet<string> = new Set(),
+  options: { strictReads?: boolean } = {},
 ): Promise<string | null> {
   const preferred = defaultLedgerForCurrency(currency)
 
@@ -813,6 +814,7 @@ export async function findFreeLedgerAccount(
     .eq('company_id', companyId)
 
   if (error) {
+    if (options.strictReads) throw Object.assign(new Error(error.message), { code: error.code })
     log.error('findFreeLedgerAccount lookup failed', { companyId, error: error.message })
     return null
   }
@@ -826,6 +828,7 @@ export async function findFreeLedgerAccount(
     .like('account_number', '19%')
 
   if (chartError) {
+    if (options.strictReads) throw Object.assign(new Error(chartError.message), { code: chartError.code })
     log.warn('findFreeLedgerAccount chart lookup failed', {
       companyId,
       error: chartError.message,
@@ -894,10 +897,11 @@ export async function allocatePsd2LedgerAccount(
   userId: string,
   // accountName is accepted for caller compatibility but no longer names the
   // chart account: see the BAS-style naming note in the function body (#1643).
-  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string> },
+  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string>; prepareOnly?: boolean },
 ): Promise<string | null> {
-  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set())
+  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set(), { strictReads: input.prepareOnly })
   if (!ledger) return null
+  if (input.prepareOnly) return ledger
 
   // The CHART account always gets a BAS-style name: the BAS reference name
   // when the slot is a standard account (1930 Företagskonto, 1940 Övriga
@@ -1028,6 +1032,8 @@ export async function resolvePsd2LedgerAccount(
     currency: string
     accountName?: string | null
     exclude?: ReadonlySet<string>
+    /** The atomic configuration writer creates any missing chart account. */
+    prepareOnly?: boolean
   },
 ): Promise<Psd2LedgerResolution | null> {
   const exclude = input.exclude ?? new Set<string>()
@@ -1043,6 +1049,7 @@ export async function resolvePsd2LedgerAccount(
       .not('iban', 'is', null)
 
     if (error) {
+      if (input.prepareOnly) throw Object.assign(new Error(error.message), { code: error.code })
       // Fall through to allocation: a failed lookup must not block the
       // connection, it just costs us the reuse.
       log.warn('resolvePsd2LedgerAccount iban lookup failed', {
@@ -1065,6 +1072,7 @@ export async function resolvePsd2LedgerAccount(
         try {
           posted = await ledgersWithPostedLines(supabase, companyId, matches.map(r => r.ledger_account))
         } catch (postedError) {
+          if (input.prepareOnly) throw postedError
           log.warn('resolvePsd2LedgerAccount posted-lines lookup failed', {
             companyId,
             error: postedError instanceof Error ? postedError.message : String(postedError),
@@ -1086,6 +1094,7 @@ export async function resolvePsd2LedgerAccount(
     currency: input.currency,
     accountName: input.accountName,
     exclude,
+    prepareOnly: input.prepareOnly,
   })
   if (!allocated) return null
   return { ledgerAccount: allocated, reuseCashAccountId: null, source: 'allocated' }
