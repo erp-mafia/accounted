@@ -46,7 +46,7 @@ import { recurringLineFlags, type RecurringLineItemType } from './recurring-line
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
-import { dailyDivisor, hourlyDivisor } from './work-schedule'
+import { dailyDivisor, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
@@ -424,9 +424,7 @@ export async function runSalaryCalculation(
       dailyDivisor: dailyDivisor(emp.workdays_per_week),
       // Scheduled hours per day weight partial absence rows (4 h of an 8 h day
       // is half a day). hours_per_week already reflects the employment degree.
-      hoursPerDay:
-        (emp.hours_per_week > 0 ? emp.hours_per_week : 40) /
-        (emp.workdays_per_week > 0 ? emp.workdays_per_week : 5),
+      hoursPerDay: scheduledHoursPerDay(emp.hours_per_week, emp.workdays_per_week),
       hoursPerWeek: emp.hours_per_week > 0 ? emp.hours_per_week : 40,
       workdaysPerWeek: emp.workdays_per_week > 0 ? emp.workdays_per_week : 5,
       calculationPolicy,

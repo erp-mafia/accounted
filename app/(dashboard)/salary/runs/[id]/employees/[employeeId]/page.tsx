@@ -373,6 +373,8 @@ export default function SalaryRunEmployeeDetailPage({
           salaryType={employee.salary_type}
           periodStart={calendarWindow.start}
           periodEnd={calendarWindow.end}
+          hoursPerWeek={employee.hours_per_week}
+          workdaysPerWeek={employee.workdays_per_week}
           salaryRunEmployeeId={runEmployee.id}
           readOnly={readOnly}
           onChange={load}
