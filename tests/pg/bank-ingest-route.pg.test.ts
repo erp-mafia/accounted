@@ -10,7 +10,6 @@ let client: PoolClient
 let connectionId: string
 let cashId: string
 let matchingVoucher: string
-let otherVoucher: string
 const uid = 'pg-bank-ingest-uid'
 const account = { uid, currency: 'SEK', ledger_account: '1930', enabled: true, iban: 'SE0000000000000000000001' }
 
@@ -18,10 +17,6 @@ beforeAll(async () => {
   owner = await seedCompany()
   matchingVoucher = await insertPostedJournalEntry({ ...owner, entryDate: '2026-01-02', lines: [
     { accountNumber: '1930', debitAmount: 0, creditAmount: 25 },
-    { accountNumber: '2999', debitAmount: 25, creditAmount: 0 },
-  ] })
-  otherVoucher = await insertPostedJournalEntry({ ...owner, entryDate: '2026-01-02', lines: [
-    { accountNumber: '1939', debitAmount: 0, creditAmount: 25 },
     { accountNumber: '2999', debitAmount: 25, creditAmount: 0 },
   ] })
 })
@@ -75,7 +70,8 @@ describe('bank adoption of an existing manual transaction', () => {
     expect((await client.query('SELECT journal_entry_id FROM transactions WHERE id = $1', [id])).rows[0].journal_entry_id).toBe(matchingVoucher)
   })
   it('rejects an anchor on another ledger after reading the locked transaction', async () => {
-    const id = await manualTransaction(otherVoucher)
+    const id = await manualTransaction(matchingVoucher)
+    await changeLedger()
     await expect(bind(id, await route())).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ADOPTION_ANCHOR_CHANGED' })
   })
   it('rejects a concurrent edit to the matched amount', async () => {
