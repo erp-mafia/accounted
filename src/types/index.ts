@@ -3872,8 +3872,21 @@ export interface RawTransaction {
   proprietary_bank_transaction_code?: string | null
 }
 
+/** Internal bank-fetch context. Its token is revalidated within each database write. */
+export interface BankIngestRoute {
+  connectionId: string
+  sessionId: string
+  accountUid: string
+  cashAccountId: string
+  ledgerAccount: string
+  currency: string
+  token: string
+}
+
 /** Options for the transaction ingestion pipeline */
 export interface IngestOptions {
+  /** Required by the PSD2 extension; manual and file imports do not provide this. */
+  bankRoute?: BankIngestRoute
   /** Skip auto-categorization (mapping engine + journal entry creation).
    * Reconciliation and invoice matching still run.
    * Used when SIE-imported entries overlap the sync date range

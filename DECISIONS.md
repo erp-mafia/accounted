@@ -697,3 +697,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-22] Founder-approved exception: use built-in SHA-256 in assertion migration 20260922123749 and align its exact staging history statement. This removes the pgcrypto schema assumption; all expected function and privilege checks stay unchanged.
 [2026-09-23] ROT/RUT payout clears the öre truncation remainder on 1513 via 3740 only for fully paid begäran whose remainder is provably truncation (0 <= 1513 net - requested < 1 kr per invoice); anything else keeps today's voucher, so a real difference is never rounded away.
 [2026-09-21] Bank sync persists observations through session-checked RPCs: fetched account arrays cannot overwrite routing or revive obsolete sessions; cash-account balances and the sync watermark commit together.
+
+[2026-09-21] Bank ingest verifies UID/session/physical identity and destination under connection and cash-account locks. Inserts and manual-row adoption reject stale route tokens; provider responses are archived before persistence so failed batches retain their evidence.

@@ -16,6 +16,9 @@ vi.mock('@/lib/core/documents/document-service', () => ({
   uploadDocument: (...args: unknown[]) => mockUploadDocument(...args),
 }))
 
+const mockResolveBankIngestRoute = vi.fn()
+vi.mock('@/lib/bank-sync/ingest-route', () => ({ resolveBankIngestRoute: (...args: unknown[]) => mockResolveBankIngestRoute(...args) }))
+
 // Mock ingest
 const mockIngest = vi.fn()
 
@@ -37,8 +40,19 @@ function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
 describe('syncAccountTransactions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveBankIngestRoute.mockImplementation(async (_db, _company, connectionId, accountUid, currency) => ({
+      connectionId, accountUid, currency, sessionId: 'session', cashAccountId: 'cash', ledgerAccount: '1930', token: 'route-token',
+    }))
     mockGetAccountBalance.mockRejectedValue(new Error('skip'))
     mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'] })
+  })
+
+  it('does not fetch or ingest when the authoritative route cannot be read', async () => {
+    mockResolveBankIngestRoute.mockRejectedValue(new Error('route unavailable'))
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toThrow('route unavailable')
+    expect(mockGetAllTransactionsWithRaw).not.toHaveBeenCalled()
+    expect(mockIngest).not.toHaveBeenCalled()
   })
 
   it('rejects a partially persisted batch after archiving it, so callers cannot advance the cursor', async () => {
@@ -663,7 +677,9 @@ describe('syncAccountTransactions', () => {
     expect(result.effectiveFromDate).toBeUndefined()
   })
 
-  it('passes account.ledger_account as IngestOptions.settlementAccount when set', async () => {
+  it('passes the verified route into ingestion', async () => {
+    mockResolveBankIngestRoute.mockResolvedValue({ connectionId: CONNECTION_ID, accountUid: 'eur-acc', currency: 'EUR',
+      sessionId: 'session', cashAccountId: 'eur-cash', ledgerAccount: '1932', token: 'route-token' })
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'EUR' }, booking_date: '2026-04-01' }],
       rawPages: ['{}'],
@@ -691,7 +707,7 @@ describe('syncAccountTransactions', () => {
     )
 
     const ingestOptions = mockIngest.mock.calls[0][4]
-    expect(ingestOptions).toMatchObject({ settlementAccount: '1932' })
+    expect(ingestOptions).toMatchObject({ settlementAccount: '1932', bankRoute: { cashAccountId: 'eur-cash', token: 'route-token' } })
   })
 
   it('skips the balance call when the stored balance is fresher than 12 hours', async () => {
@@ -803,7 +819,7 @@ describe('syncAccountTransactions', () => {
     expect(account.balance_updated_at).toBeUndefined()
   })
 
-  it('omits settlementAccount when account.ledger_account is unset (mapping engine defaults to 1930)', async () => {
+  it('uses the verified destination when the cached account has no ledger', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({
       transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' }, booking_date: '2026-04-01' }],
       rawPages: ['{}'],
@@ -831,6 +847,6 @@ describe('syncAccountTransactions', () => {
     )
 
     const ingestOptions = mockIngest.mock.calls[0][4]
-    expect(ingestOptions.settlementAccount).toBeUndefined()
+    expect(ingestOptions.settlementAccount).toBe('1930')
   })
 })
