@@ -12,7 +12,7 @@ export function bankBookingContext(
     settlement_account: settlementAccount,
     date: transaction.date,
     amount: transaction.amount,
-    currency: transaction.currency,
+    currency: transaction.currency ?? 'SEK',
     ...(targetCashAccountId ? { target_cash_account_id: targetCashAccountId } : {}),
   }
 }

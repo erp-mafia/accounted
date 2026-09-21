@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
-import type { CreateJournalEntryInput, MappingResult, VatJournalLine } from '@/types'
+import type { CreateJournalEntryInput, MappingResult, Transaction, VatJournalLine } from '@/types'
 
 // Mock engine
 vi.mock('../engine', () => ({
@@ -127,6 +127,13 @@ describe('createTransactionJournalEntry', () => {
   })
 
   // --- Validation ---
+
+  it('normalizes a legacy null source currency to the existing SEK default', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const tx = makeTransaction({ currency: null as unknown as Transaction['currency'] })
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, makeMappingResult())
+    expect(mockedCreateEntry.mock.calls[0][3].bank_booking_context?.[0].currency).toBe('SEK')
+  })
 
   it('throws when debit_account is missing', async () => {
     const tx = makeTransaction()

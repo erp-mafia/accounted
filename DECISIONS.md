@@ -672,3 +672,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 
 [2026-09-21] Bank-derived drafts carry their source snapshot until posting; validate under the cash-account lock protocol and retain posted origin claims before links arrive. Explicit sibling moves commit with the voucher.
 [2026-09-21] Cash and bank booking snapshot conflicts use PT409, not serialization_failure: a real engine HTTP probe reproduced PostgREST 14 repeatedly retrying deterministic 40001 failures.
+[2026-09-21] Atomic SQL bank bookings capture the locked source binding and validate bank totals per ledger; batch invoice matching resolves that ledger instead of hardcoding 1930. Company locks precede source, invoice, asset and journal locks to avoid repair deadlocks.
