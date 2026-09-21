@@ -30,6 +30,7 @@ export const CANNOT_EDIT_NON_DRAFT = 'CANNOT_EDIT_NON_DRAFT' as const
 export const CANNOT_CANCEL_NON_DRAFT = 'CANNOT_CANCEL_NON_DRAFT' as const
 export const ENTRY_ALREADY_REVERSED = 'ENTRY_ALREADY_REVERSED' as const
 export const CURRENCY_REVALUATION_ALREADY_EXISTS = 'CURRENCY_REVALUATION_ALREADY_EXISTS' as const
+export const ASSET_DEPRECIATION_REFUSED = 'ASSET_DEPRECIATION_REFUSED' as const
 export const INVALID_MAPPING_RESULT = 'INVALID_MAPPING_RESULT' as const
 export const BOOKKEEPING_DATABASE_ERROR = 'BOOKKEEPING_DATABASE_ERROR' as const
 export const MEANINGLESS_CORRECTION = 'MEANINGLESS_CORRECTION' as const
@@ -256,6 +257,27 @@ export class CurrencyRevaluationAlreadyExistsError extends Error {
   }
 }
 
+/**
+ * The two outcomes commit_asset_depreciation refuses without anything being
+ * wrong with the caller: the (asset, period) pair was posted by someone else
+ * first, or the asset was deleted while the posting waited on its row lock.
+ * No voucher is posted in either case, so a batch can skip the asset and
+ * carry on.
+ */
+export type AssetDepreciationRefusal = 'already_posted' | 'asset_not_found'
+
+export class AssetDepreciationRefusedError extends Error {
+  readonly code = ASSET_DEPRECIATION_REFUSED
+  constructor(public readonly reason: AssetDepreciationRefusal) {
+    super(
+      reason === 'already_posted'
+        ? 'Depreciation is already posted for this asset and fiscal period'
+        : 'Asset no longer exists: no depreciation was posted',
+    )
+    this.name = 'AssetDepreciationRefusedError'
+  }
+}
+
 export type MeaninglessCorrectionReason =
   | 'net_zero_per_account'
   | 'identical_to_original'
@@ -376,6 +398,8 @@ export type BookkeepingOperation =
   | 'commit_entry'
   | 'commit_asset_disposal'
   | 'fetch_asset_disposal_entry'
+  | 'commit_asset_depreciation'
+  | 'fetch_asset_depreciation_entry'
   | 'create_reversal_entry'
   | 'create_reversal_lines'
   | 'post_reversal_entry'

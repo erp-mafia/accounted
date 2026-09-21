@@ -1084,67 +1084,44 @@ export async function getAssetDeleteBlock(
  * the row is not in this company and AssetDeleteBlockedError (409) when a
  * posted signal exists. Returns the row as it was, for the caller's log line.
  *
- * Runs on the caller's client so RLS and the writer-role trigger apply: the
- * assets_delete policy is membership-scoped and depreciation_schedules_delete
- * only admits rows with journal_entry_id IS NULL, which is why the drafts are
- * removed explicitly before the parent row rather than left to the FK cascade
- * (a cascade runs as table owner and would not consult that policy).
+ * The rule is decided and the delete performed by delete_never_posted_asset
+ * (migration 20260920190200) in ONE transaction, under the asset row lock
+ * that commit_asset_depreciation and commit_asset_disposal also take. A
+ * posting in flight has therefore either committed (and is seen) or waits and
+ * then finds no asset (and posts no voucher): the check-then-delete window
+ * issue #2779 described is gone. The RPC is SECURITY INVOKER, so it still
+ * runs as the caller: the assets_delete / depreciation_schedules_delete RLS
+ * policies and the writer-role trigger apply exactly as before.
  *
- * KNOWN GAP (not closed here, see DECISIONS.md 2026-09-20): the check and the
- * delete are separate statements, so a planenlig avskrivning posted for this
- * asset at the same moment can slip past. Two windows:
- *   1. A schedule row turns posted between the check and the delete: the FK
- *      cascade then removes a posted row. Needs a DB guard on posted
- *      depreciation_schedules rows (one that joins the gnubok.allow_delete /
- *      sandbox-teardown bypass chain).
- *   2. commitAnnualPostings() commits the voucher and writes the schedule
- *      link in two statements. In between there is no posted row to see or
- *      guard, and its draft UPDATE matches zero rows without erroring. Only
- *      atomic depreciation posting (as commit_asset_disposal did for
- *      disposal) closes this.
- * Either way the ledger is untouched (vouchers are immutable); what is lost
- * is the register link, and the remedy is a storno of the stray voucher. The
- * disposal race is different and IS closed: see disposed_at IS NULL below.
+ * Behind it sits a BEFORE DELETE guard on posted depreciation_schedules rows,
+ * which also fires for the assets FK cascade, so the invariant no longer
+ * depends on this function (or any future caller) checking first.
  */
 export async function deleteNeverPostedAsset(
   supabase: SupabaseClient,
   companyId: string,
   assetId: string,
 ): Promise<Asset> {
+  // Read first only for the 404 and the returned row; it decides nothing.
   const asset = await getAsset(supabase, companyId, assetId)
   if (!asset) throw new AssetNotFoundError()
 
-  const block = await getAssetDeleteBlock(supabase, companyId, asset)
-  if (block) throw new AssetDeleteBlockedError(block)
-
-  const { error: scheduleError } = await supabase
-    .from('depreciation_schedules')
-    .delete()
-    .eq('company_id', companyId)
-    .eq('asset_id', assetId)
-    .is('journal_entry_id', null)
-  if (scheduleError) {
-    throw new Error(`Failed to delete depreciation drafts for asset ${assetId}: ${scheduleError.message}`)
-  }
-
-  // disposed_at IS NULL re-checks the disposal signal inside the statement,
-  // so a disposal that lands between the check above and this delete makes
-  // the delete a no-op instead of removing a row a voucher now references.
-  const { error, count } = await supabase
-    .from('assets')
-    .delete({ count: 'exact' })
-    .eq('id', assetId)
-    .eq('company_id', companyId)
-    .is('disposed_at', null)
+  const { data, error } = await supabase.rpc('delete_never_posted_asset', {
+    p_company_id: companyId,
+    p_asset_id: assetId,
+  })
   if (error) throw new Error(`Failed to delete asset ${assetId}: ${error.message}`)
 
-  if (!count) {
-    // Nothing matched: either the row vanished (deleted concurrently) or it
-    // was disposed concurrently. Re-read to answer with the right status.
-    const still = await getAsset(supabase, companyId, assetId)
-    if (still) throw new AssetDeleteBlockedError('disposed')
-    throw new AssetNotFoundError()
+  switch (data as string | null) {
+    case 'deleted':
+      return asset
+    case 'disposed':
+    case 'depreciation_posted':
+      throw new AssetDeleteBlockedError(data as AssetDeleteBlockReason)
+    case 'not_found':
+      // Vanished between the read above and the lock: deleted concurrently.
+      throw new AssetNotFoundError()
+    default:
+      throw new Error(`Failed to delete asset ${assetId}: unexpected outcome ${String(data)}`)
   }
-
-  return asset
 }

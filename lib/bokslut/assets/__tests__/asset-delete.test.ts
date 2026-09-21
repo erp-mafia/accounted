@@ -56,7 +56,7 @@ type Result = { data?: unknown; error?: unknown; count?: number | null }
  * Per-table result queue plus a recording of every chained call, so the tests
  * can assert both what the service decided and the exact filters it sent.
  */
-function makeSupabase(byTable: Record<string, Result[]>) {
+function makeSupabase(byTable: Record<string, Result[]>, rpcResult: Result = { data: 'deleted' }) {
   const queues = new Map(Object.entries(byTable).map(([t, r]) => [t, [...r]]))
   const calls: { table: string; method: string; args: unknown[] }[] = []
   const chain = (table: string, result: Result): unknown =>
@@ -75,7 +75,9 @@ function makeSupabase(byTable: Record<string, Result[]>) {
         },
       },
     )
+  const rpc = vi.fn().mockResolvedValue({ data: rpcResult.data ?? null, error: rpcResult.error ?? null })
   const supabase = {
+    rpc,
     from: vi.fn((table: string) => {
       const q = queues.get(table)
       const next = q && q.length > 0 ? q.shift()! : { data: null, error: null, count: null }
@@ -85,7 +87,7 @@ function makeSupabase(byTable: Record<string, Result[]>) {
   const methodsFor = (table: string) => calls.filter((c) => c.table === table).map((c) => c.method)
   const argsFor = (table: string, method: string) =>
     calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
-  return { supabase: supabase as never, calls, methodsFor, argsFor }
+  return { supabase: supabase as never, rpc, calls, methodsFor, argsFor }
 }
 
 describe('assetDeleteBlockReason', () => {
@@ -138,95 +140,78 @@ describe('getAssetDeleteBlock', () => {
 })
 
 describe('deleteNeverPostedAsset', () => {
-  it('throws ASSET_NOT_FOUND for a row outside the company and deletes nothing', async () => {
-    const { supabase, methodsFor } = makeSupabase({ assets: [{ data: null }] })
+  // The rule is decided by the delete_never_posted_asset RPC under the asset
+  // row lock (issue #2779); what Postgres guarantees is pinned in
+  // tests/pg/asset-depreciation-atomic.pg.test.ts. Here: what the service
+  // sends, and how it turns each outcome into the routes' 404 / 409 contract.
+
+  it('throws ASSET_NOT_FOUND for a row outside the company without calling the rpc', async () => {
+    const { supabase, rpc } = makeSupabase({ assets: [{ data: null }] })
     await expect(deleteNeverPostedAsset(supabase, 'co', 'asset-1')).rejects.toBeInstanceOf(
       AssetNotFoundError,
     )
-    expect(methodsFor('assets')).not.toContain('delete')
-    expect(methodsFor('depreciation_schedules')).toEqual([])
+    expect(rpc).not.toHaveBeenCalled()
   })
 
-  it('refuses a disposed asset with ASSET_DELETE_BLOCKED and touches nothing', async () => {
-    const { supabase, methodsFor } = makeSupabase({
-      assets: [{ data: makeAsset({ disposed_at: '2026-06-30', disposal_journal_entry_id: 'je-9' }) }],
-    })
-    const err = await deleteNeverPostedAsset(supabase, 'co', 'asset-1').catch((e) => e)
-    expect(err).toBeInstanceOf(AssetDeleteBlockedError)
-    expect(err.code).toBe('ASSET_DELETE_BLOCKED')
-    expect(err.reason).toBe('disposed')
-    expect(methodsFor('assets')).not.toContain('delete')
-    expect(methodsFor('depreciation_schedules')).not.toContain('delete')
-  })
-
-  it('refuses an asset with posted depreciation and touches nothing', async () => {
-    const { supabase, methodsFor } = makeSupabase({
-      assets: [{ data: makeAsset() }],
-      depreciation_schedules: [{ count: 2 }],
-    })
-    const err = await deleteNeverPostedAsset(supabase, 'co', 'asset-1').catch((e) => e)
-    expect(err).toBeInstanceOf(AssetDeleteBlockedError)
-    expect(err.reason).toBe('depreciation_posted')
-    expect(methodsFor('assets')).not.toContain('delete')
-    expect(methodsFor('depreciation_schedules')).not.toContain('delete')
-  })
-
-  it('deletes the unposted drafts, then the row, both company-scoped', async () => {
+  it('deletes through ONE company-scoped rpc and returns the row as it was', async () => {
     const asset = makeAsset()
-    const { supabase, calls, argsFor } = makeSupabase({
-      assets: [{ data: asset }, { count: 1 }],
-      depreciation_schedules: [{ count: 0 }, { data: null }],
-    })
+    const { supabase, rpc, calls } = makeSupabase({ assets: [{ data: asset }] })
 
     const deleted = await deleteNeverPostedAsset(supabase, 'co', 'asset-1')
 
     expect(deleted).toEqual(asset)
-    const deletes = calls.filter((c) => c.method === 'delete').map((c) => c.table)
-    expect(deletes).toEqual(['depreciation_schedules', 'assets'])
-    // Drafts only: the RLS delete policy admits journal_entry_id IS NULL rows.
-    expect(argsFor('depreciation_schedules', 'is')).toEqual([['journal_entry_id', null]])
-    expect(argsFor('depreciation_schedules', 'eq').slice(-2)).toEqual([
-      ['company_id', 'co'],
-      ['asset_id', 'asset-1'],
-    ])
-    // The row delete re-checks the disposal signal inside the statement.
-    expect(argsFor('assets', 'delete')).toEqual([[{ count: 'exact' }]])
-    expect(argsFor('assets', 'eq').slice(-2)).toEqual([
-      ['id', 'asset-1'],
-      ['company_id', 'co'],
-    ])
-    expect(argsFor('assets', 'is')).toEqual([['disposed_at', null]])
+    expect(rpc).toHaveBeenCalledTimes(1)
+    expect(rpc).toHaveBeenCalledWith('delete_never_posted_asset', {
+      p_company_id: 'co',
+      p_asset_id: 'asset-1',
+    })
+    // The regression itself: no check-then-delete from the application. The
+    // service issues no delete, and no schedule read that could go stale.
+    expect(calls.some((c) => c.method === 'delete')).toBe(false)
+    expect(calls.some((c) => c.table === 'depreciation_schedules')).toBe(false)
   })
 
-  it('surfaces a draft-delete failure before touching the asset row', async () => {
-    const { supabase, methodsFor } = makeSupabase({
-      assets: [{ data: makeAsset() }],
-      depreciation_schedules: [{ count: 0 }, { error: { message: 'permission denied' } }],
-    })
-    await expect(deleteNeverPostedAsset(supabase, 'co', 'asset-1')).rejects.toThrow(
-      /depreciation drafts.*permission denied/,
-    )
-    expect(methodsFor('assets')).not.toContain('delete')
-  })
-
-  it('answers ASSET_DELETE_BLOCKED when the row was disposed between check and delete', async () => {
-    const { supabase } = makeSupabase({
-      // maybeSingle (open), delete matched 0 rows, re-read shows it still exists
-      assets: [{ data: makeAsset() }, { count: 0 }, { data: makeAsset({ disposed_at: '2026-06-30' }) }],
-      depreciation_schedules: [{ count: 0 }, { data: null }],
-    })
+  it('answers ASSET_DELETE_BLOCKED(disposed) when the rpc finds the asset disposed', async () => {
+    const { supabase } = makeSupabase({ assets: [{ data: makeAsset() }] }, { data: 'disposed' })
     const err = await deleteNeverPostedAsset(supabase, 'co', 'asset-1').catch((e) => e)
     expect(err).toBeInstanceOf(AssetDeleteBlockedError)
+    expect(err.code).toBe('ASSET_DELETE_BLOCKED')
     expect(err.reason).toBe('disposed')
   })
 
-  it('answers ASSET_NOT_FOUND when the row vanished between check and delete', async () => {
-    const { supabase } = makeSupabase({
-      assets: [{ data: makeAsset() }, { count: 0 }, { data: null }],
-      depreciation_schedules: [{ count: 0 }, { data: null }],
-    })
+  it('answers ASSET_DELETE_BLOCKED(depreciation_posted) even when the row looked clean a moment ago', async () => {
+    // The pre-read shows a never-posted asset; a posting committed before the
+    // rpc took the row lock. The rpc, not the pre-read, is the authority.
+    const { supabase } = makeSupabase(
+      { assets: [{ data: makeAsset() }] },
+      { data: 'depreciation_posted' },
+    )
+    const err = await deleteNeverPostedAsset(supabase, 'co', 'asset-1').catch((e) => e)
+    expect(err).toBeInstanceOf(AssetDeleteBlockedError)
+    expect(err.reason).toBe('depreciation_posted')
+  })
+
+  it('answers ASSET_NOT_FOUND when the row vanished between the read and the lock', async () => {
+    const { supabase } = makeSupabase({ assets: [{ data: makeAsset() }] }, { data: 'not_found' })
     await expect(deleteNeverPostedAsset(supabase, 'co', 'asset-1')).rejects.toBeInstanceOf(
       AssetNotFoundError,
+    )
+  })
+
+  it('surfaces an rpc failure (for example the writer-role trigger) as an error, not as a delete', async () => {
+    const { supabase } = makeSupabase(
+      { assets: [{ data: makeAsset() }] },
+      { error: { message: 'permission denied' } },
+    )
+    await expect(deleteNeverPostedAsset(supabase, 'co', 'asset-1')).rejects.toThrow(
+      /Failed to delete asset asset-1: permission denied/,
+    )
+  })
+
+  it('refuses to report success on an outcome it does not know', async () => {
+    const { supabase } = makeSupabase({ assets: [{ data: makeAsset() }] }, { data: 'something_new' })
+    await expect(deleteNeverPostedAsset(supabase, 'co', 'asset-1')).rejects.toThrow(
+      /unexpected outcome something_new/,
     )
   })
 })

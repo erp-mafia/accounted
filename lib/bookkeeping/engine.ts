@@ -5,6 +5,7 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
+  AssetDepreciationRefusedError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -983,6 +984,136 @@ export async function commitAssetDisposal(
     payload: { entry: result, userId, companyId },
   })
   return result
+}
+
+export interface AssetDepreciationLink {
+  asset_id: string
+  /** The amount the register row records. The RPC refuses it unless it equals
+   *  what the draft voucher actually books. */
+  planned_depreciation: number
+}
+
+/**
+ * Post one planenlig avskrivning: create the draft, then commit the voucher
+ * AND write its depreciation_schedules link in a single database transaction
+ * (commit_asset_depreciation, which delegates numbering to
+ * commit_journal_entry and holds the asset row lock throughout).
+ *
+ * This replaces createJournalEntry() followed by a separate schedule write:
+ * a failure between those two statements left a posted voucher with no
+ * register row (issue #2779). Owning the draft here as well keeps every
+ * journal write, including the orphan-draft cleanup, inside the engine.
+ *
+ * Throws AssetDepreciationRefusedError for the two outcomes a batch should
+ * skip rather than fail on. No voucher is posted in either case.
+ */
+export async function createAssetDepreciationEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateJournalEntryInput,
+  link: AssetDepreciationLink,
+): Promise<{ entry: JournalEntry; scheduleId: string }> {
+  const draft = await createDraftEntry(supabase, companyId, userId, input)
+  const actor = getActor()
+
+  const { data, error } = await supabase.rpc('commit_asset_depreciation', {
+    p_company_id: companyId,
+    p_asset_id: link.asset_id,
+    p_entry_id: draft.id,
+    p_fiscal_period_id: draft.fiscal_period_id,
+    p_planned_depreciation: link.planned_depreciation,
+    p_actor_type: actor?.type ?? null,
+    p_actor_label: actor?.label ?? null,
+  })
+
+  if (error) {
+    const pgCode = (error as { code?: string }).code
+    // The RPC is one transaction, so on any error the draft is still a draft.
+    // Same CAS cleanup as createJournalEntry: never strand an undeletable one.
+    const { error: cancelError } = await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', draft.id)
+      .eq('status', 'draft')
+    if (cancelError) {
+      log.error('orphan depreciation draft cleanup failed (phantom draft remains)', cancelError, {
+        operation: 'commit_asset_depreciation.cleanup',
+        companyId,
+        entityType: 'journal_entry',
+        entityId: draft.id,
+      })
+    }
+
+    // SQLSTATEs set by the RPC itself: 23505 = this (asset, period) is
+    // already posted, P0002 = the asset row is gone (deleted while we waited
+    // on its lock). A bad draft is 22023 and falls through as a real error.
+    if (pgCode === '23505') throw new AssetDepreciationRefusedError('already_posted')
+    if (pgCode === 'P0002') throw new AssetDepreciationRefusedError('asset_not_found')
+
+    log.error('commit_asset_depreciation RPC failed', error, {
+      operation: 'commit_asset_depreciation',
+      companyId,
+      userId,
+      entityType: 'asset',
+      entityId: link.asset_id,
+      journalEntryId: draft.id,
+      pgCode,
+    })
+    throw new BookkeepingDatabaseError('commit_asset_depreciation', error.message)
+  }
+
+  const row = (Array.isArray(data) ? data[0] : data) as
+    | { voucher_number: number; schedule_id: string }
+    | null
+    | undefined
+  if (!row?.schedule_id) {
+    throw new BookkeepingDatabaseError(
+      'commit_asset_depreciation',
+      'RPC returned no schedule row for a committed depreciation',
+    )
+  }
+
+  // Voucher and link are committed at this point. As in commitAssetDisposal,
+  // a transient reload failure must not masquerade as a failed posting.
+  let completeEntry: JournalEntry | null = null
+  let lastFetchError: { message: string } | null = null
+  for (let attempt = 0; attempt < 2 && !completeEntry; attempt++) {
+    const { data: reloaded, error: fetchError } = await supabase
+      .from('journal_entries')
+      .select('*, lines:journal_entry_lines(*)')
+      .eq('id', draft.id)
+      .eq('company_id', companyId)
+      .single()
+    if (reloaded && !fetchError) {
+      completeEntry = reloaded as JournalEntry
+    } else {
+      lastFetchError = fetchError ?? { message: 'posted entry not found' }
+    }
+  }
+
+  if (!completeEntry) {
+    log.error('asset depreciation committed but posted entry reload failed', lastFetchError, {
+      operation: 'commit_asset_depreciation',
+      companyId,
+      userId,
+      entityType: 'asset',
+      entityId: link.asset_id,
+      journalEntryId: draft.id,
+    })
+    throw new BookkeepingDatabaseError(
+      'fetch_asset_depreciation_entry',
+      `depreciation voucher is committed but could not be reloaded: ${
+        lastFetchError?.message ?? 'posted entry not found'
+      }`,
+    )
+  }
+
+  await eventBus.emit({
+    type: 'journal_entry.committed',
+    payload: { entry: completeEntry, userId, companyId },
+  })
+  return { entry: completeEntry, scheduleId: row.schedule_id }
 }
 
 /**

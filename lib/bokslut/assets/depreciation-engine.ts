@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { createJournalEntry } from '@/lib/bookkeeping/engine'
+import { createAssetDepreciationEntry } from '@/lib/bookkeeping/engine'
+import { AssetDepreciationRefusedError } from '@/lib/bookkeeping/errors'
 import type {
   Asset,
   FiscalPeriod,
@@ -341,40 +342,34 @@ export async function commitAnnualPostings(
       },
     ]
 
-    const entry = await createJournalEntry(supabase, companyId, userId, {
-      fiscal_period_id: fiscalPeriodId,
-      entry_date: periodEnd,
-      description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
-      source_type: 'year_end',
-      lines,
-    })
-
-    // Upsert the schedule row. If a draft (no journal_entry_id) already
-    // exists for (asset, period) we overwrite it with the posted entry.
-    if (item.existingScheduleId) {
-      const { error } = await supabase
-        .from('depreciation_schedules')
-        .update({ journal_entry_id: entry.id, posted_at: new Date().toISOString() })
-        .eq('id', item.existingScheduleId)
-        .eq('company_id', companyId)
-      if (error) throw new Error(`Failed to update schedule: ${error.message}`)
-      posted.push({ assetId: item.asset.id, entry, scheduleId: item.existingScheduleId })
-    } else {
-      const { data, error } = await supabase
-        .from('depreciation_schedules')
-        .insert({
-          user_id: userId,
-          company_id: companyId,
-          asset_id: item.asset.id,
+    // Voucher and register link are ONE database transaction (issue #2779).
+    // The old shape committed the voucher and then wrote the schedule row in
+    // a second statement, so a failure in between left a posted voucher with
+    // no register row. An unposted draft row for (asset, period) is adopted
+    // by the RPC; a posted one makes it refuse.
+    try {
+      const { entry, scheduleId } = await createAssetDepreciationEntry(
+        supabase,
+        companyId,
+        userId,
+        {
           fiscal_period_id: fiscalPeriodId,
-          planned_depreciation: item.amount,
-          journal_entry_id: entry.id,
-          posted_at: new Date().toISOString(),
-        })
-        .select('id')
-        .single()
-      if (error || !data) throw new Error(`Failed to insert schedule: ${error?.message}`)
-      posted.push({ assetId: item.asset.id, entry, scheduleId: data.id })
+          entry_date: periodEnd,
+          description: `Planenlig avskrivning ${periodName}: ${item.asset.name}`,
+          source_type: 'year_end',
+          lines,
+        },
+        { asset_id: item.asset.id, planned_depreciation: item.amount },
+      )
+      posted.push({ assetId: item.asset.id, entry, scheduleId })
+    } catch (error) {
+      // Posted by someone else first, or the asset was deleted while we
+      // waited on its row lock. Nothing was posted for it: skip, carry on.
+      if (error instanceof AssetDepreciationRefusedError) {
+        skipped.push({ assetId: item.asset.id, reason: error.reason })
+        continue
+      }
+      throw error
     }
   }
 
