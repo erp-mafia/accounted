@@ -45,6 +45,7 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { calendarOpeningMonth, countAbsenceDatesInWindow } from '@/lib/salary/payslip-calendar'
 import type { SalaryType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -114,9 +115,14 @@ export interface SalaryCalendarProps {
   employeeId: string
   /** Hourly employees get the worked-hours overlay + actions; monthly only see absence. */
   salaryType: SalaryType
-  /** Pay period start (YYYY-MM-DD). The calendar opens on this month. */
+  /** First day (YYYY-MM-DD) of the window the run READS absence and worked
+   *  days from: the run's avvikelseperiod, which is the pay month only when
+   *  the run has no window of its own (payslipCalendarWindow in
+   *  lib/salary/payslip-calendar.ts). The calendar opens on this month, and
+   *  the in-period shading, "fill weekdays", the worked-hours total and the
+   *  live absence counts all follow it. */
   periodStart: string
-  /** Pay period end (YYYY-MM-DD). */
+  /** Last day (YYYY-MM-DD) of that window. */
   periodEnd: string
   /** Optional: link new rows to a specific salary run. */
   salaryRunEmployeeId?: string
@@ -148,7 +154,12 @@ export function SalaryCalendar({
   const periodStartDate = useMemo(() => parseISO(periodStart), [periodStart])
   const periodEndDate = useMemo(() => parseISO(periodEnd), [periodEnd])
 
-  const [visibleMonth, setVisibleMonth] = useState<Date>(() => startOfMonth(periodStartDate))
+  // Initialised once per mount: the month the user navigates to afterwards
+  // is theirs. The host page must therefore keep this component mounted
+  // across its own reloads (onChange), or every save jumps back here.
+  const [visibleMonth, setVisibleMonth] = useState<Date>(() =>
+    parseISO(calendarOpeningMonth({ start: periodStart, end: periodEnd })),
+  )
   const [absences, setAbsences] = useState<AbsenceDay[]>([])
   const [worked, setWorked] = useState<WorkedDay[]>([])
   const [loading, setLoading] = useState(false)
@@ -216,28 +227,11 @@ export function SalaryCalendar({
     return m
   }, [absences])
 
-  // Live counts within the pay period: unique dates per category. Emit so
-  // the parent can render day badges without waiting for a recalculation.
-  // Parental groups parental + pregnancy + care_relative to match how the
-  // existing snapshot column lumps them.
+  // Live counts within the period: unique dates per category. Emit so the
+  // parent can render day badges without waiting for a recalculation.
   useEffect(() => {
     if (!onAbsenceCountsChange) return
-    const sickDates = new Set<string>()
-    const vabDates = new Set<string>()
-    const parentalDates = new Set<string>()
-    for (const a of absences) {
-      if (a.absence_date < periodStart || a.absence_date > periodEnd) continue
-      if (a.absence_type === 'sick') sickDates.add(a.absence_date)
-      else if (a.absence_type === 'vab') vabDates.add(a.absence_date)
-      else if (a.absence_type === 'parental' || a.absence_type === 'pregnancy' || a.absence_type === 'care_relative') {
-        parentalDates.add(a.absence_date)
-      }
-    }
-    onAbsenceCountsChange({
-      sick: sickDates.size,
-      vab: vabDates.size,
-      parental: parentalDates.size,
-    })
+    onAbsenceCountsChange(countAbsenceDatesInWindow(absences, { start: periodStart, end: periodEnd }))
   }, [absences, periodStart, periodEnd, onAbsenceCountsChange])
 
   const workedMap = useMemo(() => {
