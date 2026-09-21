@@ -21,7 +21,6 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import {
   validateEmployeeBankAccount,
   isValidClearing,
-  isValidAccount,
   normalizeBankNumber,
   lookupBankByClearing,
   checkEmployeeAccountChecksum,
@@ -287,9 +286,13 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
   }
 
   const bankName = lookupBankByClearing(clearing)
+  // One verdict for the pair, from the definition the payment files use: an
+  // account is judged together with its clearing, never on its own.
+  const bankIssues = validateEmployeeBankAccount(clearing, account)
+  const accountFormatIssue = bankIssues.some((i) => i.code === 'account_format')
   const showChecksumWarning =
     !bankFocused &&
-    validateEmployeeBankAccount(clearing, account).length === 0 &&
+    bankIssues.length === 0 &&
     checkEmployeeAccountChecksum(clearing, account) === 'invalid'
 
   return (
@@ -490,9 +493,9 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
                 onChange={(e) => setAccount(e.target.value)}
                 onFocus={() => setBankFocused(true)}
                 onBlur={() => setBankFocused(false)}
-                aria-invalid={account !== '' && !isValidAccount(normalizeBankNumber(account))}
+                aria-invalid={accountFormatIssue}
               />
-              {account !== '' && !isValidAccount(normalizeBankNumber(account)) && (
+              {accountFormatIssue && (
                 <p className="text-xs text-destructive">{BANK_ISSUE_MESSAGES_SV.account_format}</p>
               )}
             </Field>

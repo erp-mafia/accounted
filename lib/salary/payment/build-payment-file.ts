@@ -20,6 +20,9 @@
  *   5. company IBAN present and BIC present or derivable (pain.001)
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
+ *   8. every one of those accounts can be carried by the chosen format
+ *      (payeeAccountProblem, the same verdict the generators apply): all
+ *      affected employees are named at once, never the account number
  *
  * Employees whose effective net payout is 0 (nollkörning, net fully consumed
  * by a nettolöneavdrag) are left out of the file, so their bank details are
@@ -46,9 +49,11 @@ import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
 import { effectiveNetPayout } from './effective-net'
 import {
   checkEmployeeAccountChecksum,
+  describePayeeAccountProblems,
   lookupBicByBankName,
   lookupBicByClearing,
   normalizeBankNumber,
+  payeeAccountProblem,
 } from './bank-account'
 
 export const SALARY_PAYMENT_FILE_FORMATS = ['pain001', 'bg_lb'] as const
@@ -83,6 +88,7 @@ export type SalaryPaymentFileErrorCode =
   | 'BANKGIRO_INVALID'
   | 'NO_EMPLOYEES'
   | 'EMPLOYEE_BANK_MISSING'
+  | 'EMPLOYEE_BANK_INVALID'
   | 'GENERATOR_FAILED'
   | 'ARCHIVE_FAILED'
   | 'DB_ERROR'
@@ -306,6 +312,25 @@ export async function buildSalaryPaymentFile(
         employee_id: sre.employee_id,
         name: sre.employee ? `${sre.employee.first_name} ${sre.employee.last_name}` : null,
       })),
+    })
+  }
+
+  // 8. Accounts the chosen format cannot carry. Checked for every paid
+  // employee before generating, so the user gets the whole list by name in one
+  // pass instead of the generator stopping at the first one. `message` is the
+  // Swedish text for the HTTP layers; like `employees` it carries names and
+  // problem codes, never a clearing or account number.
+  const invalidBank = paid.flatMap(({ sre }) => {
+    const emp = sre.employee as NonNullable<RunEmployeeRow['employee']>
+    const problem = payeeAccountProblem(emp.clearing_number, emp.bank_account_number, format)
+    if (!problem) return []
+    return [{ employee_id: sre.employee_id, name: `${emp.first_name} ${emp.last_name}`, problem }]
+  })
+  if (invalidBank.length > 0) {
+    return fail('EMPLOYEE_BANK_INVALID', format, {
+      employee_count: invalidBank.length,
+      employees: invalidBank,
+      message: describePayeeAccountProblems(invalidBank),
     })
   }
 

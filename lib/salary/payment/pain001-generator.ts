@@ -21,7 +21,7 @@
  *    goes in CdtrAgt as a ClrSysMmbId under clearing system SESBA, and the
  *    account number WITHOUT the clearing goes in CdtrAcct/Id/Othr with
  *    SchmeNm BBAN. The clearing/account split is shared with the Bankgirot
- *    LB generator (splitDomesticBankAccount) so both formats present
+ *    LB generator (resolveDomesticBankAccount) so both formats present
  *    identical routing for Swedbank 5-digit clearings and Nordea personkonto.
  *  - MsgId, PmtInfId, InstrId and EndToEndId are Max35Text: bases are
  *    truncated so suffixes always fit.
@@ -31,7 +31,7 @@
  */
 
 import { escapeXml } from '@/lib/xml/escape'
-import { splitDomesticBankAccount } from './bank-account'
+import { payeeAccountParts } from './bank-account'
 
 export interface Pain001CompanyData {
   name: string
@@ -140,9 +140,11 @@ export function generatePain001(
     const emp = employees[i]
     const txSuffix = `-TX${String(i + 1).padStart(4, '0')}`
     const txId = suffixId(msgId, txSuffix)
-    const { clearing4, accountDigits } = splitDomesticBankAccount(
+    const { clearing4, accountDigits } = payeeAccountParts(
+      emp.name,
       emp.clearingNumber,
-      emp.bankAccountNumber
+      emp.bankAccountNumber,
+      'pain001'
     )
 
     lines.push('      <CdtTrfTxInf>')

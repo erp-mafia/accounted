@@ -345,6 +345,44 @@ describe('POST /salary-runs/:id/approve', () => {
     expect(body.error.details.issues.length).toBeGreaterThan(0)
   })
 
+  it('returns SALARY_RUN_APPROVE_VALIDATION_FAILED naming an employee whose bank details name no payable account', async () => {
+    // Invented number: 11 digits that do not repeat the clearing.
+    const unpayableEmployee = {
+      calculation_breakdown: { steps: [] },
+      employee: {
+        first_name: 'Lena',
+        last_name: 'Lund',
+        clearing_number: '5037',
+        bank_account_number: '96123456789',
+        email: 'lena@test',
+      },
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { id: RUN_ID, status: 'review' }, error: null },
+        salary_run_employees: { data: [unpayableEmployee], error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await approve(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/approve`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const text = await res.text()
+    const body = JSON.parse(text)
+    expect(body.error.code).toBe('SALARY_RUN_APPROVE_VALIDATION_FAILED')
+    expect(body.error.details.issues).toEqual([
+      'Lena Lund: kontonumret är ogiltigt (5-10 siffror, utan clearingnummer). Rätta bankuppgifterna.',
+    ])
+    expect(text).not.toContain('96123456789')
+  })
+
   it('refuses to approve a non-review run', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

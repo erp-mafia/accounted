@@ -400,7 +400,7 @@ Advances a salary run from `review` to `approved` after validating every employe
 
 **Pitfalls:**
 - Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.
-- Every employee on the run needs a `clearing_number` + `bank_account_number`. Missing bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list.
+- Every employee on the run needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers.
 - Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.
 - Employees without email get a non-blocking warning (lönebesked can't be sent automatically).
 - No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.
@@ -1428,6 +1428,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 **Pitfalls:**
 - Run status must be one of approved, paid, booked: a draft or review run returns 409 SALARY_RUN_PAYMENT_FILE_NOT_READY. Approve the run first (:approve).
 - pain001 needs the company IBAN and a BIC (saved, or derived from the company clearing number / bank name) in company settings, plus clearing number and account number on every employee with a net payout. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.
+- An employee account the chosen format cannot carry returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID with details.employees (employee_id, name, problem) for every affected employee at once; the response never echoes an account number. problem is clearing_format or account_format (correct the employee's bank details: clearing 4 digits or 5 starting with 8, account 5-10 digits without the clearing number) or bg_lb_account_too_long (a 5-digit clearing with a 10-digit account does not fit the fixed-width Bankgirot LB account field: request format pain001 instead). A dry run reports the same error, so preview before payday.
 - The file comes back inline as `content` (a string). Write it to disk under `filename` (pain001 as UTF-8, bg_lb as ISO 8859-1 with CRLF line endings, exactly as returned) and upload it in the bank's file channel. Nothing is transmitted to the bank by this call.
 - Generating the file does NOT mark the run paid and moves no money. Call :mark-paid once the bank has executed the batch, then :book to post the verifikationer.
 - Bankgirot LB is being retired by the banks during 2026: prefer pain001. `format` defaults to company_settings.preferred_payment_format, which is pain001 unless the company changed it.

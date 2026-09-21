@@ -75,6 +75,19 @@ describe('generateBgLb', () => {
     expect(paymentLine.slice(6, 16)).toBe('1123456789')
   })
 
+  it('refuses by name an account that needs 11 positions in the 10-wide account field', () => {
+    // Invented number: 5-digit clearing + 10-digit account. It used to throw
+    // "Numeriskt fält för långt (11 > 10): 996..." with the number in the text.
+    const employees: BgLbEmployee[] = [
+      { name: 'Anna Andersson', clearingNumber: '6000', bankAccountNumber: '1234567', netSalary: 1000 },
+      { name: 'Sara Svensson', clearingNumber: '8327-9', bankAccountNumber: '9612345678', netSalary: 1000 },
+    ]
+    expect(() => generateBgLb(company, employees, baseOptions)).toThrow(
+      'Sara Svensson: kontonumret ryms inte i Bankgirot LB-filen',
+    )
+    expect(() => generateBgLb(company, employees, baseOptions)).not.toThrow(/996|9612345678|Numeriskt/)
+  })
+
   it('rejects invalid bankgiro number', () => {
     expect(() =>
       generateBgLb({ ...company, senderBankgiro: 'invalid' }, [], baseOptions)

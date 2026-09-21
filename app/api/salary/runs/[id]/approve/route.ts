@@ -3,12 +3,13 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { eventBus } from '@/lib/events'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
+import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 
 ensureInitialized()
 
 /** review → approved (authorization recorded, with pre-approve validation).
- *  ?force=true bypasses the overridable "bank details missing" guard — approval
+ *  ?force=true bypasses the overridable "bank details missing or invalid" guard: approval
  *  is an authorization step, so the user may approve now and complete bank
  *  details before generating the payment file (which hard-blocks on its own). */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
@@ -59,9 +60,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       // net (nollkörning, or fully net-deducted) produces no payment-file line,
       // so no destination account is needed: mirrors the pain.001 / BG-LB
       // generators, which only include employees with effectiveNet > 0.
-      if (effectiveNetPayout(sre) > 0 && (!emp.clearing_number || !emp.bank_account_number)) {
-        bankDetailErrors.push(`${name}: Bankuppgifter saknas (clearingnummer och/eller kontonummer)`)
-      }
+      // Missing, or present but naming no payable account (a value saved
+      // before entry and payout shared one definition): say it here, by name,
+      // instead of on payday when the payment file refuses it.
+      const bankRemark =
+        effectiveNetPayout(sre) > 0
+          ? employeeBankDetailsRemark(name, emp.clearing_number, emp.bank_account_number)
+          : null
+      if (bankRemark) bankDetailErrors.push(bankRemark)
 
       // Must have been calculated (calculation_breakdown exists)
       if (!sre.calculation_breakdown) {
@@ -88,7 +94,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // to approve anyway (the "Godkänn ändå" path).
     if (bankDetailErrors.length > 0 && !force) {
       return NextResponse.json({
-        error: 'Bankuppgifter saknas för en eller flera anställda',
+        error: 'Bankuppgifter saknas eller är ogiltiga för en eller flera anställda',
         details: bankDetailErrors,
         warnings,
         code: 'SALARY_APPROVE_BANK_DETAILS_MISSING',

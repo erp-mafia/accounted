@@ -18,7 +18,7 @@
  * the salary journal entry. Subject to 7-year retention.
  */
 
-import { splitDomesticBankAccount } from './bank-account'
+import { payeeAccountParts } from './bank-account'
 
 export interface BgLbCompanyData {
   name: string
@@ -30,7 +30,10 @@ export interface BgLbEmployee {
   name: string
   /** 4-5 digit clearing number. */
   clearingNumber: string
-  /** Up to 10-digit bank account number. */
+  /**
+   * Bank account number without clearing. What resolves, and what fits the
+   * 10-wide account field, is decided by resolveDomesticBankAccount.
+   */
   bankAccountNumber: string
   /** Net salary in SEK (öre handled internally). */
   netSalary: number
@@ -106,17 +109,22 @@ export function generateBgLb(
   // ─── Posttyp 54: Betalning till bankkonto (one per employee) ───
   // Pos 1-2:   "54"
   // Pos 3-6:   Clearing number (4 digits, right-justified, zero-padded)
-  //            5-digit Swedbank clearings: digit 5 goes in pos 7 (we shift
-  //            into the account field below per Bankgirot spec).
-  // Pos 7-16:  Bank account number (10 digits, right-justified, zero-padded)
+  //            5-digit Swedbank clearings: digit 5 is carried as the leading
+  //            digit of the account field (resolveDomesticBankAccount).
+  // Pos 7-16:  Bank account number (10 digits, right-justified, zero-padded).
+  //            An account that needs 11 positions (5-digit clearing with a
+  //            10-digit account) does not fit: payeeAccountParts refuses that
+  //            employee by name instead of truncating or re-encoding.
   // Pos 17-41: Receiver name (25 chars, left-justified, space-padded)
   // Pos 42-53: Amount in öre (12 digits, right-justified, zero-padded)
   // Pos 54-59: Payment date YYMMDD
   // Pos 60-80: Free reference / period label (21 chars)
   for (const emp of positivePayments) {
-    const { clearing4, accountDigits } = splitDomesticBankAccount(
+    const { clearing4, accountDigits } = payeeAccountParts(
+      emp.name,
       emp.clearingNumber,
-      emp.bankAccountNumber
+      emp.bankAccountNumber,
+      'bg_lb'
     )
     const amountOre = Math.round(emp.netSalary * 100)
     const reference = `Lon ${options.periodLabel}`
@@ -279,11 +287,13 @@ function toYyMmDd(isoDate: string): string {
   return m[1].slice(2) + m[2] + m[3]
 }
 
-/** Right-justify with zero-padding (for numeric fields). */
+/** Right-justify with zero-padding (for numeric fields). The value itself is
+ *  never echoed: it can be a bank account number, and the message reaches
+ *  toasts, API responses and logs. */
 function padNumber(value: string, length: number): string {
   const digits = value.replace(/\D/g, '')
   if (digits.length > length) {
-    throw new Error(`Numeriskt fält för långt (${digits.length} > ${length}): ${value}`)
+    throw new Error(`Numeriskt fält för långt (${digits.length} > ${length})`)
   }
   return digits.padStart(length, '0')
 }

@@ -121,6 +121,66 @@ describe('POST /api/salary/runs/[id]/approve: bank-detail guard', () => {
     expect(body.details[0]).toContain('Bankuppgifter saknas')
   })
 
+  it('blocks (overridably) by NAME when stored bank details name no payable account, without the number', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review', company_id: 'company-1' } },
+      {
+        data: [
+          // Invented number: 11 digits that do not repeat the clearing. The
+          // old 5-11 digit entry rule saved it; no payment file can carry it.
+          runEmp({
+            first_name: 'Lena',
+            last_name: 'Lund',
+            net_salary: 24000,
+            clearing_number: '5037',
+            bank_account_number: '96123456789',
+          }),
+        ],
+      },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/approve', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const text = await response.text()
+    const body = JSON.parse(text) as { code: string; overridable: boolean; details: string[] }
+
+    expect(response.status).toBe(400)
+    expect(body.code).toBe('SALARY_APPROVE_BANK_DETAILS_MISSING')
+    expect(body.overridable).toBe(true)
+    expect(body.details).toEqual([
+      'Lena Lund: kontonumret är ogiltigt (5-10 siffror, utan clearingnummer). Rätta bankuppgifterna.',
+    ])
+    expect(text).not.toContain('96123456789')
+  })
+
+  it('does not block a 5-digit clearing with a 10-digit account: pain.001 carries it', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: { id: 'run-1', status: 'review', company_id: 'company-1' } },
+      {
+        data: [
+          runEmp({
+            first_name: 'Sara',
+            last_name: 'Svensson',
+            net_salary: 24000,
+            clearing_number: '8327-9',
+            bank_account_number: '9612345678',
+          }),
+        ],
+      },
+      { data: { id: 'run-1', status: 'approved' } },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/approve', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    expect(response.status).toBe(200)
+  })
+
   it('approves a mixed run: pays the one with bank details, ignores the zero-net one without', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)

@@ -66,6 +66,27 @@ describe('resolveSupplierPayee', () => {
     expect(result).toEqual({ ok: false, reason: 'payee_invalid' })
   })
 
+  it('judges the account with its clearing, by the definition the payment file resolves with', () => {
+    // Invented numbers. 11 digits are a payee only when they repeat the
+    // 4-digit clearing (stripped by the generator); otherwise no file can
+    // carry them, so the batch preview must say payee_invalid up front.
+    expect(
+      resolveSupplierPayee({ ...emptySource, clearing_number: '1708', account_number: '17082042825' }),
+    ).toEqual({ ok: true, payee: { type: 'bank_account', clearing: '1708', account: '17082042825' } })
+    expect(
+      resolveSupplierPayee({ ...emptySource, clearing_number: '5037', account_number: '96123456789' }),
+    ).toEqual({ ok: false, reason: 'payee_invalid' })
+    expect(resolveSupplierPayee({ ...emptySource, bank_account: '5037-96123456789' })).toEqual({
+      ok: false,
+      reason: 'payee_invalid',
+    })
+    // A 5-digit clearing with a 10-digit account is a payee: supplier files
+    // are pain.001 only, which has no fixed-width account field.
+    expect(
+      resolveSupplierPayee({ ...emptySource, clearing_number: '83279', account_number: '9612345678' }),
+    ).toEqual({ ok: true, payee: { type: 'bank_account', clearing: '83279', account: '9612345678' } })
+  })
+
   it('parses free-text bank_account with an explicit separator', () => {
     const result = resolveSupplierPayee({ ...emptySource, bank_account: '3300-123 456 789' })
     expect(result).toEqual({

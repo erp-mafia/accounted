@@ -125,7 +125,9 @@ describe('generatePain001', () => {
     const badEmployee = [
       { name: 'Fel Felsson', clearingNumber: '123', bankAccountNumber: '1234567', netSalary: 20000 },
     ]
-    expect(() => generatePain001(company, badEmployee, options)).toThrow('Ogiltigt clearingnummer')
+    expect(() => generatePain001(company, badEmployee, options)).toThrow(
+      'Fel Felsson: clearingnumret är ogiltigt',
+    )
   })
 
   it('omits remittance info entirely (not allowed for salary payments)', () => {

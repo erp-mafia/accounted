@@ -39,6 +39,7 @@ import {
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { effectiveNetPayout } from '@/lib/salary/payment/effective-net'
+import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
 import { eventBus } from '@/lib/events'
 
 export type BookRunResult<T> =
@@ -288,8 +289,8 @@ export interface AdvanceAndBookData extends BookedRunData {
  * operation's human approval covers the authorization the dashboard collects
  * per-status. Validation parity with the dashboard routes:
  *   - every roster row must carry a calculation_breakdown (blocking)
- *   - missing bank details (for a positive net payout) and missing email are
- *     warnings, not blockers (dashboard force-approve semantics)
+ *   - missing or invalid bank details (for a positive net payout) and missing
+ *     email are warnings, not blockers (dashboard force-approve semantics)
  *   - F-skatt not verified surfaces as a warning (review route parity)
  */
 export async function advanceAndBookSalaryRun(
@@ -346,9 +347,11 @@ export async function advanceAndBookSalaryRun(
           `${name}: F-skatt ej verifierad: 30% skatteavdrag och fulla avgifter tillämpas (f-skatt.md)`,
         )
       }
-      if (effectiveNetPayout(sre) > 0 && (!emp.clearing_number || !emp.bank_account_number)) {
-        warnings.push(`${name}: Bankuppgifter saknas (clearingnummer och/eller kontonummer)`)
-      }
+      const bankRemark =
+        effectiveNetPayout(sre) > 0
+          ? employeeBankDetailsRemark(name, emp.clearing_number, emp.bank_account_number)
+          : null
+      if (bankRemark) warnings.push(bankRemark)
       if (!emp.email) {
         warnings.push(`${name}: E-post saknas, lönebesked kan inte skickas`)
       }

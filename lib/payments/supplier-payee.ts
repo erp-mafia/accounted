@@ -14,7 +14,7 @@
  */
 
 import { validateBankgiroNumber, validatePlusgiroNumber, validateOcrReference } from '@/lib/bankgiro/luhn'
-import { isValidAccount, isValidClearing } from '@/lib/salary/payment/bank-account'
+import { resolveDomesticBankAccount } from '@/lib/salary/payment/bank-account'
 
 export type SupplierPayee =
   | { type: 'bankgiro'; bankgiro: string }
@@ -65,7 +65,9 @@ export function resolveSupplierPayee(supplier: SupplierPayeeSource): PayeeResolu
   const clearing = digits(supplier.clearing_number)
   const account = digits(supplier.account_number)
   if (clearing || account) {
-    if (!isValidClearing(clearing) || !isValidAccount(account)) {
+    // The same definition the pain.001 generator resolves the payee with, so a
+    // payee accepted here is one the file can carry.
+    if (!resolveDomesticBankAccount(clearing, account).ok) {
       return { ok: false, reason: 'payee_invalid' }
     }
     return { ok: true, payee: { type: 'bank_account', clearing, account } }
@@ -77,7 +79,7 @@ export function resolveSupplierPayee(supplier: SupplierPayeeSource): PayeeResolu
     if (!match) return { ok: false, reason: 'payee_invalid' }
     const ftClearing = match[1]
     const ftAccount = digits(match[2])
-    if (!isValidClearing(ftClearing) || !isValidAccount(ftAccount)) {
+    if (!resolveDomesticBankAccount(ftClearing, ftAccount).ok) {
       return { ok: false, reason: 'payee_invalid' }
     }
     return { ok: true, payee: { type: 'bank_account', clearing: ftClearing, account: ftAccount } }

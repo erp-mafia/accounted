@@ -354,6 +354,55 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID naming the employee, never the account number', async () => {
+    // Invented number. A 5-digit clearing with a 10-digit account needs 11
+    // positions in the 10-wide Bankgirot LB account field.
+    const { supabase, calls } = makeRecordingSupabase(
+      happyTables({
+        salary_run_employees: {
+          data: [employee({ clearing_number: '8327-9', bank_account_number: '9612345678' })],
+        },
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'bg_lb' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(422)
+    const text = await res.text()
+    const body = JSON.parse(text)
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID')
+    expect(body.error.details.format).toBe('bg_lb')
+    expect(body.error.details.employee_count).toBe(1)
+    expect(body.error.details.employees).toEqual([
+      { employee_id: EMPLOYEE_ID, name: 'Anna Andersson', problem: 'bg_lb_account_too_long' },
+    ])
+    expect(body.error.details.message).toContain('Anna Andersson')
+    expect(body.error.details.message).toContain('pain.001')
+    expect(text).not.toContain('9612345678')
+    expect(text).not.toContain('996')
+    expect(stampCalls(calls)).toHaveLength(0)
+  })
+
+  it('carries the same employee in a pain001 file', async () => {
+    const { supabase } = makeRecordingSupabase(
+      happyTables({
+        salary_run_employees: {
+          data: [employee({ clearing_number: '8327-9', bank_account_number: '9612345678' })],
+        },
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'pain001' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(200)
+  })
+
   it('does not require bank details for a zero-net employee and warns that they are left out', async () => {
     const { supabase } = makeRecordingSupabase(
       happyTables({

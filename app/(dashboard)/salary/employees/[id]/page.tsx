@@ -25,7 +25,6 @@ import { vacationPayRateFromPercentInput, vacationPayRateToPercent } from '@/lib
 import {
   validateEmployeeBankAccount,
   isValidClearing,
-  isValidAccount,
   normalizeBankNumber,
   lookupBankByClearing,
   checkEmployeeAccountChecksum,
@@ -281,14 +280,23 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
   }
 
   const bankName = lookupBankByClearing(clearing)
+  // One verdict for the pair, from the definition the payment files use: an
+  // account is judged together with its clearing, never on its own.
+  const bankIssues = validateEmployeeBankAccount(clearing, account)
+  const accountFormatIssue = bankIssues.some((i) => i.code === 'account_format')
   const showChecksumWarning =
     !bankFocused &&
-    validateEmployeeBankAccount(clearing, account).length === 0 &&
+    bankIssues.length === 0 &&
     checkEmployeeAccountChecksum(clearing, account) === 'invalid'
 
   // Saved (not in-progress) values for the read view.
   const savedBankName = lookupBankByClearing(employee.clearing_number || '')
   const bankMissing = !employee.clearing_number || !employee.bank_account_number
+  // A saved pair from before the shared definition may name no payable
+  // account. Say so here, long before the payment file refuses it on payday.
+  const bankInvalid =
+    !bankMissing &&
+    validateEmployeeBankAccount(employee.clearing_number, employee.bank_account_number).length > 0
   const savedDimensions = employee.default_dimensions ?? {}
   const savedDimensionLabel = Object.keys(savedDimensions)
     .sort((a, b) => Number(a) - Number(b))
@@ -496,6 +504,14 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             action={canWrite ? { label: t('detail_edit'), onClick: openEdit } : undefined}
           >
             {t('detail_bank_missing')}
+          </AttnLine>
+        )}
+        {bankInvalid && (
+          <AttnLine
+            className="mt-2"
+            action={canWrite ? { label: t('detail_edit'), onClick: openEdit } : undefined}
+          >
+            {t('detail_bank_invalid')}
           </AttnLine>
         )}
       </DetailSection>
@@ -753,9 +769,9 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                         onFocus={() => setBankFocused(true)}
                         onBlur={() => setBankFocused(false)}
                         disabled={!canWrite}
-                        aria-invalid={account !== '' && !isValidAccount(normalizeBankNumber(account))}
+                        aria-invalid={accountFormatIssue}
                       />
-                      {account !== '' && !isValidAccount(normalizeBankNumber(account)) && (
+                      {accountFormatIssue && (
                         <p className="text-xs text-destructive">{t('bank_error_account_format')}</p>
                       )}
                     </div>

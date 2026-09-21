@@ -155,6 +155,33 @@ describe('advanceAndBookSalaryRun', () => {
     )
   })
 
+  it('warns by name when stored bank details name no payable account, without the number', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review' }) },
+      // Invented number: 11 digits that do not repeat the clearing.
+      {
+        data: [
+          makeSre({
+            employee: { ...makeSre().employee, clearing_number: '5037', bank_account_number: '96123456789' },
+          }),
+        ],
+      },
+      { data: { id: 'run-1' } },
+      { data: { id: 'run-1' } },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const remark = result.data.warnings.find((w) => w.includes('kontonumret är ogiltigt'))
+      expect(remark).toBeDefined()
+      expect(result.data.warnings.join(' ')).not.toContain('96123456789')
+    }
+  })
+
   it('books a paid zero-total run as nollkörning without journal entries', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     enqueueMany([

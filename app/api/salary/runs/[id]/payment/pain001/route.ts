@@ -48,6 +48,9 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
       return NextResponse.json({
         error: `${result.details.employee_count as number} anställd(a) saknar bankkontouppgifter`,
       }, { status: 400 })
+    case 'EMPLOYEE_BANK_INVALID':
+      // Names every affected employee and the fix; never an account number.
+      return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'GENERATOR_FAILED':
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'ARCHIVE_FAILED':

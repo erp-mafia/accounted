@@ -21,7 +21,7 @@
  *    SchmeNm/Prtry BGNR. Plusgiro payees route SESBA member 9960 with
  *    SchmeNm/Cd BBAN. Bank-account payees use the clearing number as the
  *    SESBA member and the account (without clearing) as BBAN, through the
- *    same splitDomesticBankAccount used by the salary generator so the two
+ *    same resolveDomesticBankAccount used by the salary generators so the
  *    files can never route an account differently.
  *  - Swedbank MIG (Validex PFH_pain_001_001_03_219): a BGNR creditor demands
  *    a BGNR debtor. When the company has a bankgiro, bankgiro-payee payments
@@ -59,7 +59,7 @@
 
 import { escapeXml } from '@/lib/xml/escape'
 import { roundOre } from '@/lib/money'
-import { splitDomesticBankAccount } from '@/lib/salary/payment/bank-account'
+import { payeeAccountParts } from '@/lib/salary/payment/bank-account'
 import type { PaymentReference, SupplierPayee } from './supplier-payee'
 
 export interface SupplierPain001Debtor {
@@ -247,7 +247,12 @@ function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
       scheme = '<SchmeNm><Cd>BBAN</Cd></SchmeNm>'
       break
     case 'bank_account': {
-      const { clearing4, accountDigits } = splitDomesticBankAccount(payee.clearing, payee.account)
+      const { clearing4, accountDigits } = payeeAccountParts(
+        payment.payeeName,
+        payee.clearing,
+        payee.account,
+        'pain001',
+      )
       memberId = clearing4
       accountId = accountDigits
       scheme = '<SchmeNm><Cd>BBAN</Cd></SchmeNm>'

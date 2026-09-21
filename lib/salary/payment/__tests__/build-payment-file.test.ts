@@ -274,14 +274,131 @@ describe('buildSalaryPaymentFile', () => {
   })
 
   it('maps a generator throw to GENERATOR_FAILED with a Swedish message and no stamp', async () => {
+    const badDate = { ...run, payment_date: '24/4 2026' }
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([{ data: badDate }, { data: company }, { data: settings }, { data: [anna] }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'bg_lb' })
+    expect(result).toMatchObject({ ok: false, code: 'GENERATOR_FAILED' })
+    if (result.ok) return
+    expect(String(result.details.message)).toContain('Ogiltigt datum')
+    expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
+  })
+
+  // ── Employee accounts the chosen format cannot carry ──────────
+  // Invented numbers. `sara` is the support-ticket shape: a 5-digit Swedbank
+  // clearing with a 10-digit account needs 11 positions in the 10-wide
+  // Bankgirot LB account field ("Numeriskt fält för långt (11 > 10): 996...").
+  const sara = {
+    ...anna,
+    employee_id: 'emp-2',
+    employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678' },
+  }
+  const sven = {
+    ...anna,
+    employee_id: 'emp-3',
+    employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432' },
+  }
+  // Accepted by the old 5-11 digit rule; names no payable account in any format.
+  const legacy = {
+    ...anna,
+    employee_id: 'emp-4',
+    employee: { first_name: 'Lena', last_name: 'L', clearing_number: '5037', bank_account_number: '96123456789' },
+  }
+
+  it('refuses the LB file by NAME for every employee whose account does not fit, before generating', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, sara, sven] }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'bg_lb' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'EMPLOYEE_BANK_INVALID',
+      format: 'bg_lb',
+      details: {
+        employee_count: 2,
+        employees: [
+          { employee_id: 'emp-2', name: 'Sara S', problem: 'bg_lb_account_too_long' },
+          { employee_id: 'emp-3', name: 'Sven T', problem: 'bg_lb_account_too_long' },
+        ],
+      },
+    })
+    if (result.ok) return
+    const message = String(result.details.message)
+    expect(message).toBe(
+      'Sara S, Sven T: kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
+    )
+    // Nothing in the failure carries a clearing or account number.
+    const serialized = JSON.stringify(result.details)
+    for (const secret of ['9612345678', '9698765432', '996', '8327', '8105']) {
+      expect(serialized).not.toContain(secret)
+    }
+    expect(calls.filter((c) => c.method === 'insert')).toHaveLength(0)
+    expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
+  })
+
+  it('pays the same employees with pain.001, which has no fixed-width account field', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, sara, sven] }, { data: null }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.employeeCount).toBe(3)
+    expect(result.content).toContain('<Id>99612345678</Id>')
+  })
+
+  it('names an employee whose stored details name no payable account, in every format', async () => {
+    for (const format of ['pain001', 'bg_lb'] as const) {
+      const { supabase, enqueueMany, calls } = client()
+      enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, legacy] }])
+      const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format })
+      expect(result).toMatchObject({
+        ok: false,
+        code: 'EMPLOYEE_BANK_INVALID',
+        details: { employee_count: 1, employees: [{ employee_id: 'emp-4', name: 'Lena L', problem: 'account_format' }] },
+      })
+      if (result.ok) return
+      expect(String(result.details.message)).toBe(
+        'Lena L: kontonumret är ogiltigt (5-10 siffror, utan clearingnummer). Rätta bankuppgifterna.',
+      )
+      expect(JSON.stringify(result.details)).not.toContain('96123456789')
+      expect(calls.filter((c) => c.method === 'insert')).toHaveLength(0)
+    }
+  })
+
+  it('reports an invalid clearing as EMPLOYEE_BANK_INVALID, not as a raw generator throw', async () => {
     const badClearing = { ...anna, employee: { ...anna.employee, clearing_number: '12' } }
     const { supabase, enqueueMany, calls } = client()
     enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [badClearing] }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
-    expect(result).toMatchObject({ ok: false, code: 'GENERATOR_FAILED' })
-    if (result.ok) return
-    expect(String(result.details.message)).toContain('clearingnummer')
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'EMPLOYEE_BANK_INVALID',
+      details: { employees: [{ employee_id: 'emp-1', name: 'Anna A', problem: 'clearing_format' }] },
+    })
     expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
+  })
+
+  it('a dry run reports the same refusal, so a preview before payday is truthful', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [sara] }])
+    const result = await buildSalaryPaymentFile(supabase, {
+      companyId: COMPANY_ID,
+      runId: RUN_ID,
+      userId: USER_ID,
+      format: 'bg_lb',
+      dryRun: true,
+    })
+    expect(result).toMatchObject({ ok: false, code: 'EMPLOYEE_BANK_INVALID' })
+  })
+
+  it('ignores the bank details of an employee with no payout, as for missing details', async () => {
+    const zeroNet = { ...legacy, net_salary: 0, tax_withheld: 0 }
+    const { supabase, enqueueMany } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, zeroNet] }, { data: null }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'bg_lb' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.employeeCount).toBe(1)
   })
 
   it('dry run builds the file but never stamps', async () => {

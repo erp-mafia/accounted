@@ -27,6 +27,7 @@ vi.mock('@/lib/bankgiro/luhn', () => ({
 import { GET } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { requireWritePermission } from '@/lib/auth/require-write'
+import { generateBgLb } from '@/lib/salary/payment/bg-lb-generator'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -90,6 +91,53 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
     // The message must name where the setting lives: the settings overview
     // shows a registry bankgiro this route does not read.
     expect(body.error).toContain('Inställningar → Fakturering')
+  })
+
+  it('returns 404 when the run does not exist', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([{ data: null }])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/bg-lb'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(404)
+  })
+
+  it('returns 400 naming the employees whose account does not fit the LB field, never the number', async () => {
+    // Invented numbers: the support-ticket shape. A 5-digit clearing with a
+    // 10-digit account needs 11 positions in the 10-wide LB account field; the
+    // toast used to read "Numeriskt fält för långt (11 > 10): 996...".
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      { data: { name: 'Bolaget AB' } }, // companies
+      { data: { company_name: 'Bolaget AB', bankgiro: '123-4567' } }, // company_settings
+      {
+        data: [
+          { employee_id: 'e1', employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567' } },
+          { employee_id: 'e2', employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678' } },
+          { employee_id: 'e3', employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432' } },
+        ],
+      }, // salary_run_employees
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/bg-lb'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    const text = await response.text()
+    const body = JSON.parse(text)
+    expect(body.error).toBe(
+      'Sara S, Sven T: kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
+    )
+    expect(text).not.toContain('9612345678')
+    expect(text).not.toContain('9698765432')
+    expect(text).not.toContain('996')
+    expect(generateBgLb).not.toHaveBeenCalled()
   })
 
   it('generates a Bankgirot LB file for an approved run', async () => {

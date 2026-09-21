@@ -23,6 +23,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { eventBus } from '@/lib/events'
 import { refreshRunYtd } from '@/lib/salary/ytd'
+import { employeeBankDetailsRemark } from '@/lib/salary/payment/bank-account'
 
 const SalaryRunApproved = z.object({
   id: z.string().uuid(),
@@ -47,7 +48,7 @@ registerEndpoint({
     'Posting journal entries (use `:book` after `:mark-paid`). Reverting an approval (the lifecycle has no `:unapprove`: call `:correct` once the run is booked if you need to undo).',
   pitfalls: [
     'Run must be in `review`: non-`review` runs return 400 SALARY_RUN_APPROVE_NOT_REVIEW.',
-    'Every employee on the run needs a `clearing_number` + `bank_account_number`. Missing bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list.',
+    'Every employee on the run needs a `clearing_number` + `bank_account_number` that name a payable account (clearing 4 digits, or 5 starting with 8; account 5-10 digits without the clearing number). Missing or invalid bank details return 400 SALARY_RUN_APPROVE_VALIDATION_FAILED with the per-employee list; the list names employees, never account numbers.',
     'Every employee on the run needs `calculation_breakdown` populated. If you skipped `:calculate` somehow, approve fails.',
     'Employees without email get a non-blocking warning (lönebesked can\'t be sent automatically).',
     'No period-lock check here: that lives on `:book` where the verifikation is posted. An agent can approve a run whose payment date falls in a now-locked period; `:book` will later refuse.',
@@ -141,11 +142,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       const emp = sre.employee
       if (!emp) continue
       const name = `${emp.first_name} ${emp.last_name}`
-      if (!emp.clearing_number || !emp.bank_account_number) {
-        validationErrors.push(
-          `${name}: Bankuppgifter saknas (clearingnummer och/eller kontonummer)`,
-        )
-      }
+      // Missing, or present but naming no payable account: the same verdict
+      // the payment-file generators apply, so an approved run is one the
+      // payment step will not refuse on its bank details.
+      const bankRemark = employeeBankDetailsRemark(name, emp.clearing_number, emp.bank_account_number)
+      if (bankRemark) validationErrors.push(bankRemark)
       if (!sre.calculation_breakdown) {
         validationErrors.push(`${name}: Beräkning saknas, kör beräkning först`)
       }

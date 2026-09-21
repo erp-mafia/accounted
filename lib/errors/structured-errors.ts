@@ -3812,6 +3812,13 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_en:
       'One or more employees with a net payout lack a clearing number or account number. Complete their bank details under Employees.',
   },
+  SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID: {
+    httpStatus: 422,
+    message_sv:
+      'En eller flera anställda har bankuppgifter som betalfilen inte kan ta med. details.employees anger vem och vad som behöver rättas.',
+    message_en:
+      'One or more employees have bank details the payment file cannot carry. details.employees names who and what to correct.',
+  },
   SALARY_RUN_PAYMENT_FILE_GENERATION_FAILED: {
     httpStatus: 400,
     message_sv: 'Betalfilen kunde inte skapas: kontrollera bankuppgifterna för företaget och de anställda.',
