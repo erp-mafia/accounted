@@ -103,7 +103,7 @@ describe('bank sync result persistence', () => {
     await expect(persist([
       { uid: account.uid, balance: 25, balance_updated_at: completed },
       { uid: 'disabled', dedup_scope: 'different' },
-    ])).rejects.toMatchObject({ code: '40001' })
+    ])).rejects.toMatchObject({ code: 'PT409' })
     await client.query('ROLLBACK TO SAVEPOINT sync_failure')
     expect(await state()).toEqual(before)
     expect((await client.query('SELECT balance FROM cash_accounts WHERE id = $1', [cashId])).rows[0].balance).toBeNull()

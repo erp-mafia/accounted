@@ -699,3 +699,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-21] Bank sync persists observations through session-checked RPCs: fetched account arrays cannot overwrite routing or revive obsolete sessions; cash-account balances and the sync watermark commit together.
 
 [2026-09-21] Bank ingest verifies UID/session/physical identity and destination under connection and cash-account locks. Inserts and manual-row adoption reject stale route tokens; provider responses are archived before persistence so failed batches retain their evidence.
+
+[2026-09-21] Bank routing conflicts return PT409: stale sessions, destinations and dedup scopes require refreshed input. PostgREST can retry deterministic serialization_failure errors indefinitely, as confirmed by the joint engine HTTP probe.

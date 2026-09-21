@@ -76,18 +76,18 @@ describe('bank adoption of an existing manual transaction', () => {
   })
   it('rejects an anchor on another ledger after reading the locked transaction', async () => {
     const id = await manualTransaction(otherVoucher)
-    await expect(bind(id, await route())).rejects.toMatchObject({ code: '40001', message: 'BANK_INGEST_ADOPTION_ANCHOR_CHANGED' })
+    await expect(bind(id, await route())).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ADOPTION_ANCHOR_CHANGED' })
   })
   it('rejects a concurrent edit to the matched amount', async () => {
     const id = await manualTransaction()
     await client.query('UPDATE transactions SET amount = -50 WHERE id = $1', [id])
-    await expect(bind(id, await route())).rejects.toMatchObject({ code: '40001', message: 'BANK_INGEST_ADOPTION_CHANGED' })
+    await expect(bind(id, await route())).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ADOPTION_CHANGED' })
   })
   it('rejects a route change between the match and its adoption', async () => {
     const id = await manualTransaction()
     const snapshot = await route()
     await changeLedger()
-    await expect(bind(id, snapshot)).rejects.toMatchObject({ code: '40001', message: 'BANK_INGEST_ROUTE_CHANGED' })
+    await expect(bind(id, snapshot)).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ROUTE_CHANGED' })
   })
 })
 
@@ -107,7 +107,7 @@ describe('bank ingest route boundary', () => {
     const snapshot = await route()
     await changeLedger()
     await client.query('SAVEPOINT changed_route')
-    await expect(insert(snapshot)).rejects.toMatchObject({ code: '40001', message: 'BANK_INGEST_ROUTE_CHANGED' })
+    await expect(insert(snapshot)).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ROUTE_CHANGED' })
     await client.query('ROLLBACK TO SAVEPOINT changed_route')
     expect((await client.query('SELECT count(*)::int AS n FROM transactions WHERE bank_connection_id = $1', [connectionId])).rows[0].n).toBe(0)
     expect((await insert(await route())).cash_account_id).toBe(cashId)
@@ -121,7 +121,7 @@ describe('bank ingest route boundary', () => {
     if (change === 'currency') await client.query("UPDATE cash_accounts SET currency = 'EUR' WHERE id = $1", [cashId])
     if (change === 'identity') await client.query("UPDATE cash_accounts SET iban = 'SE0000000000000000000002' WHERE id = $1", [cashId])
     if (change === 'compatibility') await client.query(`UPDATE bank_connections SET accounts_data = jsonb_set(accounts_data, '{0,ledger_account}', '"1939"') WHERE id = $1`, [connectionId])
-    await expect(insert(snapshot)).rejects.toMatchObject({ code: '40001' })
+    await expect(insert(snapshot)).rejects.toMatchObject({ code: 'PT409' })
   })
 
   it('allows a balance-only update without invalidating the fetched route', async () => {
@@ -144,7 +144,7 @@ describe('bank ingest route boundary', () => {
     await client.query('ROLLBACK TO SAVEPOINT anonymous')
     await client.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [randomUUID()])
     await client.query('SET LOCAL ROLE authenticated')
-    await expect(insert(snapshot)).rejects.toMatchObject({ code: '40001' })
+    await expect(insert(snapshot)).rejects.toMatchObject({ code: 'PT409' })
   })
 
   it.each(['authenticated', 'service_role'])('accepts a checked %s insert', async role => {
@@ -187,7 +187,7 @@ describe('bank insert and route concurrency', () => {
       await waitForBlock(pid)
       await client.query('COMMIT')
       if (ordering === 'route-first') {
-        await expect(pending).rejects.toMatchObject({ code: '40001' })
+        await expect(pending).rejects.toMatchObject({ code: 'PT409' })
         await other.query('ROLLBACK')
       } else {
         await pending

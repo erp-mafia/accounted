@@ -1171,7 +1171,7 @@ describe('ingestTransactions', () => {
     expect(txUpdates).toContainEqual({ cash_account_id: 'acct-A' })
   })
 
-  it.each([null, { code: '40001', message: 'route changed' }])('uses the checked bank adoption boundary and fails the batch on rejection', async error => {
+  it.each([null, { code: 'PT409', message: 'route changed' }])('uses the checked bank adoption boundary and fails the batch on rejection', async error => {
     const { supabase, enqueue, updates } = createQueueMockSupabase()
     const raw = makeRaw({ date: '2026-01-02', amount: -25, description: 'Manual payment',
       bank_connection_id: 'connection', import_source: 'enable_banking' })
@@ -2403,7 +2403,7 @@ describe('ingestTransactions', () => {
     expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
   })
 
-  it.each([null, { code: '40001', message: 'BANK_INGEST_ROUTE_CHANGED' }])('persists bank-context rows through the checked RPC and propagates its outcome', async error => {
+  it.each([null, { code: 'PT409', message: 'BANK_INGEST_ROUTE_CHANGED' }])('persists bank-context rows through the checked RPC and propagates its outcome', async error => {
     const { supabase, enqueue, inserts } = createQueueMockSupabase()
     const raw = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking' })
     const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
