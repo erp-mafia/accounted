@@ -20,8 +20,8 @@ must never be committed.
 The fixture spans 2025 and 2026, with 1,500 supplier names, repeated descriptions,
 invoice references, 350 dates per year, balance-only vouchers, revenues, mixed
 expense accounts and VAT lines. Its 25,750 distinct raw descriptions make it more
-favorable to deduplication than the real large-import case. That limitation needs
-an additional mostly-unique-description measurement.
+favorable to deduplication than the real large-import case. The read-only
+production measurement below covers a mostly-unique-description dataset.
 
 The benchmark runs five authenticated HTTP requests for each history window,
 then three concurrent all-history/12-month pairs. These retain the eight-second
@@ -50,28 +50,46 @@ query measurement does not establish a latency percentile or whole-flow
 reliability under production concurrency.
 
 The completed staging fixture has 100,000 entries, 25,750 descriptions and
-360,000 lines. All 16 authenticated HTTP calls succeeded under the unchanged
+360,000 lines. After restoring staging's existing parties migrations and current
+normalizer, all 16 authenticated HTTP calls succeeded under the unchanged
 eight-second database limit:
 
 | Window | Serial HTTP, five runs | Concurrent HTTP, three pairs | Original SQL, one parity run |
 | --- | --- | --- | --- |
-| All history | 4.177 to 5.828 s | 4.174 to 5.704 s | 24.965 s |
-| Since 2025-09-21 | 3.172 to 3.470 s | 3.150 to 5.305 s | 15.534 s |
+| All history | 4.305 to 4.708 s | 4.793 to 5.075 s | 29.145 s |
+| Since 2025-09-21 | 3.283 to 3.458 s | 3.262 to 3.852 s | 18.629 s |
 
 Each concurrent pair requests both windows. Old and new full JSON results
 matched exactly for both windows, with 1,000 keys each. The original timings
 use a direct diagnostic SQL connection with the longer timeout; new timings
 include HTTP overhead. These are a small sample, not latency percentiles.
 
-## Validation limits
+## Complete-flow validation
 
-Staging has the older SQL `ledger_key` definition and is missing the parties
-tables and evidence RPC. Restoring the existing parties migration fails on an
-invalid legacy fixture value. The observed-party tests pass; the complete test
-file retains one pre-existing SQL/TypeScript ledger-key parity failure on this
-staging schema. Full register/refresh verification needs those prerequisites.
+The approved staging-only legacy fixture cleanup unblocked replay of the
+existing parties migrations. Their SQL and original version numbers were
+preserved; no prerequisite migration file was changed. Both relevant pg test
+files now pass: 33 observed-party/normalizer tests and 12 suggestion tests.
 
-Browser verification also encountered an existing `process is not defined`
-error in `lib/branding/service.ts` under the local webpack dev server. The
-refresh success, partial failure and total failure outcomes have unit coverage;
-the browser flow is not yet verified.
+The first authenticated suggestion run created 1,000 suggestions and 3,000
+facts in 12.874 seconds across multiple database requests. The following
+all-history register read returned 1,000 rows in 4.451 seconds. The document
+evidence RPC completed in 36 ms with no documents in this import fixture;
+document extraction cases are covered by the suggestion pg tests.
+
+Browser verification used the normal Turbopack dev server, the staging fixture
+account and the existing Read new action. The page rendered 1,000 rows and
+statistics without a browser error. Repeat POST /api/parties/suggest calls
+returned 200, attached the existing 1,000 suggestions and created no duplicates;
+the final call took 7.544 seconds and its list reload took 3.530 seconds.
+
+Aborting one refresh endpoint showed the partial-failure message; aborting both
+showed the failure message. After removing interception, a successful repeat
+showed the genuine zero-new-results message. The list reloaded after each
+outcome, including attachment-only updates. The bank resolver was disabled
+because this fixture tests imported ledger observations, without bank strings
+or AI calls. The earlier webpack-only branding error did not occur with
+Turbopack; no branding code was changed.
+
+The migration is applied to staging only. Production rollout remains separate
+from these tests and requires approval.
