@@ -201,7 +201,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // Phase 2 classification (+1): the human-override UPDATE on
 // document_attachments is a partial patch (doc_type and admission columns);
 // one literal per key combination is not viable.
-const UNRESOLVED_CEILING = 412
+// Phase 3 extraction (+4): the job queue's status patch spreads a partial
+// update, the extraction save carries the model's field payload, and the
+// provenance upsert builds its row and names its conflict target from the
+// row's own keys.
+const UNRESOLVED_CEILING = 416
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

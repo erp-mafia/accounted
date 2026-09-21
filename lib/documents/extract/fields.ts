@@ -1,4 +1,5 @@
 import type { FieldKind } from './schemas'
+import { roundOre } from '@/lib/money'
 
 /** One field as a model reading returned it. */
 export interface Reading {
@@ -35,7 +36,6 @@ export interface ExtractedField {
 
 export type Payload = Record<string, ExtractedField>
 
-const roundOre = (n: number) => Math.round(n * 100) / 100
 
 /** Swedish organisation or personal identity number as ten digits; a 12-digit form drops its century. */
 export function normalizeOrgNumber(raw: unknown): string | null {
