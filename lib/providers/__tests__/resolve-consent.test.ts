@@ -241,6 +241,29 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(refreshFortnoxToken).not.toHaveBeenCalled();
   });
 
+  it('preserves definitive failure evidence when credential reconciliation cannot read the row', async () => {
+    mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+    mock.enqueue({ data: [expiredTokens] });
+    mock.enqueue({ error: { message: 'connection reset' } });
+    vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(new FortnoxOAuthError('refresh', 400, 'invalid_grant'));
+    await expect(resolveConsent('co1', 'c1')).rejects.toMatchObject({
+      code: 'PROVIDER_AUTH_EXPIRED', providerCode: 'invalid_grant', credentialRevision: 'old-revision', status: 400,
+    });
+  });
+
+  it.each(['fortnox', 'briox'])('persists rotated %s credentials before the revision migration is available', async provider => {
+    const { credential_revision: _revision, ...legacyTokens } = expiredTokens;
+    mock.enqueue({ data: [{ ...consentRow, provider }] });
+    mock.enqueue({ data: [legacyTokens] });
+    mock.enqueue({ data: [{ consent_id: 'c1' }] });
+    if (provider === 'fortnox') vi.mocked(refreshFortnoxToken).mockResolvedValueOnce({ access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer', expires_in: 3600 });
+    await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'new-access' });
+    expect(mock.findCalls('provider_consent_tokens', 'select')).toEqual([['*'], ['consent_id']]);
+    expect(mock.findCalls('provider_consent_tokens', 'eq')).toContainEqual(['token_expires_at', legacyTokens.token_expires_at]);
+    expect(mock.findCalls('provider_consent_tokens', 'eq').some(args => args[0] === 'credential_revision')).toBe(false);
+    expect(mock.findCall('provider_consent_tokens', 'update')?.[0]).toMatchObject({ refresh_token: 'new-refresh' });
+  });
+
   it('returns the revision of the saved Fortnox token, not the expired snapshot', async () => {
     mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
     mock.enqueue({ data: [expiredTokens] });

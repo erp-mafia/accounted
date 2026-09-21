@@ -4,6 +4,7 @@ import type { ApiRouteDefinition, ExtensionContext } from '@/lib/extensions/type
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { requireWritePermission } from '@/lib/auth/require-write'
 
 const RetrySchema = z.object({ consentId: z.uuid(), blockId: z.uuid() }).strict()
 function failure(status: number) {
@@ -12,7 +13,7 @@ function failure(status: number) {
 }
 function hasContext(ctx?: ExtensionContext): ctx is ExtensionContext { return !!ctx?.companyId && !!ctx.userId }
 
-/** The extension dispatcher enforces MFA, company membership and POST write access. */
+/** The extension dispatcher enforces MFA and company membership. Mutations also check write access here. */
 export const invoiceCompletionRoutes: ApiRouteDefinition[] = [
   {
     method: 'GET', path: '/invoice-completion',
@@ -29,6 +30,8 @@ export const invoiceCompletionRoutes: ApiRouteDefinition[] = [
       if (!hasContext(ctx)) return failure(401)
       const body = await validateBody(request, RetrySchema)
       if (!body.success) return body.response
+      const write = await requireWritePermission(ctx.supabase, ctx.userId, { companyId: ctx.companyId })
+      if (!write.ok) return write.response
       const { data: consent, error: lookupError } = await ctx.supabase.from('provider_consents').select('id')
         .eq('id', body.data.consentId).eq('company_id', ctx.companyId).eq('status', 1).eq('provider', 'fortnox').maybeSingle()
       if (lookupError) return failure(500)

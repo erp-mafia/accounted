@@ -20,12 +20,13 @@ export default function InvoiceCompletionRecovery({ onReconnect }: { onReconnect
   const t = useTranslations('extensions')
   const locale = useLocale()
   const { company, role } = useCompany()
-  const { data: block, mutate } = useSWR(company ? [ROOT, company.id] : null, ([url]) => readStatus(url), { refreshInterval: 15_000 })
+  const { data: block, error: statusError, mutate } = useSWR(company ? [ROOT, company.id] : null, ([url]) => readStatus(url), { refreshInterval: 15_000 })
   const [retrying, setRetrying] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [expiredConsent, setExpiredConsent] = useState<string | null>(null)
   const [queued, setQueued] = useState(false)
-  if (!block) return queued ? <p className="text-sm text-muted-foreground" role="status">{t('ext_arcim_completion_queued')}</p> : null
+  const statusNotice = statusError ? <p className="text-sm text-muted-foreground" role="status">{t('ext_arcim_job_connection')}</p> : null
+  if (!block) return statusNotice ?? (queued ? <p className="text-sm text-muted-foreground" role="status">{t('ext_arcim_completion_queued')}</p> : null)
 
   const reconnect = block.reason === 'PROVIDER_AUTH_EXPIRED' || expiredConsent === block.consentId
   async function retry() {
@@ -54,6 +55,7 @@ export default function InvoiceCompletionRecovery({ onReconnect }: { onReconnect
         {t(reconnect ? 'ext_arcim_job_reconnect' : 'ext_arcim_completion_retry')}
       </Button>
     </AttnLine>
+    {statusNotice}
     {error && <p className="text-sm text-destructive" role="alert">{error}</p>}
   </div>
 }

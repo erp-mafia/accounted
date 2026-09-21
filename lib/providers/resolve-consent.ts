@@ -133,8 +133,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         if (code === 'PROVIDER_AUTH_EXPIRED') {
           const { data: freshRows, error: readError } = await queryInExecutionBudget(supabase
             .from('provider_consent_tokens').select('*').eq('consent_id', consentId).limit(1));
-          if (readError) throw new Error('Could not reconcile Fortnox credentials');
-          const fresh = freshRows?.[0];
+          const fresh = readError ? undefined : freshRows?.[0];
           if (fresh?.access_token && fresh.credential_revision !== tokens.credential_revision) {
             return { consent, accessToken: fresh.access_token as string,
               providerCompanyId: fresh.provider_company_id as string | undefined,
@@ -188,16 +187,21 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
         token_expires_at: newExpiresAt,
       })
       .eq('consent_id', consentId);
-    const guardedUpdate = consent.provider === 'fortnox'
+    // During rollout the token row may still have the legacy schema. Keep its
+    // expiry guard and projection until the revision column is available, so
+    // deploying before the migration cannot lose a provider-rotated token pair.
+    const usesRevision = consent.provider === 'fortnox' && typeof tokens.credential_revision === 'string';
+    const guardedUpdate = usesRevision
       ? refreshUpdate.eq('credential_revision', tokens.credential_revision as string)
       : refreshUpdate.eq('token_expires_at', tokens.token_expires_at as string);
-    const { data: updatedRows, error: updateError } = await queryInExecutionBudget(guardedUpdate
+    const { data: updatedRows, error: updateError } = await queryInExecutionBudget(usesRevision
       // consent_id is the table's PRIMARY KEY: there is no `id` column.
       // Selecting `id` here makes Postgres reject the whole statement
       // ("column provider_consent_tokens.id does not exist"), which surfaces as
       // updateError and is misreported as "rotated tokens could not be saved"
       // AFTER the provider already rotated, permanently breaking the consent.
-      .select('consent_id, credential_revision'));
+      ? guardedUpdate.select('consent_id, credential_revision')
+      : guardedUpdate.select('consent_id'));
 
     if (updateError) {
       // The provider has ALREADY rotated the tokens but we failed to persist
