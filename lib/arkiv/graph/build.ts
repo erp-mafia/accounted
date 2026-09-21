@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { roundOre } from '@/lib/money'
 import { CLUSTER_LABELS, type ClusterId, type CompanyGraph, type GraphLink, type GraphNode } from './types'
 
 /**
@@ -35,7 +36,7 @@ const GROUP_LABELS: Record<string, string> = {
 }
 const INVOICE_SOURCE_TYPES = new Set(['invoice_created', 'invoice_paid', 'invoice_cash_payment', 'credit_note'])
 
-const round2 = (n: number) => Math.round(n * 100) / 100
+const round2 = roundOre
 /** Thousands separated by a plain space, so text renderings and tests never meet a non-breaking space. */
 const kr = (n: number) => Math.round(n).toLocaleString('sv-SE').replace(/\u00a0/g, ' ')
 const group = (type: string | null): string =>
