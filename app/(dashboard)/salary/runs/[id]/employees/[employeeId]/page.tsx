@@ -180,9 +180,11 @@ export default function SalaryRunEmployeeDetailPage({
   }
 
   // Only data that belongs to the payslip in the URL is shown; anything else
-  // counts as "not loaded yet".
+  // counts as "not loaded yet". Compared case-insensitively: Postgres matches
+  // a hand-typed uppercase uuid, and the row comes back in lowercase.
+  const sameId = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
   const current =
-    data && data.run.id === runId && data.runEmployee.employee_id === employeeId ? data : null
+    data && sameId(data.run.id, runId) && sameId(data.runEmployee.employee_id, employeeId) ? data : null
 
   // The calendar works in the window the engine reads this run's absence and
   // worked days from (the avvikelseperiod), which is not the pay month on a
