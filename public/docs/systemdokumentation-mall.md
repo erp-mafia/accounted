@@ -124,6 +124,8 @@ Följande delsystem matar journalen:
 
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
 
+När öresavrundning väljs vid registrering av en leverantörsfaktura sparas avrundningen som en separat fakturarad på konto 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden. Avrundningen ändrar inte momsbeloppet eller beskattningsunderlaget för omvänd skattskyldighet. Regeln införs med programversionen för PR #2849; version och första observerade driftsättning visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte.
+
 ### 4.5 Dimensioner
 
 [OM KOSTNADSSTÄLLEN ELLER PROJEKT ANVÄNDS: konteringsrader kan märkas med dimensionsvärden för uppföljning per kostnadsställe eller projekt. Dimensionerna påverkar inte huvudbokföringens saldon. Ses under **Data > Kostnadsställen & projekt**. STRYK DETTA AVSNITT OM DIMENSIONER INTE ANVÄNDS.]

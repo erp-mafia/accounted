@@ -1,5 +1,6 @@
 import { roundOre } from '@/lib/money'
 import { supplierInvoiceDisplayFigures } from './display-figures'
+import { isSupplierInvoiceRoundingItem } from './rounding-item'
 
 interface AmountItem {
   amount: number
@@ -21,12 +22,12 @@ export function supplierInvoiceEditorAmounts(
     const amount = Math.round((item.amount || 0) * 100) / 100
     // Rounding is outside the self-assessed VAT base too.
     const rate = reverseCharge
-      ? (item.account_number === '3740' ? 0 : item.reverse_charge_rate ?? 0.25)
+      ? (isSupplierInvoiceRoundingItem({ ...item, vat_rate: 0 }, amount, currency) ? 0 : item.reverse_charge_rate ?? 0.25)
       : item.vat_rate || 0
     const vatAmount = !reverseCharge && item.vat_amount != null
       ? Math.round(item.vat_amount * 100) / 100
       : Math.round(amount * rate * 100) / 100
-    return { lineTotal: amount, vatAmount }
+    return { lineTotal: amount, vatAmount, vatRate: rate }
   })
   const subtotal = roundOre(itemTotals.reduce((sum, item) => sum + item.lineTotal, 0))
   const totalVat = roundOre(itemTotals.reduce((sum, item) => sum + item.vatAmount, 0))
