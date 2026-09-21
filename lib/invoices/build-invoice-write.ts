@@ -58,9 +58,16 @@ import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-pers
  * everywhere else.
  *
  * Declaring exactly what is read turns an omitted input into a compile error
- * instead of a silent `undefined`. A full `select('*')` row is still
+ * instead of a silent `undefined`: supabase-js types a literal select() string
+ * into a row with those keys, so a narrow projection that drops a column no
+ * longer type-checks against this parameter. A full `select('*')` row is still
  * assignable, so those doors are unchanged. A door that deliberately withholds
  * a field says so with an explicit `null`.
+ *
+ * Keep a narrow door's select() a LITERAL string, not a shared constant: the
+ * type already stops an omission, and a literal stays visible to the
+ * phantom-column scanner (tests/schema/no-phantom-columns.test.ts), which
+ * cannot resolve a select built at runtime.
  *
  *  - customer_type, vat_number_validated, country: decide the VAT treatment
  *  - id, vat_number: explainVatTreatment (which condition failed, remediation)
@@ -74,16 +81,6 @@ export type InvoiceBuilderCustomer = Pick<
   Customer,
   'id' | 'customer_type' | 'vat_number' | 'vat_number_validated' | 'personal_number'
 > & { country: string | null }
-
-/**
- * The `customers` columns that decide and explain an invoice's VAT treatment:
- * the select() string for a door that must not load the whole row (the public
- * API keeps customer PII out of the invoice write path). Declared once, here,
- * next to the type that needs them. Such a door supplies `personal_number`
- * itself, see InvoiceBuilderCustomer.
- */
-export const VAT_TREATMENT_CUSTOMER_COLUMNS =
-  'id, customer_type, vat_number, vat_number_validated, country' as const
 
 // The validated line shape (a superset of what create/update schemas produce).
 export interface InvoiceWriteItemInput {

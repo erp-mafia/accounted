@@ -33,7 +33,7 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CreateInvoiceItemSchema } from '@/lib/api/schemas'
-import { buildInvoiceWriteData, VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
@@ -389,12 +389,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         deduction_personnummer_last4: string | null
       }
 
-      // Narrow projection keeps customer PII out of this path. The columns
-      // are the shared VAT_TREATMENT_CUSTOMER_COLUMNS, never a list typed
-      // here: see POST /invoices for how `country` went missing (#2783).
+      // Narrow projection keeps customer PII out of this path. Every column
+      // the builder reads is a required key of its customer type, so dropping
+      // one from this string no longer compiles: see POST /invoices for how
+      // `country` went missing (#2783).
       const { data: customer, error: customerErr } = await ctx.supabase
         .from('customers')
-        .select(VAT_TREATMENT_CUSTOMER_COLUMNS)
+        .select('id, customer_type, vat_number, vat_number_validated, country')
         .eq('company_id', ctx.companyId!)
         .eq('id', cur.customer_id as string)
         .maybeSingle()

@@ -30,7 +30,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
-import { buildInvoiceWriteData, VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
+import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import {
@@ -619,15 +619,14 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const documentType: InvoiceDocumentType = input.document_type || 'invoice'
 
     // Customer fetch (scoped to company). Not '*': customer PII stays out of
-    // this path. The columns are the shared VAT_TREATMENT_CUSTOMER_COLUMNS,
-    // not a list typed here: a hand-picked list is how `country` went missing
-    // on this route (#2783), so an eu_business established in Sweden got 0 %
-    // reverse charge here and 25 % on every other surface (#2025). The
-    // builder's customer type makes every field it reads a required key, so a
-    // column dropped from the projection no longer compiles.
+    // this path. `country` was missing from this list until #2783, so an
+    // eu_business established in Sweden got 0 % reverse charge here and 25 %
+    // on every other surface (#2025). It cannot go missing again silently:
+    // the builder's customer type makes every field it reads a required key,
+    // so dropping a column from this string no longer compiles.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select(VAT_TREATMENT_CUSTOMER_COLUMNS)
+      .select('id, customer_type, vat_number, vat_number_validated, country')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()

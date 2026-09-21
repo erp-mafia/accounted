@@ -17,7 +17,6 @@
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
-import { VAT_TREATMENT_CUSTOMER_COLUMNS } from '@/lib/invoices/build-invoice-write'
 
 const REPO_ROOT = path.resolve(__dirname, '../../..')
 
@@ -60,21 +59,23 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
  * reads a missing country as "does not block", so an eu_business established
  * in Sweden got 0 % reverse charge on the two v1 routes that never selected it.
  *
- * These paths decide the treatment by calling the rule functions directly, so
- * the builder's typed customer parameter cannot see them, and route tests
- * written against a mock that ignores select() cannot either. Pinned at source
- * level, like the gate above.
+ * The route tests used table mocks that ignored the select() string, so they
+ * could not see this (the v1 invoice route mocks honour it since #2783).
+ * Pinned at source level, like the gate above, and independent of tsc.
  */
-const NARROW_CUSTOMER_SELECTS_OUTSIDE_THE_BUILDER = [
+const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
+  'app/api/v1/companies/[companyId]/invoices/route.ts',
+  'app/api/v1/companies/[companyId]/invoices/[id]/route.ts',
   'app/api/v1/companies/[companyId]/invoices/bulk-create/route.ts',
   'extensions/general/mcp-server/server.ts',
 ]
 
 describe('narrow customer projections that decide a VAT treatment carry every input', () => {
-  for (const relative of NARROW_CUSTOMER_SELECTS_OUTSIDE_THE_BUILDER) {
+  for (const relative of EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT) {
     it(`${relative} selects vat_number and country wherever it selects vat_number_validated`, () => {
       const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
-      expect(source).toContain('explainVatTreatment(')
+      // Directly, or through the shared builder's result.
+      expect(source).toMatch(/explainVatTreatment\(|build\.warnings/)
       const selects = Array.from(source.matchAll(/\.select\(\s*'([^']*\bvat_number_validated\b[^']*)'/g)).map(
         (match) => match[1],
       )
@@ -89,41 +90,20 @@ describe('narrow customer projections that decide a VAT treatment carry every in
 })
 
 /**
- * The doors that go through buildInvoiceWriteData need no per-file pin: its
- * customer parameter (InvoiceBuilderCustomer) makes every field it reads a
- * required key, so a projection that drops one does not compile. Verified when
- * this landed: deleting `country` from VAT_TREATMENT_CUSTOMER_COLUMNS fails
- * `npm run check:types` with TS2322 at both v1 call sites.
+ * For the doors that go through buildInvoiceWriteData the pin above is the
+ * second net, not the first. The builder's customer parameter
+ * (InvoiceBuilderCustomer) makes every field it reads a required key, and
+ * supabase-js types a literal select() string into a row with those keys, so a
+ * projection that drops one does not compile. Verified when this landed:
+ * deleting `country` from either v1 select fails `npm run check:types` with
+ * TS2322 at that call site.
  *
  * What the compiler cannot stop is the thing that hid #2783 in the first place:
  * a cast. The builder used to take the full `Customer`, no narrow projection
  * could satisfy that, so both v1 routes wrote `customer as unknown as Customer`
- * and the cast erased the check. Two things are pinned instead: the one shared
- * column list is complete, and nobody casts their way back in.
+ * and the cast erased the check. Nobody casts their way back in.
  */
-describe('doors into buildInvoiceWriteData cannot omit a customer input', () => {
-  const BUILDER_DOORS_WITH_NARROW_SELECT = [
-    'app/api/v1/companies/[companyId]/invoices/route.ts',
-    'app/api/v1/companies/[companyId]/invoices/[id]/route.ts',
-  ]
-
-  it('VAT_TREATMENT_CUSTOMER_COLUMNS carries every column the VAT rule and its explanation read', () => {
-    const columns = VAT_TREATMENT_CUSTOMER_COLUMNS.split(',').map((column) => column.trim())
-    expect(columns.sort()).toEqual(
-      ['country', 'customer_type', 'id', 'vat_number', 'vat_number_validated'].sort(),
-    )
-  })
-
-  for (const relative of BUILDER_DOORS_WITH_NARROW_SELECT) {
-    it(`${relative} selects the shared column list, not one typed by hand`, () => {
-      const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
-      expect(source).toContain('build.warnings')
-      expect(source).toContain('.select(VAT_TREATMENT_CUSTOMER_COLUMNS)')
-      // A literal list naming vat_number_validated is a second, driftable copy.
-      expect(source).not.toMatch(/\.select\(\s*'[^']*\bvat_number_validated\b[^']*'/)
-    })
-  }
-
+describe('doors into buildInvoiceWriteData cannot cast away a missing customer input', () => {
   it('no caller of buildInvoiceWriteData double-casts its customer', () => {
     // Code only: the builder's own doc comment quotes the old cast to explain
     // why the parameter type changed, and prose is not an offence.
