@@ -9,14 +9,14 @@ describe('deriveSupplierInvoiceDefaults', () => {
     expect(deriveSupplierInvoiceDefaults(null)).toEqual({
       entityType: 'enskild_firma',
       accountingMethod: 'accrual',
-      oreRounding: true,
+      oreRounding: false,
       dimensionsEnabled: false,
       vatRegistered: true,
     })
     expect(deriveSupplierInvoiceDefaults(undefined, 'aktiebolag').entityType).toBe('aktiebolag')
   })
 
-  it('reads every gate from the settings row', () => {
+  it('reads the company gates from the settings row', () => {
     expect(
       deriveSupplierInvoiceDefaults(
         settings({
@@ -48,9 +48,13 @@ describe('deriveSupplierInvoiceDefaults', () => {
     )
   })
 
+  it.each([true, false, null, undefined])('does not infer supplier rounding from company preference %s', (ore_rounding) => {
+    expect(deriveSupplierInvoiceDefaults(settings({ ore_rounding })).oreRounding).toBe(false)
+  })
+
   it('treats an unknown accounting method or non-boolean rounding as the defaults', () => {
     const d = deriveSupplierInvoiceDefaults(settings({ accounting_method: 'weird', ore_rounding: 'yes' }))
     expect(d.accountingMethod).toBe('accrual')
-    expect(d.oreRounding).toBe(true)
+    expect(d.oreRounding).toBe(false)
   })
 })

@@ -32,7 +32,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
-import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
+import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import BankTransactionPicker from '@/components/transactions/BankTransactionPicker'
@@ -1048,30 +1048,9 @@ export default function NewSupplierInvoiceForm({
   // else moms-related disappears when the company isn't VAT-registered.
   const vatColsVisible = vatRegistered || watchedReverseCharge
 
-  const itemTotals = (watchedItems || []).map((item) => {
-    const lineTotal = Math.round((item.amount || 0) * 100) / 100
-    // Reverse charge: VAT is self-assessed at reverse_charge_rate (25% default),
-    // not the line's vat_rate (which is 0: the supplier charged nothing).
-    const effectiveRate = watchedReverseCharge ? (item.reverse_charge_rate ?? 0.25) : (item.vat_rate || 0)
-    const vatAmount = Math.round(lineTotal * effectiveRate * 100) / 100
-    return { lineTotal, vatAmount }
-  })
-  const subtotal = itemTotals.reduce((sum, t) => sum + t.lineTotal, 0)
-  const totalVat = itemTotals.reduce((sum, t) => sum + t.vatAmount, 0)
-  // Reverse charge: supplier never invoices VAT, so it doesn't roll into the
-  // payable total. The VAT is still accounted for via 2614 / 2645 in
-  // bookkeeping: the line stays in the breakdown for transparency.
-  const payableVat = watchedReverseCharge ? 0 : totalVat
-  const total = Math.round((subtotal + payableVat) * 100) / 100
-
-  // Öresavrundning live preview: the same figures the review step, the detail
-  // page and the list show. Display-only; the registered amount and the
-  // booked verifikat keep the exact öre (settled against 3740 at payment).
-  const figures = supplierInvoiceDisplayFigures({
-    total,
-    currency: watchedCurrency || 'SEK',
-    ore_rounding: oreRounding,
-  })
+  const { itemTotals, subtotal, totalVat, figures } = supplierInvoiceEditorAmounts(
+    watchedItems || [], watchedCurrency || 'SEK', watchedReverseCharge, oreRounding,
+  )
 
   // Total cross-check (change 2): client-only compare against the displayed
   // payable; a mismatch renders field-adjacent, never blocks, never travels.
@@ -1493,7 +1472,7 @@ export default function NewSupplierInvoiceForm({
         : watchedCurrency,
     )
   }
-  if ((watchedCurrency || 'SEK') === 'SEK' && !oreRounding) forvalChips.push(t('chip_ore_rounding_off'))
+  if ((watchedCurrency || 'SEK') === 'SEK' && oreRounding) forvalChips.push(t('ore_rounding_label'))
   if (watchedDeliveryDate) forvalChips.push(t('chip_delivery_date', { date: formatDate(watchedDeliveryDate) }))
   if ((watchedNotes || '').trim()) forvalChips.push(t('chip_notes'))
   if (dimensionsEnabled && defaultDimsSummary) forvalChips.push(defaultDimsSummary)
@@ -2522,9 +2501,6 @@ export default function NewSupplierInvoiceForm({
               reverseCharge={pendingData.reverse_charge}
               paymentReference={pendingData.payment_reference || undefined}
               items={pendingData.items}
-              subtotal={subtotal}
-              totalVat={totalVat}
-              total={total}
               oreRounding={oreRounding}
             />
           </ConfirmationDialog>
@@ -2532,8 +2508,7 @@ export default function NewSupplierInvoiceForm({
       })()}
 
       {/* Bank transaction picker for "Registrera & markera som betald". The
-          target is the rounded "att betala": a Bankgiro/Swish row carries whole
-          kronor, and the match settles the öre residual against 3740. */}
+          target is the payable including the invoice rounding item. */}
       <BankTransactionPicker
         open={showBankPicker}
         onOpenChange={(open) => {

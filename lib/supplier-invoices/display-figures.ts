@@ -9,7 +9,7 @@ import { getDisplayTotal, type DisplayTotal } from '@/lib/invoices/rounding'
 const SUPPLIER_INVOICE_ROUNDING_FALLBACK = { ore_rounding: false } as const
 
 export interface SupplierInvoiceDisplayInput {
-  /** Exact total incl. VAT: what gets registered and credited on 2440. */
+  /** Total incl. VAT, before any additional display rounding. */
   total: number
   currency: string
   /** Per-invoice öresavrundning flag. null/undefined resolves to off. */
@@ -17,24 +17,23 @@ export interface SupplierInvoiceDisplayInput {
 }
 
 export interface SupplierInvoiceDisplayFigures {
-  /** The registered total to the öre: the 2440 credit in the verifikat. */
+  /** The supplied total to the öre. */
   exactTotal: number
   /** Öresavrundning outcome on that total (SEK only, flag on, öre to round). */
   rounding: DisplayTotal
   /**
    * What the user is told to pay: whole kronor when rounding applies, else
    * the exact total. The bank row of a Bankgiro/Swish payment carries this
-   * figure; the difference to `exactTotal` is settled against 3740 when the
-   * payment is matched (lib/bookkeeping/supplier-payment-lines.ts).
+   * figure. New editor submissions save the adjustment as an invoice item;
+   * legacy display-only rounding is handled when the payment is matched.
    */
   toPay: number
 }
 
 /**
  * One source of truth for the figures every supplier-invoice surface shows
- * after the form: the editor summary, the review step, the detail page and
- * the list. The registered amount and the booked verifikat keep the exact
- * öre; only the presentation rounds.
+ * in the editor summary, review, detail page and list. This helper only
+ * presents amounts; editor-amounts derives the item saved on new invoices.
  */
 export function supplierInvoiceDisplayFigures(
   invoice: SupplierInvoiceDisplayInput,

@@ -14,7 +14,10 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
-import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
+import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import { isSupplierInvoiceRoundingItem } from '@/lib/supplier-invoices/rounding-item'
+import { debitNatural } from '@/lib/bookkeeping/line-side'
+import { roundOre } from '@/lib/money'
 import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Supplier } from '@/types'
 
@@ -53,11 +56,7 @@ interface SupplierInvoiceReviewContentProps {
   reverseCharge: boolean
   paymentReference?: string
   items: ReviewLineItem[]
-  subtotal: number
-  totalVat: number
-  total: number
-  /** The editor's öresavrundning switch (SEK only). Rounds the payable shown
-   *  here, never the verifikat: the exact öre is settled against 3740 at payment. */
+  /** Include the invoice rounding in both the payable and journal preview. */
   oreRounding: boolean
 }
 
@@ -75,6 +74,7 @@ function buildJournalPreview(
   total: number,
   reverseCharge: boolean,
   supplierType: string | undefined,
+  currency: string,
   // FX multiplier applied to every amount. 1 when the invoice is in SEK or
   // when no rate is set. Matches what the backend writes: items go through
   // resolveSekAmount(item.line_total, null, currency, exchange_rate), so the
@@ -103,11 +103,13 @@ function buildJournalPreview(
 
   // Debit: Expense accounts
   for (const [accountNumber, amount] of expenseByAccount) {
+    if (roundOre(amount) === 0) continue
+    const sides = debitNatural(amount)
     lines.push({
       account_number: accountNumber,
       description: desc,
-      debit: amount,
-      credit: 0,
+      debit: sides.debit_amount,
+      credit: sides.credit_amount,
     })
   }
 
@@ -158,6 +160,7 @@ function buildJournalPreview(
     const baseByRate = new Map<number, number>()
     const nonBasisBaseByRate = new Map<number, number>()
     for (const item of items) {
+      if (isSupplierInvoiceRoundingItem(item, item.amount, currency)) continue
       const rate = resolveReverseChargeRate(item)
       const sek = toSek(item.amount)
       baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
@@ -246,12 +249,12 @@ export function SupplierInvoiceReviewContent({
   reverseCharge,
   paymentReference,
   items,
-  subtotal,
-  totalVat,
-  total,
   oreRounding,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
+  const { itemTotals, subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
+    items, currency, reverseCharge, oreRounding,
+  )
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1
   // The description the engine will stamp on every line of this verifikat.
@@ -263,23 +266,27 @@ export function SupplierInvoiceReviewContent({
     invoiceNumber,
     supplier.name,
   )
+  // The payload normalizes reverse-charge supplier VAT to zero before saving.
+  const previewItems = items.map((item, index) => ({
+    ...item,
+    amount: itemTotals[index].lineTotal,
+    vat_rate: reverseCharge ? 0 : item.vat_rate,
+    vat_amount: reverseCharge ? 0 : itemTotals[index].vatAmount,
+  }))
   const journalLines = buildJournalPreview(
-    items,
-    subtotal,
+    roundingItem ? [...previewItems, roundingItem] : previewItems,
+    roundOre(subtotal + (roundingItem?.amount ?? 0)),
     totalVat,
-    total,
+    figures.toPay,
     reverseCharge,
     supplier.supplier_type,
+    currency,
     fxRate,
     voucherDescription,
   )
   const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
-  // Same figures as the editor summary (and the detail page and list after
-  // registration): the payable rounds to whole kronor when öresavrundning is
-  // on, while the verifikat below keeps the exact öre on 2440.
-  const figures = supplierInvoiceDisplayFigures({ total, currency, ore_rounding: oreRounding })
 
   // No account-label lookup any more: the BESKRIVNING column shows the
   // line_description that will actually be posted. A hardcoded label map
@@ -347,12 +354,7 @@ export function SupplierInvoiceReviewContent({
               // self-assessed rate/amount the buyer books (matches the voucher
               // preview below). Manual vat_amount overrides only apply to
               // ordinary deductible VAT, never to RC self-assessment.
-              const displayRate = reverseCharge ? resolveReverseChargeRate(item) : item.vat_rate
-              const vatAmount = reverseCharge
-                ? Math.round(item.amount * displayRate * 100) / 100
-                : item.vat_amount != null
-                  ? Math.round(item.vat_amount * 100) / 100
-                  : Math.round(item.amount * item.vat_rate * 100) / 100
+              const { vatRate: displayRate, vatAmount } = itemTotals[index]
               return (
                 <tr key={index} className="border-b last:border-0">
                   <td className="py-2">
@@ -383,12 +385,7 @@ export function SupplierInvoiceReviewContent({
       </div>
       <div className="sm:hidden space-y-2">
         {items.map((item, index) => {
-          const displayRate = reverseCharge ? resolveReverseChargeRate(item) : item.vat_rate
-          const vatAmount = reverseCharge
-            ? Math.round(item.amount * displayRate * 100) / 100
-            : item.vat_amount != null
-              ? Math.round(item.vat_amount * 100) / 100
-              : Math.round(item.amount * item.vat_rate * 100) / 100
+          const { vatRate: displayRate, vatAmount } = itemTotals[index]
           return (
             <div key={index} className="border rounded-lg p-3 text-sm space-y-1.5">
               <div className="flex items-center justify-between">
@@ -513,7 +510,6 @@ export function SupplierInvoiceReviewContent({
         {figures.rounding.applies && (
           <p className="text-xs text-muted-foreground">
             {t('review_ore_rounding_note', {
-              exact: formatCurrency(figures.exactTotal, currency),
               delta: formatCurrency(figures.rounding.roundingDelta, currency),
             })}
           </p>
