@@ -1,5 +1,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import {
+  isSkvSessionBeyondRecovery,
+  isTerminalReconsentState,
+} from '@/lib/skatteverket/session-lifetime'
 import { getSkatteverketEnvironment, type SkvAuth } from './api-client'
 import { getSystemAuthMode, isSystemAuthConfigured } from './system-auth/config'
 import {
@@ -111,6 +115,14 @@ export interface CompanyTokenUser {
    * so consumers (the agent briefing) can reason about likely expiry.
    */
   createdAt: string | null
+  /**
+   * The hourly session is spent and cannot be refreshed: a fresh BankID
+   * consent is the only way back. Computed from the stored expiry rather than
+   * read off a health flag, because ordinary expiry is not a health fault and
+   * never latches one (#2567). Consumers that used to read needsReconsent for
+   * "can we talk to SKV right now" must read this.
+   */
+  sessionBeyondRecovery: boolean
 }
 
 /**
@@ -138,7 +150,7 @@ export async function findCompanyTokenUser(
 ): Promise<CompanyTokenUser | null> {
   const { data, error } = await supabase
     .from('skatteverket_tokens')
-    .select('user_id, status, created_at')
+    .select('user_id, status, created_at, expires_at, refresh_count, last_error_code')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
 
@@ -147,22 +159,34 @@ export async function findCompanyTokenUser(
     return null
   }
 
-  const rows = (
-    (data ?? []) as Array<{ user_id: string | null; status: string | null; created_at: string | null }>
-  ).filter(
-    (row): row is { user_id: string; status: string | null; created_at: string | null } =>
-      typeof row.user_id === 'string'
+  type TokenRow = {
+    user_id: string
+    status: string | null
+    created_at: string | null
+    expires_at: string | null
+    refresh_count: number | null
+    last_error_code: string | null
+  }
+  const rows = ((data ?? []) as Array<Partial<TokenRow>>).filter(
+    (row): row is TokenRow => typeof row.user_id === 'string'
   )
   if (rows.length === 0) return null
 
-  const active = rows.filter(row => row.status !== 'needs_reconsent')
+  // A row latched with ordinary session expiry before #2567 is not a dead
+  // row: it ranks with the active ones, exactly as it will once its owner
+  // consents again.
+  const active = rows.filter(row => !isTerminalReconsentState(row.status, row.last_error_code))
   const pool = active.length > 0 ? active : rows
   const own = opts.preferUserId ? pool.find(row => row.user_id === opts.preferUserId) : undefined
   const pick = own ?? pool[0]
 
   return {
     userId: pick.user_id,
-    needsReconsent: pick.status === 'needs_reconsent',
+    needsReconsent: isTerminalReconsentState(pick.status, pick.last_error_code),
     createdAt: pick.created_at ?? null,
+    sessionBeyondRecovery: isSkvSessionBeyondRecovery({
+      expiresAt: pick.expires_at,
+      refreshCount: pick.refresh_count,
+    }),
   }
 }

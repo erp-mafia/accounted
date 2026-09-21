@@ -5655,13 +5655,18 @@ export const tools: McpTool[] = [
           }
           const token = await findCompanyTokenUser(supabase, companyId)
           if (!token) return null
-          if (token.needsReconsent) {
+          // Either the session is simply spent (the normal hourly state, read
+          // from the stored expiry: it no longer latches a health flag, #2567)
+          // or the row carries a terminal fault. Both mean the same thing to
+          // an agent: a person has to run BankID before SKV tools work.
+          if (token.sessionBeyondRecovery || token.needsReconsent) {
             return {
               status: 'needs_reconsent',
               source: 'user',
               connected_at: token.createdAt,
-              message:
-                'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.',
+              message: token.needsReconsent
+                ? 'Skatteverket-anslutningen går inte att använda som den är och behöver godkännas om: be användaren ansluta igen med BankID under Inställningar → Skatteverket och godkänna alla behörigheter. Bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.'
+                : 'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.',
             }
           }
           return { status: 'active', source: 'user', connected_at: token.createdAt }

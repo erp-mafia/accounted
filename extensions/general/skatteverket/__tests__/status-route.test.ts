@@ -101,3 +101,44 @@ describe('GET /status canRefresh', () => {
     expect(body).toMatchObject({ connected: true, expired: false, canRefresh: false })
   })
 })
+
+describe('GET /status needsReconsent', () => {
+  const liveToken = {
+    access_token: 'a',
+    refresh_token: 'r',
+    expires_at: NOW - 3 * 60 * 60 * 1000,
+    refresh_count: 0,
+    scope: 'momsdeklaration ska agd',
+  }
+
+  it('reports a terminal latch so the panel can prompt for a fresh consent', async () => {
+    mockGetTokens.mockResolvedValue(liveToken)
+    mockGetTokenHealth.mockResolvedValue({
+      status: 'needs_reconsent',
+      last_error_code: 'MISSING_SCOPE',
+      last_error_at: '2026-09-01T03:00:00Z',
+    })
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body).toMatchObject({ needsReconsent: true, lastErrorCode: 'MISSING_SCOPE' })
+  })
+
+  it('does NOT report a legacy SESSION_EXPIRED latch as needing re-consent (#2567)', async () => {
+    // Written by the pre-fix crons for the ordinary hourly expiry. `expired`
+    // and `canRefresh` already carry that fact honestly; the latch would
+    // otherwise keep the "something is broken" copy up forever.
+    mockGetTokens.mockResolvedValue(liveToken)
+    mockGetTokenHealth.mockResolvedValue({
+      status: 'needs_reconsent',
+      last_error_code: 'SESSION_EXPIRED',
+      last_error_at: '2026-09-01T03:00:00Z',
+    })
+    const body = await (await findRoute().handler(request(), makeContext())).json()
+    expect(body).toMatchObject({
+      connected: true,
+      expired: true,
+      canRefresh: false,
+      needsReconsent: false,
+      lastErrorCode: 'SESSION_EXPIRED',
+    })
+  })
+})

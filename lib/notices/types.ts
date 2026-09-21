@@ -33,13 +33,17 @@ export const NOTICE_CATEGORIES = [
    */
   'bank_connection_broken',
   /**
-   * The Skatteverket connection can no longer authenticate.
-   * Pending:  a skatteverket_tokens row exists for (user, company) with
-   *           status = 'needs_reconsent', or its access token is expired with
-   *           no usable refresh token (refresh_token NULL or refresh_count
-   *           >= 10): mirrors the skatteverket extension's /status route.
-   * Done:     the user re-consents with BankID (storeTokens resets the row)
-   *           or disconnects entirely (no row = not connected = no notice).
+   * The Skatteverket connection needs the user, in one of two ways.
+   * Pending:  a skatteverket_tokens row exists for (user, company) and either
+   *           (a) is latched needs_reconsent with a terminal error code
+   *           (message skv_disconnected), or (b) has an unusable session
+   *           (expired with no usable refresh token) AND no successful
+   *           skattekonto sync for a week (message skv_session_expired). The
+   *           hourly BankID expiry on its own is NOT pending: it is the
+   *           resting state of every connected company, not a fault (#2567).
+   * Done:     the user re-consents with BankID (storeTokens resets the row),
+   *           a sync succeeds again, or they disconnect entirely (no row =
+   *           not connected = no notice).
    */
   'skv_disconnected',
   /**

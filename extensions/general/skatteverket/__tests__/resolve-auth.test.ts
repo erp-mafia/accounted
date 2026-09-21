@@ -29,7 +29,14 @@ vi.mock('../lib/system-auth/config', async (importOriginal) => {
 import { resolveReadAuth, hasVerifiedGrant, findCompanyTokenUser } from '../lib/resolve-auth'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-type TokenRow = { user_id: string; status: string; created_at?: string }
+type TokenRow = {
+  user_id: string
+  status: string
+  created_at?: string
+  expires_at?: string | null
+  refresh_count?: number | null
+  last_error_code?: string | null
+}
 
 /**
  * Chain stub for the company token lookup: `.select().eq().order()` resolves
@@ -249,7 +256,7 @@ describe('findCompanyTokenUser', () => {
 
   it('prefers the given user, then active status, then recency', async () => {
     const supabase = makeSupabase([
-      { user_id: 'user-c', status: 'needs_reconsent', created_at: '3' },
+      { user_id: 'user-c', status: 'needs_reconsent', last_error_code: 'MISSING_SCOPE', created_at: '3' },
       { user_id: 'user-b', status: 'active', created_at: '2' },
       { user_id: 'user-a', status: 'active', created_at: '1' },
     ])
@@ -257,17 +264,57 @@ describe('findCompanyTokenUser', () => {
       userId: 'user-b',
       needsReconsent: false,
       createdAt: '2',
+      sessionBeyondRecovery: false,
     })
     expect(await findCompanyTokenUser(supabase, 'company-1', { preferUserId: 'user-a' })).toEqual({
       userId: 'user-a',
       needsReconsent: false,
       createdAt: '1',
+      sessionBeyondRecovery: false,
     })
     // Preferring a user whose row is dead still yields the live row.
     expect(await findCompanyTokenUser(supabase, 'company-1', { preferUserId: 'user-c' })).toEqual({
       userId: 'user-b',
       needsReconsent: false,
       createdAt: '2',
+      sessionBeyondRecovery: false,
+    })
+  })
+
+  it('reports a spent hourly session without calling it a fault (#2567)', async () => {
+    // The state every connected company rests in between consents: the row is
+    // healthy, the session is not. Consumers that need "can we talk to SKV
+    // right now" (the agent briefing) read sessionBeyondRecovery.
+    const supabase = makeSupabase([
+      {
+        user_id: 'user-a',
+        status: 'active',
+        created_at: '1',
+        expires_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
+        refresh_count: 1,
+      },
+    ])
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toMatchObject({
+      userId: 'user-a',
+      needsReconsent: false,
+      sessionBeyondRecovery: true,
+    })
+  })
+
+  it('ranks a legacy SESSION_EXPIRED latch with the live rows, not the dead ones', async () => {
+    const supabase = makeSupabase([
+      {
+        user_id: 'user-legacy',
+        status: 'needs_reconsent',
+        last_error_code: 'SESSION_EXPIRED',
+        created_at: '3',
+      },
+      { user_id: 'user-b', status: 'active', created_at: '2' },
+    ])
+    // Newest wins among equals, and the legacy latch is not a fault.
+    expect(await findCompanyTokenUser(supabase, 'company-1')).toMatchObject({
+      userId: 'user-legacy',
+      needsReconsent: false,
     })
   })
 })

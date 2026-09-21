@@ -65,7 +65,14 @@ function mockSupabase(opts: {
   dimensionRuleRows?: Array<{ account_number: string; rule_type: string; dimension_id: string }>
   dimensionsEnabled?: boolean
   // skatteverket_tokens rows for the connection-health block. Default: none.
-  skvTokenRows?: Array<{ user_id: string; status: string | null; created_at: string | null }>
+  skvTokenRows?: Array<{
+    user_id: string
+    status: string | null
+    created_at: string | null
+    expires_at?: string | null
+    refresh_count?: number | null
+    last_error_code?: string | null
+  }>
   errors?: { profile?: string; memory?: string; atoms?: string }
 }) {
   const profile = opts.profile === undefined ? null : opts.profile
@@ -534,11 +541,20 @@ describe('skatteverket_connection health block', () => {
     })
   })
 
-  it('reports needs_reconsent with the directive message so the agent warns the user up front', async () => {
+  it('reports a spent hourly session with the "detta är normalt" message (#2567)', async () => {
+    // The session no longer latches a health flag, so the briefing derives it
+    // from the stored expiry. Without that the agent would be told the
+    // connection is fine and discover the dead session mid-task.
     const supabase = mockSupabase({
       profile: null,
       skvTokenRows: [
-        { user_id: 'user-1', status: 'needs_reconsent', created_at: '2026-08-25T08:00:00Z' },
+        {
+          user_id: 'user-1',
+          status: 'active',
+          created_at: '2026-08-25T08:00:00Z',
+          expires_at: new Date(Date.now() - 20 * 60 * 60 * 1000).toISOString(),
+          refresh_count: 1,
+        },
       ],
     })
     const result = (await tool().execute(
@@ -556,6 +572,35 @@ describe('skatteverket_connection health block', () => {
     })
     expect(result.skatteverket_connection?.message).toContain('BankID')
     expect(result.skatteverket_connection?.message).toContain('ca 1 timme')
+  })
+
+  it('reports a terminal latch with the approve-again message, not the hourly one', async () => {
+    const supabase = mockSupabase({
+      profile: null,
+      skvTokenRows: [
+        {
+          user_id: 'user-1',
+          status: 'needs_reconsent',
+          created_at: '2026-08-25T08:00:00Z',
+          last_error_code: 'MISSING_SCOPE',
+        },
+      ],
+    })
+    const result = (await tool().execute(
+      {},
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as {
+      skatteverket_connection?: { status: string; source: string; message?: string }
+    }
+    expect(result.skatteverket_connection).toMatchObject({
+      status: 'needs_reconsent',
+      source: 'user',
+    })
+    expect(result.skatteverket_connection?.message).toContain('godkänn')
+    expect(result.skatteverket_connection?.message).not.toContain('ca 1 timme')
   })
 
   it('declares the block in the outputSchema as optional (never required)', () => {

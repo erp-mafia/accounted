@@ -18,12 +18,13 @@ import {
   DEFAULT_SKATTEKONTO_TOLERANCE_SEK,
   SKATTEKONTO_DRIFT_TOLERANCE_KEY,
   SKATTEKONTO_EXTENSION_ID,
+  SKATTEKONTO_LAST_SYNCED_AT_KEY,
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
   skattekontoUnexplainedFrom,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
-import { expiringBankConnectionsFrom, skvStatusNeedsReconnect } from './predicates'
-import { isSkvSessionRefreshable } from '@/lib/skatteverket/session-lifetime'
+import { expiringBankConnectionsFrom, skvDataIsStale, skvStatusNeedsReconnect } from './predicates'
+import { isSkvSessionRefreshable, isTerminalReconsentState } from '@/lib/skatteverket/session-lifetime'
 import type { Notice } from './types'
 
 // The pure decision layer lives in ./predicates (client-safe: 'use client'
@@ -200,12 +201,24 @@ export async function detectExpiringBankConnections(
 }
 
 /**
- * skv_disconnected: a stored Skatteverket connection that can no longer
- * authenticate. Mirrors the skatteverket extension's /status route exactly
- * (needs_reconsent flag, or expired with no usable refresh token) and runs
- * the shared skvStatusNeedsReconnect decision over the row. Connections are
- * per (user, company), so the predicate needs the caller's user id.
- * Refresh-token ciphertext is read only for a null check and never returned.
+ * skv_disconnected: a stored Skatteverket connection the user has to act on.
+ * Two states, because they are two different facts (#2567):
+ *
+ *   1. Terminal. The row is latched needs_reconsent with a code only a fresh
+ *      BankID consent clears (missing behorighet, refresh budget spent,
+ *      unreadable ciphertext). Warned about immediately.
+ *   2. Expired with nothing left to refresh, which is where EVERY connected
+ *      company sits between consents: Skatteverket's per-flow BankID session
+ *      lasts about an hour. Saying "the connection needs renewing" about that
+ *      state every day is what made three reporters think the integration was
+ *      broken, so it is only mentioned once the data it feeds has actually
+ *      gone stale (a week without a successful skattekonto sync). The
+ *      immediate, contextual version of this line lives on the Skattekonto
+ *      and Transaktioner pages, where the user is looking at the numbers.
+ *
+ * Connections are per (user, company), so the predicate needs the caller's
+ * user id. Refresh-token ciphertext is read only for a null check and never
+ * returned.
  */
 export async function detectSkvDisconnected(
   supabase: SupabaseClient,
@@ -217,14 +230,13 @@ export async function detectSkvDisconnected(
     if ((process.env.SKATTEVERKET_DISABLED ?? '').toLowerCase() === 'true') return null
     const { data, error } = await supabase
       .from('skatteverket_tokens')
-      .select('status, expires_at, refresh_token, refresh_count, last_error_at')
+      .select('status, expires_at, refresh_token, refresh_count, last_error_at, last_error_code')
       .eq('user_id', userId)
       .eq('company_id', companyId)
       .maybeSingle()
     if (error) return logAndNull('skv_disconnected', companyId, error)
     if (!data) return null
 
-    const status = (data.status as string | null) ?? 'active'
     const expiresAt = data.expires_at as string | null
     const expired = expiresAt !== null && new Date(expiresAt).getTime() < now.getTime()
     // Same rule as the extension's /status route: a refresh token past its
@@ -237,21 +249,43 @@ export async function detectSkvDisconnected(
       },
       now,
     )
-    const needsReconsent = status === 'needs_reconsent'
+    // A row latched SESSION_EXPIRED before #2567 is not terminal: that was
+    // the hourly expiry being recorded as a fault, and the time math above
+    // reports it without any stored flag.
+    const needsReconsent = isTerminalReconsentState(
+      data.status as string | null,
+      data.last_error_code as string | null,
+    )
     if (!skvStatusNeedsReconnect({ connected: true, needsReconsent, expired, canRefresh })) {
       return null
     }
-    // needs_reconsent rows discriminate on when the terminal error was
-    // detected; refresh-exhausted rows on when the token expired: either way
-    // a NEW failure after a successful re-consent mints a new id.
-    const discriminator = needsReconsent
-      ? `needs_reconsent@${(data.last_error_at as string | null) ?? ''}`
-      : `expired@${expiresAt ?? ''}`
+
+    if (needsReconsent) {
+      // Discriminated by when the terminal error was detected, so a NEW
+      // failure after a successful re-consent mints a new id.
+      return {
+        id: `skv_disconnected:needs_reconsent@${(data.last_error_at as string | null) ?? ''}`,
+        category: 'skv_disconnected',
+        severity: 'warning',
+        messageKey: 'skv_disconnected',
+        actionKey: 'skv_disconnected_action',
+        actionHref: '/settings/tax',
+      }
+    }
+
+    // Merely expired: worth a line only once the data went stale. Fall back
+    // to the end of the last BankID session when nothing ever synced, so a
+    // company that connected and never got data is not silently ignored.
+    const lastSyncedAt = await readSkattekontoLastSyncedAt(supabase, companyId)
+    const lastFreshAt = lastSyncedAt ?? expiresAt
+    if (!skvDataIsStale(lastFreshAt, now)) return null
     return {
-      id: `skv_disconnected:${discriminator}`,
+      // Stable while the same stale spell lasts (the timestamp only moves
+      // when a sync succeeds, which also clears the notice).
+      id: `skv_disconnected:stale@${lastFreshAt ?? ''}`,
       category: 'skv_disconnected',
-      severity: 'error',
-      messageKey: 'skv_disconnected',
+      severity: 'warning',
+      messageKey: 'skv_session_expired',
       actionKey: 'skv_disconnected_action',
       actionHref: '/settings/tax',
     }
@@ -262,6 +296,34 @@ export async function detectSkvDisconnected(
       err instanceof Error ? { message: err.message } : null,
     )
   }
+}
+
+/**
+ * The last successful skattekonto sync for a company, or null when it never
+ * synced. Read straight from extension_data, like detectSkvUnexplained: core
+ * must not import from @/extensions/.
+ *
+ * A failed lookup THROWS rather than answering null: null means "no sync has
+ * ever happened" and sends the caller to the much older session expiry, which
+ * would turn a transient query failure into a false stale-data warning. The
+ * detector's own catch turns the throw into no notice at all, which is the
+ * honest answer while we cannot see the data.
+ */
+async function readSkattekontoLastSyncedAt(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('extension_data')
+    .select('value')
+    .eq('company_id', companyId)
+    .eq('extension_id', SKATTEKONTO_EXTENSION_ID)
+    .eq('key', SKATTEKONTO_LAST_SYNCED_AT_KEY)
+    .maybeSingle()
+  if (error) throw new Error(error.message)
+  if (!data) return null
+  const value = data.value
+  return typeof value === 'string' ? value : null
 }
 
 /** Brand names stay untranslated; the sentence around them is localised. */
