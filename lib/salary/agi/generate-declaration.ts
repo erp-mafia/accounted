@@ -136,6 +136,17 @@ export type GenerateAgiDeclarationResult =
       status?: number
     }
 
+/** Placeholder for a row whose benefit fields are never emitted (a tombstoned IU). */
+const NO_BENEFITS: TaxableBenefits = {
+  grossByType: {},
+  taxableByType: {},
+  grossTotal: 0,
+  paid: 0,
+  reduction: 0,
+  reducedType: null,
+  taxableTotal: 0,
+}
+
 function sumLineItemAmounts(
   lineItems: Array<Record<string, unknown>>,
   types: string[],
@@ -319,6 +330,15 @@ export async function generateAgiDeclaration(
   // decision, a different thing.
   const rowBenefits: TaxableBenefits[] = []
   for (const sre of parsedRows) {
+    // A removed employee is an FK205 tombstone: the XML emits identity fields
+    // only and skips every amount and benefit field, and the totals already
+    // leave the row out. Nothing on it can be inconsistent, so its rows are
+    // never a reason to refuse: that would block the very correction that
+    // removes the employee. The placeholder keeps the index aligned.
+    if (sre.removed_from_agi) {
+      rowBenefits.push(NO_BENEFITS)
+      continue
+    }
     const who = `Anställd ${sre.employee?.specification_number ?? '?'}`
     const resolution = resolveTaxableBenefits(
       (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0 })),

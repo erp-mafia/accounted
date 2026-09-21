@@ -597,6 +597,38 @@ describe('generateAgiDeclaration: an employee payment for a benefit reduces the 
     expect(message).toContain('arbetsgivardeklarationen')
   })
 
+  it('a removed employee (FK205 tombstone) never blocks the AGI, however stale or ambiguous their rows', async () => {
+    // The tombstone emits identity fields only, so nothing on it can be
+    // inconsistent. Refusing here would block the correction that removes them.
+    const staleRemoved = { ...row([CAR, payment(-6664)], 6664), removed_from_agi: true }
+    const ambiguousRemoved = {
+      ...row([CAR, { item_type: 'benefit_meals', amount: 2480 }, payment(-2480)], 9144),
+      removed_from_agi: true,
+    }
+    for (const removed of [staleRemoved, ambiguousRemoved]) {
+      const result = await generate([removed])
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      const iu = iuBlockFor(result.xml, '199001011234')
+      expect(iu).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
+      expect(iu).not.toContain('faltkod="013"')
+    }
+  })
+
+  it('still validates the live employees next to a removed one', async () => {
+    const removed = { ...row([CAR, payment(-6664)], 6664), removed_from_agi: true }
+    const liveAndStale = {
+      ...row([CAR, payment(-6664)], 6664),
+      employee_id: '33333333-3333-4333-8333-333333333333',
+      employee: { personnummer: 'emp2_encrypted', specification_number: 2, f_skatt_status: 'a_skatt' },
+    }
+    const result = await generate([removed, liveAndStale])
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.code).toBe('AGI_INCOMPLETE_DATA')
+    expect(JSON.stringify(result.details)).toContain('Anställd 2, 2026-06')
+  })
+
   it('refuses a payment on a payslip with several benefit types instead of guessing a field', async () => {
     const result = await generate([row([CAR, { item_type: 'benefit_meals', amount: 2480 }, payment(-2480)], 9144)])
     expect(result.ok).toBe(false)
