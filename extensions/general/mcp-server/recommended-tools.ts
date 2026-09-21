@@ -25,6 +25,7 @@
 import { workflowSkills } from './skills'
 import {
   SEARCH_ONLY_READ_NOTE,
+  SEARCH_ONLY_STAGED_NOTE,
   SEARCH_ONLY_WRITE_NOTE,
   type ToolCallableVia,
 } from './tool-reach'
@@ -227,6 +228,9 @@ export function annotateLoadoutTools(
     }
     if (callable_via === 'call_tool') {
       return { name, callable: true, note: SEARCH_ONLY_READ_NOTE }
+    }
+    if (callable_via === 'stage_tool') {
+      return { name, callable: true, note: SEARCH_ONLY_STAGED_NOTE }
     }
     return { name, callable: true }
   })
