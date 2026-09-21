@@ -13,6 +13,7 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
+import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
 import type {
   AmountType,
   CreditedInvoiceRefDto,
@@ -584,9 +585,10 @@ export interface MappedInvoice {
    * Accounted id the mapper cannot know: the original may be inserted in the
    * same run, a chunk later, or by an earlier run. So the importer pairs the
    * rows afterwards, from `creditedInvoiceRef`, when the provider named the
-   * credited invoice (Bokio's invoiceRef does; the arcim gateway, Visma and
-   * Fortnox send nothing), and counts what stayed unpaired into the migration
-   * summary (`ext_arcim_credit_notes_unlinked_detail`). Guessing the original
+   * credited invoice (Bokio's invoiceRef and Fortnox's CreditInvoiceReference
+   * do; Visma, Briox, Björn Lundén and WINT send nothing), and counts what
+   * stayed unpaired into the migration summary
+   * (`ext_arcim_credit_notes_unlinked_detail`). Guessing the original
    * from an amount would put a wrong pair in the AR ledger, so no reference
    * means unpaired. The row itself is complete räkenskapsinformation either
    * way (reversed amounts, terminal status, the credited number in notes).
@@ -696,28 +698,52 @@ function negate(n: number): number {
 }
 
 /**
- * The same document stated in magnitudes.
+ * The same document stated in magnitudes: what it would read as if it were
+ * the invoice it reverses.
  *
- * Providers disagree on the sign a kreditfaktura carries: Visma reports a
- * credit invoice with a negative TotalAmount (lib/providers/visma/mapper.ts)
- * while the arcim gateway states the magnitude beside invoiceTypeCode 381.
- * Both have to land on the single convention Accounted stores, so the amounts
- * are resolved from the magnitudes and the credit sign is applied once, at the
- * end. It is also what lets resolveInvoiceVat classify the rate at all: it
- * divides VAT by subtotal, which only yields a statutory rate when both are
- * positive.
+ * Providers disagree on the sign a kreditfaktura carries: Fortnox and Visma
+ * report a credit invoice with negative amounts (lib/providers/fortnox,
+ * lib/providers/visma) while Bokio states the magnitude beside
+ * invoiceTypeCode 381. Both have to land on the single convention Accounted
+ * stores, so the amounts are resolved from the magnitudes and the credit sign
+ * is applied once, at the end. It is also what lets resolveInvoiceVat
+ * classify the rate at all: it divides VAT by subtotal, which only yields a
+ * statutory rate when both are positive.
+ *
+ * The header figures are single values, so their magnitude is their absolute
+ * value. The ROWS are not: a credit note can credit one thing and charge
+ * another on the same document (goods returned, a return fee charged), and
+ * its rows then carry both signs. 65 of the Fortnox credit notes in
+ * production on 2026-09-20 do, and for every one of them the rows as sent sum
+ * to the header. Taking each row's absolute value would turn the charge into
+ * a second credit and break rows against header, so the
+ * rows are flipped TOGETHER, by the one factor that makes their net
+ * non-negative, and keep their sign relative to each other. When all rows
+ * share a sign that is the absolute value, as before. The unit price stays a
+ * magnitude and the quantity carries the row's sign, which is how an in-app
+ * credit note is written (lib/invoices/build-credit-note-item.ts).
  */
 function withAbsoluteAmounts(dto: SalesInvoiceDto): SalesInvoiceDto {
   const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
+  const rowNet = dto.lines.reduce((sum, line) => sum + line.lineExtensionAmount.value, 0)
+  // A net of exactly zero decides nothing either way; the header's sign does.
+  const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
+  const factor = statedNegative ? -1 : 1
+  const oriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * factor })
   return {
     ...dto,
-    lines: dto.lines.map((line) => ({
-      ...line,
-      quantity: line.quantity != null ? Math.abs(line.quantity) : undefined,
-      unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
-      lineExtensionAmount: abs(line.lineExtensionAmount),
-      taxAmount: line.taxAmount ? abs(line.taxAmount) : undefined,
-    })),
+    lines: dto.lines.map((line) => {
+      const lineExtensionAmount = oriented(line.lineExtensionAmount)
+      return {
+        ...line,
+        quantity: line.quantity != null
+          ? Math.abs(line.quantity) * (lineExtensionAmount.value < 0 ? -1 : 1)
+          : undefined,
+        unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
+        lineExtensionAmount,
+        taxAmount: line.taxAmount ? oriented(line.taxAmount) : undefined,
+      }
+    }),
     taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: abs(dto.taxTotal.taxAmount) } : undefined,
     legalMonetaryTotal: {
       ...dto.legalMonetaryTotal,
@@ -821,7 +847,7 @@ export function mapSalesInvoice(
   customerId: string,
   fxRates?: FxRateIndex
 ): MappedInvoice {
-  const isCreditNote = dto.invoiceTypeCode === '381'
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
 
   const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
   const sign = (n: number): number => (isCreditNote ? negate(n) : n)
@@ -845,13 +871,15 @@ export function mapSalesInvoice(
   // A kreditfaktura is never an open or a paid receivable, so it gets a
   // terminal status regardless of the provider's lifecycle status:
   // invoiceTypeCode is the only signal that the document IS a credit note, and
-  // the arcim gateway is not guaranteed to also send status='credited'. Same
-  // reasoning as mapSupplierInvoice. The one exception is a draft: a credit
-  // note the source never issued (Bokio's draft | published enum) is not a
-  // credit yet and stays a draft here too, the state an in-app credit note
-  // starts in, so it neither reverses AR nor marks the original credited.
+  // a provider is not guaranteed to also send status='credited' (Fortnox
+  // reports a settled balance, which used to read as 'paid'). Same reasoning
+  // as mapSupplierInvoice. Two source states are kept, because in neither has
+  // the credit note reduced anything: a draft the source never issued
+  // (Bokio's draft | published enum) stays a draft, the state an in-app
+  // credit note starts in, and one the source voided (makulerad) stays
+  // cancelled instead of being revived as an effective credit.
   const status = isCreditNote
-    ? (dto.status === 'draft' ? 'draft' : 'credited')
+    ? (dto.status === 'draft' || dto.status === 'cancelled' ? dto.status : 'credited')
     : (statusMap[dto.status] || 'sent')
 
   // Nothing is ever collected on a kreditfaktura: it reduces what the customer
@@ -1036,7 +1064,7 @@ export function mapSupplierInvoice(
     credited: 'credited',
   }
 
-  const isCreditNote = dto.invoiceTypeCode === '381'
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
 
   // Payment-derived status and amounts, by the rule the repair pass shares.
   const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
