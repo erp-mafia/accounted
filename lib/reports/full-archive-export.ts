@@ -1639,6 +1639,7 @@ async function buildSystemDoc(
       val: 'Avstängd som standard för nya leverantörsfakturor oavsett företagsinställning. Användaren väljer avrundning när den finns på leverantörens faktura. Redan inlästa avrundningsrader behålls även när valet är avstängt.',
       registrering: 'När öresavrundning väljs i leverantörsfakturaeditorn sparas skillnaden till hel krona som en separat fakturarad på 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden.',
       moms: 'Avrundningsraden ändrar inte momsbeloppet och ingår inte i beskattningsunderlaget för omvänd skattskyldighet.',
+      omfattning: 'Undantaget från beskattningsunderlaget gäller bara fakturor i SEK och rader på 3740 med momssats 0 och absolutbelopp högst 0,50 kronor. Det avgränsar regeln till avrundning som editorn kan skapa, inte en allmän momstolerans. Större belopp, andra valutor och rader med annan momssats behåller tidigare behandling.',
       historik: 'Regeln infördes i PR #2849. Programversion och första observerade driftsättning registreras i app_releases och visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte av denna regel.',
     },
     verifikationsserier: (voucherSeriesResult.data || []).map(
