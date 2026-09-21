@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { receiptImage } from '@/tests/fixtures/receipt-images'
 import {
   parseJsonResponse,
   createMockRouteParams,
@@ -124,6 +125,18 @@ describe('GET /api/documents/[id]/inline', () => {
     expect(res.status).toBe(200)
     expect(res.headers.get('Content-Type')).toBe('image/png')
     expect(res.headers.get('Content-Security-Policy')).toBeNull()
+  })
+
+  it('previews the detected type while retaining a mismatched original filename', async () => {
+    const buffer = receiptImage('jpeg')
+    enqueue({ data: makeDoc({ file_name: 'receipt.png', mime_type: 'image/jpeg' }), error: null })
+    downloadMock.mockResolvedValue({ data: new Blob([buffer], { type: 'image/png' }), error: null })
+    const res = await GET(makeReq(), createMockRouteParams({ id: 'doc-1' }))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Type')).toBe('image/jpeg')
+    expect(res.headers.get('Content-Disposition')).toContain('filename="receipt.png"')
+    expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(await res.arrayBuffer()).toEqual(buffer)
   })
 
   it('serves HTML documents with a sandboxing CSP that blocks outbound requests', async () => {
