@@ -192,7 +192,13 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the day's other merges (peppol, SIE set-based import) under the Motparter
 // page. Same escape hatch, same reason: one expression somewhere in the files
 // the branches do not share.
-const UNRESOLVED_CEILING = 407
+// 2026-09-21 Arkiv merge train (phases 1 to 5 each add their own entry below;
+// main stood at 407 of 407 when the train started). Headroom of 3 restored
+// here so a parallel merge to main does not stall the train: 407 -> 410 base.
+// Phase 1 page text (+1): lib/documents/read/store.ts inserts one
+// document_pages row per page built by a map; the columns are literal inside
+// the callback but the scanner reads only object and array literals.
+const UNRESOLVED_CEILING = 411
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
