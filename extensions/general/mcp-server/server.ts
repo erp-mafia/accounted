@@ -3893,10 +3893,10 @@ export const tools: McpTool[] = [
     // destructive, so the carrier is too. A hint that errs toward prompting is
     // the safe direction; connector-catalog-reach.test.ts pins the rule.
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
-    // The approval contract, machine-readable on the carrier itself. Literal
-    // because deriveToolMeta keys on the staged schema, which this open
-    // pass-through schema is not.
-    _meta: { requires_approval: true, approve_tool: 'gnubok_approve_pending_operation' },
+    // No _meta.requires_approval here: deriveToolMeta keys on the staged
+    // schema, which this open pass-through is not. The contract still reaches
+    // the agent twice: the description names the approve step, and every
+    // staged result carries approve: { tool, args }.
     async execute() {
       // Unreachable: see gnubok_call_tool. If this ever runs, the rewrite was
       // removed and a bridged write skipped the staging-only check.
