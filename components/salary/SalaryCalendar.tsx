@@ -45,6 +45,8 @@ import {
 } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
+import { calendarOpeningMonth, countAbsenceDatesInWindow } from '@/lib/salary/payslip-calendar'
+import { defaultDayHours } from '@/lib/salary/work-schedule'
 import type { SalaryType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -114,10 +116,21 @@ export interface SalaryCalendarProps {
   employeeId: string
   /** Hourly employees get the worked-hours overlay + actions; monthly only see absence. */
   salaryType: SalaryType
-  /** Pay period start (YYYY-MM-DD). The calendar opens on this month. */
+  /** First day (YYYY-MM-DD) of the window the run READS absence and worked
+   *  days from: the run's avvikelseperiod, which is the pay month only when
+   *  the run has no window of its own (payslipCalendarWindow in
+   *  lib/salary/payslip-calendar.ts). The calendar opens on this month, and
+   *  the in-period shading, "fill weekdays", the worked-hours total and the
+   *  live absence counts all follow it. */
   periodStart: string
-  /** Pay period end (YYYY-MM-DD). */
+  /** Last day (YYYY-MM-DD) of that window. */
   periodEnd: string
+  /** The employee's weekly schedule (employees.hours_per_week /
+   *  workdays_per_week). Decides what "one day" is in the hours dialogs: the
+   *  same scheduled day the engine weights an absence row against. Missing
+   *  values mean the 40 h / 5 d default, i.e. 8 hours. */
+  hoursPerWeek?: number | null
+  workdaysPerWeek?: number | null
   /** Optional: link new rows to a specific salary run. */
   salaryRunEmployeeId?: string
   /** Read-only mode (e.g. for booked runs). */
@@ -135,6 +148,8 @@ export function SalaryCalendar({
   salaryType,
   periodStart,
   periodEnd,
+  hoursPerWeek,
+  workdaysPerWeek,
   salaryRunEmployeeId,
   readOnly = false,
   onChange,
@@ -147,8 +162,14 @@ export function SalaryCalendar({
   const isHourly = salaryType === 'hourly'
   const periodStartDate = useMemo(() => parseISO(periodStart), [periodStart])
   const periodEndDate = useMemo(() => parseISO(periodEnd), [periodEnd])
+  const scheduledDayHours = defaultDayHours(hoursPerWeek, workdaysPerWeek)
 
-  const [visibleMonth, setVisibleMonth] = useState<Date>(() => startOfMonth(periodStartDate))
+  // Initialised once per mount: the month the user navigates to afterwards
+  // is theirs. The host page must therefore keep this component mounted
+  // across its own reloads (onChange), or every save jumps back here.
+  const [visibleMonth, setVisibleMonth] = useState<Date>(() =>
+    parseISO(calendarOpeningMonth({ start: periodStart, end: periodEnd })),
+  )
   const [absences, setAbsences] = useState<AbsenceDay[]>([])
   const [worked, setWorked] = useState<WorkedDay[]>([])
   const [loading, setLoading] = useState(false)
@@ -216,28 +237,11 @@ export function SalaryCalendar({
     return m
   }, [absences])
 
-  // Live counts within the pay period: unique dates per category. Emit so
-  // the parent can render day badges without waiting for a recalculation.
-  // Parental groups parental + pregnancy + care_relative to match how the
-  // existing snapshot column lumps them.
+  // Live counts within the period: unique dates per category. Emit so the
+  // parent can render day badges without waiting for a recalculation.
   useEffect(() => {
     if (!onAbsenceCountsChange) return
-    const sickDates = new Set<string>()
-    const vabDates = new Set<string>()
-    const parentalDates = new Set<string>()
-    for (const a of absences) {
-      if (a.absence_date < periodStart || a.absence_date > periodEnd) continue
-      if (a.absence_type === 'sick') sickDates.add(a.absence_date)
-      else if (a.absence_type === 'vab') vabDates.add(a.absence_date)
-      else if (a.absence_type === 'parental' || a.absence_type === 'pregnancy' || a.absence_type === 'care_relative') {
-        parentalDates.add(a.absence_date)
-      }
-    }
-    onAbsenceCountsChange({
-      sick: sickDates.size,
-      vab: vabDates.size,
-      parental: parentalDates.size,
-    })
+    onAbsenceCountsChange(countAbsenceDatesInWindow(absences, { start: periodStart, end: periodEnd }))
   }, [absences, periodStart, periodEnd, onAbsenceCountsChange])
 
   const workedMap = useMemo(() => {
@@ -554,6 +558,7 @@ export function SalaryCalendar({
         <BulkWorkedDialog
           employeeId={employeeId}
           dates={Array.from(selected).sort()}
+          scheduledDayHours={scheduledDayHours}
           salaryRunEmployeeId={salaryRunEmployeeId}
           onClose={() => setBulkMode(null)}
           onSaved={(conflicts) => {
@@ -569,6 +574,7 @@ export function SalaryCalendar({
         <BulkAbsenceDialog
           employeeId={employeeId}
           dates={Array.from(selected).sort()}
+          scheduledDayHours={scheduledDayHours}
           salaryRunEmployeeId={salaryRunEmployeeId}
           onClose={() => setBulkMode(null)}
           onSaved={(conflicts) => {
@@ -609,6 +615,8 @@ interface BulkConflict { date: string; reason: string }
 interface BulkWorkedDialogProps {
   employeeId: string
   dates: string[]
+  /** One scheduled day for this employee: the dialog's default. */
+  scheduledDayHours: number
   salaryRunEmployeeId?: string
   onClose: () => void
   onSaved: (conflicts: BulkConflict[]) => void
@@ -617,12 +625,13 @@ interface BulkWorkedDialogProps {
 function BulkWorkedDialog({
   employeeId,
   dates,
+  scheduledDayHours,
   salaryRunEmployeeId,
   onClose,
   onSaved,
 }: BulkWorkedDialogProps) {
   const t = useTranslations('salary_calendar')
-  const [hours, setHours] = useState<string>('8')
+  const [hours, setHours] = useState<string>(() => String(scheduledDayHours))
   const [notes, setNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -763,6 +772,9 @@ function BulkWorkedDialog({
 interface BulkAbsenceDialogProps {
   employeeId: string
   dates: string[]
+  /** One scheduled day for this employee: the dialog's default, and the
+   *  most an absence row can weigh in the calculation. */
+  scheduledDayHours: number
   salaryRunEmployeeId?: string
   onClose: () => void
   onSaved: (conflicts: BulkConflict[]) => void
@@ -771,13 +783,14 @@ interface BulkAbsenceDialogProps {
 function BulkAbsenceDialog({
   employeeId,
   dates,
+  scheduledDayHours,
   salaryRunEmployeeId,
   onClose,
   onSaved,
 }: BulkAbsenceDialogProps) {
   const t = useTranslations('salary_calendar')
   const [absenceType, setAbsenceType] = useState<AbsenceType>('sick')
-  const [hours, setHours] = useState<string>('8')
+  const [hours, setHours] = useState<string>(() => String(scheduledDayHours))
   const [notes, setNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -865,6 +878,14 @@ function BulkAbsenceDialog({
               onChange={(e) => setHours(e.target.value)}
               className="tabular-nums"
             />
+            {/* A hint, not a refusal: the row is accepted and counts as one
+                full day. The usual cause is typing a full-time day on a
+                part-time schedule. */}
+            {parseFloat(hours) > scheduledDayHours && (
+              <p className="text-[11px] text-muted-foreground">
+                {t('hours_over_schedule_hint', { hours: String(scheduledDayHours) })}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

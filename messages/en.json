@@ -8055,6 +8055,7 @@
     "bulk_worked_desc": "{count, plural, one {# day} other {# days}} will be marked as worked. Existing hours for these dates will be overwritten.",
     "hours_per_day": "Hours per day",
     "hours_zero_hint": "Set to 0 to remove worked time on the selected days.",
+    "hours_over_schedule_hint": "More than the scheduled working day ({hours} h). The absence counts as one full day in the payroll calculation.",
     "notes_label": "Note (optional)",
     "conflicts_worked": "{count, plural, one {# day was skipped} other {# days were skipped}} — combined with existing absence it would have exceeded 24 hours.",
     "close": "Close",

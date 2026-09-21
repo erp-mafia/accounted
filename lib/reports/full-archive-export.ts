@@ -1670,6 +1670,14 @@ async function buildSystemDoc(
         'Samlingsverifikat (bokföring av flera banktransaktioner i ett verifikat) använder standardserien för banktransaktioner',
       ],
     },
+    leverantorsbetalningar_regler: {
+      bankmatchning:
+        'supplier_invoice_payments.amount anger den reglerade skulden i fakturans valuta, inklusive eventuell öresavrundning på 3740. Beloppet motsvarar ökningen av supplier_invoices.paid_amount. Banktransaktionen och verifikatets betalningskonto visar det faktiskt utbetalda beloppet.',
+      andring:
+        'PR #2850 rättar bankmatchningens betalningsrad. Ändringen gäller nya matchningar från den programversion som innehåller rättningen. Programversionernas första registrerade drifttid finns i app_releases och rapporten Behandlingshistorik; fakturans betalningsdatum anger inte vilken programversion som skapade raden.',
+      historik:
+        'Äldre bankmatchningar med öresavrundning kan ha sparat utbetalt belopp i stället för reglerad skuld. Historiska reskontror och återföringar som använder dessa rader kan därför avvika med den tidigare avrundningen. Rättningen ändrar inte äldre betalningsrader eller redan avvikande fakturasaldon. Vid granskning jämförs raden med det ursprungliga betalningsverifikatet och banktransaktionen. Äldre delbetalningar utan avrundning har samma belopp enligt båda reglerna.',
+    },
     behorighetskontroll: {
       description: 'Rollbaserad atkomstkontroll med owner/admin/member/viewer',
       mfa_stod: true,

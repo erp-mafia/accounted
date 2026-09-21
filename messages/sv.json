@@ -8055,6 +8055,7 @@
     "bulk_worked_desc": "{count, plural, one {# dag} other {# dagar}} markeras som arbetade. Befintliga timmar för dessa datum skrivs över.",
     "hours_per_day": "Timmar per dag",
     "hours_zero_hint": "Sätt till 0 för att ta bort arbetad tid på de valda dagarna.",
+    "hours_over_schedule_hint": "Mer än den schemalagda arbetsdagen ({hours} h). Frånvaron räknas som en hel dag i löneberäkningen.",
     "notes_label": "Anteckning (valfri)",
     "conflicts_worked": "{count, plural, one {# dag utelämnades} other {# dagar utelämnades}} — kombinationen med befintlig frånvaro hade överstigit 24 timmar.",
     "close": "Stäng",

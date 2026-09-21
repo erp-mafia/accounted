@@ -181,6 +181,21 @@ describe('generateFullArchive', () => {
   })
 
   describe('scope: period', () => {
+    it('exports supplier settlement rules and their legacy limitation for audit interpretation', async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const documentation = JSON.parse(await zip.file('revision/systemdokumentation.json')!.async('text'))
+      const rules = documentation.leverantorsbetalningar_regler
+      expect(rules.bankmatchning).toContain('reglerade skulden i fakturans valuta')
+      expect(rules.bankmatchning).toContain('3740')
+      expect(rules.andring).toContain('PR #2850')
+      expect(rules.andring).toContain('app_releases')
+      expect(rules.historik).toContain('ändrar inte äldre betalningsrader')
+    })
+
     it('retains custom-account classification beyond the first chart page in system documentation', async () => {
       enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
       const chart = createQueuedMockSupabase()
