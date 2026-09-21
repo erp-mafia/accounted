@@ -618,10 +618,10 @@ describe('upsertFromPsd2', () => {
   })
 
   it('propagates a conflict without falling back to independent writes', async () => {
-    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: '40001', message: 'session changed' } })
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: 'PT409', message: 'session changed' } })
     const from = vi.fn()
     await expect(upsertFromPsd2({ rpc, from } as unknown as SupabaseClient, 'company', input))
-      .rejects.toMatchObject({ code: '40001', message: 'cash_accounts upsert failed: session changed' })
+      .rejects.toMatchObject({ code: 'PT409', message: 'cash_accounts upsert failed: session changed' })
     expect(from).not.toHaveBeenCalled()
   })
 

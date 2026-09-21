@@ -114,6 +114,18 @@ describe('createTransactionJournalEntry', () => {
     mockedFindFiscalPeriod.mockResolvedValue('period-1')
   })
 
+  it.each([-50, 50])('preserves the source snapshot and chosen settlement side for amount %s', async amount => {
+    const { supabase } = createQueuedMockSupabase()
+    const tx = makeTransaction({ id: 'source-1', cash_account_id: 'original-cash', amount })
+    const mapping = makeMappingResult(amount < 0
+      ? { credit_account: '1940' } : { debit_account: '1940', credit_account: '3001' })
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+    expect(mockedCreateEntry.mock.calls[0][3].bank_booking_context).toEqual([{
+      transaction_id: tx.id, cash_account_id: 'original-cash', settlement_account: '1940',
+      date: tx.date, amount, currency: tx.currency,
+    }])
+  })
+
   // --- Validation ---
 
   it('throws when debit_account is missing', async () => {

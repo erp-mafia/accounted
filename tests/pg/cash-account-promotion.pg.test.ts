@@ -179,12 +179,12 @@ describe('atomic PSD2 promotion', () => {
   })
 
   it('rejects an obsolete session before writing', async () => {
-    await expect(promote({ expected_session_id: 'old-session' })).rejects.toMatchObject({ code: '40001', message: 'CASH_ACCOUNT_SESSION_CHANGED' })
+    await expect(promote({ expected_session_id: 'old-session' })).rejects.toMatchObject({ code: 'PT409', message: 'CASH_ACCOUNT_SESSION_CHANGED' })
   })
 
   it('rejects an unrelated physical account and a changed keeper', async () => {
     await client.query('SAVEPOINT changed_keeper')
-    await expect(promote({ reuse_cash_account_id: randomUUID() })).rejects.toMatchObject({ code: '40001' })
+    await expect(promote({ reuse_cash_account_id: randomUUID() })).rejects.toMatchObject({ code: 'PT409' })
     await client.query('ROLLBACK TO SAVEPOINT changed_keeper')
     await client.query("UPDATE cash_accounts SET iban = 'OTHER' WHERE id = $1", [twinId])
     await expect(promote()).rejects.toMatchObject({ code: '23514', message: 'CASH_ACCOUNT_RETIREMENT_IDENTITY_CONFLICT' })
@@ -194,7 +194,7 @@ describe('atomic PSD2 promotion', () => {
     await transaction()
     const before = await state()
     await client.query('SAVEPOINT missing_retirement')
-    await expect(promote({}, client, [randomUUID()])).rejects.toMatchObject({ code: '40001', message: 'CASH_ACCOUNT_RETIREMENT_CHANGED' })
+    await expect(promote({}, client, [randomUUID()])).rejects.toMatchObject({ code: 'PT409', message: 'CASH_ACCOUNT_RETIREMENT_CHANGED' })
     await client.query('ROLLBACK TO SAVEPOINT missing_retirement')
     expect(await state()).toEqual(before)
   })
@@ -220,7 +220,7 @@ describe('atomic PSD2 promotion', () => {
     await client.query('ROLLBACK TO SAVEPOINT anonymous')
     await client.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [randomUUID()])
     await client.query('SET LOCAL ROLE authenticated')
-    await expect(promote()).rejects.toMatchObject({ code: 'P0002' })
+    await expect(promote()).rejects.toMatchObject({ code: '42501' })
   })
 })
 

@@ -109,7 +109,7 @@ describe('company twin plan and atomic receipt', () => {
     const reviewed = await plan()
     await transaction()
     await client.query('SAVEPOINT stale_review')
-    await expect(heal(reviewed.fingerprint)).rejects.toMatchObject({ code: '40001' })
+    await expect(heal(reviewed.fingerprint)).rejects.toMatchObject({ code: 'PT409' })
     await client.query('ROLLBACK TO SAVEPOINT stale_review')
     expect((await client.query('SELECT count(*)::int AS n FROM cash_accounts WHERE company_id = $1', [owner.companyId])).rows[0].n).toBe(2)
     expect((await client.query('SELECT event_id FROM processing_history WHERE event_id = $1', [operationId])).rows).toEqual([])
@@ -397,7 +397,7 @@ describe('company twin plan and atomic receipt', () => {
       expect(blocked).toBe(true)
       await client.query('UPDATE cash_accounts SET enabled = false WHERE id = $1', [twinId])
       await client.query('COMMIT')
-      await expect(pending).rejects.toMatchObject({ code: '40001' })
+      await expect(pending).rejects.toMatchObject({ code: 'PT409' })
       expect((await client.query('SELECT count(*)::int AS n FROM cash_accounts WHERE company_id = $1', [owner.companyId])).rows[0].n).toBe(2)
       expect((await client.query('SELECT event_id FROM processing_history WHERE event_id = $1', [operationId])).rows).toEqual([])
     } finally {

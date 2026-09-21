@@ -32,10 +32,10 @@ describe('healTwinCashAccounts', () => {
     expect(from).not.toHaveBeenCalled()
   })
   it('propagates database conflicts without attempting any separate audit or repair writes', async () => {
-    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: '40001', message: 'plan changed' } })
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: 'PT409', message: 'plan changed' } })
     const from = vi.fn()
     await expect(healTwinCashAccounts({ rpc, from } as unknown as SupabaseClient, companyId, write))
-      .rejects.toMatchObject({ code: '40001', message: 'cash account twin repair failed: plan changed' })
+      .rejects.toMatchObject({ code: 'PT409', message: 'cash account twin repair failed: plan changed' })
     expect(from).not.toHaveBeenCalled()
   })
   it.each([null, { ...receipt, companyId: 'another' }, { ...receipt, operationId: 'another' }, { ...receipt, fingerprint: 'old' }])

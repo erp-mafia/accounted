@@ -1,5 +1,6 @@
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveCashAccountVoucherSeries } from './cash-account-voucher-series'
+import { bankBookingContext } from './bank-booking-context'
 import { resolveSekAmount, buildCurrencyMetadata } from './currency-utils'
 import { coerceDimensionsBag } from './dimension-resolver'
 import { extractNetAmount, extractVatAmount } from './vat-entries'
@@ -353,6 +354,8 @@ export async function createTransactionJournalEntry(
     description: composedDescription,
     source_type: 'bank_transaction',
     source_id: transaction.id,
+    bank_booking_context: [bankBookingContext(transaction,
+      transaction.amount < 0 ? mappingResult.credit_account! : mappingResult.debit_account!)],
     lines,
     ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
   }

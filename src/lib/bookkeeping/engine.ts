@@ -404,6 +404,7 @@ export async function createDraftEntry(
       description: input.description,
       source_type: input.source_type,
       source_id: input.source_id || null,
+      ...(input.bank_booking_context ? { bank_booking_context: input.bank_booking_context } : {}),
       notes: input.notes || null,
       status: 'draft',
     })

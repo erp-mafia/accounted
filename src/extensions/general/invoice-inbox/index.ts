@@ -1,3 +1,4 @@
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { routeClassifiedDocument } from './lib/route-from-arkiv'
 import type { EventPayload } from '@/lib/events/types'
@@ -3164,12 +3165,13 @@ export const invoiceInboxExtension: Extension = {
         }
 
         // If a transaction is provided, validate it before booking.
-        let transaction: { id: string; journal_entry_id: string | null } | null = null
-        if (body.transaction_id) {
+        let transaction: Pick<Transaction, 'id' | 'journal_entry_id' | 'cash_account_id' | 'date' | 'amount' | 'currency'> | null = null
+        const sourceTransactionId = body.transaction_id ?? item.matched_transaction_id
+        if (sourceTransactionId) {
           const { data: tx, error: txError } = await ctx.supabase
             .from('transactions')
-            .select('id, journal_entry_id')
-            .eq('id', body.transaction_id)
+            .select('id, journal_entry_id, cash_account_id, date, amount, currency')
+            .eq('id', sourceTransactionId)
             .eq('company_id', ctx.companyId)
             .maybeSingle()
           if (txError || !tx) {
@@ -3211,8 +3213,12 @@ export const invoiceInboxExtension: Extension = {
             fiscal_period_id: body.fiscal_period_id,
             entry_date: body.entry_date,
             description: body.description,
-            source_type: transaction ? 'bank_transaction' : 'inbox_item',
-            source_id: transaction ? transaction.id : item.id,
+            source_type: body.transaction_id ? 'bank_transaction' : 'inbox_item',
+            source_id: body.transaction_id ? transaction!.id : item.id,
+            ...(transaction ? { bank_booking_context: [bankBookingContext(transaction,
+              await resolveSettlementAccount(ctx.supabase, ctx.companyId, transaction.cash_account_id,
+                createLogger('invoice-inbox.book-direct'), transaction.currency),
+            )] } : {}),
             notes: effectiveNotes,
             lines: body.lines,
           })
