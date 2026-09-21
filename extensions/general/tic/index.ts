@@ -54,6 +54,7 @@ import {
 } from './lib/bankid-pending'
 import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
+import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { openBankIdResult, sealBankIdResult } from './lib/bankid-flow-result'
 import type { BankIdFlowResult, BankIdFlowState } from './lib/bankid-flow-cookie'
 import type { BankIdUser } from './lib/bankid-types'
@@ -1462,7 +1463,13 @@ export const ticExtension: Extension = {
           // it (account pre-hijacking, security audit 2026-09). The address is
           // confirmed by the mail sent below, and only then does the identity
           // count (see lib/bankid-pending.ts).
-          const randomPassword = crypto.randomBytes(32).toString('base64url')
+          //
+          // The password is one the person never sees, so it must pass the
+          // project's GoTrue password policy on its own: generateAuthPassword
+          // carries every character class a policy can require. A plain
+          // base64url string has a symbol only by luck, and about one signup
+          // in four was refused as weak_password while symbols were required.
+          const randomPassword = generateAuthPassword()
           const { data: newUser, error: createError } = await supabase.auth.admin.createUser({
             email: trimmedEmail!,
             email_confirm: false,
