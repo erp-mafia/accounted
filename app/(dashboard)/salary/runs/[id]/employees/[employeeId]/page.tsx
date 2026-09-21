@@ -11,6 +11,8 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
+import { AddPayslipLineDialog } from '@/components/salary/AddPayslipLineDialog'
+import { isManualPayslipLineType } from '@/lib/salary/manual-payslip-lines'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
@@ -71,9 +73,26 @@ const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'war
   corrected: 'outline',
 }
 
+/** A line as the detail route returns it: the source columns say where it came from. */
+type LineRow = SalaryLineItem & {
+  source_recurring_line_id?: string | null
+  source_benefit_id?: string | null
+}
+
 interface DetailResponse {
   run: SalaryRun
-  runEmployee: SalaryRunEmployee & { employee: EmployeeMasked; line_items: SalaryLineItem[] }
+  runEmployee: SalaryRunEmployee & { employee: EmployeeMasked; line_items: LineRow[] }
+}
+
+/**
+ * Lines the user may take off a draft payslip: an utlägg line (added with one
+ * click on the run page, #2331) and a one-off line added by hand here. Lines
+ * the calculation or a recurring line derives are left alone: recalculation
+ * would only bring them back.
+ */
+function isRemovableLine(li: LineRow): boolean {
+  if (li.source_expense_claim_id) return true
+  return isManualPayslipLineType(li.item_type) && !li.source_recurring_line_id && !li.source_benefit_id
 }
 
 export default function SalaryRunEmployeeDetailPage({
@@ -90,6 +109,7 @@ export default function SalaryRunEmployeeDetailPage({
   const [error, setError] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
   const [removingLineId, setRemovingLineId] = useState<string | null>(null)
+  const [addingLine, setAddingLine] = useState(false)
   // Live counts pushed from the calendar: overrides the stale snapshot from
   // the last calculation so badges update immediately on absence save.
   const [liveCounts, setLiveCounts] = useState<{ sick: number; vab: number; parental: number } | null>(null)
@@ -158,9 +178,9 @@ export default function SalaryRunEmployeeDetailPage({
     }
   }
 
-  // Utlägg lines (#2331) are the only lines this page lets the user remove:
-  // they were added from the run page with one click and must be just as
-  // easy to take off again. The claim goes back to Att göra.
+  // Removes an utlägg line (#2331: added from the run page with one click,
+  // just as easy to take off again; the claim goes back to Att göra) or a
+  // one-off line added with "Lägg till rad". See isRemovableLine.
   const handleRemoveLine = async (lineId: string) => {
     setRemovingLineId(lineId)
     setError(null)
@@ -226,9 +246,9 @@ export default function SalaryRunEmployeeDetailPage({
   const lineItems = runEmployee.line_items ?? []
   const periodLabel = `${run.period_year}-${String(run.period_month).padStart(2, '0')}`
   const readOnly = run.status !== 'draft' && run.status !== 'review'
-  // Utlägg lines can be taken off the payslip only while the run is a draft
-  // (the line commands' gate); the column exists only then.
-  const canRemoveClaimLines = run.status === 'draft'
+  // Lines can be added to and taken off the payslip only while the run is a
+  // draft (the line commands' gate); the button and the column exist only then.
+  const canEditLines = run.status === 'draft'
   const statusLabel = tSalary(`status_${run.status}`)
 
   const taxValue = runEmployee.tax_withheld_override ?? runEmployee.tax_withheld
@@ -392,8 +412,28 @@ export default function SalaryRunEmployeeDetailPage({
         </div>
       </DetailSection>
 
-      {/* Line items: the list-page table idiom straight on the panel. */}
-      <DetailSection kicker={t('line_items_title', { count: lineItems.length })}>
+      {/* Line items: the list-page table idiom straight on the panel. One-off
+          lines (milersättning, traktamente, bonus, a deduction) are added
+          from the kicker's action; utlägg from the run page. */}
+      <DetailSection
+        kicker={t('line_items_title', { count: lineItems.length })}
+        aside={
+          canEditLines ? (
+            <Button type="button" size="sm" variant="outline" className="-my-1" onClick={() => setAddingLine(true)}>
+              {t('add_line')}
+            </Button>
+          ) : undefined
+        }
+      >
+        {canEditLines && (
+          <AddPayslipLineDialog
+            open={addingLine}
+            onOpenChange={setAddingLine}
+            runId={runId}
+            salaryRunEmployeeId={runEmployee.id}
+            onAdded={load}
+          />
+        )}
         {lineItems.length === 0 ? (
           <p className="text-sm text-muted-foreground">{t('no_line_items')}</p>
         ) : (
@@ -404,8 +444,8 @@ export default function SalaryRunEmployeeDetailPage({
                   <th className={cn(TH_CLASS, 'pl-0')}>{t('th_type')}</th>
                   <th className={TH_CLASS}>{t('th_description')}</th>
                   <th className={cn(TH_CLASS, 'text-right')}>{t('th_quantity')}</th>
-                  <th className={cn(TH_CLASS, 'text-right', !canRemoveClaimLines && 'pr-0')}>{t('th_amount')}</th>
-                  {canRemoveClaimLines && (
+                  <th className={cn(TH_CLASS, 'text-right', !canEditLines && 'pr-0')}>{t('th_amount')}</th>
+                  {canEditLines && (
                     <th className={cn(TH_CLASS, 'pr-0 text-right')}>
                       <span className="sr-only">{t('th_actions')}</span>
                     </th>
@@ -414,26 +454,26 @@ export default function SalaryRunEmployeeDetailPage({
               </thead>
               <tbody>
                 {lineItems.map(li => (
-                  <tr key={li.id} className={cn(canRemoveClaimLines && 'group')}>
+                  <tr key={li.id} className={cn(canEditLines && 'group')}>
                     <td className={cn(TD_CLASS, 'pl-0 text-muted-foreground')}>
                       {LINE_ITEM_TYPE_KEYS[li.item_type] ? t(LINE_ITEM_TYPE_KEYS[li.item_type]) : li.item_type}
                     </td>
                     <td className={TD_CLASS}>{li.description}</td>
                     <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{li.quantity ?? '-'}</td>
-                    <td className={cn(TD_CLASS, 'text-right tabular-nums', !canRemoveClaimLines && 'pr-0')}>
+                    <td className={cn(TD_CLASS, 'text-right tabular-nums', !canEditLines && 'pr-0')}>
                       {formatCurrency(li.amount)}
                     </td>
-                    {canRemoveClaimLines && (
+                    {canEditLines && (
                       <td className={cn(TD_CLASS, 'pr-0 text-right')}>
-                        {li.source_expense_claim_id && (
+                        {isRemovableLine(li) && (
                           <Button
                             variant="ghost"
                             size="icon"
                             className={cn('-my-1 h-8 w-8 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
                             onClick={() => handleRemoveLine(li.id)}
                             disabled={removingLineId === li.id}
-                            aria-label={t('remove_expense_claim_line_aria')}
-                            title={t('remove_expense_claim_line_aria')}
+                            aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
+                            title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
                           >
                             {removingLineId === li.id ? (
                               <Loader2 className="h-4 w-4 animate-spin" />
