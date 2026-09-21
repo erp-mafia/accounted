@@ -18,6 +18,8 @@ import {
 import { buildPrefilledCredentials, wantsCompanyId } from './lib/prefill-credentials'
 import { syncAccountTransactions } from './lib/sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
+import { applyRateLimitCooldown, holdSyncLease } from './lib/sync-lease'
+import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
@@ -797,6 +799,20 @@ export const enableBankingExtension: Extension = {
             )
           }
 
+          // Hold the shared sync lease without checking it: a person asking
+          // for a sync is never put on a cooldown, but the cron and the
+          // agent-triggered sync stay off this connection meanwhile.
+          // Best effort: a courtesy to the automatic paths must never fail
+          // the sync the user asked for.
+          await holdSyncLease(supabase, { connectionId: connection.id }, Date.now() + SYNC_COOLDOWN_MS).catch(
+            (leaseError: unknown) => {
+              log.warn('[enable-banking] Sync: could not hold the sync lease', {
+                connection_id,
+                message: leaseError instanceof Error ? leaseError.message : String(leaseError),
+              })
+            },
+          )
+
           const toDate = new Date().toISOString().split('T')[0]
           const fromDate = new Date(Date.now() - days_back * 24 * 60 * 60 * 1000)
             .toISOString()
@@ -989,6 +1005,8 @@ export const enableBankingExtension: Extension = {
             trigger: 'manual',
             error,
           })
+          // A bank 429 keeps the automatic paths away for hours, not minutes.
+          await applyRateLimitCooldown(supabase, connection, error)
 
           // The bank refused a window it has answered before, or every
           // narrower one: not a dead session and not a broken connection, so

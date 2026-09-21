@@ -126,12 +126,12 @@ import {
 } from '@/lib/reports/kpi'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import {
-  ACCOUNT_RUTA,
-  VAT_SETTLEMENT_NET_ACCOUNTS,
+  detectMomsredovisning,
   rutorFromTotals,
   rcInputTotalsFromDeclaration,
   calculateVatDeclaration,
   resolvePeriodDates,
+  type MomsredovisningDetection,
   type VatPeriodSource,
 } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
@@ -2231,7 +2231,42 @@ interface VatReportResult {
   }
   summary: string
   warnings: string[]
+  /**
+   * The verifikat in the period that are NOT in the rutor because they are
+   * classified as momsredovisning. Without this an agent comparing a ruta with
+   * the general ledger sees a gap and nothing that explains it (#2805).
+   * Capped at EXCLUDED_SETTLEMENT_ENTRIES_CAP; `count` is the uncapped total.
+   * Not declared in VAT_REPORT_OUTPUT_SCHEMA on purpose: that schema leaves the
+   * top level open, and the tools/list payload budget has no room for prose.
+   */
+  excluded_settlement_entries: {
+    count: number
+    truncated: boolean
+    note: string
+    entries: VatExcludedSettlementEntry[]
+  }
 }
+
+/** One verifikat kept out of the rutor as a momsredovisning. */
+interface VatExcludedSettlementEntry {
+  journal_entry_id: string
+  voucher_label: string
+  entry_date: string
+  source_type: string | null
+  /**
+   * `tagged`: source_type vat_settlement. `net_account_shape`: a declaration
+   * account and a 2650/1650 line. `tax_account_shape`: only 26xx, the
+   * skattekonto 1630 and 3740. See detectMomsredovisning in core.
+   */
+  detected_by: MomsredovisningDetection
+}
+
+const EXCLUDED_SETTLEMENT_ENTRIES_CAP = 20
+
+const EXCLUDED_SETTLEMENT_ENTRIES_NOTE =
+  'Dessa verifikat är klassade som momsredovisning (taggade vat_settlement, eller igenkända på formen: ' +
+  'ett momskonto mot 2650/1650, eller enbart 26xx mot skattekontot 1630) och ingår därför inte i rutorna. ' +
+  'Skiljer sig en ruta från huvudboken är det här förklaringen finns.'
 
 interface VatReportWithRutor {
   report: VatReportResult
@@ -2267,6 +2302,12 @@ interface VatReportWithRutor {
    * discloses a yearly calendar fallback.
    */
   periodSource: VatPeriodSource
+  /**
+   * EVERY verifikat kept out of the rutor as a momsredovisning, uncapped
+   * (`report.excluded_settlement_entries.entries` is the capped wire view).
+   * The close check names the shape-detected ones from this list.
+   */
+  excludedSettlementEntries: VatExcludedSettlementEntry[]
 }
 
 /**
@@ -2320,46 +2361,63 @@ async function computeVatReportWithRutor(
     account_number: string
     debit_amount: number
     credit_amount: number
-    journal_entries?: { source_type: string | null }
+    journal_entries?: {
+      source_type: string | null
+      entry_date?: string | null
+      voucher_series?: string | null
+      voucher_number?: number | null
+    }
   }>({
     supabase,
-    entryColumns: 'entry_date, status, user_id, source_type',
+    entryColumns: 'entry_date, status, user_id, source_type, voucher_series, voucher_number',
     lineColumns: 'journal_entry_id, account_number, debit_amount, credit_amount',
     filterEntries: (q: EntryLinesQuery) =>
       q
         .eq('company_id', companyId)
         .in('status', ['posted', 'reversed'])
-        // Momsredovisning entries (the settlement verifikat clearing 26xx to
-        // 2650/1650) would zero the rutor once booked; exclude them so this
-        // report matches lib/reports/vat-declaration.ts (fetchVatAccountTotals).
-        .neq('source_type', 'vat_settlement')
+        // Tagged vat_settlement entries are fetched too and dropped below with
+        // the shape-detected ones, so the report can NAME what it excluded.
         .gte('entry_date', startDate)
         .lte('entry_date', endDate),
   })
 
-  // Settlements booked WITHOUT the vat_settlement tag (manual momsomföring,
-  // SIE-imported settlements, stornos of a settlement) are excluded by shape,
-  // mirroring fetchVatAccountTotals (#984): an entry touching both a
-  // declaration account (ACCOUNT_RUTA) and a settlement net account
-  // (2650/1650) is a momsredovisning, not VAT-bearing activity. Opening
-  // balances are exempt: carried-in 26xx balances are unsettled VAT that
-  // belongs in the next declaration.
-  const declarationEntryIds = new Set<string>()
-  const netEntryIds = new Set<string>()
+  // Momsredovisning entries would zero the rutor once booked, so they are
+  // excluded: the tagged ones (source_type vat_settlement) and the untagged
+  // ones recognised by shape (manual momsomföring, SIE-imported settlements,
+  // stornos of a settlement, VAT moved straight against the skattekonto).
+  // The rule itself lives in core, detectMomsredovisning, the TypeScript
+  // mirror of the predicate in get_vat_declaration_totals (#984, #2805): this
+  // report holds every line of every entry, which is what the purity test of
+  // the second shape needs. Never re-derive it here.
+  const entryLineAccounts = new Map<string, string[]>()
   for (const line of lines) {
-    if (ACCOUNT_RUTA[line.account_number]) declarationEntryIds.add(line.journal_entry_id)
-    else if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(line.account_number)) {
-      netEntryIds.add(line.journal_entry_id)
-    }
+    const accounts = entryLineAccounts.get(line.journal_entry_id)
+    if (accounts) accounts.push(line.account_number)
+    else entryLineAccounts.set(line.journal_entry_id, [line.account_number])
   }
   const settlementShapedIds = new Set<string>()
+  const excludedEntries: VatExcludedSettlementEntry[] = []
   for (const line of lines) {
     const id = line.journal_entry_id
-    if (!declarationEntryIds.has(id) || !netEntryIds.has(id)) continue
+    if (settlementShapedIds.has(id)) continue
     const entry = line.journal_entries
-    if (!entry || entry.source_type === 'opening_balance') continue
+    if (!entry) continue
+    const detectedBy = detectMomsredovisning(entry.source_type, entryLineAccounts.get(id) ?? [])
+    if (!detectedBy) continue
     settlementShapedIds.add(id)
+    excludedEntries.push({
+      journal_entry_id: id,
+      voucher_label: formatVoucherLabel(entry.voucher_series, entry.voucher_number),
+      entry_date: entry.entry_date ?? '',
+      source_type: entry.source_type,
+      detected_by: detectedBy,
+    })
   }
+  excludedEntries.sort((a, b) =>
+    a.entry_date === b.entry_date
+      ? a.voucher_label.localeCompare(b.voucher_label, 'sv', { numeric: true })
+      : a.entry_date < b.entry_date ? -1 : 1,
+  )
 
   const accountTotals = new Map<string, { debit: number; credit: number }>()
   for (const line of lines) {
@@ -2453,6 +2511,12 @@ async function computeVatReportWithRutor(
         ? `Moms att få tillbaka: ${Math.abs(ruta49).toFixed(2)} kr`
         : 'Noll i moms',
     warnings,
+    excluded_settlement_entries: {
+      count: excludedEntries.length,
+      truncated: excludedEntries.length > EXCLUDED_SETTLEMENT_ENTRIES_CAP,
+      note: EXCLUDED_SETTLEMENT_ENTRIES_NOTE,
+      entries: excludedEntries.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP),
+    },
   }
 
   // Same `accountTotals` the report is built from, projected through core's
@@ -2464,6 +2528,7 @@ async function computeVatReportWithRutor(
     dynamicVatAccounts,
     accountTotals,
     periodSource,
+    excludedSettlementEntries: excludedEntries,
   }
 }
 
@@ -2557,10 +2622,17 @@ interface VatCloseBlocker {
     | 'declaration_incomplete'
     | 'deadline_unavailable'
     | 'fiscal_year_not_found'
+    | 'momsredovisning_entries_excluded'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
   hint: string
+  /**
+   * Only on `momsredovisning_entries_excluded`: the verifikat the finding is
+   * about, capped like the report's list. `blockers` items are open objects in
+   * the outputSchema, so this costs no tools/list budget.
+   */
+  entries?: VatExcludedSettlementEntry[]
   /**
    * Stable rule id when this blocker comes from the shared momsdeklaration
    * completeness checks (lib/reports/vat-declaration-checks.ts), so an agent
@@ -2993,8 +3065,14 @@ export async function computeVatCloseCheck(
   //    step 4b: they need rutor 20-24 and 50, which the report view omits, plus
   //    the per-account totals so the RC input comparison reads 2645/2647
   //    instead of the ruta 48 aggregate.
-  const { report: vatReport, declarationRutor, dynamicVatAccounts, accountTotals, periodSource } =
-    await computeVatReportWithRutor(args, companyId, supabase)
+  const {
+    report: vatReport,
+    declarationRutor,
+    dynamicVatAccounts,
+    accountTotals,
+    periodSource,
+    excludedSettlementEntries,
+  } = await computeVatReportWithRutor(args, companyId, supabase)
   const { start, end, type: periodType, year, period } = vatReport.period
 
   // 2) Company settings: deadline inputs come from the same fields used by
@@ -3166,6 +3244,32 @@ export async function computeVatCloseCheck(
       hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
     })
   }
+  // Untagged verifikat the report classified as momsredovisning BY SHAPE and
+  // therefore kept out of the rutor. Informational (severity low, never part
+  // of ready_to_close): a manual or imported settlement is supposed to be
+  // excluded. It is named because shape is an inference, not a recorded intent
+  // (#2805): when a ruta disagrees with the general ledger, these are the
+  // verifikat that explain it, and until now nothing pointed at them. Tagged
+  // vat_settlement entries are left out: the app booked those itself.
+  const shapeDetectedEntries = excludedSettlementEntries.filter((e) => e.detected_by !== 'tagged')
+  if (shapeDetectedEntries.length > 0) {
+    const named = shapeDetectedEntries
+      .slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP)
+      .map((e) => `${e.voucher_label} (${e.entry_date})`)
+      .join(', ')
+    const more = shapeDetectedEntries.length > EXCLUDED_SETTLEMENT_ENTRIES_CAP
+      ? ` och ${shapeDetectedEntries.length - EXCLUDED_SETTLEMENT_ENTRIES_CAP} till`
+      : ''
+    blockers.push({
+      kind: 'momsredovisning_entries_excluded',
+      severity: 'low',
+      count: shapeDetectedEntries.length,
+      message: `Information: ${shapeDetectedEntries.length} verifikat utan momsredovisningstagg är klassade som momsredovisning på formen och ingår inte i rutorna: ${named}${more}`,
+      hint: 'Blockerar inte. Formen är ett momskonto mot 2650/1650, eller enbart 26xx mot skattekontot 1630. Skiljer sig en ruta från huvudboken är det dessa verifikat som förklarar skillnaden: granska dem med gnubok_query_journal.',
+      entries: shapeDetectedEntries.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP),
+    })
+  }
+
   // 4b) Is the DECLARATION itself complete? Everything above is about the
   //     bookkeeping around it; this is about the momsdeklaration.
   //
