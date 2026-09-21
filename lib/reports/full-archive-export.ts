@@ -1237,6 +1237,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',
+  invoice_completion_entries: 're-fetchable matching evidence and retry receipts; completed invoices and processing history are exported separately',
   sie_period_read_leases: 'short-lived coordination leases; no accounting content',
   // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
   peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',

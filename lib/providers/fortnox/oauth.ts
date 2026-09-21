@@ -1,3 +1,4 @@
+import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import { FORTNOX_AUTH_URL, FORTNOX_TOKEN_URL } from './config';
 import type { OAuthConfig, TokenResponse } from '../types';
 import {
@@ -138,6 +139,7 @@ export async function exchangeFortnoxCode(
     FORTNOX_TOKEN_URL,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Authorization: basicAuthHeader(config),
@@ -167,6 +169,7 @@ export async function refreshFortnoxToken(
     FORTNOX_TOKEN_URL,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Authorization: basicAuthHeader(config),
