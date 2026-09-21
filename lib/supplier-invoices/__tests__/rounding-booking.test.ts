@@ -76,7 +76,7 @@ it.each([false, true])('renders a rounding credit and the actual 2440 total (exp
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const cellsFor = (account: string) => {
     const row = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(m => m[1].includes(account))![1]
-    return [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1].replace(/<[^>]*>/g, '')).slice(-2)
+    return [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(m => m[1]).slice(-2)
   }
   expect(cellsFor('3740')).toEqual(['', formatAmount(0.25)])
   expect(cellsFor('2440')).toEqual(['', formatAmount(20056)])
@@ -124,6 +124,6 @@ it.each([
   }))
   const body = [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].at(-1)![1]
   const vatRow = [...body.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/g)].find(row => row[1].includes('2647'))![1]
-  const vatCells = [...vatRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(cell => cell[1].replace(/<[^>]*>/g, '')).slice(-2)
+  const vatCells = [...vatRow.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(cell => cell[1]).slice(-2)
   expect(vatCells).toEqual([formatAmount(expectedVat), ''])
 })
