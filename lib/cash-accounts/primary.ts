@@ -1,22 +1,29 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CashAccount } from '@/types'
-import { setPrimary } from '@/lib/cash-accounts/service'
 import { isBankCashAccount } from '@/lib/cash-accounts/invoice-payee'
 
 /**
  * Why an account cannot be made the company's primary by hand, in the order
- * the checks run. 'not_found' covers another company's id as well.
+ * the checks run. 'not_found' covers another company's id as well;
+ * 'forbidden' is the database's own owner/admin check.
  */
-export type PrimaryIneligibleReason = 'not_found' | 'disabled' | 'not_sek' | 'not_bank_account'
+export type PrimaryIneligibleReason =
+  | 'not_found'
+  | 'forbidden'
+  | 'disabled'
+  | 'not_sek'
+  | 'not_bank_account'
 
 export type MakePrimaryResult =
   | { ok: true; account: CashAccount }
   | { ok: false; reason: PrimaryIneligibleReason }
 
 /**
- * The one definition of "may be the primary account", shared by the server
- * (makePrimary) and the settings row that offers the action, so the UI never
- * shows a button the server refuses.
+ * The UI-side mirror of the rule make_cash_account_primary enforces
+ * (migration 20260921070500), so the settings row never offers a button the
+ * database refuses. The database is the authority; this only decides what to
+ * show. tests/pg/cash-accounts-routing-audit.pg.test.ts runs the same cases
+ * through both and fails if they drift.
  *
  * The primary is where bookings land when nothing else says which bank account
  * they belong to: the skattekonto __PRIMARY_SEK__ counter leg and the owner of
@@ -28,70 +35,53 @@ export type MakePrimaryResult =
  */
 export function primaryIneligibleReason(
   account: Pick<CashAccount, 'enabled' | 'currency' | 'ledger_account'>,
-): Exclude<PrimaryIneligibleReason, 'not_found'> | null {
+): Exclude<PrimaryIneligibleReason, 'not_found' | 'forbidden'> | null {
   if (!account.enabled) return 'disabled'
   if ((account.currency ?? '').toUpperCase() !== 'SEK') return 'not_sek'
   if (!isBankCashAccount(account)) return 'not_bank_account'
   return null
 }
 
+/** The refusal the RPC raised, read off its message; null for any other error. */
+function refusalFromRpcError(message: string): PrimaryIneligibleReason | null {
+  if (message.includes('CASH_ACCOUNT_NOT_FOUND')) return 'not_found'
+  if (message.includes('CASH_ACCOUNT_PRIMARY_ADMIN_ONLY')) return 'forbidden'
+  const match = /CASH_ACCOUNT_PRIMARY_INELIGIBLE: (disabled|not_sek|not_bank_account)/.exec(message)
+  return match ? (match[1] as PrimaryIneligibleReason) : null
+}
+
 /**
- * Make one of the company's cash accounts its primary. The swap itself is the
- * set_cash_account_primary RPC (one transaction, never a moment without a
- * primary); this adds the eligibility rule the RPC does not have.
+ * Make one of the company's cash accounts its primary, through the
+ * make_cash_account_primary RPC: it locks the row, checks eligibility and
+ * swaps the flag in one transaction, so a concurrent disable either lands
+ * first and is refused here, or waits and no longer matches its own predicate.
+ *
+ * Not set_cash_account_primary: that one carries the flag for system merges
+ * (PSD2 sync, twin heal) and deliberately has no eligibility rule.
  *
  * Writes cash_accounts.is_primary on two rows and nothing else. No journal
  * entry, line or transaction is touched: everything that reads the primary
  * resolves it at the moment it books or lists, so only later bookings follow.
+ * The change itself is logged to audit_log by the audit_cash_accounts_routing
+ * trigger, with the acting user.
  */
 export async function makePrimary(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
 ): Promise<MakePrimaryResult> {
-  const read = () =>
-    supabase
-      .from('cash_accounts')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('id', cashAccountId)
-      .maybeSingle()
-
-  const before = await read()
-  if (before.error) throw new Error(`cash_accounts makePrimary lookup failed: ${before.error.message}`)
-  if (!before.data) return { ok: false, reason: 'not_found' }
-  const account = before.data as CashAccount
-
-  const reason = primaryIneligibleReason(account)
-  if (reason) return { ok: false, reason }
-  if (account.is_primary) return { ok: true, account }
-
-  // Who is primary now, so a swap that turns out to be wrong can be undone.
-  const previous = await supabase
-    .from('cash_accounts')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('is_primary', true)
-    .neq('id', cashAccountId)
-    .maybeSingle()
-  if (previous.error) throw new Error(`cash_accounts makePrimary lookup failed: ${previous.error.message}`)
-  const previousId = (previous.data as { id: string } | null)?.id ?? null
-
-  await setPrimary(supabase, companyId, cashAccountId)
-
-  const after = await read()
-  if (after.error) throw new Error(`cash_accounts makePrimary re-read failed: ${after.error.message}`)
-  if (!after.data) return { ok: false, reason: 'not_found' }
-
-  // The RPC checks only that the row exists, so the eligibility read above and
-  // the swap are two statements: a disable that commits in between would leave
-  // a disabled primary. This re-read catches every such case, because once the
-  // swap has committed setEnabled()'s own predicate (is_primary = false)
-  // refuses any further disable of this row. Hand the flag back and refuse.
-  const lateReason = primaryIneligibleReason(after.data as CashAccount)
-  if (lateReason) {
-    if (previousId) await setPrimary(supabase, companyId, previousId)
-    return { ok: false, reason: lateReason }
+  const { data, error } = await supabase.rpc('make_cash_account_primary', {
+    p_company_id: companyId,
+    p_cash_account_id: cashAccountId,
+  })
+  if (error) {
+    const reason = refusalFromRpcError(error.message ?? '')
+    if (reason) return { ok: false, reason }
+    throw new Error(`cash_accounts makePrimary failed: ${error.message}`)
   }
-  return { ok: true, account: after.data as CashAccount }
+  // A composite-returning function comes back as the row (or a one-row array,
+  // depending on how PostgREST was asked).
+  const account = (Array.isArray(data) ? data[0] : data) as CashAccount | null
+  if (!account) return { ok: false, reason: 'not_found' }
+  return { ok: true, account }
 }

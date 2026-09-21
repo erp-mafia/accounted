@@ -23,13 +23,13 @@ function notFound(): NextResponse {
  * POST /api/cash-accounts/[id]/primary
  *
  * Make this account the company's primary. An action, not a field: it takes no
- * body, flips the flag on two rows in one transaction (set_cash_account_primary)
- * and cannot be combined with anything else.
+ * body, checks eligibility and flips the flag on two rows in one transaction
+ * (make_cash_account_primary) and cannot be combined with anything else.
  *
  * Owner/admin only, same gate as the enabled toggle next to it: the primary is
  * the skattekonto counter leg (__PRIMARY_SEK__) and the account that owns
- * transactions with no cash_account_id in reconciliation. What qualifies
- * lives in makePrimary(), not here.
+ * transactions with no cash_account_id in reconciliation. What qualifies is
+ * decided inside the RPC, not here; who did it and when lands in audit_log.
  * Only bookings made after the call follow the new primary; nothing posted is
  * read or written.
  */
@@ -54,6 +54,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       const result = await makePrimary(supabase, companyId, id)
       if (result.ok) return NextResponse.json({ data: result.account })
       if (result.reason === 'not_found') return notFound()
+      // The database's own owner/admin check (make_cash_account_primary): the
+      // role read above said yes and the membership changed in between.
+      if (result.reason === 'forbidden') {
+        return errorResponseFromCode('FORBIDDEN', log, {
+          requestId,
+          details: { required_roles: ['owner', 'admin'] },
+        })
+      }
       return errorResponseFromCode('CASH_ACCOUNT_PRIMARY_INELIGIBLE', log, {
         requestId,
         details: { cash_account_id: id, reason: result.reason },

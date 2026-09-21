@@ -868,6 +868,48 @@ describe('auditRowToEvent: behandlingsregler', () => {
     expect(churn).toBeNull()
   })
 
+  // Migration 20260921070500 (desk crm#59): both flags redirect an automatic
+  // account choice, so a change is a behandlingsregel change (BFNAR 2013:2
+  // p. 9.16) and shows from/to with who did it.
+  it('cash_accounts: turning an account off and moving the primary show from/to and the actor', () => {
+    const disabled = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Företagskonto', ledger_account: '1930', enabled: true, is_primary: false, balance: 0 },
+        new_state: { name: 'Företagskonto', ledger_account: '1930', enabled: false, is_primary: false, balance: 0 },
+      }),
+    )!
+    expect(disabled).toMatchObject({ category: 'installningar', code: 'cash_account.updated', object: 'Företagskonto 1930' })
+    expect(disabled.details).toEqual(['Aktivt: Ja → Nej'])
+
+    const primary = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        old_state: { name: 'Bankkonto 1940', ledger_account: '1940', enabled: true, is_primary: false },
+        new_state: { name: 'Bankkonto 1940', ledger_account: '1940', enabled: true, is_primary: true },
+      }),
+    )!
+    expect(primary.details).toEqual(['Primärt bankkonto: Nej → Ja'])
+
+    // A service-role write (bank sync, re-enable on ingest) is logged by the
+    // trigger as actor_type 'system' with no user: the report says so.
+    const system = auditRowToEvent(
+      auditRow({
+        table_name: 'cash_accounts',
+        action: 'UPDATE',
+        user_id: null,
+        actor_id: null,
+        actor_type: 'system',
+        old_state: { name: 'Företagskonto', ledger_account: '1930', enabled: false },
+        new_state: { name: 'Företagskonto', ledger_account: '1930', enabled: true },
+      }),
+    )!
+    expect(system.actor).toMatchObject({ type: 'system', user_id: null })
+    expect(system.details).toEqual(['Aktivt: Nej → Ja'])
+  })
+
   it('categorization_templates: the learning columns never reach the report', () => {
     // The DB trigger filters these already (20260901103000 + 20260901200000);
     // the read model must not resurrect them if a row slips through, or every

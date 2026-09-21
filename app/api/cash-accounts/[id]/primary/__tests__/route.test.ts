@@ -6,7 +6,7 @@ import {
   createQueuedMockSupabase,
 } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -82,7 +82,6 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(403)
     expect(body.error.code).toBe('FORBIDDEN')
-    expect(findCalls('cash_accounts', 'select')).toHaveLength(0)
     expect(rpcCalls()).toHaveLength(0)
   })
 
@@ -94,104 +93,67 @@ describe('POST /api/cash-accounts/[id]/primary (desk crm#59: move primary off th
     expect(getCompanyRoleMock).not.toHaveBeenCalled()
   })
 
-  it('returns 404 when the account is not one of the company\'s', async () => {
-    enqueue({ data: null }) // company-scoped lookup finds nothing
+  const RPC = ['make_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: CA_1940 }]
+
+  it('returns 404 when the RPC finds no such account in the company', async () => {
+    enqueue({ data: null, error: { message: 'CASH_ACCOUNT_NOT_FOUND', code: 'P0002' } })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(404)
     expect(body.error.code).toBe('CASH_ACCOUNT_NOT_FOUND')
-    expect(findCalls('cash_accounts', 'eq')).toContainEqual(['company_id', 'company-1'])
-    expect(rpcCalls()).toHaveLength(0)
+    expect(rpcCalls()).toEqual([RPC])
   })
 
-  it.each([
-    ['a disabled account', { enabled: false }, 'disabled'],
-    ['a currency account', { currency: 'EUR', ledger_account: '1950' }, 'not_sek'],
-    ['a PSP clearing account', { ledger_account: '1686' }, 'not_bank_account'],
-    ['a till', { ledger_account: '1910' }, 'not_bank_account'],
-  ])('returns 400 for %s and never calls the RPC', async (_label, overrides, reason) => {
-    enqueue({ data: account(overrides) })
+  // The rule itself lives in the RPC (one transaction with the swap) and is
+  // proven in tests/pg/cash-accounts-routing-audit.pg.test.ts. Here: each
+  // refusal it raises becomes a 400 with its reason.
+  it.each(['disabled', 'not_sek', 'not_bank_account'])(
+    'returns 400 with the reason when the RPC refuses the target as %s',
+    async (reason) => {
+      enqueue({ data: null, error: { message: `CASH_ACCOUNT_PRIMARY_INELIGIBLE: ${reason}`, code: '23514' } })
+      const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details?: { reason?: string } }
+      }>(response)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('CASH_ACCOUNT_PRIMARY_INELIGIBLE')
+      expect(body.error.details?.reason).toBe(reason)
+    },
+  )
+
+  it('returns 403 when the database\'s own owner/admin check refuses', async () => {
+    enqueue({ data: null, error: { message: 'CASH_ACCOUNT_PRIMARY_ADMIN_ONLY: only owner or admin', code: '42501' } })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
-    const { status, body } = await parseJsonResponse<{
-      error: { code: string; details?: { reason?: string } }
-    }>(response)
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('CASH_ACCOUNT_PRIMARY_INELIGIBLE')
-    expect(body.error.details?.reason).toBe(reason)
-    expect(rpcCalls()).toHaveLength(0)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
   })
 
-  it('makes an enabled SEK bank account primary through set_cash_account_primary and returns it', async () => {
-    enqueue({ data: account() }) // lookup
-    enqueue({ data: { id: 'ca-1930' } }) // current primary
-    enqueue({ data: null }) // rpc
-    enqueue({ data: account({ is_primary: true }) }) // re-read
+  it('makes the account primary through make_cash_account_primary and returns the row', async () => {
+    enqueue({ data: account({ is_primary: true }) })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
     const { status, body } = await parseJsonResponse<{ data: { id: string; is_primary: boolean } }>(response)
     expect(status).toBe(200)
     expect(body.data).toMatchObject({ id: CA_1940, is_primary: true })
-    expect(rpcCalls()).toEqual([
-      ['set_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: CA_1940 }],
-    ])
+    expect(rpcCalls()).toEqual([RPC])
   })
 
-  // Hard Rule 1: moving the primary is a settings change. It must not read or
-  // write a journal table or a transaction; only later bookings follow it.
-  it('touches cash_accounts and the RPC only: no journal table, no transaction', async () => {
-    enqueue({ data: account() })
-    enqueue({ data: { id: 'ca-1930' } }) // current primary
-    enqueue({ data: null })
+  // Hard Rule 1: moving the primary is a settings change. The route reaches
+  // the database through the one RPC and no table at all.
+  it('calls the RPC and touches no table: no journal table, no transaction', async () => {
     enqueue({ data: account({ is_primary: true }) })
     await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
-    const tables = mockSupabase.from.mock.calls.map((c) => c[0])
-    expect(new Set(tables)).toEqual(new Set(['cash_accounts']))
-    expect(findCalls('cash_accounts', 'update')).toHaveLength(0)
-    expect(findCalls('cash_accounts', 'insert')).toHaveLength(0)
-    expect(findCalls('cash_accounts', 'delete')).toHaveLength(0)
-  })
-
-  it('allows an account a bank connection holds: the PSD2 sync never picks a primary', async () => {
-    enqueue({ data: account({ bank_connection_id: 'conn-1', source: 'enable_banking' }) })
-    enqueue({ data: { id: 'ca-1930' } }) // current primary
-    enqueue({ data: null })
-    enqueue({ data: account({ bank_connection_id: 'conn-1', source: 'enable_banking', is_primary: true }) })
-    const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
-    expect(response.status).toBe(200)
+    expect(mockSupabase.from.mock.calls).toHaveLength(0)
     expect(rpcCalls()).toHaveLength(1)
   })
 
-  // Superagent P2: the RPC only checks that the row exists, so a disable that
-  // commits between the eligibility read and the swap would leave a disabled
-  // primary. The re-read after the swap catches it and the flag goes back.
-  it('hands primary back and answers 400 when the target was disabled between the check and the swap', async () => {
-    enqueue({ data: account() }) // lookup: eligible
-    enqueue({ data: { id: 'ca-1930' } }) // current primary
-    enqueue({ data: null }) // rpc: swap to 1940
-    enqueue({ data: account({ is_primary: true, enabled: false }) }) // re-read: disabled meanwhile
-    enqueue({ data: null }) // rpc: back to 1930
-    const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
-    const { status, body } = await parseJsonResponse<{
-      error: { code: string; details?: { reason?: string } }
-    }>(response)
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('CASH_ACCOUNT_PRIMARY_INELIGIBLE')
-    expect(body.error.details?.reason).toBe('disabled')
-    expect(rpcCalls()).toEqual([
-      ['set_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: CA_1940 }],
-      ['set_cash_account_primary', { p_company_id: 'company-1', p_cash_account_id: 'ca-1930' }],
-    ])
-  })
-
-  it('is a no-op on the account that is already primary', async () => {
+  it('never calls set_cash_account_primary: that one has no eligibility rule', async () => {
     enqueue({ data: account({ is_primary: true }) })
-    const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
-    expect(response.status).toBe(200)
-    expect(rpcCalls()).toHaveLength(0)
+    await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
+    expect(rpcCalls().map((c) => c[0])).not.toContain('set_cash_account_primary')
   })
 
-  it('maps an RPC failure to the canonical error envelope', async () => {
-    enqueue({ data: account() })
-    enqueue({ data: { id: 'ca-1930' } }) // current primary
+  it('maps any other RPC failure to the canonical error envelope', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
     const response = await POST(postReq(), createMockRouteParams({ id: CA_1940 }))
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
