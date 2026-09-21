@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { getTwinRepairReceipt, healTwinCashAccounts } from '../heal-twins'
+import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair } from '../heal-twins'
 
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn() }))
 const companyId = '123e4567-e89b-12d3-a456-426614174000'
@@ -61,5 +61,33 @@ describe('getTwinRepairReceipt', () => {
     expect(query.eq).toHaveBeenCalledWith('company_id', companyId)
     expect(query.eq).toHaveBeenCalledWith('event_id', operationId)
     expect(query.eq).toHaveBeenCalledWith('event_type', 'CashAccountTwinsMerged')
+  })
+})
+
+describe('verifyTwinRepair', () => {
+  const verified = { companyId, operationId, status: 'consistent', receiptPhase: 'completed',
+    issues: [], routingIssues: [], cashAccountsChecked: 2, transactionsChecked: 1, journalsChecked: 0,
+    verifiedAt: '2026-09-21T16:00:00Z' }
+  it('checks a specific operation without relying on remaining twins', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: verified, error: null })
+    expect(await verifyTwinRepair({ rpc } as unknown as SupabaseClient, companyId, operationId)).toEqual(verified)
+    expect(rpc).toHaveBeenCalledExactlyOnceWith('verify_cash_account_twin_repair', {
+      p_company_id: companyId, p_operation_id: operationId,
+    })
+  })
+  it.each(['changed', 'insufficient-evidence'])('preserves the database outcome: %s', async status => {
+    const rpc = vi.fn().mockResolvedValue({ data: { ...verified, status }, error: null })
+    expect((await verifyTwinRepair({ rpc } as unknown as SupabaseClient, companyId, operationId)).status).toBe(status)
+  })
+  it('preserves a missing receipt error', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code: 'P0002', message: 'receipt missing' } })
+    await expect(verifyTwinRepair({ rpc } as unknown as SupabaseClient, companyId, operationId))
+      .rejects.toMatchObject({ code: 'P0002', message: 'cash account twin verification failed: receipt missing' })
+  })
+  it.each([null, { ...verified, companyId: 'other' }, { ...verified, operationId: 'other' }, { ...verified, status: 'unknown' },
+    { ...verified, routingIssues: null }])('rejects an invalid verification response: %j', async data => {
+    const rpc = vi.fn().mockResolvedValue({ data, error: null })
+    await expect(verifyTwinRepair({ rpc } as unknown as SupabaseClient, companyId, operationId))
+      .rejects.toThrow('missing or invalid acknowledgement')
   })
 })

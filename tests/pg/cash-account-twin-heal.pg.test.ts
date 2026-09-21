@@ -38,6 +38,9 @@ async function heal(fingerprint: string, id = operationId) {
   return (await client.query('SELECT heal_cash_account_twins($1, $2, $3, $4) AS result',
     [owner.companyId, fingerprint, id, JSON.stringify(actor)])).rows[0].result
 }
+async function verify(id = operationId, companyId = owner.companyId) {
+  return (await client.query('SELECT verify_cash_account_twin_repair($1, $2) AS result', [companyId, id])).rows[0].result
+}
 async function transaction(id = randomUUID()) {
   await client.query(`INSERT INTO transactions(id, company_id, user_id, date, amount, currency, description, cash_account_id)
     VALUES ($1, $2, $3, '2026-01-02', -25, 'SEK', 'PG twin fixture', $4)`, [id, owner.companyId, owner.userId, twinId])
@@ -83,7 +86,10 @@ describe('company twin plan and atomic receipt', () => {
     expect(await heal(reviewed.fingerprint)).toEqual(result)
     expect((await client.query('SELECT cash_account_id FROM transactions WHERE id = $1', [tx])).rows[0].cash_account_id).toBe(keeperId)
     const receipts = (await client.query('SELECT payload FROM processing_history WHERE event_id = $1', [operationId])).rows
-    expect(receipts).toEqual([{ payload: { phase: 'completed', plan_fingerprint: reviewed.fingerprint, result } }])
+    expect(receipts).toEqual([{ payload: { phase: 'completed', plan_fingerprint: reviewed.fingerprint, result,
+      verification: { schemaVersion: 1, cashAccounts: expect.any(Array), journals: [],
+        transactions: [{ id: tx, cashAccountId: keeperId, hash: expect.stringMatching(/^[0-9a-f]{64}$/) }] },
+    } }])
     await expect(client.query("UPDATE processing_history SET payload = '{}' WHERE event_id = $1", [operationId])).rejects.toThrow()
   })
 
@@ -113,6 +119,116 @@ describe('company twin plan and atomic receipt', () => {
     const reviewed = await plan()
     await heal(reviewed.fingerprint)
     await expect(heal('f'.repeat(64))).rejects.toMatchObject({ code: '23505', message: 'CASH_ACCOUNT_OPERATION_ID_CONFLICT' })
+  })
+
+  it('verifies current bindings after the final twin disappears and excludes bank details from the receipt', async () => {
+    await transaction()
+    await heal((await plan()).fingerprint)
+    expect((await plan()).groups).toEqual([])
+    expect(await verify()).toMatchObject({ status: 'consistent', cashAccountsChecked: 2, transactionsChecked: 1,
+      journalsChecked: 0, issues: [], routingIssues: [] })
+    const payload = (await client.query('SELECT payload FROM processing_history WHERE event_id = $1', [operationId])).rows[0].payload
+    expect(JSON.stringify(payload)).not.toContain(iban)
+    expect(JSON.stringify(payload)).not.toContain('PG twin fixture')
+    await client.query('UPDATE cash_accounts SET balance = 123, balance_updated_at = now() WHERE id = $1', [keeperId])
+    expect((await verify()).status).toBe('consistent')
+  })
+
+  it('detects a later wrong route even with no twins remaining', async () => {
+    await heal((await plan()).fingerprint)
+    await client.query(`UPDATE bank_connections SET accounts_data = jsonb_set(accounts_data, '{0,ledger_account}', '"1939"') WHERE id = $1`, [connectionId])
+    expect((await plan()).groups).toEqual([])
+    expect(await verify()).toMatchObject({ status: 'changed', issues: [],
+      routingIssues: [{ kind: 'ledger-mismatch', connectionId, cashAccountId: keeperId }] })
+  })
+
+  it('detects a live cash account removed from the connection selection', async () => {
+    await heal((await plan()).fingerprint)
+    await client.query("UPDATE bank_connections SET accounts_data = '[]' WHERE id = $1", [connectionId])
+    expect(await verify()).toMatchObject({ status: 'changed', routingIssues: [
+      { kind: 'cash-account-not-selected', connectionId, cashAccountId: keeperId },
+    ] })
+  })
+
+  it('detects a repaired keeper left on a revoked connection', async () => {
+    await heal((await plan()).fingerprint)
+    await client.query("UPDATE bank_connections SET status = 'revoked' WHERE id = $1", [connectionId])
+    expect(await verify()).toMatchObject({ status: 'changed', routingIssues: [
+      { kind: 'inactive-connection', connectionId, cashAccountId: keeperId },
+    ] })
+  })
+
+  it('allows service verification and denies anonymous and authenticated callers', async () => {
+    await heal((await plan()).fingerprint)
+    await client.query('SAVEPOINT verification_grants')
+    await client.query('SET LOCAL ROLE anon')
+    await expect(verify()).rejects.toMatchObject({ code: '42501' })
+    await client.query('ROLLBACK TO SAVEPOINT verification_grants')
+    await client.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [owner.userId])
+    await client.query('SET LOCAL ROLE authenticated')
+    await expect(verify()).rejects.toMatchObject({ code: '42501' })
+    await client.query('ROLLBACK TO SAVEPOINT verification_grants')
+    await client.query('SET LOCAL ROLE service_role')
+    expect((await verify()).status).toBe('consistent')
+  })
+
+  it('detects a lost binding instead of treating zero twin groups as success', async () => {
+    const id = await transaction()
+    await heal((await plan()).fingerprint)
+    await client.query('UPDATE transactions SET cash_account_id = null WHERE id = $1', [id])
+    expect((await plan()).groups).toEqual([])
+    expect(await verify()).toMatchObject({ status: 'changed', issues: [{ kind: 'transaction-or-anchor-changed', id,
+      expectedCashAccountId: keeperId, currentCashAccountId: null }] })
+  })
+
+  it('reports insufficient evidence for historical events rather than inventing proof', async () => {
+    await client.query(`INSERT INTO processing_history(event_id, company_id, correlation_id, aggregate_type, aggregate_id,
+      event_type, payload, actor, occurred_at) VALUES ($1, $2, $1, 'System', $2, 'CashAccountTwinsMerged',
+      '{"phase":"started"}', $3, now())`, [operationId, owner.companyId, JSON.stringify(actor)])
+    expect(await verify()).toMatchObject({ status: 'insufficient-evidence', receiptPhase: 'started' })
+  })
+
+  it('scopes verification by company even for the service role', async () => {
+    await heal((await plan()).fingerprint)
+    await client.query('SET LOCAL ROLE service_role')
+    await expect(verify(operationId, randomUUID())).rejects.toMatchObject({ code: 'P0002' })
+  })
+
+  it('captures and verifies transaction bindings beyond the REST page limit', async () => {
+    await client.query(`INSERT INTO transactions(company_id, user_id, date, amount, currency, description, cash_account_id)
+      SELECT $1, $2, '2026-01-02', -25, 'SEK', 'PG large repair', $3 FROM generate_series(1, 1101)`,
+    [owner.companyId, owner.userId, twinId])
+    const lateId = (await client.query('SELECT id FROM transactions WHERE company_id = $1 ORDER BY id OFFSET 1000 LIMIT 1', [owner.companyId])).rows[0].id
+    await heal((await plan()).fingerprint)
+    expect(await verify()).toMatchObject({ status: 'consistent', transactionsChecked: 1101 })
+    await client.query('UPDATE transactions SET cash_account_id = null WHERE id = $1', [lateId])
+    expect(await verify()).toMatchObject({ status: 'changed', issues: [{ kind: 'transaction-or-anchor-changed', id: lateId }] })
+  })
+
+  it('proves that an existing posted voucher and its anchored transaction were preserved', async () => {
+    const historical = await seedCompany()
+    const voucher = await insertPostedJournalEntry({ ...historical, entryDate: '2026-01-02', lines: [
+      { accountNumber: '1931', debitAmount: 25, creditAmount: 0 },
+      { accountNumber: '2999', debitAmount: 0, creditAmount: 25 },
+    ] })
+    const connection = randomUUID(), keeper = randomUUID(), manual = randomUUID()
+    await client.query(`INSERT INTO bank_connections(id, company_id, user_id, session_id, status, accounts_data)
+      VALUES ($1, $2, $3, 'pg-voucher-proof', 'active', $4)`, [connection, historical.companyId, historical.userId,
+      JSON.stringify([{ uid: 'voucher-proof-uid', currency: 'SEK', iban, ledger_account: '1931', enabled: true }])])
+    await client.query(`INSERT INTO cash_accounts(id, company_id, ledger_account, currency, iban, bank_connection_id, external_uid)
+      VALUES ($1, $2, '1931', 'SEK', $3, $4, 'voucher-proof-uid')`, [keeper, historical.companyId, iban, connection])
+    await client.query(`INSERT INTO cash_accounts(id, company_id, ledger_account, currency, iban, source, is_primary)
+      VALUES ($1, $2, '1930', 'SEK', $3, 'manual', true)`, [manual, historical.companyId, iban])
+    await client.query(`INSERT INTO transactions(company_id, user_id, date, amount, currency, description, cash_account_id, journal_entry_id)
+      VALUES ($1, $2, '2026-01-02', 25, 'SEK', 'PG anchored', $3, $4),
+        ($1, $2, '2026-01-02', 25, 'SEK', 'PG movable', $5, null)`, [historical.companyId, historical.userId, keeper, voucher, manual])
+    const before = (await client.query('SELECT cash_repair_journal_state($1, $2) AS state', [historical.companyId, voucher])).rows[0].state
+    const reviewed = (await client.query('SELECT plan_cash_account_twins($1) AS plan', [historical.companyId])).rows[0].plan
+    const op = randomUUID()
+    await client.query('SELECT heal_cash_account_twins($1, $2, $3, $4)', [historical.companyId, reviewed.fingerprint, op, JSON.stringify(actor)])
+    expect(await verify(op, historical.companyId)).toMatchObject({ status: 'consistent', journalsChecked: 1, transactionsChecked: 2 })
+    const after = (await client.query('SELECT cash_repair_journal_state($1, $2) AS state', [historical.companyId, voucher])).rows[0].state
+    expect(after).toEqual(before)
   })
 
   it('fingerprints transaction identities, not just their count', async () => {

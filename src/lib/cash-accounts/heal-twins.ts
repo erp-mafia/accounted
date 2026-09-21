@@ -44,6 +44,19 @@ export interface HealTwinsResult {
   operationId?: string
 }
 
+export interface TwinRepairVerification {
+  companyId: string
+  operationId: string
+  status: 'consistent' | 'changed' | 'insufficient-evidence'
+  receiptPhase: string
+  issues: Array<{ kind: string; id: string; expectedCashAccountId?: string; currentCashAccountId?: string | null }>
+  routingIssues: Array<{ kind: string; connectionId: string; cashAccountId: string | null; uidHash: string | null }>
+  cashAccountsChecked?: number
+  transactionsChecked?: number
+  journalsChecked?: number
+  verifiedAt: string
+}
+
 export type HealTwinsOptions =
   | { dryRun: true }
   | {
@@ -110,4 +123,22 @@ export async function getTwinRepairReceipt(
     throw new Error('cash account twin receipt is invalid')
   }
   return result as HealTwinsResult
+}
+
+/** Compare the receipt's expected bindings and preserved state with current data. */
+export async function verifyTwinRepair(
+  supabase: SupabaseClient,
+  companyId: string,
+  operationId: string,
+): Promise<TwinRepairVerification> {
+  const { data, error } = await supabase.rpc('verify_cash_account_twin_repair', {
+    p_company_id: companyId, p_operation_id: operationId,
+  })
+  if (error) throw Object.assign(new Error(`cash account twin verification failed: ${error.message}`), { code: error.code })
+  if (!data || data.companyId !== companyId || data.operationId !== operationId ||
+    !['consistent', 'changed', 'insufficient-evidence'].includes(data.status) ||
+    !Array.isArray(data.issues) || !Array.isArray(data.routingIssues) || typeof data.verifiedAt !== 'string') {
+    throw new Error('cash account twin verification failed: missing or invalid acknowledgement')
+  }
+  return data as TwinRepairVerification
 }

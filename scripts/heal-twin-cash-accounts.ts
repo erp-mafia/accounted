@@ -36,7 +36,7 @@ import { createInterface } from 'node:readline/promises'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { physicalAccountKey } from '@/lib/cash-accounts/service'
-import { getTwinRepairReceipt, healTwinCashAccounts, type HealTwinsResult } from '@/lib/cash-accounts/heal-twins'
+import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair, type HealTwinsResult, type TwinRepairVerification } from '@/lib/cash-accounts/heal-twins'
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`)
@@ -141,21 +141,35 @@ function print(result: HealTwinsResult): void {
   }
 }
 
+function printVerification(result: TwinRepairVerification): void {
+  console.log(`Current verification: ${result.status} (${result.verifiedAt})`)
+  console.log(`Checked ${result.cashAccountsChecked ?? 0} cash accounts, ${result.transactionsChecked ?? 0} transactions and ${result.journalsChecked ?? 0} journals.`)
+  for (const issue of result.issues) console.log(`  ${issue.kind}: ${issue.id}`)
+  for (const issue of result.routingIssues) console.log(`  routing ${issue.kind}: connection ${issue.connectionId}, cash account ${issue.cashAccountId ?? 'missing'}`)
+  if (result.status === 'insufficient-evidence') {
+    console.log('This historical event lacks the state evidence required for complete verification. It needs a separate recovery review.')
+  }
+  if (result.status !== 'consistent') process.exitCode = 3
+}
+
 async function main(): Promise<void> {
   console.log(`Target: ${supabaseUrl} (${ENV_FILE})`)
   console.log(EXECUTE ? 'Mode: EXECUTE' : 'Mode: dry run, nothing is written')
 
-  const recoveryId = VERIFY_OPERATION ?? (EXECUTE ? OPERATION_ID : null)
+  if (VERIFY_OPERATION && COMPANY_ID) {
+    printVerification(await verifyTwinRepair(supabase, COMPANY_ID, VERIFY_OPERATION))
+    return
+  }
+
+  const recoveryId = EXECUTE ? OPERATION_ID : null
   if (recoveryId && COMPANY_ID) {
     const receipt = await getTwinRepairReceipt(supabase, COMPANY_ID, recoveryId)
     if (receipt) {
       console.log(`Committed receipt for operation ${recoveryId}:`)
       print(receipt)
-      console.log('Current state (dry run):')
-      print(await healTwinCashAccounts(supabase, COMPANY_ID, { dryRun: true }))
+      printVerification(await verifyTwinRepair(supabase, COMPANY_ID, recoveryId))
       return
     }
-    if (VERIFY_OPERATION) throw new Error(`No completed receipt for operation ${recoveryId}`)
   }
 
   const companyIds = COMPANY_ID ? [COMPANY_ID] : await companiesWithTwins()
@@ -196,6 +210,7 @@ async function main(): Promise<void> {
   )
   console.log('\nDone. After-state (dry run):')
   print(await healTwinCashAccounts(supabase, COMPANY_ID, { dryRun: true }))
+  printVerification(await verifyTwinRepair(supabase, COMPANY_ID, OPERATION_ID))
 }
 
 main().catch((error) => {
