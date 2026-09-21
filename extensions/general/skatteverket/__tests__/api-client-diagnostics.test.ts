@@ -57,6 +57,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** Stub the upstream response without making a network request. */
 function respond(status: number) {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(
     JSON.stringify({ error: 'Invalid client id or secret' }),
@@ -64,6 +65,7 @@ function respond(status: number) {
   )))
 }
 
+/** Find the authentication diagnostic after the logger's real redaction. */
 function authRecord(status: number) {
   const record = records.find((r) => r.msg === `${status} from Skatteverket API`)
   expect(record).toBeDefined()
