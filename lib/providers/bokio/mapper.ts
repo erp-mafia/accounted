@@ -445,9 +445,8 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
   const paid = remaining !== undefined && totalAmount > 0 && remaining <= 0;
 
   const supplierRef = raw['supplierRef'] as Record<string, unknown> | undefined;
-  // journalEntryRef.id is a Bokio uuid, not a series/number pair, so it
-  // cannot fill SourceVoucherRefDto (see lib/providers/source-voucher.ts).
-  // It does answer one question: has Bokio booked this invoice.
+  // The hydration pass resolves this UUID to sourceVoucher through Bokio's
+  // journal endpoint. Here it only establishes whether Bokio booked it.
   const journalEntryRef = raw['journalEntryRef'] as Record<string, unknown> | null | undefined;
   const rawLines = (raw['lineItems'] as Record<string, unknown>[] | undefined) ?? [];
 

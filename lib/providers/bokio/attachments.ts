@@ -50,6 +50,26 @@ export interface BokioVoucherRef {
   date: string;
 }
 
+function voucherRef(entry: BokioJournalEntry): BokioVoucherRef | null {
+  const match = VOUCHER_NUMBER_RE.exec(entry.journalEntryNumber ?? '');
+  if (!match) return null;
+  return { series: match[1], number: Number(match[2]), date: entry.date };
+}
+
+/** Resolve only the invoice's referenced entry, within a bounded worker batch. */
+export async function fetchBokioVoucherRef(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+  entryId: string,
+): Promise<BokioVoucherRef> {
+  const entry = await client.get<BokioJournalEntry>(accessToken,
+    `/companies/${encodeURIComponent(companyId)}${JOURNAL_ENTRIES_PATH}/${encodeURIComponent(entryId)}`);
+  const ref = entry.id === entryId ? voucherRef(entry) : null;
+  if (!ref || ref.number <= 0) throw new Error('Bokio journal entry did not supply a matching, readable voucher reference');
+  return ref;
+}
+
 async function paginate<T>(
   client: BokioClient,
   accessToken: string,
@@ -102,13 +122,8 @@ export async function fetchBokioVoucherIndex(
 
   const index = new Map<string, BokioVoucherRef>();
   for (const entry of entries) {
-    const match = VOUCHER_NUMBER_RE.exec(entry.journalEntryNumber ?? '');
-    if (!match) continue;
-    index.set(entry.id, {
-      series: match[1],
-      number: Number(match[2]),
-      date: entry.date,
-    });
+    const ref = voucherRef(entry);
+    if (ref) index.set(entry.id, ref);
   }
   return index;
 }

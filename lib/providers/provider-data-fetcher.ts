@@ -17,6 +17,7 @@ import { BRIOX_RESOURCE_CONFIGS } from './briox/config';
 import { BokioClient, BokioApiError } from './bokio/client';
 import { BOKIO_RESOURCE_CONFIGS } from './bokio/config';
 import { isBokioCreditNotePayload } from './bokio/mapper';
+import { fetchBokioVoucherRef } from './bokio/attachments';
 import { BjornLundenClient } from './bjornlunden/client';
 import { BL_RESOURCE_CONFIGS } from './bjornlunden/config';
 import { WintClient } from './wint/client';
@@ -569,9 +570,9 @@ type InvoiceResource =
 
 /** What a hydration pass managed to do, for the migration summary. */
 export interface HydrationReport {
-  /** Invoices whose payload was missing VAT, a net, or line items. */
+  /** Invoices missing detail fields or needing their journal UUID resolved. */
   needed: number;
-  /** Detail payloads successfully fetched and re-mapped. */
+  /** Invoices whose required detail and voucher lookups completed. */
   hydrated: number;
   /** Detail fetches that errored; the list-form invoice was kept. */
   failed: number;
@@ -796,12 +797,41 @@ async function mapWithConcurrency<T>(
   await Promise.all(workers);
 }
 
+interface InvoiceEnrichment<T> {
+  needed: (dto: T) => boolean;
+  apply: (dto: T) => Promise<T>;
+}
+
+/**
+ * Bokio names the journal UUID, while the SIE linker needs its voucher number.
+ * Fetch only that entry, after any invoice detail replacement, under the same
+ * hydration deadline. No process-wide cache can leak refs between companies.
+ */
+function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
+  provider: ProviderName, accessToken: string, companyId: string | undefined,
+): InvoiceEnrichment<T> | undefined {
+  if (provider !== 'bokio' || !companyId) return undefined;
+  const entryId = (dto: T): string | undefined => {
+    const ref = dto._raw?.['journalEntryRef'] as { id?: unknown } | null | undefined;
+    return typeof ref?.id === 'string' && ref.id ? ref.id : undefined;
+  };
+  return {
+    needed: dto => !dto.sourceVoucher && !!entryId(dto),
+    apply: async dto => {
+      const id = entryId(dto);
+      if (!id || dto.sourceVoucher) return dto;
+      const { series, number } = await fetchBokioVoucherRef(bokioClient, accessToken, companyId, id);
+      return { ...dto, sourceVoucher: { series, number } };
+    },
+  };
+}
+
 /**
  * Replace list-form invoices with their detail form, open ones first.
  *
  * Returns a NEW array in the original order; entries that were not hydrated
- * (already complete, out of budget, or the fetch failed) are the originals,
- * so the caller never ends up with fewer invoices than it passed in.
+ * (already complete, out of budget, or the fetch failed) retain the latest
+ * successfully mapped payload. The caller never loses an invoice.
  *
  * `unhydratedIds` names the invoices that NEEDED a detail form and did not
  * get one (budget, abort, or a failed fetch). A consumer that reads a field
@@ -816,6 +846,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   mapper: ((raw: Record<string, unknown>) => unknown) | null,
   label: string,
   budgetMs: number,
+  enrichment?: InvoiceEnrichment<T>,
 ): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string> }> {
   if (!fetchDetail || !mapper) {
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
@@ -823,7 +854,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
 
   const pending = items
     .map((dto, index) => ({ dto, index }))
-    .filter(({ dto }) => needsDetail(dto) && dto.id);
+    .filter(({ dto }) => (needsDetail(dto) || enrichment?.needed(dto)) && dto.id);
 
   if (pending.length === 0) {
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
@@ -860,12 +891,21 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
       // its 300 s function ceiling. The underlying request is not cancelled,
       // but control returns and the remaining invoices are reported as
       // unhydrated instead of the run dying.
-      const raw = await withDeadline(fetchDetail(dto), deadline);
-      if (!raw) {
-        report.failed++;
-        return;
+      let result = dto;
+      if (needsDetail(dto)) {
+        const raw = await withDeadline(fetchDetail(dto), deadline);
+        if (!raw) {
+          report.failed++;
+          return;
+        }
+        result = mapper(raw) as T;
+        // Retain recovered detail even if the optional voucher lookup fails.
+        hydrated[index] = result;
       }
-      hydrated[index] = mapper(raw) as T;
+      if (enrichment?.needed(result)) {
+        result = await withDeadline(enrichment.apply(result), deadline);
+      }
+      hydrated[index] = result;
       report.hydrated++;
       unhydratedIds.delete(dto.id);
     } catch (err) {
@@ -992,6 +1032,7 @@ export async function hydrateSalesInvoices(
     resourceMapper(provider, ResourceType.SalesInvoices),
     `${provider} sales-invoice`,
     budgetMs,
+    bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
   );
 
   return { invoices: items, hydration: report, unhydratedIds };
@@ -1030,6 +1071,7 @@ export async function hydrateSupplierInvoices(
     resourceMapper(provider, ResourceType.SupplierInvoices),
     `${provider} supplier-invoice`,
     budgetMs,
+    bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
   );
 
   return { invoices: items, hydration: report, unhydratedIds };

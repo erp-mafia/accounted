@@ -57,7 +57,7 @@ function openRow(id: string, invoiceNumber: string, invoiceDate: string, total: 
 }
 
 /** Records every update() the pass issues, and the filters it scoped them with. */
-function trackingSupabase() {
+function trackingSupabase(result: { data: { id: string } | null; error: { message: string } | null } = { data: { id: 'updated' }, error: null }) {
   const updates: { values: Record<string, unknown>; filters: Record<string, unknown> }[] = []
   const selectFilters: Record<string, unknown> = {}
 
@@ -66,13 +66,15 @@ function trackingSupabase() {
       update: (values: Record<string, unknown>) => {
         const filters: Record<string, unknown> = { table }
         updates.push({ values, filters })
-        // .eq(...).eq(...) then awaited: the last link resolves.
         const chain = {
           eq: (column: string, value: unknown) => {
             filters[column] = value
             return chain
           },
-          then: (resolve: (value: { error: null }) => unknown) => resolve({ error: null }),
+          is: (column: string, value: unknown) => { filters[column] = value; return chain },
+          in: (column: string, value: unknown) => { filters[column] = value; return chain },
+          select: () => chain,
+          maybeSingle: async () => result,
         }
         return chain
       },
@@ -244,5 +246,37 @@ describe('refreshMigratedSupplierPaymentState', () => {
 
     expect(updates).toHaveLength(0)
     expect(result).toMatchObject({ matched: 1, updated: 1, dryRun: true })
+  })
+
+  it('excludes payment vouchers already planned by the dry run', async () => {
+    mFetchProvider.mockResolvedValue([providerInvoice('L-400', '2020-08-03', 1250, 0)])
+    mFetchAll.mockResolvedValue([openRow('si-7', 'L-400', '2020-08-03', 1250)])
+    const { supabase, updates } = trackingSupabase()
+    const result = await refreshMigratedSupplierPaymentState({
+      supabase, companyId: 'company-1', consentId: 'consent-1', dryRun: true, excludeInvoiceIds: ['si-7'],
+    })
+    expect(result.updated).toBe(0)
+    expect(updates).toHaveLength(0)
+  })
+
+  it('does not count or overwrite an invoice changed after the initial read', async () => {
+    mFetchProvider.mockResolvedValue([providerInvoice('L-400', '2020-08-03', 1250, 0)])
+    mFetchAll.mockResolvedValue([openRow('si-7', 'L-400', '2020-08-03', 1250)])
+    const { supabase, updates } = trackingSupabase({ data: null, error: null })
+    const result = await refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' })
+    expect(result).toMatchObject({ updated: 0, unchanged: 1 })
+    expect(updates[0].filters).toMatchObject({
+      registration_journal_entry_id: null, payment_journal_entry_id: null, paid_amount: 0,
+      is_credit_note: false, status: ['registered', 'approved', 'overdue'], total: 1250,
+      supplier_invoice_number: 'L-400', invoice_date: '2020-08-03',
+    })
+  })
+
+  it('propagates an update failure so reconciliation does not link away the retry candidates', async () => {
+    mFetchProvider.mockResolvedValue([providerInvoice('L-400', '2020-08-03', 1250, 0)])
+    mFetchAll.mockResolvedValue([openRow('si-7', 'L-400', '2020-08-03', 1250)])
+    const { supabase } = trackingSupabase({ data: null, error: { message: 'write failed' } })
+    await expect(refreshMigratedSupplierPaymentState({ supabase, companyId: 'company-1', consentId: 'consent-1' }))
+      .rejects.toThrow('write failed')
   })
 })
