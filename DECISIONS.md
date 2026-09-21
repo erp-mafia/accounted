@@ -702,3 +702,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 
 [2026-09-21] Bank routing conflicts return PT409: stale sessions, destinations and dedup scopes require refreshed input. PostgREST can retry deterministic serialization_failure errors indefinitely, as confirmed by the joint engine HTTP probe.
 [2026-09-21] Restore staging's journal-line guard from unchanged main/production SQL, with Emil's explicit exception: staging's applied migration history masked an older definition that rejected sanctioned inline replacement lines.
+[2026-09-21] Disconnect commits the connection revoke and both cash-route releases before claiming upstream revocation. Reconnect retains its old consent for callback fan-out; removing the early DELETE avoids invalidating a still-held session.

@@ -54,3 +54,18 @@ export async function saveBankAccountSelection(
   if (!data?.status || !Array.isArray(data?.accounts)) throw new Error('Bank selection receipt missing')
   return data as { status: string; accounts: unknown[] }
 }
+
+/** Release the provider route without changing cash IDs or historical links. */
+export async function disconnectBankConnection(
+  supabase: SupabaseClient, companyId: string, userId: string, connectionId: string, expectedToken: string,
+): Promise<{ connection_id: string; session_id: string | null; bank_name: string | null; released_cash_accounts: number }> {
+  const { data, error } = await supabase.rpc('disconnect_bank_connection', {
+    p_company_id: companyId, p_user_id: userId, p_connection_id: connectionId, p_expected_token: expectedToken,
+  })
+  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  if (data?.connection_id !== connectionId || (data.session_id !== null && typeof data.session_id !== 'string')
+    || (data.bank_name !== null && typeof data.bank_name !== 'string') || !Number.isInteger(data.released_cash_accounts)) {
+    throw new Error('Bank disconnect receipt missing')
+  }
+  return data
+}

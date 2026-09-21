@@ -1,10 +1,10 @@
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { NextResponse } from 'next/server'
+import { z } from 'zod'
 import {
   startAuthorization,
   getASPSPs,
   getPreferredAuthMethodDetails,
-  deleteSession,
   isSandboxMode,
   SessionExpiredError,
   AspspUnavailableError,
@@ -28,7 +28,8 @@ import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
 import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { triggerConnectionSync } from './lib/trigger-sync'
-import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
+import { findReusableSessions } from './lib/session-sharing'
+import { revokeUnusedSession } from './lib/session-revocation'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -43,7 +44,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
-import { readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -667,39 +668,9 @@ export const enableBankingExtension: Extension = {
               throw new Error(`Failed to update connection: ${stateError.message}`)
             }
 
-            // Best-effort revoke the dead consent at Enable Banking. A
-            // closed/expired session is often already gone, so a failure here is
-            // expected and non-fatal: the new authorization supersedes it.
-            // Logged at WARN so a systematic revoke failure is visible to
-            // monitoring (compliance: ASVS V16 / ISO 27001 A.8.15).
-            // Never revoke a session other companies still hold. On a shared
-            // consent this revoke would kill their feeds instantly, before the
-            // replacement session exists, and permanently if the user abandons
-            // the bank flow. The callback moves the siblings onto the new
-            // session once it lands; the superseded one lapses on its own.
-            let oldSessionShared = false
-            if (existing.session_id) {
-              const { createServiceClient } = await import('@/lib/supabase/server')
-              const serviceSupabase = await createServiceClient()
-              oldSessionShared =
-                (await countLiveSiblings(serviceSupabase, existing.session_id, existing.id)) > 0
-              if (oldSessionShared) {
-                log.info('[enable-banking] Old session shared with other companies: not revoking', {
-                  connection_id: existing.id,
-                })
-              }
-            }
-
-            if (existing.session_id && !oldSessionShared) {
-              try {
-                await deleteSession(existing.session_id)
-              } catch (revokeError) {
-                log.warn('[enable-banking] Old session revoke skipped (likely already expired)', {
-                  message: revokeError instanceof Error ? revokeError.message : String(revokeError),
-                  connection_id: existing.id,
-                })
-              }
-            }
+            // Keep the old consent available until the callback commits its
+            // replacement and renews siblings. This expired row deliberately
+            // retains session_id for that fan-out, so it is still a holder.
 
             const { url, authorization_id } = await startAuthorization(
               resolvedAspspName,
@@ -1888,105 +1859,31 @@ export const enableBankingExtension: Extension = {
         })
         if (!rl.ok) return rl.response!
 
-        const { connection_id } = await request.json()
+        const parsed = z.object({ connection_id: z.uuid() }).safeParse(await request.json().catch(() => null))
+        if (!parsed.success) return errorResponse(parsed.error, log)
+        const { connection_id } = parsed.data
 
-        if (!connection_id) {
-          return NextResponse.json({ error: 'connection_id is required' }, { status: 400 })
+        let connection: Awaited<ReturnType<typeof disconnectBankConnection>>
+        try {
+          const snapshot = await readBankConfiguration(supabase, companyId, connection_id)
+          connection = await disconnectBankConnection(supabase, companyId, user.id, connection_id, snapshot.token)
+        } catch (error) {
+          return errorResponse(error, log)
         }
 
-        const { data: connection, error: findError } = await supabase
-          .from('bank_connections')
-          .select('id, session_id, status, bank_name')
-          .eq('id', connection_id)
-          .eq('company_id', companyId)
-          .single()
-
-        if (findError || !connection) {
-          return NextResponse.json({ error: 'Connection not found' }, { status: 404 })
-        }
-
-        // Revoke the PSD2 consent only when no other company still depends on
-        // it. Sessions are shared across a user's companies (see
-        // lib/session-sharing.ts), so a blind revoke here would silently take
-        // down a sibling company's bank feed: exactly the failure this feature
-        // exists to remove. countLiveSiblings needs the service client because
-        // RLS hides a sibling living in a company the user has since left, and
-        // an unseen sibling would read as "safe to revoke".
-        let sharedWithSiblings = false
+        // Both local writes have committed. The service-only claim checks all
+        // companies and prevents a new holder attaching before provider HTTP.
         if (connection.session_id) {
-          const { createServiceClient } = await import('@/lib/supabase/server')
-          const serviceSupabase = await createServiceClient()
-          const siblingCount = await countLiveSiblings(
-            serviceSupabase,
-            connection.session_id,
-            connection.id,
-          )
-          sharedWithSiblings = siblingCount > 0
-          if (sharedWithSiblings) {
-            log.info('[enable-banking] Session still in use by other companies: skipping revoke', {
-              connectionId: connection.id,
-              siblingCount,
-              userId: user.id,
-              companyId,
-            })
-          }
-        }
-
-        if (connection.session_id && !sharedWithSiblings) {
           try {
-            await deleteSession(connection.session_id)
-          } catch (error) {
-            // The revoke is best-effort: an expired or already-closed session
-            // is the normal case here, and the disconnect continues either
-            // way, so this is a warning and not an error.
-            log.warn('[enable-banking] Failed to revoke PSD2 session (may be expired)', {
-              message: error instanceof Error ? error.message : String(error),
-              sessionId: connection.session_id,
-              connectionId: connection_id,
-              connectionStatus: connection.status,
-              userId: user.id,
-              companyId,
+            const { createServiceClient } = await import('@/lib/supabase/server')
+            await revokeUnusedSession(await createServiceClient(), connection.session_id)
+          } catch {
+            // Local disconnect remains committed if upstream cleanup fails.
+            // The claim records provider failure and fences later attachment.
+            log.warn('[enable-banking] Upstream consent cleanup was not confirmed', {
+              connectionId: connection_id, userId: user.id, companyId,
             })
           }
-        }
-
-        const { error: updateError } = await supabase
-          .from('bank_connections')
-          .update({ status: 'revoked', session_id: null })
-          .eq('id', connection.id)
-
-        if (updateError) {
-          log.error('[enable-banking] Failed to mark connection revoked', {
-            errorMessage: updateError.message,
-            connectionId: connection.id,
-            userId: user.id,
-            companyId,
-          })
-          return NextResponse.json({ error: 'Failed to disconnect' }, { status: 500 })
-        }
-
-        // Release the connection's ledger claims by demoting its cash_accounts
-        // rows to manual (bank_connection_id = null). The rows themselves stay:
-        // transactions.cash_account_id and the ledger history reference them,
-        // and upsertFromPsd2 promotes a manual holder in place on reconnect so
-        // the same bank lands back on its original BAS account (e.g. 1930)
-        // instead of overflowing to the next free slot.
-        const { error: releaseError } = await supabase
-          .from('cash_accounts')
-          .update({ bank_connection_id: null })
-          .eq('company_id', companyId)
-          .eq('bank_connection_id', connection.id)
-
-        if (releaseError) {
-          // Don't fail the disconnect: the connection is already revoked, and
-          // the allocator / collision guard also skip revoked connections, so
-          // the orphaned rows self-heal on the next picker save.
-          log.error('[enable-banking] Failed to release cash_accounts ledger claims on disconnect', {
-            errorMessage: releaseError.message,
-            connectionId: connection.id,
-            userId: user.id,
-            companyId,
-          })
         }
 
         try {
@@ -1994,8 +1891,8 @@ export const enableBankingExtension: Extension = {
           await emit({
             type: 'bank_connection.revoked',
             payload: {
-              connectionId: connection.id,
-              bankName: (connection as { bank_name?: string | null }).bank_name ?? null,
+              connectionId: connection.connection_id,
+              bankName: connection.bank_name,
               userId: user.id,
               companyId,
             },
@@ -2003,7 +1900,7 @@ export const enableBankingExtension: Extension = {
         } catch (emitError) {
           log.error('[enable-banking] Failed to emit revoke event', {
             errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
-            connectionId: connection.id,
+            connectionId: connection.connection_id,
             userId: user.id,
             companyId,
           })
