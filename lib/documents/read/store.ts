@@ -58,7 +58,7 @@ export async function readAndStoreDocument(
     const reason = err instanceof Error ? err.message : String(err)
     if (err instanceof ReaderUnavailableError) {
       // Not stamped: the document is fine, the reader is missing. It stays unread for the next run.
-      log.error('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason })
+      log.warn('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason })
       return { status: 'error', reason: `${READER_UNAVAILABLE}: ${reason.slice(0, 300)}` }
     }
     log.warn('read failed', { doc: doc.id, mime: doc.mime_type, reason })

@@ -77,8 +77,9 @@ export function readerForMime(mimeType: string | null | undefined): PageReader |
 }
 
 /**
- * The reader itself could not be loaded (a native binding missing from the
- * deployed function, say). That is a fact about the environment, never about
+ * The reader itself could not be loaded (a native binding the runtime cannot
+ * load, say: pdf-inspector's Linux build needs glibc 2.35 and Vercel's
+ * Amazon Linux 2023 runtime has 2.34). That is a fact about the environment, never about
  * the document, so nothing is stamped on the document: it stays unread and
  * the backfill reads it once the reader is there.
  */

@@ -126,20 +126,6 @@ const nextConfig: NextConfig = {
   // Native napi readers for the Arkiv reading layer (lib/documents/read):
   // prebuilt .node binaries must be required at runtime, never bundled.
   serverExternalPackages: ['@firecrawl/pdf-inspector', '@firecrawl/anydoc'],
-  // The readers load their platform binding with a guarded require of an
-  // optional sibling package (@firecrawl/pdf-inspector-linux-x64-gnu and
-  // friends). File tracing follows the main package but not that require, so
-  // on Vercel the function shipped without the .node file and every PDF read
-  // failed with "Cannot find native binding" (2026-09-21). Whatever platform
-  // packages npm installed are copied into the functions that read documents;
-  // the self-hosted image is Alpine, so the musl variant rides the same glob.
-  outputFileTracingIncludes: Object.fromEntries(
-    // The upload route, the read and job crons, the on-demand text route, the Arkiv routes and the MCP server (served as an extension route).
-    ['/api/documents', '/api/documents/**/*', '/api/arkiv/**/*', '/api/extensions/ext/**/*'].map((route) => [
-      route,
-      ['./node_modules/@firecrawl/pdf-inspector-*/**/*', './node_modules/@firecrawl/anydoc-*/**/*'],
-    ]),
-  ),
   experimental: {
     optimizePackageImports: ['recharts', 'date-fns', 'framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
