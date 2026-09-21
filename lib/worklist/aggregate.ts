@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
+import type { MissingUnderlagSample } from './missing-underlag'
 import {
   countDeadlinesNeedingAction,
   countExpensePayoutsDue,
@@ -46,6 +47,13 @@ export interface GetWorklistCountsOptions {
    * instead of a second scan. Pass null for "nothing to pay in".
    */
   skattekontoPaymentDue?: SkattekontoPaymentDue | null | Promise<SkattekontoPaymentDue | null>
+  /**
+   * The missing-underlag page the caller is already fetching to say what the
+   * errand behind the row is (Hem renders it as the row's detail line). Its
+   * `total` is computed over the full filtered set inside the same RPC, so
+   * passing it replaces the count call rather than adding one.
+   */
+  missingUnderlag?: MissingUnderlagSample | Promise<MissingUnderlagSample>
 }
 
 export async function getWorklistCounts(
@@ -74,7 +82,9 @@ export async function getWorklistCounts(
       ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
       : countSuggestedMatches(supabase, companyId),
     countSupplierInvoicesAwaitingApproval(supabase, companyId),
-    countVerifikatMissingDocument(supabase, companyId),
+    options.missingUnderlag
+      ? Promise.resolve(options.missingUnderlag).then((s) => s.total)
+      : countVerifikatMissingDocument(supabase, companyId),
     countOverdueInvoices(supabase, companyId),
     countDeadlinesNeedingAction(supabase, companyId),
     countPendingOperations(supabase, companyId),

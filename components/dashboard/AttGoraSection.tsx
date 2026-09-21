@@ -12,6 +12,7 @@ import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
+import type { MissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { AiTaskAction } from './AiTaskAction'
 import { KopplingarChips } from './KopplingarChips'
@@ -88,6 +89,13 @@ interface AttGoraSectionProps {
    * client, or offer the connect buttons when there is none.
    */
   aiClients?: AiClient[]
+  /**
+   * What the biggest missing underlag actually need fetching from, derived
+   * from the same page of rows the count comes from (lib/worklist/
+   * missing-underlag). Renders as the row's detail line so the errand is
+   * visible before anyone opens a chat, and with no chat having run.
+   */
+  missingUnderlag?: MissingUnderlagSample
   /** False when no Skatteverket token is stored: the kopplingar chip offers the connect. */
   hasSkatteverketConnection?: boolean
   /**
@@ -155,6 +163,7 @@ export default function AttGoraSection({
   emptyLedger = false,
   hasActiveBankConnection = true,
   aiClients = [],
+  missingUnderlag,
   hasSkatteverketConnection = false,
   showKopplingar = false,
 }: AttGoraSectionProps) {
@@ -279,6 +288,17 @@ export default function AttGoraSection({
   // connected. Off the live counts, so a confirmed match updates the prompt.
   const aiAction = (category: AiTaskCategory, count: number) =>
     aiClients.length > 0 ? <AiTaskAction clients={aiClients} task={{ category, count }} /> : undefined
+
+  // Where the biggest missing underlag actually have to be fetched from, in
+  // one line, derived from the ledger rather than reported back by an agent.
+  // Silent when the answer is "look in your mail": that is what "Verifikat
+  // utan underlag" already says, and a detail line on every row is the bug
+  // convention 5 exists to prevent.
+  const topMissingUnderlag = missingUnderlag?.top
+  const missingUnderlagDetail =
+    topMissingUnderlag && topMissingUnderlag.kind !== 'mail'
+      ? t(`missing_underlag_next_${topMissingUnderlag.kind}`, { count: topMissingUnderlag.count })
+      : undefined
 
   return (
     <section aria-label={t('att_gora_title')}>
@@ -494,6 +514,7 @@ export default function AttGoraSection({
                         action={aiAction('verifikat_missing_document', counts.verifikat_missing_document)}
                         icon={FileWarning}
                         label={t('row_missing_underlag')}
+                        detail={missingUnderlagDetail}
                         count={counts.verifikat_missing_document}
                       />
                     )}
