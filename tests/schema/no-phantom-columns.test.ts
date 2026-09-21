@@ -198,7 +198,10 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // Phase 1 page text (+1): lib/documents/read/store.ts inserts one
 // document_pages row per page built by a map; the columns are literal inside
 // the callback but the scanner reads only object and array literals.
-const UNRESOLVED_CEILING = 411
+// Phase 2 classification (+1): the human-override UPDATE on
+// document_attachments is a partial patch (doc_type and admission columns);
+// one literal per key combination is not viable.
+const UNRESOLVED_CEILING = 412
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
