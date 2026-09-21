@@ -5195,7 +5195,7 @@
     "review_sek_amount_at_rate": "SEK amount (at rate {rate})",
     "review_voucher_preview_title": "Verifikat to be booked",
     "review_voucher_in_sek_suffix": "(in SEK)",
-    "review_ore_rounding_note": "The verifikat is booked with the exact amount {exact} on 2440. The öre rounding ({delta}) is booked against 3740 when the invoice is paid.",
+    "review_ore_rounding_note": "Rounding of {delta} is included in the invoice amount and booked to 3740.",
     "review_vat_inline": "{rate}% VAT ({amount})",
     "review_payment_reference_inline": "Payment reference: {reference}",
     "debit_short": "D {amount}",

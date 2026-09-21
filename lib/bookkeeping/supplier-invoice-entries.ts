@@ -975,6 +975,8 @@ function groupBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
+    // Invoice rounding is not consideration for a taxable purchase.
+    if (item.account_number === '3740') continue
     const rate = resolveReverseChargeRate(item)
     let baseSek = toSekOrThrow(item.line_total, currency, exchangeRate)
     if (useAbsoluteValues) baseSek = Math.abs(baseSek)
@@ -1021,6 +1023,7 @@ function groupNonBasisBaseByRate(
 ): Map<number, number> {
   const baseByRate = new Map<number, number>()
   for (const item of items) {
+    if (item.account_number === '3740') continue
     if (isReverseChargeBasisAccount(item.account_number)) continue
     const rate = resolveReverseChargeRate(item)
     let itemSek = toSekOrThrow(item.line_total, currency, exchangeRate)

@@ -14,7 +14,9 @@ import {
 } from '@/lib/bookkeeping/vat-entries'
 import { generateSlpLines, isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
-import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
+import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
+import { debitNatural } from '@/lib/bookkeeping/line-side'
+import { roundOre } from '@/lib/money'
 import { resolveBookingAccount, itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { Supplier } from '@/types'
 
@@ -53,11 +55,7 @@ interface SupplierInvoiceReviewContentProps {
   reverseCharge: boolean
   paymentReference?: string
   items: ReviewLineItem[]
-  subtotal: number
-  totalVat: number
-  total: number
-  /** The editor's öresavrundning switch (SEK only). Rounds the payable shown
-   *  here, never the verifikat: the exact öre is settled against 3740 at payment. */
+  /** Include the invoice rounding in both the payable and journal preview. */
   oreRounding: boolean
 }
 
@@ -103,11 +101,13 @@ function buildJournalPreview(
 
   // Debit: Expense accounts
   for (const [accountNumber, amount] of expenseByAccount) {
+    if (roundOre(amount) === 0) continue
+    const sides = debitNatural(amount)
     lines.push({
       account_number: accountNumber,
       description: desc,
-      debit: amount,
-      credit: 0,
+      debit: sides.debit_amount,
+      credit: sides.credit_amount,
     })
   }
 
@@ -158,6 +158,7 @@ function buildJournalPreview(
     const baseByRate = new Map<number, number>()
     const nonBasisBaseByRate = new Map<number, number>()
     for (const item of items) {
+      if (item.account_number === '3740') continue
       const rate = resolveReverseChargeRate(item)
       const sek = toSek(item.amount)
       baseByRate.set(rate, (baseByRate.get(rate) || 0) + sek)
@@ -246,12 +247,12 @@ export function SupplierInvoiceReviewContent({
   reverseCharge,
   paymentReference,
   items,
-  subtotal,
-  totalVat,
-  total,
   oreRounding,
 }: SupplierInvoiceReviewContentProps) {
   const t = useTranslations('supplier_invoice_editor')
+  const { subtotal, totalVat, total, figures, roundingItem } = supplierInvoiceEditorAmounts(
+    items, currency, reverseCharge, oreRounding,
+  )
   const parsedRate = exchangeRate ? parseFloat(exchangeRate) : NaN
   const fxRate = currency !== 'SEK' && Number.isFinite(parsedRate) && parsedRate > 0 ? parsedRate : 1
   // The description the engine will stamp on every line of this verifikat.
@@ -264,10 +265,10 @@ export function SupplierInvoiceReviewContent({
     supplier.name,
   )
   const journalLines = buildJournalPreview(
-    items,
-    subtotal,
+    roundingItem ? [...items, roundingItem] : items,
+    roundOre(subtotal + (roundingItem?.amount ?? 0)),
     totalVat,
-    total,
+    figures.toPay,
     reverseCharge,
     supplier.supplier_type,
     fxRate,
@@ -276,10 +277,6 @@ export function SupplierInvoiceReviewContent({
   const totalDebit = journalLines.reduce((sum, l) => sum + l.debit, 0)
   const totalCredit = journalLines.reduce((sum, l) => sum + l.credit, 0)
   const showingSek = fxRate !== 1
-  // Same figures as the editor summary (and the detail page and list after
-  // registration): the payable rounds to whole kronor when öresavrundning is
-  // on, while the verifikat below keeps the exact öre on 2440.
-  const figures = supplierInvoiceDisplayFigures({ total, currency, ore_rounding: oreRounding })
 
   // No account-label lookup any more: the BESKRIVNING column shows the
   // line_description that will actually be posted. A hardcoded label map
@@ -513,7 +510,6 @@ export function SupplierInvoiceReviewContent({
         {figures.rounding.applies && (
           <p className="text-xs text-muted-foreground">
             {t('review_ore_rounding_note', {
-              exact: formatCurrency(figures.exactTotal, currency),
               delta: formatCurrency(figures.rounding.roundingDelta, currency),
             })}
           </p>
