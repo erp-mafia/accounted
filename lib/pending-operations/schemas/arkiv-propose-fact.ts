@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { isoDateSchema } from '@/lib/invariants/zod'
 
 // Commit-boundary re-validation for the staged arkiv_propose_fact operation
 // (gnubok_propose_fact). An agent proposes a company fact with its evidence;
@@ -11,8 +12,8 @@ export const ArkivProposeFactParamsSchema = z.object({
   subject_id: z.string().uuid(),
   predicate: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/),
   value: z.union([z.string().trim().min(1).max(2000), z.number()]),
-  valid_from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
-  valid_to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  valid_from: isoDateSchema.nullable().optional(),
+  valid_to: isoDateSchema.nullable().optional(),
   rationale: z.string().trim().min(1).max(1000),
   evidence: z
     .object({
