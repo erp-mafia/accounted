@@ -377,6 +377,64 @@ describe('gnubok_update_account', () => {
     ).rejects.toThrow(/Nothing to update/)
   })
 
+  it('stages a momsruta override (vat_box) on a 26xx account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '2617',
+        account_name: 'Utgående moms tjänster utanför EU 25 %',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '2617', vat_box: '30', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { dry_run?: boolean; preview: { current: Record<string, unknown>; changes: Record<string, unknown> } }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.current.vat_box).toBeNull()
+    expect(result.preview.changes).toEqual({ vat_box: '30' })
+  })
+
+  it('refuses vat_box outside the set and on accounts that are not 26xx', async () => {
+    const current = (accountNumber: string) => ({
+      data: {
+        account_number: accountNumber,
+        account_name: 'x',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const bad = createQueuedMockSupabase()
+    bad.enqueue(current('2617'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '2617', vat_box: '49' },
+        'company-1', 'user-1', bad.supabase as never,
+      ),
+    ).rejects.toThrow(/vat_box must be one of/)
+
+    const wrongAccount = createQueuedMockSupabase()
+    wrongAccount.enqueue(current('4545'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '4545', vat_box: '60' },
+        'company-1', 'user-1', wrongAccount.supabase as never,
+      ),
+    ).rejects.toThrow(/26xx/)
+  })
+
   it('dry-run preview carries current values and the requested changes', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({
@@ -432,5 +490,70 @@ describe('gnubok_update_account', () => {
     )) as { preview: { changes: Record<string, unknown> } }
 
     expect(result.preview.changes).toEqual({ default_vat_treatment: null })
+  })
+})
+
+describe('gnubok_list_accounts: compact detail and paging', () => {
+  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // in one answer. Both options are opt-in so every existing caller keeps the
+  // rows it had; `total` rides along on every answer.
+  const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const full = (n: string, name: string, cls: number, vat: string | null) => ({
+    account_number: n, account_name: name, account_class: cls, account_group: n.slice(0, 2), account_type: 'asset',
+    normal_balance: 'debit', is_active: true, description: null, default_vat_treatment: vat,
+  })
+  const rows = [
+    full('1930', 'Företagskonto', 1, null),
+    full('2617', 'Utgående moms tjänster utanför EU 25 %', 2, null),
+    full('4545', 'Import av varor 25 %', 4, 'import_goods'),
+  ]
+  const compactRows = rows.map(({ account_number, account_name, account_class, is_active, default_vat_treatment }) =>
+    ({ account_number, account_name, account_class, is_active, default_vat_treatment }))
+  const SELECT = 'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, default_vat_treatment'
+  type Page = { accounts: { account_number: string }[]; count: number; total: number }
+
+  it('compact selects only what an agent needs to pick or check a konto, and reports total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ detail: 'compact' }, 'company-1', 'user-1', supabase as never)) as Page
+    // One literal select for both modes: compact is a projection, so the
+    // phantom-column scanner can still read every column name.
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: compactRows, count: 3, total: 3 })
+  })
+
+  it('full detail keeps the previous columns, gains default_vat_treatment, and adds total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as Page
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: rows, count: 3, total: 3 })
+  })
+
+  it('limit and offset page the result in account_number order and keep total', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 1, offset: 1 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result.accounts.map((a) => a.account_number)).toEqual(['2617'])
+    expect(result.count).toBe(1)
+    expect(result.total).toBe(3)
+  })
+
+  it('an offset past the end is an empty page with the total intact', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 50, offset: 10 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result).toEqual({ accounts: [], count: 0, total: 3 })
+  })
+
+  it('rejects a non-positive limit and a negative offset before any query', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    await expect(
+      listAccounts.execute({ limit: 0 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/limit must be a positive integer/)
+    await expect(
+      listAccounts.execute({ offset: -1 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/offset must be a non-negative integer/)
+    expect(calls).toHaveLength(0)
   })
 })

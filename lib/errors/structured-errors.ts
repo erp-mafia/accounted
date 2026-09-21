@@ -1351,6 +1351,31 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Välj ett av företagets bankkonton som är markerat "Visas på fakturor" och har betaluppgifter för fakturans valuta.',
     },
   },
+  CASH_ACCOUNT_DISABLE_PRIMARY: {
+    httpStatus: 400,
+    message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
+    message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
+  },
+  CASH_ACCOUNT_DISABLED_PAYEE: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
+    message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
+  },
+  CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
+    httpStatus: 400,
+    message_sv: 'Kontot kan inte vara primärt. Det primära kontot måste vara ett aktivt bankkonto i SEK (konto 1920-1999).',
+    message_en: 'This account cannot be the primary. The primary account must be an active bank account in SEK (account 1920-1999).',
+  },
+  CASH_ACCOUNT_DISABLE_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har obokförda transaktioner och kan inte stängas av förrän de är bokförda eller ignorerade.',
+    message_en: 'The account has unbooked transactions and cannot be disabled until they are booked or ignored.',
+  },
+  CASH_ACCOUNT_ENABLED_BANK_MANAGED: {
+    httpStatus: 409,
+    message_sv: 'Kontot hör till en bankkoppling. Slå på eller av det under bankkopplingen i stället.',
+    message_en: 'This account belongs to a bank connection. Turn it on or off from the bank connection instead.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces
@@ -2065,6 +2090,29 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     message_sv: 'Räkenskapsperioden kunde inte hittas.',
     message_en: 'Fiscal period not found.',
   },
+  // Bokslutsdispositioner (periodiseringsfond, överavskrivningar, bolagsskatt,
+  // särskild löneskatt) exist only for a form whose profile says so
+  // (supportsCorporateTaxDispositions: today the aktiebolag). The wizard never
+  // offers them to another form; this code closes the hand-made request path.
+  YEAR_END_DISPOSITIONS_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv:
+      'Bokslutsdispositioner (periodiseringsfond, överavskrivningar, bolagsskatt och särskild löneskatt) stöds inte för företagets företagsform.',
+    message_en:
+      'Year-end tax dispositions (periodiseringsfond, excess depreciation, corporate tax and special payroll tax) are not supported for this company\'s legal form.',
+  },
+  // The EF declaration preview (egenavgifter, räntefördelning, EF
+  // periodiseringsfond, expansionsfond) exists only for a form that files
+  // NE-bilagan (filesIncomeReturn === 'NE'). Thrown by
+  // lib/bokslut/enskild-firma/ef-declaration-preview.ts, surfaced as-is by
+  // the MCP tool gnubok_preview_ef_declaration.
+  EF_DECLARATION_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv:
+      'NE-bilagans beräkningar (egenavgifter, räntefördelning, periodiseringsfond och expansionsfond) gäller bara enskild firma, inte företagets företagsform.',
+    message_en:
+      'The NE-bilaga preview (egenavgifter, räntefördelning, periodiseringsfond and expansionsfond) applies only to an enskild firma, not to this company\'s legal form.',
+  },
   PERIOD_LOCK_FAILED: {
     httpStatus: 400,
     message_sv: 'Perioden kunde inte låsas.',
@@ -2254,6 +2302,39 @@ const VAT_REPORT: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Momsdeklarationen kunde inte beräknas.',
     message_en: 'Failed to calculate VAT declaration.',
+  },
+}
+
+// Marking a momsperiod as filed by hand (issue #2746): the record is the
+// period's moms deadline, so these guard the dates a manual filing may carry
+// and the one state a manual action must not touch (a Skatteverket kvittens).
+const VAT_FILING: Record<string, StructuredErrorEntry> = {
+  VAT_FILING_PERIOD_NOT_ENDED: {
+    httpStatus: 400,
+    message_sv: 'Perioden har inte avslutats än och kan inte markeras som inlämnad.',
+    message_en: 'The period has not ended yet and cannot be marked as filed.',
+  },
+  VAT_FILING_DATE_BEFORE_PERIOD_END: {
+    httpStatus: 400,
+    message_sv: 'Inlämningsdatumet ligger före periodens slut.',
+    message_en: 'The filing date is before the end of the period.',
+  },
+  VAT_FILING_DATE_IN_FUTURE: {
+    httpStatus: 400,
+    message_sv: 'Inlämningsdatumet kan inte ligga i framtiden.',
+    message_en: 'The filing date cannot be in the future.',
+  },
+  VAT_FILING_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Perioden är inte markerad som inlämnad.',
+    message_en: 'The period is not recorded as filed.',
+  },
+  VAT_FILING_CONFIRMED_BY_SKATTEVERKET: {
+    httpStatus: 409,
+    message_sv:
+      'Perioden är inlämnad via Skatteverket-kopplingen med kvittens och kan inte avmarkeras.',
+    message_en:
+      'The period was filed through the Skatteverket connection with a receipt and cannot be unmarked.',
   },
 }
 
@@ -2486,6 +2567,16 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ogiltiga listparametrar: limit måste vara 1-100, offset ett icke-negativt heltal och status ett giltigt importstatus.',
     message_en: 'Invalid list parameters: limit must be 1-100, offset a nonnegative integer, and status a valid import status.',
   },
+  BANK_FILE_INVALID_SETTLEMENT_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Bankkontot måste vara ett aktivt konto i kontoklass 19 i din kontoplan (till exempel 1930).',
+    message_en: 'The bank account must be an active class 19 account in your chart of accounts (for example 1930).',
+  },
+  BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Det valda bankkontot kan inte användas för den här filen. Inget importerades.',
+    message_en: 'The selected bank account cannot be used for this file. Nothing was imported.',
+  },
 }
 
 /**
@@ -2511,6 +2602,12 @@ const BANK_SYNC: Record<string, StructuredErrorEntry> = {
     httpStatus: 429,
     message_sv: 'Anslutningen synkades nyligen. Vänta tills next_allowed_at innan du synkar igen.',
     message_en: 'This connection was synced recently. Wait until next_allowed_at before syncing again; the data you have is already fresh.',
+    retryable: true,
+  },
+  BANK_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'Banken begränsar just nu hur ofta transaktioner får hämtas. Vänta tills next_allowed_at. Anslutningen behöver inte förnyas.',
+    message_en: 'The bank is temporarily rate limiting this consent. Do not sync again before next_allowed_at: it is our cooldown (the bank\'s Retry-After when it sent one, bounded backoff otherwise), not a reset time confirmed by the bank. The connection is still valid: do not ask the user to renew it.',
     retryable: true,
   },
   BANK_SESSION_EXPIRED: {
@@ -3531,6 +3628,45 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En lönekörning för perioden finns redan.',
     message_en: 'A salary run for that period already exists.',
   },
+  SALARY_RUN_CORRECT_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Bara bokförda lönekörningar kan korrigeras (rättelsekörning).',
+    message_en: 'Only booked salary runs can be corrected (rättelsekörning).',
+  },
+  SALARY_RUN_ALREADY_CORRECTED: {
+    httpStatus: 409,
+    message_sv: 'Lönekörningen är redan korrigerad; arbeta vidare i korrigeringskörningen.',
+    message_en: 'The salary run is already corrected; continue in its correction run.',
+  },
+  SALARY_REGISTER_DATES_LOCKED_BY_RUN: {
+    httpStatus: 409,
+    message_sv:
+      'Datumen ingår i avvikelseperioden för en lönekörning som redan är beräknad, godkänd eller bokförd. Återställ körningen till utkast, eller gör en rättelsekörning, innan frånvaro eller arbetade timmar ändras.',
+    message_en:
+      'The dates fall inside the deviation period of a salary run that is already calculated, approved or booked. Revert that run to draft, or run a correction, before changing absence or worked hours.',
+    remediation: {
+      description:
+        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted from the dashboard.',
+    },
+  },
+  SALARY_RUN_DEVIATION_PERIOD_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Ogiltig avvikelseperiod: ange både start- och slutdatum (ÅÅÅÅ-MM-DD), start före slut, högst två månader.',
+    message_en:
+      'Invalid deviation period: give both start and end (YYYY-MM-DD), start before end, at most two months.',
+  },
+  SALARY_RUN_DEVIATION_PERIOD_OVERLAP: {
+    httpStatus: 409,
+    message_sv:
+      'Avvikelseperioden överlappar en annan lönekörning: samma frånvarodagar skulle dras två gånger. Ange en avvikelseperiod som inte överlappar, eller byt inställning först inför nästa nya månad.',
+    message_en:
+      'The deviation period overlaps another salary run: the same absence days would be deducted twice. Pass a non-overlapping deviation period, or change the setting before the next new month.',
+    remediation: {
+      description:
+        'details.conflicting_run_id names the run that already reads these days. Pass deviation_period_start/deviation_period_end that start after its window, or leave the company setting unchanged.',
+    },
+  },
   SALARY_RUN_PATCH_NOT_DRAFT: {
     httpStatus: 400,
     message_sv: 'Endast utkast (draft) kan uppdateras.',
@@ -3652,6 +3788,34 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Ett utlägg på lönebeskedet är inte längre öppet (utbetalt eller borttaget). Ta bort raden och beräkna om innan bokföring.',
     message_en: 'An expense claim on the payslip is no longer open (paid or removed). Remove the line and recalculate before booking.',
+  },
+  // Salary payment file (ISO 20022 pain.001 / Bankgirot LB) on the v1 API.
+  // The dashboard routes keep their legacy messages; both surfaces share
+  // lib/salary/payment/build-payment-file.ts. `details.problem` names the
+  // field that is missing or invalid.
+  SALARY_RUN_PAYMENT_FILE_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'Betalfil kan bara genereras efter godkännande (status approved, paid eller booked).',
+    message_en: 'A payment file can only be generated after approval (status approved, paid or booked).',
+  },
+  SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS: {
+    httpStatus: 422,
+    message_sv:
+      'Företagets bankuppgifter för betalfilen saknas eller är ogiltiga: IBAN och BIC för ISO 20022 (pain.001), bankgironummer för Bankgirot LB. Fyll i dem under Inställningar → Fakturering.',
+    message_en:
+      'The company bank details the payment file needs are missing or invalid: IBAN and BIC for ISO 20022 (pain.001), bankgiro number for Bankgirot LB. Fill them in under Settings → Invoicing.',
+  },
+  SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING: {
+    httpStatus: 422,
+    message_sv:
+      'En eller flera anställda med nettoutbetalning saknar clearingnummer eller kontonummer. Komplettera bankuppgifterna under Anställda.',
+    message_en:
+      'One or more employees with a net payout lack a clearing number or account number. Complete their bank details under Employees.',
+  },
+  SALARY_RUN_PAYMENT_FILE_GENERATION_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Betalfilen kunde inte skapas: kontrollera bankuppgifterna för företaget och de anställda.',
+    message_en: 'The payment file could not be generated: check the bank details of the company and its employees.',
   },
   // Phase 5 PR-3: additional import error codes.
   SIE_IMPORT_DUPLICATE: {
@@ -4536,6 +4700,27 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  ASSET_DELETE_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgången kan inte tas bort eftersom den har nått bokföringen: avskrivningar är bokförda eller tillgången är avyttrad. Registerraden är då räkenskapsinformation (BFL 7 kap.). Använd avyttring, eller återför verifikatet med storno först.',
+    message_en:
+      'The asset cannot be deleted because it has reached the books: depreciation is posted or the asset is disposed. The register row is then accounting information (BFL ch. 7). Dispose it, or reverse the voucher with storno first.',
+  },
+  K3_REQUIRED_FOR_COMPONENTS: {
+    httpStatus: 422,
+    message_sv:
+      'Komponentuppdelning (k3_components) kräver att företaget tillämpar K3 (BFNAR 2012:1).',
+    message_en:
+      'Component depreciation (k3_components) requires the company to apply K3 (BFNAR 2012:1).',
+  },
+  INVALID_K3_COMPONENTS: {
+    httpStatus: 400,
+    message_sv:
+      'Komponentuppdelningen är ogiltig: komponenternas anskaffningsvärden måste summera till tillgångens anskaffningsvärde.',
+    message_en:
+      'The component breakdown is invalid: component costs must sum to the acquisition cost of the asset.',
+  },
   // Generic on purpose: the flag covers accounts excluded from K2 for several
   // different reasons (egenupparbetade immateriella, uppskjuten skatt,
   // verkligt värde, säkringsredovisning, ...), so the static entry states only
@@ -4912,6 +5097,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...FX,
   ...REPORT,
   ...VAT_REPORT,
+  ...VAT_FILING,
   ...PS_REPORT,
   ...SIE_EXPORT,
   ...TAX_DECL,

@@ -6,10 +6,12 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
+import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
 import { syncWooCommerceOrders } from './lib/order-sync'
+import { MAX_BACKFILL_YEARS } from './types'
 import type { WooCommerceConnection, WooCommerceStatusResponse } from './types'
 
 // Per-user limits: connect/disconnect start outward-facing handshakes, sync
@@ -17,6 +19,16 @@ import type { WooCommerceConnection, WooCommerceStatusResponse } from './types'
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
+
+/**
+ * Wall clock a single manual run may spend before it stops and resumes later.
+ * Without a deadline a huge sync against a slow host would be killed at the
+ * dispatcher's maxDuration with no cursor persisted; with one it stops
+ * cleanly, reports a partial sync and resumes where it stopped on the next
+ * press.
+ */
+const MANUAL_SYNC_BUDGET_MS = 240_000
 
 // A pending row younger than this blocks a second connect attempt so a
 // double-click cannot start two handshake round-trips (only one state would
@@ -310,6 +322,10 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       // server-only (trigger, 20260907150000), so the insert runs on the
       // service client; membership was already proven by requireUserAndCompany
       // and company_id/user_id come from that context, never from the body.
+      // The order cursor is seeded with the connection moment, same as the
+      // handshake activation (activateIfComplete): older orders are already
+      // booked from the bank side, and fetching them is an explicit backfill.
+      const connectedAt = new Date().toISOString()
       const { data: created, error: insertError } = await createServiceClientNoCookies()
         .from('woocommerce_connections')
         .insert({
@@ -323,8 +339,9 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
           consumer_key_encrypted: encryptCredential(consumerKey),
           consumer_secret_encrypted: encryptCredential(consumerSecret),
           status: 'active',
-          connected_at: new Date().toISOString(),
-          browser_confirmed_at: new Date().toISOString(),
+          connected_at: connectedAt,
+          browser_confirmed_at: connectedAt,
+          last_order_synced_at: connectedAt,
           transaction_sync_enabled: true,
         })
         .select('id, store_url')
@@ -414,11 +431,8 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
 
       try {
         const serviceClient = createServiceClientNoCookies()
-        // Bounded like the cron: without a deadline a huge first sync against
-        // a slow host would be killed at the dispatcher's maxDuration with no
-        // cursor persisted; with one it stops cleanly, reports a partial sync
-        // and resumes where it stopped on the next press.
-        const deadlineMs = Date.now() + 240_000
+        // Bounded like the cron (see MANUAL_SYNC_BUDGET_MS).
+        const deadlineMs = Date.now() + MANUAL_SYNC_BUDGET_MS
         // One entry per processed store, plus an explicit skipped count:
         // returning only the last summary hid per-store failures and reported
         // success for zero work when the deadline expired early.
@@ -456,6 +470,114 @@ export const woocommerceApiRoutes: ApiRouteDefinition[] = [
       } catch (error) {
         log.error('[woocommerce] Manual sync failed', {
           message: error instanceof Error ? error.message : String(error),
+        })
+        return NextResponse.json(
+          { error: 'Synkroniseringen misslyckades. Försök igen.' },
+          { status: 502 },
+        )
+      }
+    },
+  },
+  {
+    method: 'POST',
+    path: '/backfill',
+    handler: async (request: Request, ctx?: ExtensionContext) => {
+      const log = ctx?.log ?? console
+      const auth = await requireUserAndCompany(ctx)
+      if (auth instanceof NextResponse) return auth
+
+      const capabilityBlocked = await requireCapability(
+        auth.supabase,
+        auth.companyId,
+        CAPABILITY.woocommerce_sync,
+      )
+      if (capabilityBlocked) return capabilityBlocked
+
+      const rl = await checkRateLimit({
+        prefix: 'woocommerce:backfill',
+        identifier: auth.userId,
+        ...RATE_LIMIT_BACKFILL,
+      })
+      if (!rl.ok) return rl.response!
+
+      const body = (await request.json().catch(() => ({}))) as {
+        from?: unknown
+        connection_id?: unknown
+      }
+      const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
+      if ('error' in parsed) {
+        return NextResponse.json(
+          { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
+          { status: 400 },
+        )
+      }
+
+      // A start date belongs to one store. connection_id may be omitted only
+      // when the company has a single active store (multi-store, migration
+      // 20260811073422).
+      let query = auth.supabase
+        .from('woocommerce_connections')
+        .select('*')
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+      if (typeof body.connection_id === 'string') query = query.eq('id', body.connection_id)
+      const { data: connections } = await query.limit(2)
+
+      if (!connections || connections.length === 0) {
+        return NextResponse.json(
+          { error: 'Ingen ansluten WooCommerce-butik.' },
+          { status: 404 },
+        )
+      }
+      if (connections.length > 1) {
+        return NextResponse.json(
+          { error: 'Flera butiker är anslutna. Ange vilken butik som ska hämtas (connection_id).' },
+          { status: 400 },
+        )
+      }
+      const connection = connections[0] as WooCommerceConnection
+
+      // The cursor is the start date, so a backfill is just the cursor moved
+      // back: no second column that could disagree with it. The run advances
+      // it to the newest modified order again, and the ingest upserts by
+      // external_id, so re-reading an already imported range changes nothing.
+      const { error: cursorError } = await auth.supabase
+        .from('woocommerce_connections')
+        .update({ last_order_synced_at: parsed.iso, error_message: null })
+        .eq('id', connection.id)
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+      if (cursorError) {
+        log.error('[woocommerce] Failed to move order cursor for backfill', {
+          message: cursorError.message,
+          connection_id: connection.id,
+        })
+        return NextResponse.json(
+          { error: 'Kunde inte spara startdatumet. Försök igen.' },
+          { status: 500 },
+        )
+      }
+
+      try {
+        const serviceClient = createServiceClientNoCookies()
+        const summary = await syncWooCommerceOrders(
+          serviceClient,
+          { ...connection, last_order_synced_at: parsed.iso },
+          undefined,
+          Date.now() + MANUAL_SYNC_BUDGET_MS,
+        )
+        return NextResponse.json({
+          success: true,
+          from: parsed.iso,
+          connection_id: connection.id,
+          transactions: summary,
+        })
+      } catch (error) {
+        // The cursor stays at the chosen date on purpose: the next run
+        // resumes the backfill from where this one failed.
+        log.error('[woocommerce] Backfill sync failed', {
+          message: error instanceof Error ? error.message : String(error),
+          connection_id: connection.id,
         })
         return NextResponse.json(
           { error: 'Synkroniseringen misslyckades. Försök igen.' },

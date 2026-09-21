@@ -35,7 +35,7 @@ registerEndpoint({
   useWhen:
     'You\'ve confirmed the salary payment hit employee bank accounts and want to advance the run\'s lifecycle so `:book` can post the verifikation.',
   doNotUseFor:
-    'Initiating the actual bank transfer (the v1 API does not yet expose payment-file generation; use the dashboard\'s payment-file endpoints). Posting journal entries (use `:book`). Reverting a paid run (no `:unpaid` exists: call `:correct` once booked if you need to undo).',
+    'Initiating the actual bank transfer (generate the bank file with POST /salary-runs/{id}/payment-file and upload it through the bank channel; this verb only records that it happened). Posting journal entries (use `:book`). Reverting a paid run (no `:unpaid` exists: call `:correct` once booked if you need to undo).',
   pitfalls: [
     'Run must be in `approved`: non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.',
     'paid_at is set server-side to the current UTC timestamp; the API does not accept a body-supplied date to keep BFL audit clean.',

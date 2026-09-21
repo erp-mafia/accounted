@@ -30,6 +30,15 @@ vi.mock('@/lib/auth/brand-signup-gate', () => ({
   readInviteTokenFromCookieHeader: vi.fn().mockReturnValue(null),
 }))
 
+// The real generator behind a spy, so the signup test can pin that the
+// password handed to GoTrue IS its output and not a string built at the call
+// site. One draw cannot tell the two apart: a base64url string happens to carry
+// every character class on most draws.
+vi.mock('@/lib/auth/generated-password', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/generated-password')>()
+  return { ...actual, generateAuthPassword: vi.fn(actual.generateAuthPassword) }
+})
+
 import {
   cancelBankIdSession,
   collectBankIdResult,
@@ -40,6 +49,7 @@ import {
 } from '../lib/bankid-client'
 import { sendBankIdSignupConfirmation } from '../lib/bankid-confirmation-mail'
 import { createServiceClient } from '@/lib/supabase/server'
+import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { ticExtension } from '../index'
 import {
   BANKID_FLOW_COOKIE,
@@ -252,6 +262,38 @@ describe('POST /bankid/complete', () => {
       expect(status).toBe(500)
       expect(body.error).toBe('internal_error')
       expect(admin.generateLink).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('signup mode: the password nobody sees (weak_password 422 on prod, 2026-09-21)', () => {
+    it('creates the account with the shared generator, whose password passes any GoTrue policy', async () => {
+      // The call site used to build 32 random bytes as base64url, which has a
+      // symbol ('-' or '_') only by luck: with symbols required, GoTrue refused
+      // about one BankID signup in four as weak_password.
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      const { admin } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+      ])
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      await findCompleteHandler()(req)
+
+      expect(generateAuthPassword).toHaveBeenCalledTimes(1)
+      const generated = vi.mocked(generateAuthPassword).mock.results[0].value as string
+      expect(admin.createUser).toHaveBeenCalledTimes(1)
+      const { password } = admin.createUser.mock.calls[0][0] as { password: string }
+      expect(password).toBe(generated)
+
+      expect(password).toMatch(/[a-z]/)
+      expect(password).toMatch(/[A-Z]/)
+      expect(password).toMatch(/[0-9]/)
+      expect(password).toMatch(/[!@#$%^&*()_+\-=[\]{};'\\:"|<>?,./`~]/)
+      // bcrypt reads 72 bytes and GoTrue rejects anything longer.
+      expect(Buffer.byteLength(password, 'utf8')).toBeLessThanOrEqual(72)
     })
   })
 

@@ -11,6 +11,7 @@ import {
   defaultRateForVatTreatment,
   isVatTreatmentAllowedForAccountClass,
 } from '@/lib/vat/account-vat-treatment'
+import { isVatBoxAccount } from '@/lib/vat/account-vat-box'
 
 // Response shapes are legacy `{ data }` / `{ error: string }` — several pages
 // (import, supplier-invoices, article form) consume the list directly.
@@ -115,6 +116,12 @@ export const POST = withRouteContext(
         { status: 400 },
       )
     }
+    if (body.vat_box && !isVatBoxAccount(body.account_number)) {
+      return NextResponse.json(
+        { error: 'Momsruta kan bara väljas för momskonton (26xx, inte 2650).' },
+        { status: 400 },
+      )
+    }
     const defaultVatRate = body.default_vat_treatment && body.default_vat_rate == null
       ? defaultRateForVatTreatment(body.default_vat_treatment, accountClass)
       : body.default_vat_rate ?? null
@@ -136,6 +143,7 @@ export const POST = withRouteContext(
         default_vat_code: body.default_vat_code || null,
         default_vat_rate: defaultVatRate,
         default_vat_treatment: body.default_vat_treatment ?? null,
+        vat_box: body.vat_box ?? null,
         sru_code: body.sru_code || null,
         sort_order: parseInt(body.account_number),
       })

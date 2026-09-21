@@ -45,6 +45,37 @@ describe('classifyBankSyncFailure', () => {
     expect(classifyBankSyncFailure('plain string')).toEqual({ errorClass: 'unknown', diagnostic: 'Error: plain string' })
   })
 
+  it('classifies a bank 429 as rate_limited with the provider code and timing, never the body', () => {
+    const body = '{"code":429,"error":"ASPSP_RATE_LIMIT_EXCEEDED","message":"limit for SE4550000000058398257466"}'
+    const quota = classifyBankSyncFailure(
+      new AspspUnavailableError(429, body, 'rate-limited', '2026-08-01', { dailyQuota: true }),
+    )
+    expect(quota).toEqual({
+      errorClass: 'rate_limited',
+      diagnostic: 'AspspUnavailableError: bank rate limit (HTTP 429, quota exhausted)',
+      httpStatus: 429,
+      ebCode: 'ASPSP_RATE_LIMIT_EXCEEDED',
+      cooldownSeconds: 6 * 60 * 60,
+    })
+    expect(JSON.stringify(quota)).not.toContain('SE45')
+
+    // The bank's own Retry-After is kept next to the cooldown we applied.
+    expect(
+      classifyBankSyncFailure(
+        new AspspUnavailableError(429, 'Too Many Requests', 'rate-limited', undefined, {
+          dailyQuota: false,
+          retryAfterSeconds: 120,
+        }),
+      ),
+    ).toEqual({
+      errorClass: 'rate_limited',
+      diagnostic: 'AspspUnavailableError: bank rate limit (HTTP 429)',
+      httpStatus: 429,
+      cooldownSeconds: 60 * 60,
+      bankRetryAfterSeconds: 120,
+    })
+  })
+
   it('reads no code out of a non-JSON body and caps a long message', () => {
     const html = new SessionExpiredError(401, '<html>gateway</html>')
     expect(classifyBankSyncFailure(html)).not.toHaveProperty('ebCode')

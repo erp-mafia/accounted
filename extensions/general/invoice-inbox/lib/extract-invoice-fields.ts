@@ -519,9 +519,10 @@ const MAX_EXTRACTION_TEXT_LENGTH = 50_000
  * output is only ever sent to the model as plain text, never rendered):
  * drops script/style/head blocks and comments, keeps block boundaries as
  * newlines so amounts and labels stay line-separated, decodes the entities
- * that occur in practice, and collapses whitespace.
+ * that occur in practice, and collapses whitespace. `maxLength` defaults to
+ * the model budget; the mail-body underlag renders with a larger one.
  */
-export function htmlToText(html: string): string {
+export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT_LENGTH): string {
   const withoutBlocks = html
     .replace(/<(script|style|head|title)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
@@ -551,7 +552,7 @@ export function htmlToText(html: string): string {
     .replace(/\s*\n\s*/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-    .slice(0, MAX_EXTRACTION_TEXT_LENGTH)
+    .slice(0, maxLength)
 }
 
 const EXTRACTION_INSTRUCTION = 'Extract the fields per the schema. JSON only.'

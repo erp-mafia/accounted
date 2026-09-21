@@ -39,6 +39,7 @@ import {
   Undo2,
 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
+import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
@@ -173,6 +174,9 @@ export function RunHeader({
   // else on the page explains why "augusti" is declared in September.
   const agiPeriod = agiReportingPeriod(run)
   const agiPeriodDiffers = agiPeriodDiffersFromRunPeriod(run)
+  // Same idea for the avvikelseperiod: when absence and worked days come
+  // from another month than the salary, say which one.
+  const deviationWindow = hasCustomDeviationWindow(run) ? runDeviationWindow(run) : null
 
   const metaParts: React.ReactNode[] = [
     <span key="payment" className="inline-flex items-center gap-2">
@@ -200,6 +204,16 @@ export function RunHeader({
     metaParts.push(
       <span key="agi-period">
         {t('agi_period_note', { period: formatAgiPeriodDashed(agiPeriod) })}
+      </span>,
+    )
+  }
+  if (deviationWindow) {
+    metaParts.push(
+      <span key="deviation-period" className="tabular-nums">
+        {t('deviation_period_note', {
+          start: formatDate(deviationWindow.start),
+          end: formatDate(deviationWindow.end),
+        })}
       </span>,
     )
   }

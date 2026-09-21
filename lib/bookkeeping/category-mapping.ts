@@ -3,6 +3,11 @@ import { getVatRate, generateReverseChargeLines } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
 import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
+import {
+  isNotVatRegistered,
+  vatTreatmentForRegistration,
+  type VatRegistration,
+} from './vat-registration'
 
 /**
  * Maps TransactionCategory to BAS accounts for journal entry creation
@@ -107,13 +112,18 @@ function getIncomeAccount(category: string, vatTreatment?: VatTreatment): string
  *
  * For expenses: Debit expense account, Credit bank (or private for non-business)
  * For income: Debit bank, Credit revenue account
+ *
+ * `vatRegistered` is company_settings.vat_registered: an explicit false
+ * resolves every rate-bearing treatment to exempt (no 2641, no 26xx, income
+ * on the momsfri account), see lib/bookkeeping/vat-registration.ts.
  */
 export function getCategoryAccountMapping(
   category: TransactionCategory,
   amount: number,
   isBusiness: boolean,
   entityType: EntityType,
-  vatTreatment?: VatTreatment
+  vatTreatment?: VatTreatment,
+  vatRegistered?: VatRegistration
 ): CategoryAccountMapping {
   // Private/owner transactions use entity-specific accounts
   // EF: 2013 for withdrawals (uttag), 2018 for deposits (insättningar)
@@ -139,7 +149,10 @@ export function getCategoryAccountMapping(
 
     // Representation defaults to reduced_12 (ML 13 kap 24-25 §§, max 300 SEK/person).
     // Note: income tax deduction was abolished 2017 (IL 16 kap 2 §), but VAT deduction remains.
-    const resolvedVat = vatTreatment ?? (isVatExempt ? null : category === 'expense_representation' ? 'reduced_12' : 'standard_25')
+    const resolvedVat = vatTreatmentForRegistration(
+      vatTreatment ?? (isVatExempt ? null : category === 'expense_representation' ? 'reduced_12' : 'standard_25'),
+      vatRegistered,
+    )
 
     if (amount > 0) {
       // Incoming refund: bank receives money, expense account is reduced (credited).
@@ -164,10 +177,15 @@ export function getCategoryAccountMapping(
 
   // Check if it's an income category
   if (category.startsWith('income_')) {
-    const incomeAccount = getIncomeAccount(category, vatTreatment)
-
     // Use provided vatTreatment, or default to standard_25
-    const resolvedVat = vatTreatment ?? 'standard_25'
+    const resolvedVat = vatTreatmentForRegistration(vatTreatment ?? 'standard_25', vatRegistered)
+    // A non-registered company's sale carries no moms, which is what the
+    // exempt revenue account (3004) says; a registered company keeps the
+    // static fallback for an omitted treatment.
+    const incomeAccount = getIncomeAccount(
+      category,
+      isNotVatRegistered(vatRegistered) ? resolvedVat : vatTreatment,
+    )
 
     // Determine output VAT account based on rate
     let outputVatAccount: string | null = null
@@ -242,15 +260,27 @@ export function buildMappingResultFromCategory(
   isBusiness: boolean,
   entityType: EntityType,
   vatTreatment?: VatTreatment,
-  vatAmountOverride?: number | null
+  vatAmountOverride?: number | null,
+  vatRegistered?: VatRegistration
 ): MappingResult {
-  const mapping = getCategoryAccountMapping(category, transaction.amount, isBusiness, entityType, vatTreatment)
+  const mapping = getCategoryAccountMapping(
+    category, transaction.amount, isBusiness, entityType, vatTreatment, vatRegistered,
+  )
 
   const vatLines: VatJournalLine[] = []
 
   // Calculate VAT if applicable using the resolved treatment from mapping
   const treatment = mapping.vatTreatment as VatTreatment | null
   const hasVatOverride = vatAmountOverride !== undefined && vatAmountOverride !== null
+
+  if (hasVatOverride && isBusiness && isNotVatRegistered(vatRegistered)) {
+    // Mirrors the supplier-invoice guard: the moms on the underlag is part of
+    // the cost for a company with no deduction right, never a 2641 line.
+    throw new Error(
+      'vat_amount cannot be booked for a company that is not VAT-registered: it has no deduction ' +
+      'right for input VAT (13 kap. ML 2023:200), so the moms on the underlag is part of the cost.'
+    )
+  }
 
   // Journal entry lines are SEK; transaction.amount is in transaction.currency.
   // The lenient resolver (not the OrNull sibling) is deliberate: it must agree
@@ -424,11 +454,17 @@ export function getDefaultAccountForCategory(
 /**
  * Get the default VAT treatment for a category.
  * Bank fees, card fees, and currency exchange are VAT-exempt.
- * All other business categories default to standard 25%.
+ * All other business categories default to standard 25%, resolved to exempt
+ * for a company that is not VAT-registered (lib/bookkeeping/vat-registration.ts).
  */
 export function getDefaultVatTreatmentForCategory(
-  category: TransactionCategory
+  category: TransactionCategory,
+  vatRegistered?: VatRegistration
 ): VatTreatment | null {
+  return vatTreatmentForRegistration(defaultVatTreatmentForCategory(category), vatRegistered)
+}
+
+function defaultVatTreatmentForCategory(category: TransactionCategory): VatTreatment | null {
   if (category === 'private' || category === 'uncategorized') {
     return null
   }

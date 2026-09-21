@@ -57,6 +57,7 @@ import {
   buildVoucherIndex,
   fetchFiscalPeriods,
   fetchSourceRefVouchers,
+  fetchVouchersForNumbers,
   periodIdForDate,
   resolveDatedRef,
   sourceRefKey,
@@ -147,6 +148,8 @@ export interface LinkMigratedRegistrationVouchersOptions {
   supabase: SupabaseClient
   companyId: string
   invoices: MigratedInvoiceLinkInput[]
+  /** Read only source voucher numbers in a durable worker's current batch. */
+  bounded?: boolean
   /** Resolve and corroborate but write nothing. Default false. */
   dryRun?: boolean
 }
@@ -304,7 +307,11 @@ export async function linkMigratedRegistrationVouchers(
 
   // 1. The company's migrated verifikat and fiscal years, indexed once.
   const [vouchers, periods] = await Promise.all([
-    fetchSourceRefVouchers(supabase, companyId),
+    // A bounded worker batch should not reload a company's entire ledger.
+    options.bounded
+      ? fetchVouchersForNumbers(supabase, companyId,
+          invoices.flatMap(input => input.sourceVoucher ? [input.sourceVoucher.number] : []))
+      : fetchSourceRefVouchers(supabase, companyId),
     fetchFiscalPeriods(supabase, companyId),
   ])
   const index = buildVoucherIndex(vouchers)

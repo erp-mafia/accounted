@@ -17,10 +17,33 @@ import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
 import { Switch } from '@/components/ui/switch'
 import { useSettings } from '@/components/settings/useSettings'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
+import {
+  DEFAULT_SALARY_CALCULATION_POLICY,
+  SALARY_CALCULATION_POLICY_KEYS,
+  SALARY_CALCULATION_POLICY_OPTIONS,
+  type SalaryCalculationPolicy,
+  type SalaryCalculationPolicyKey,
+} from '@/lib/salary/calculation-policy'
 import type { CompanySettings } from '@/types'
 
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 const BANK_OPTIONS = ['swedbank', 'seb', 'handelsbanken', 'nordea'] as const
+
+/**
+ * One <select> per calculation convention. The form field name is the policy
+ * key prefixed so it cannot collide with a column; the value is validated
+ * against the allowed options on save and falls back to the default (the
+ * historical engine) for anything unexpected, exactly like the other selects.
+ */
+function readPolicyFromForm(formData: FormData): SalaryCalculationPolicy {
+  const policy = { ...DEFAULT_SALARY_CALCULATION_POLICY } as Record<SalaryCalculationPolicyKey, string>
+  for (const key of SALARY_CALCULATION_POLICY_KEYS) {
+    const raw = formData.get(`policy_${key}`)
+    const options: readonly string[] = SALARY_CALCULATION_POLICY_OPTIONS[key]
+    if (typeof raw === 'string' && options.includes(raw)) policy[key] = raw
+  }
+  return policy as SalaryCalculationPolicy
+}
 
 const BANK_LABEL: Record<(typeof BANK_OPTIONS)[number], string> = {
   swedbank: 'Swedbank',
@@ -47,6 +70,11 @@ export function SalarySettingsContent() {
   const effectiveFormat = format ?? settings.preferred_payment_format ?? 'pain001'
   const effectiveNetRounding = netRounding ?? settings.salary_net_rounding ?? false
   const currentSeries = resolveDefaultSeriesForSource(settings, 'salary_payment')
+  // {} on a company that never touched the conventions = every default.
+  const currentPolicy: SalaryCalculationPolicy = {
+    ...DEFAULT_SALARY_CALCULATION_POLICY,
+    ...(settings.salary_calculation_policy ?? {}),
+  }
 
   function handleSave(formData: FormData) {
     const payDayRaw = parseInt((formData.get('salary_pay_day') as string) || '25', 10)
@@ -54,12 +82,18 @@ export function SalarySettingsContent() {
     const paymentFormat = (formData.get('preferred_payment_format') as string) || 'pain001'
     const bank = (formData.get('salary_default_bank') as string) || 'none'
     const series = (formData.get('salary_voucher_series') as string) || 'A'
+    const deviationRaw = formData.get('salary_deviation_period') as string | null
+    const deviationPeriod = deviationRaw === 'previous_month' ? 'previous_month' : 'same_month'
 
     const updates: Record<string, unknown> = {
       salary_pay_day: payDay,
       preferred_payment_format: paymentFormat,
       salary_default_bank: bank === 'none' ? null : bank,
       salary_net_rounding: effectiveNetRounding,
+      salary_deviation_period: deviationPeriod,
+      // All six conventions travel together: the internal settings route
+      // stores the object as a whole.
+      salary_calculation_policy: readPolicyFromForm(formData),
     }
 
     // The booking engine resolves the series from the per-source-type map;
@@ -138,6 +172,20 @@ export function SalarySettingsContent() {
               <option value="other">{t('bank_other')}</option>
             </SettingsSelect>
           </SettingsRow>
+          <SettingsRow
+            label={t('deviation_period_label')}
+            htmlFor="salary_deviation_period"
+            help={t('deviation_period_help')}
+          >
+            <SettingsSelect
+              id="salary_deviation_period"
+              name="salary_deviation_period"
+              defaultValue={settings.salary_deviation_period ?? 'same_month'}
+            >
+              <option value="same_month">{t('deviation_period_same_month')}</option>
+              <option value="previous_month">{t('deviation_period_previous_month')}</option>
+            </SettingsSelect>
+          </SettingsRow>
           <SettingsRow label={t('net_rounding_label')} help={t('net_rounding_help')}>
             <Switch
               id="salary_net_rounding"
@@ -148,6 +196,29 @@ export function SalarySettingsContent() {
               {t('net_rounding_toggle')}
             </label>
           </SettingsRow>
+        </SettingsGroup>
+
+        {/* Calculation conventions (lib/salary/calculation-policy.ts): one
+            select per convention, the first option of each being the
+            historical engine. Labels and help live under settings_salary as
+            policy_<key>_label / _help / _<option>. */}
+        <SettingsGroup label={t('policy_heading')} help={t('policy_help')}>
+          {SALARY_CALCULATION_POLICY_KEYS.map((key) => (
+            <SettingsRow
+              key={key}
+              label={t(`policy_${key}_label`)}
+              htmlFor={`policy_${key}`}
+              help={t(`policy_${key}_help`)}
+            >
+              <SettingsSelect id={`policy_${key}`} name={`policy_${key}`} defaultValue={currentPolicy[key]}>
+                {SALARY_CALCULATION_POLICY_OPTIONS[key].map((option) => (
+                  <option key={option} value={option}>
+                    {t(`policy_${key}_${option}`)}
+                  </option>
+                ))}
+              </SettingsSelect>
+            </SettingsRow>
+          ))}
         </SettingsGroup>
 
         <SettingsGroup label={t('accounting_heading')}>

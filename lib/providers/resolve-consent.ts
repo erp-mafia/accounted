@@ -1,3 +1,5 @@
+import { checkExecutionBudget, currentExecutionBudget, ExecutionBudgetExceeded, queryInExecutionBudget, withExecutionDeadline } from '@/lib/http/execution-budget';
+import { OAUTH_TIMEOUT_MS, isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { createServiceClient } from '@/lib/supabase/server';
 import type { TokenResponse } from './types';
 import { getOAuthConfig } from './oauth-config';
@@ -21,12 +23,12 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   const supabase = createServiceClient();
 
   // Load consent
-  const { data: consentRows } = await supabase
+  const { data: consentRows } = await queryInExecutionBudget(supabase
     .from('provider_consents')
     .select('*')
     .eq('id', consentId)
     .eq('company_id', companyId)
-    .limit(1);
+    .limit(1));
 
   if (!consentRows || consentRows.length === 0) {
     throw { status: 404, message: 'Consent not found' };
@@ -43,11 +45,11 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   }
 
   // Load tokens
-  const { data: tokenRows } = await supabase
+  const { data: tokenRows } = await queryInExecutionBudget(supabase
     .from('provider_consent_tokens')
     .select('*')
     .eq('consent_id', consentId)
-    .limit(1);
+    .limit(1));
 
   if (!tokenRows || tokenRows.length === 0) {
     throw { status: 401, message: 'No tokens found for this consent: complete OAuth first' };
@@ -67,16 +69,16 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   // Björn Lunden: client credentials, auto-refresh when expired
   if (consent.provider === 'bjornlunden') {
     if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
-      const refreshed = await refreshBjornLundenToken();
+      const refreshed = await refreshWithinBudget(() => refreshBjornLundenToken());
       const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
 
-      await supabase
+      await queryInExecutionBudget(supabase
         .from('provider_consent_tokens')
         .update({
           access_token: refreshed.access_token,
           token_expires_at: newExpiresAt,
         })
-        .eq('consent_id', consentId);
+        .eq('consent_id', consentId));
 
       return {
         consent,
@@ -110,20 +112,22 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     // at the boundary that knows this is a refresh.
     try {
       if (consent.provider === 'fortnox') {
-        refreshed = await refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string);
+        refreshed = await refreshWithinBudget(() => refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string));
       } else if (consent.provider === 'briox') {
         // Briox /tokenrefresh wants the (expired) access token alongside the
         // refresh token; no app-level config involved. Both tokens rotate:
         // the new refresh_token is persisted below.
-        refreshed = await refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string);
+        refreshed = await refreshWithinBudget(() => refreshBrioxToken(tokens.refresh_token as string, tokens.access_token as string));
       } else if (consent.provider === 'wint') {
         // WINT rotates the pair on refresh (the response is a full login
         // envelope); the guarded update below persists the new refresh_token.
-        refreshed = await refreshWintToken(tokens.refresh_token as string);
+        refreshed = await refreshWithinBudget(() => refreshWintToken(tokens.refresh_token as string));
       } else {
-        refreshed = await refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string);
+        refreshed = await refreshWithinBudget(() => refreshVismaToken(getOAuthConfig(consent.provider as string), tokens.refresh_token as string));
       }
     } catch (err) {
+      if (err instanceof ExecutionBudgetExceeded || isTimeoutError(err)) throw err;
+      checkExecutionBudget();
       const reason = err instanceof Error ? err.message : String(err);
       // A missing/inactive integration license (Fortnox `error_missing_license`)
       // is NOT a revivable token: re-authorizing loops until the customer
@@ -156,7 +160,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     // the pair the first request just stored with a possibly-dead one. Key
     // the UPDATE on the token_expires_at we read above: if another request
     // already rotated, zero rows match and we adopt the stored fresh tokens.
-    const { data: updatedRows, error: updateError } = await supabase
+    const { data: updatedRows, error: updateError } = await queryInExecutionBudget(supabase
       .from('provider_consent_tokens')
       .update({
         access_token: refreshed.access_token,
@@ -170,7 +174,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       // ("column provider_consent_tokens.id does not exist"), which surfaces as
       // updateError and is misreported as "rotated tokens could not be saved"
       // AFTER the provider already rotated, permanently breaking the consent.
-      .select('consent_id');
+      .select('consent_id'));
 
     if (updateError) {
       // The provider has ALREADY rotated the tokens but we failed to persist
@@ -194,11 +198,11 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       // Lost the refresh race: a concurrent request already rotated and
       // persisted a fresh pair. Use those tokens as-is: calling the provider
       // refresh endpoint again here would invalidate the winner's pair.
-      const { data: freshRows } = await supabase
+      const { data: freshRows } = await queryInExecutionBudget(supabase
         .from('provider_consent_tokens')
         .select('*')
         .eq('consent_id', consentId)
-        .limit(1);
+        .limit(1));
 
       const fresh = freshRows?.[0];
       if (fresh?.access_token) {
@@ -226,4 +230,15 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     accessToken: tokens.access_token as string,
     providerCompanyId: tokens.provider_company_id as string | undefined,
   };
+}
+
+/** Never rotate a token unless there is time left to save the returned pair. */
+async function refreshWithinBudget(refresh: () => Promise<TokenResponse>): Promise<TokenResponse> {
+  const budget = currentExecutionBudget();
+  if (!budget) return refresh();
+  const persistenceReserve = 5_000;
+  if (budget.deadline - Date.now() < OAUTH_TIMEOUT_MS + persistenceReserve) {
+    throw new ExecutionBudgetExceeded('credential-refresh');
+  }
+  return withExecutionDeadline(budget.deadline - persistenceReserve, 'credential-refresh', refresh);
 }

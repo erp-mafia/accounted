@@ -25,6 +25,7 @@ import { POST } from '../route'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
+import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -48,6 +49,7 @@ describe('POST /api/salary/runs — one-click creation', () => {
     vi.mocked(createSalaryRunWithEmployees).mockResolvedValue({
       run: { ...CREATED_RUN },
       employeeCount: 3,
+      deviationWindow: { start: '2026-07-01', end: '2026-07-31' },
     })
     vi.mocked(runSalaryCalculation).mockResolvedValue({
       ok: true,
@@ -164,6 +166,56 @@ describe('POST /api/salary/runs — one-click creation', () => {
         voucherSeries: 'B',
       }),
     )
+  })
+
+  it('passes explicit deviation_period dates through to the lib', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    enqueueMany([{ data: null }, { data: null }])
+
+    const response = await POST(
+      post({
+        period_year: 2026,
+        period_month: 9,
+        payment_date: '2026-09-25',
+        deviation_period_start: '2026-08-01',
+        deviation_period_end: '2026-08-31',
+      }),
+      { params: Promise.resolve({}) } as never,
+    )
+    expect(response.status).toBe(201)
+    expect(createSalaryRunWithEmployees).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        deviationPeriodStart: '2026-08-01',
+        deviationPeriodEnd: '2026-08-31',
+      }),
+    )
+  })
+
+  it('maps an overlapping avvikelseperiod to 409 with the conflicting run', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+    enqueueMany([{ data: null }, { data: null }])
+    vi.mocked(createSalaryRunWithEmployees).mockRejectedValueOnce(
+      new SalaryDeviationPeriodError('SALARY_RUN_DEVIATION_PERIOD_OVERLAP', 'overlap', {
+        conflicting_run_id: 'run-aug',
+      }),
+    )
+
+    const response = await POST(
+      post({ period_year: 2026, period_month: 9, payment_date: '2026-09-25' }),
+      { params: Promise.resolve({}) } as never,
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { conflicting_run_id?: string } }
+    }>(response)
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_DEVIATION_PERIOD_OVERLAP')
+    expect(body.error.details?.conflicting_run_id).toBe('run-aug')
+    expect(runSalaryCalculation).not.toHaveBeenCalled()
   })
 
   it('returns 409 with existingId when an active run exists for the period', async () => {

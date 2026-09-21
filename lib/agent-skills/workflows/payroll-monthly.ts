@@ -39,6 +39,7 @@ If anything is missing, the user fixes it in the web UI before running payroll.
 - Adds **all active employees** with their base salary line (item_type \`monthly_salary\` or \`hourly_salary\`)
 - Returns the run ID + employee count
 - Idempotent on \`(company_id, period_year, period_month)\`: re-calling errors with "Salary run already exists for this period"
+- **Avvikelseperiod**: absence (sick, VAB, parental, tjänstledighet) and worked days are read from the run's deviation window, not necessarily the pay month. Default = the company setting \`salary_deviation_period\` (\`same_month\`, or \`previous_month\` for "innevarande månads lön, föregående månads avvikelser", the common Swedish setup). Pass \`deviation_period_start\` + \`deviation_period_end\` (both, YYYY-MM-DD) to override for one run. The staged preview shows the resolved window; a window that overlaps another live run is refused (the same sick day would be deducted twice), so change the setting before the first run of a new month, not mid-stream.
 
 ### Step 3: Set this month's salary (if it differs from the fixed pay)
 
@@ -68,7 +69,7 @@ Errors at this stage usually mean missing tax-table data: fall back to \`getDefa
 
 \`gnubok_get_salary_run({ salary_run_id })\`: full breakdown including \`calculation_breakdown\` showing step-by-step formulas. The user reviews per-employee in web UI.
 
-\`gnubok_get_salary_journal({ year })\`: annual rollup for sanity check.
+\`gnubok_get_salary_journal({ year })\` (via \`gnubok_call_tool\`): annual rollup for sanity check.
 
 ### Step 6: Approve & book
 
@@ -110,7 +111,7 @@ Returns \`{ message, period, employee_count, download_url }\`. The XML conforms 
 - \`gnubok_calculate_salary_run\`: compute tax + avgifter + accrual
 - \`gnubok_get_salary_run\`: review breakdown
 - \`gnubok_book_salary_run\`: stage booking (statuses + verifikat)
-- \`gnubok_get_salary_journal\`: annual rollup
+- \`gnubok_get_salary_journal\` (via \`gnubok_call_tool\`): annual rollup
 - \`gnubok_generate_agi\`: produce AGI XML for filing
 `
 

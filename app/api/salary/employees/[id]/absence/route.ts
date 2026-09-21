@@ -28,7 +28,14 @@ function errorResponse(code: string, details?: Record<string, unknown>): NextRes
     (code === 'ABSENCE_HOURS_CONFLICT' ? (details?.message as string | undefined) : undefined) ??
     entry?.message_sv ??
     'Något gick fel'
-  return NextResponse.json({ error: message, code }, { status: entry?.httpStatus ?? 500 })
+  // The register lock (409) names the run that already read the dates
+  // (salary_run_id, locked_dates): pass that through so the calendar can
+  // point at it. Every other code keeps details server-side.
+  const body =
+    code === 'SALARY_REGISTER_DATES_LOCKED_BY_RUN' && details
+      ? { error: message, code, details }
+      : { error: message, code }
+  return NextResponse.json(body, { status: entry?.httpStatus ?? 500 })
 }
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(

@@ -10,8 +10,8 @@ import type { ProposedDisposition } from '../types'
 export { SLP_RATE }
 
 export interface SlpComputation {
-  /** Total pension cost during the period: sum of posted debits on accounts
-   *  7410-7419 (pensionsförsäkringspremier, individuella pensioner, etc.). */
+  /** Net pension cost during the period on accounts 7410-7419, including
+   *  reversed originals so they offset their posted storno entries. */
   pensionCostsBooked: number
   /** Optional manual adjustment: e.g. avsättning till pensionsskuld on 2210
    *  bokad under perioden som inte ligger på 7410-7419 men ska SLP-belastas. */
@@ -53,6 +53,8 @@ export async function calculateSarskildLoneskatt(
   // query covers both the SLP base (7410-7419) and the SLP already posted to
   // 7533 during the year (supplier-invoice lines flagged apply_slp book the
   // 7533/2514 pair at registration); the rows are partitioned below.
+  // Match ledger reports: a reversed original still contributes alongside
+  // its posted storno, for both pension costs and previously provisioned SLP.
   const PENSION_ACCOUNTS = Array.from({ length: 10 }, (_, i) => `741${i}`)
   let data: Row[]
   try {
@@ -63,7 +65,7 @@ export async function calculateSarskildLoneskatt(
         q
           .eq('company_id', companyId)
           .eq('fiscal_period_id', fiscalPeriodId)
-          .eq('status', 'posted'),
+          .in('status', ['posted', 'reversed']),
       filterLines: (q: EntryLinesQuery) =>
         q.in('account_number', [...PENSION_ACCOUNTS, '7533']),
       attachEntriesAs: null,

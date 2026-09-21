@@ -43,24 +43,24 @@ describe('resolveLandingDestination', () => {
   it('returns /clients for byrå staff on their own brand host', async () => {
     resolveBrandByHostMock.mockResolvedValue({ teamId: 'team-1' })
     resolveBrandsForTeamsMock.mockResolvedValue(
-      new Map([['team-1', { domain: 'app.amnas.se', appName: 'Amnas' }]]),
+      new Map([['team-1', { domain: 'app.brand-f.se', appName: 'Brand F' }]]),
     )
     enqueue({ data: [byraMembership] })
 
-    const dest = await resolveLandingDestination(client, 'user-1', 'app.amnas.se')
+    const dest = await resolveLandingDestination(client, 'user-1', 'app.brand-f.se')
 
     expect(dest).toBe('/clients')
-    expect(resolveBrandByHostMock).toHaveBeenCalledWith('app.amnas.se')
+    expect(resolveBrandByHostMock).toHaveBeenCalledWith('app.brand-f.se')
   })
 
   it('returns / for byrå staff on a foreign brand host', async () => {
     resolveBrandByHostMock.mockResolvedValue({ teamId: 'team-other' })
     resolveBrandsForTeamsMock.mockResolvedValue(
-      new Map([['team-1', { domain: 'app.amnas.se', appName: 'Amnas' }]]),
+      new Map([['team-1', { domain: 'app.brand-f.se', appName: 'Brand F' }]]),
     )
     enqueue({ data: [byraMembership] })
 
-    const dest = await resolveLandingDestination(client, 'user-1', 'app.ziffr.se')
+    const dest = await resolveLandingDestination(client, 'user-1', 'app.brand-g.se')
 
     expect(dest).toBe('/')
   })
@@ -78,7 +78,7 @@ describe('resolveLandingDestination', () => {
   it('returns / for a branded byrå landing on the canonical host', async () => {
     resolveBrandByHostMock.mockResolvedValue(null)
     resolveBrandsForTeamsMock.mockResolvedValue(
-      new Map([['team-1', { domain: 'app.amnas.se', appName: 'Amnas' }]]),
+      new Map([['team-1', { domain: 'app.brand-f.se', appName: 'Brand F' }]]),
     )
     enqueue({ data: [byraMembership] })
 
@@ -99,7 +99,7 @@ describe('resolveLandingDestination', () => {
   it('degrades to / when the membership query errors', async () => {
     enqueue({ data: null, error: { message: 'boom' } })
 
-    const dest = await resolveLandingDestination(client, 'user-1', 'app.amnas.se')
+    const dest = await resolveLandingDestination(client, 'user-1', 'app.brand-f.se')
 
     expect(dest).toBe('/')
   })

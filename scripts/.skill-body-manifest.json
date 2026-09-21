@@ -172,12 +172,12 @@
     "version": 1
   },
   "horizontal/swedish-sie-import-export": {
-    "hash": "6d003ee8c3439058f60c63ff5f2ca153cf6c1b6657bda56754352a6d409bd831",
-    "version": 3
+    "hash": "bc03f212f6621005d5b22df6679c670163693644224719e63d42fc8ebf319a21",
+    "version": 4
   },
   "horizontal/swedish-sie-import-export/bas-sru": {
-    "hash": "7fb1f664b69f5cce897938115d730d00e736d81b6216b6aa13990fc3db95259a",
-    "version": 2
+    "hash": "fcc4b02f2428e82f9ee2cd3b939fbb180c0597895f3d372bfb361ce97af199f3",
+    "version": 3
   },
   "horizontal/swedish-sie-import-export/encoding": {
     "hash": "eaa520fe47638fd521d27d0f9d6315d5c15f47eed2b4df408c9e9addba10c7d8",
@@ -188,16 +188,16 @@
     "version": 1
   },
   "horizontal/swedish-sie-import-export/validation-rules": {
-    "hash": "8b08c3d09757fe261bbab469e8d30cb51b960f423d57ada622cadd17a92c9598",
-    "version": 1
+    "hash": "dbb7086c97f69af23f90b02130937951829bbd8065e87d8a5d49dd57123feaea",
+    "version": 2
   },
   "horizontal/swedish-sru-filing": {
-    "hash": "56a1ce1be4908e15b6e3c9dcad64e5a3fb0f4400c47a2f88504d0bf897f4a9da",
-    "version": 6
+    "hash": "1bfe3a84e6f9919d1cd4fb28e978fa4c704c4619fe331b716d923e3cdb347d1a",
+    "version": 7
   },
   "horizontal/swedish-sru-filing/sru-codes": {
-    "hash": "b96a87715d6d9091e7ee43558b362b51565f23f1b6268784084b0a498aa867fc",
-    "version": 5
+    "hash": "5052baa2513b4e9833025b3d0e7de54fcfeb0fa47ba32891d5c0ec1530685fa3",
+    "version": 6
   },
   "horizontal/swedish-tax-planning": {
     "hash": "99b87fac9eacf0ad168434c2bce99f21cdb8a53cb26ccabb64ba291b9059aa24",
@@ -244,8 +244,8 @@
     "version": 3
   },
   "horizontal/swedish-year-end-closing/closing-process": {
-    "hash": "2d23c29bcf8a7f5d6ce72e677abe518efdf8300ed11360269377a342f51945b5",
-    "version": 3
+    "hash": "a97cd8e7c9461ff8a734647d3f6aadc7db40210bf170c9e83af2362ee9c81463",
+    "version": 4
   },
   "horizontal/swedish-year-end-closing/journal-entries": {
     "hash": "b4891b88b6cf409f00c76c70b7acb9dbf20e13ac05814886f978b80b878ab0a9",

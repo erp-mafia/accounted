@@ -7,7 +7,7 @@ import {
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
 import { registerExpenseClaim } from '@/lib/expenses/expense-claims-service'
-import { OWNER_FALLBACK_NAME, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
+import { ownerFallbackName, resolveExpenseLiabilityAccount } from '@/lib/expenses/payer'
 import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
@@ -590,7 +590,7 @@ export const POST = withRouteContext(
           exchange_rate: fx.rate.exchangeRate ?? undefined,
           expense_account: largestExpenseAccount(items as SupplierInvoiceItem[]),
           employee_id: body.employee_id ?? undefined,
-          claimant_name: payer === 'owner' ? body.claimant_name?.trim() || OWNER_FALLBACK_NAME : undefined,
+          claimant_name: payer === 'owner' ? body.claimant_name?.trim() || ownerFallbackName(entityType) : undefined,
           document_id: documentId ?? undefined,
           inbox_item_id: inboxItem?.id,
           lines: buildSupplierInvoicePrivatelyPaidLines(

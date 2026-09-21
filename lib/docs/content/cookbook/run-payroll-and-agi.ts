@@ -98,7 +98,9 @@ Response shows \`status: 'approved'\` plus a \`warnings\` array. The endpoint va
 
 Missing email is a **non-blocking warning** (lönebesked can't be sent automatically) and does not fail approval. Validation failures return \`SALARY_RUN_APPROVE_VALIDATION_FAILED\` with the full \`issues\` list (and any \`warnings\`) in \`details\`. A non-\`review\` run returns \`SALARY_RUN_APPROVE_NOT_REVIEW\`.
 
-## 4. Mark paid (approved → paid)
+## 4. Pay, then mark paid (approved → paid)
+
+The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` with \`{ "format": "pain001" }\` (or \`"bg_lb"\`; omitted = the company's \`preferred_payment_format\`) returns the ISO 20022 pain.001 XML inline as \`data.content\` with a \`data.filename\`, plus the employee count, the total and any warnings. It needs the company's IBAN and BIC (bankgiro for LB) and each employee's clearing and account number, and the run must be approved. Write the content to disk and upload it in the bank's file channel; generating it does not change the run's state. Dry-run it first to see the preview without stamping the run.
 
 After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 
@@ -193,6 +195,25 @@ Save the XML to disk and upload it to **Skatteverket Mina Sidor → Tjänster �
 
 Generating the XML stamps \`agi_generated_at\` on the salary run and emits an \`agi.generated\` event. There is no public endpoint to store a Skatteverket confirmation number back on the run: track the submission reference in your own system.
 
+## Avvikelseperiod: deviations from the previous month
+
+Most Swedish payrolls pay the fixed salary for the current month and take the deviations (sjukfrånvaro, VAB, föräldraledighet, tjänstledighet, worked hours for hourly staff, OB) from the **previous** month, because the current month's calendar is not complete on pay day. The run carries that window as \`deviation_period_start\` / \`deviation_period_end\`; \`:calculate\` reads \`salary_absence_days\` and \`salary_worked_days\` from it, and the AGI frånvarouppgifter follow the same window.
+
+- **Company default**: \`salary_deviation_period\` in the company's payroll settings (\`same_month\` by default, \`previous_month\` for the setup above). Set it once, before the first run: the dashboard, the MCP tool and \`POST /salary-runs\` all resolve it when no dates are passed.
+- **Per run**: pass both \`deviation_period_start\` and \`deviation_period_end\` (ISO dates, at most 62 days) on \`POST /salary-runs\`. Explicit dates win over the setting.
+
+\`\`\`json
+{
+  "period_year": 2026,
+  "period_month": 9,
+  "payment_date": "2026-09-25",
+  "deviation_period_start": "2026-08-01",
+  "deviation_period_end": "2026-08-31"
+}
+\`\`\`
+
+Register the absence on the dates it happened (\`PUT /employees/{id}/absence\` with the real August dates); the September run picks them up. The window is snapshotted on the run, so changing the setting later never moves an already-calculated run. A window that overlaps another live run of the company is refused with \`409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP\` (the same sick day would otherwise be deducted twice), and one date without the other, or an inverted or over-long window, with \`400 SALARY_RUN_DEVIATION_PERIOD_INVALID\`.
+
 ## State machine summary
 
 \`\`\`
@@ -209,6 +230,7 @@ When an employee has bilförmån / fri kost / friskvård, the förmånsvärde is
 
 - **\`PATCH\`/\`DELETE\` are draft-only.** Both require \`draft\` status (\`SALARY_RUN_PATCH_NOT_DRAFT\` / \`SALARY_RUN_DELETE_NOT_DRAFT\`). There is no revert-to-draft and no \`:unapprove\`; a booked run is corrected via the forthcoming \`:correct\` verb (storno-then-rebook), not by editing or deleting.
 - **AGI period vs run period.** The AGI declaration covers \`(period_year, period_month)\`: the same period as the run, not the payment date. A run paid on 2026-06-02 for May still files as the May AGI.
+- **Absence registered in the pay month but the run reads the previous month.** With \`previous_month\` (or explicit dates), September's run deducts August's absence only. Days registered in September land on the October run. Check \`deviation_period_start\`/\`deviation_period_end\` on the run before you register.
 - **F-skatt verification is the integrator's job.** The API trusts \`employee.f_skatt_status\` (\`a_skatt\` | \`f_skatt\` | \`fa_skatt\` | \`not_verified\`) to be in sync with the employee's live Skatteverket registration. A wrong status produces a non-compliant AGI; check the F-skattsedel before payroll runs. \`not_verified\` employees are surfaced as a non-blocking warning on \`:calculate\` (30% skatteavdrag and full avgifter are applied until verified).
 - **Sociala avgifter age reduction.** Per Prop. 2025/26:66, employees who are **18-22 years old at the start of the 2026 income year (born 2003-2007)** AND employees who **have turned 67 at the start of the income year (1 January 2026)** get reduced satser. The "at the start of" boundary matters: a 66-year-old whose 67th birthday falls in February 2026 does NOT qualify for the elder reduction in 2026. The engine derives age from the employee's personnummer (the leading birthdate digits: there is no separate \`birthdate\` field) and applies the correct sats automatically: don't override unless you've consulted [Skatteverkets table](https://www.skatteverket.se/foretagochorganisationer/skatter/arbetsgivareochinkomstuppgifter/arbetsgivaravgifteroch_skatteavdrag.4.18e1b10334ebe8bc80003392.html). The old "under 26" rule from 2024 does NOT apply for 2026 and later.
 - **Bruttolöneavdrag vs nettolöneavdrag order.** Bruttolöneavdrag reduces both lön och avgifter; nettolöneavdrag only affects the employee's payout. Pass either explicitly in the run; don't mix them.
@@ -217,5 +239,6 @@ When an employee has bilförmån / fri kost / friskvård, the förmånsvärde is
 
 - **[Set up webhooks](/docs/api/cookbook/webhooks)**: subscribe to \`salary_run.booked\` and \`agi.generated\` events to drive downstream payroll integrations.
 - **[Year-end closing](/docs/api/cookbook/year-end-closing)**: payroll's annual cap is the kontrolluppgift season (january of the following year).
+- **[Onboard a payroll customer](/docs/api/cookbook/onboard-payroll-customer)**: the operator-side setup (payroll settings, employees, cutover balances) and the monthly input loop (absence, worked days).
 - **[Salary-runs reference](/docs/api/reference/salary-runs)**: every parameter, every error code.
 `

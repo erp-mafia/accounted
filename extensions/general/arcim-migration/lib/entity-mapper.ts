@@ -13,8 +13,10 @@ import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
 import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
+import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
 import type {
   AmountType,
+  CreditedInvoiceRefDto,
   CustomerDto,
   SupplierDto,
   SalesInvoiceDto,
@@ -576,22 +578,28 @@ export interface MappedInvoice {
    */
   vatUnresolved: boolean
   /**
-   * True for an imported kreditfaktura that carries no pointer at the invoice
-   * it credits.
+   * True for an imported kreditfaktura: the row AS MAPPED carries no pointer
+   * at the invoice it credits.
    *
-   * `invoices` models that relation only through `credited_invoice_id`, and no
-   * provider DTO carries a reference to the credited invoice: SalesInvoiceDto
-   * and SupplierInvoiceDto (lib/providers/dto.ts) state the type through
-   * `invoiceTypeCode` 381 and nothing else. So every credit note the migration
-   * imports lands unlinked, and guessing the original from a number in a note
-   * or from the amount would put a wrong pair in the AR ledger. The row itself
-   * is complete räkenskapsinformation (reversed amounts, terminal status);
-   * only the pairing is missing. Meant to be counted into the migration
-   * summary the way `vatUnresolved` is, so the user is told instead of finding
-   * it out in the ledger; the orchestrator does not read it yet, and the copy
-   * that reports it waits in `ext_arcim_credit_notes_unlinked_detail`.
+   * `invoices` models that relation only through `credited_invoice_id`, an
+   * Accounted id the mapper cannot know: the original may be inserted in the
+   * same run, a chunk later, or by an earlier run. So the importer pairs the
+   * rows afterwards, from `creditedInvoiceRef`, when the provider named the
+   * credited invoice (Bokio's invoiceRef and Fortnox's CreditInvoiceReference
+   * do; Visma, Briox, Björn Lundén and WINT send nothing), and counts what
+   * stayed unpaired into the migration summary
+   * (`ext_arcim_credit_notes_unlinked_detail`). Guessing the original
+   * from an amount would put a wrong pair in the AR ledger, so no reference
+   * means unpaired. The row itself is complete räkenskapsinformation either
+   * way (reversed amounts, terminal status, the credited number in notes).
    */
   creditNoteUnlinked: boolean
+  /**
+   * The credited invoice as the provider named it, for the importer's pairing
+   * pass. null when the row is not a credit note or the provider sent no
+   * reference.
+   */
+  creditedInvoiceRef: CreditedInvoiceRefDto | null
 }
 
 // ── Public mappers ──────────────────────────────────────────────────
@@ -690,28 +698,52 @@ function negate(n: number): number {
 }
 
 /**
- * The same document stated in magnitudes.
+ * The same document stated in magnitudes: what it would read as if it were
+ * the invoice it reverses.
  *
- * Providers disagree on the sign a kreditfaktura carries: Visma reports a
- * credit invoice with a negative TotalAmount (lib/providers/visma/mapper.ts)
- * while the arcim gateway states the magnitude beside invoiceTypeCode 381.
- * Both have to land on the single convention Accounted stores, so the amounts
- * are resolved from the magnitudes and the credit sign is applied once, at the
- * end. It is also what lets resolveInvoiceVat classify the rate at all: it
- * divides VAT by subtotal, which only yields a statutory rate when both are
- * positive.
+ * Providers disagree on the sign a kreditfaktura carries: Fortnox and Visma
+ * report a credit invoice with negative amounts (lib/providers/fortnox,
+ * lib/providers/visma) while Bokio states the magnitude beside
+ * invoiceTypeCode 381. Both have to land on the single convention Accounted
+ * stores, so the amounts are resolved from the magnitudes and the credit sign
+ * is applied once, at the end. It is also what lets resolveInvoiceVat
+ * classify the rate at all: it divides VAT by subtotal, which only yields a
+ * statutory rate when both are positive.
+ *
+ * The header figures are single values, so their magnitude is their absolute
+ * value. The ROWS are not: a credit note can credit one thing and charge
+ * another on the same document (goods returned, a return fee charged), and
+ * its rows then carry both signs. 65 of the Fortnox credit notes in
+ * production on 2026-09-20 do, and for every one of them the rows as sent sum
+ * to the header. Taking each row's absolute value would turn the charge into
+ * a second credit and break rows against header, so the
+ * rows are flipped TOGETHER, by the one factor that makes their net
+ * non-negative, and keep their sign relative to each other. When all rows
+ * share a sign that is the absolute value, as before. The unit price stays a
+ * magnitude and the quantity carries the row's sign, which is how an in-app
+ * credit note is written (lib/invoices/build-credit-note-item.ts).
  */
 function withAbsoluteAmounts(dto: SalesInvoiceDto): SalesInvoiceDto {
   const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
+  const rowNet = dto.lines.reduce((sum, line) => sum + line.lineExtensionAmount.value, 0)
+  // A net of exactly zero decides nothing either way; the header's sign does.
+  const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
+  const factor = statedNegative ? -1 : 1
+  const oriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * factor })
   return {
     ...dto,
-    lines: dto.lines.map((line) => ({
-      ...line,
-      quantity: line.quantity != null ? Math.abs(line.quantity) : undefined,
-      unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
-      lineExtensionAmount: abs(line.lineExtensionAmount),
-      taxAmount: line.taxAmount ? abs(line.taxAmount) : undefined,
-    })),
+    lines: dto.lines.map((line) => {
+      const lineExtensionAmount = oriented(line.lineExtensionAmount)
+      return {
+        ...line,
+        quantity: line.quantity != null
+          ? Math.abs(line.quantity) * (lineExtensionAmount.value < 0 ? -1 : 1)
+          : undefined,
+        unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
+        lineExtensionAmount,
+        taxAmount: line.taxAmount ? oriented(line.taxAmount) : undefined,
+      }
+    }),
     taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: abs(dto.taxTotal.taxAmount) } : undefined,
     legalMonetaryTotal: {
       ...dto.legalMonetaryTotal,
@@ -750,7 +782,11 @@ export interface SupplierSettlement {
   status: 'paid' | 'partially_paid' | null
   paidAmount: number
   remainingAmount: number
-  /** Non-null exactly when `status` is. */
+  /**
+   * The settlement date the provider named, or null: when `status` is null
+   * and also when the provider gave no date (Fortnox never does). Never
+   * derived from the invoice date: an unknown date stays unknown (#2719).
+   */
   paidAt: string | null
 }
 
@@ -768,11 +804,16 @@ export interface SupplierSettlement {
  * not a payment (384 such rows across two migrated companies were written as
  * "paid" for 0 kr on 2026-09-14). An explicit paid = false from an enum is
  * never overridden by a zero either: see trustedBalance.
+ *
+ * The settlement date is the provider's `lastPaymentDate` or nothing. It
+ * used to fall back to the issue date, which turned "the provider did not
+ * say when" into a confident wrong date on every Fortnox-migrated invoice,
+ * rendered as fact in the UI (#2719). The invoice date is deliberately not
+ * a parameter any more so the fallback cannot creep back in.
  */
 export function resolveSupplierSettlement(
   paymentStatus: PaymentStatusDto,
   total: number,
-  issueDate: string,
 ): SupplierSettlement {
   const balance = trustedBalance(paymentStatus, total)
   // Treat the balance numerically (never strict === 0) so floating drift or a
@@ -786,7 +827,7 @@ export function resolveSupplierSettlement(
       status: 'paid',
       paidAmount: total,
       remainingAmount: 0,
-      paidAt: paymentStatus.lastPaymentDate || issueDate,
+      paidAt: paymentStatus.lastPaymentDate || null,
     }
   }
 
@@ -795,7 +836,7 @@ export function resolveSupplierSettlement(
     status: partial ? 'partially_paid' : null,
     paidAmount: Math.max(0, paidAmount),
     remainingAmount: Math.max(0, balance),
-    paidAt: partial ? paymentStatus.lastPaymentDate || issueDate : null,
+    paidAt: partial ? paymentStatus.lastPaymentDate || null : null,
   }
 }
 
@@ -806,7 +847,7 @@ export function mapSalesInvoice(
   customerId: string,
   fxRates?: FxRateIndex
 ): MappedInvoice {
-  const isCreditNote = dto.invoiceTypeCode === '381'
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
 
   const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
   const sign = (n: number): number => (isCreditNote ? negate(n) : n)
@@ -830,9 +871,16 @@ export function mapSalesInvoice(
   // A kreditfaktura is never an open or a paid receivable, so it gets a
   // terminal status regardless of the provider's lifecycle status:
   // invoiceTypeCode is the only signal that the document IS a credit note, and
-  // the arcim gateway is not guaranteed to also send status='credited'. Same
-  // reasoning as mapSupplierInvoice.
-  const status = isCreditNote ? 'credited' : (statusMap[dto.status] || 'sent')
+  // a provider is not guaranteed to also send status='credited' (Fortnox
+  // reports a settled balance, which used to read as 'paid'). Same reasoning
+  // as mapSupplierInvoice. Two source states are kept, because in neither has
+  // the credit note reduced anything: a draft the source never issued
+  // (Bokio's draft | published enum) stays a draft, the state an in-app
+  // credit note starts in, and one the source voided (makulerad) stays
+  // cancelled instead of being revived as an effective credit.
+  const status = isCreditNote
+    ? (dto.status === 'draft' || dto.status === 'cancelled' ? dto.status : 'credited')
+    : (statusMap[dto.status] || 'sent')
 
   // Nothing is ever collected on a kreditfaktura: it reduces what the customer
   // owes rather than settling anything. This also keeps the row clear of
@@ -842,9 +890,12 @@ export function mapSalesInvoice(
   const settlement = isCreditNote
     ? { paidAt: null as string | null, paidAmount: 0, remainingAmount: 0 }
     : {
-        paidAt: dto.paymentStatus.paid
-          ? dto.paymentStatus.lastPaymentDate || dto.issueDate
-          : null,
+        // The provider's settlement date or nothing. The old issue-date
+        // fallback wrote every Fortnox-migrated invoice as paid on the day
+        // it was issued (#2719): Fortnox never sends lastPaymentDate, Visma
+        // and WINT do. A null paid_at on a paid invoice is a state the detail
+        // page already renders honestly (classifyPaymentHistoryGap).
+        paidAt: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || null : null,
         paidAmount: dto.paymentStatus.paid ? total : round2(total - balance),
         remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
       }
@@ -881,7 +932,7 @@ export function mapSalesInvoice(
     vat_rate: vat.rate,
     your_reference: null,
     our_reference: null,
-    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
+    notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
     // Always 'invoice'. invoices_document_type_check allows only
     // ('invoice', 'proforma', 'delivery_note'), and Accounted models a
     // kreditfaktura as an invoice row with reversed amounts plus
@@ -905,26 +956,32 @@ export function mapSalesInvoice(
     fxUnresolved: fx.unresolved,
     vatUnresolved: vat.unresolved,
     creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: isCreditNote ? (dto.creditedInvoiceRef ?? null) : null,
   }
 }
 
 /**
- * Durable note for a migrated kreditfaktura that carries no pointer at the
- * invoice it credits.
+ * Durable note for a migrated kreditfaktura.
  *
  * ML 17 kap 22-23 § requires a kreditfaktura to reference the original
  * invoice, and BFL 5 kap 6-7 § requires a verifikation to reference its
- * underlag. No provider DTO carries that reference (lib/providers/dto.ts), so
- * the pairing cannot be resolved at import time and guessing it would corrupt
- * the AR ledger. The wizard reports the count, but a wizard result screen is
- * not rakenskapsinformation: the gap has to be legible on the record itself,
- * years later, to whoever opens the invoice. So it is written into `notes`,
- * preserving whatever note the provider sent.
+ * underlag. The wizard reports what could not be paired, but a wizard result
+ * screen is not räkenskapsinformation: the reference has to be legible on
+ * the record itself, years later, to whoever opens the invoice. So the
+ * credited invoice's number is written into `notes` when the provider sent
+ * it, whether or not the pairing pass then finds that invoice here, and the
+ * absence of any reference is disclosed when it did not. Whatever note the
+ * provider sent is preserved above it.
  */
-function creditNoteUnlinkedNote(providerNote: string | null | undefined): string {
-  const disclosure =
-    'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
-    + 'saknas: kallsystemet skickade ingen sadan referens vid migreringen.'
+function creditNoteNote(
+  providerNote: string | null | undefined,
+  ref: CreditedInvoiceRefDto | null | undefined,
+): string {
+  const creditedNumber = ref?.invoiceNumber?.trim()
+  const disclosure = creditedNumber
+    ? `Kreditfaktura importerad vid systembyte. Krediterar faktura ${creditedNumber} i källsystemet.`
+    : 'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
+      + 'saknas: källsystemet skickade ingen sådan referens vid migreringen.'
   const existing = (providerNote || '').trim()
   return existing ? `${existing}\n\n${disclosure}` : disclosure
 }
@@ -1007,10 +1064,10 @@ export function mapSupplierInvoice(
     credited: 'credited',
   }
 
-  const isCreditNote = dto.invoiceTypeCode === '381'
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
 
   // Payment-derived status and amounts, by the rule the repair pass shares.
-  const settlement = resolveSupplierSettlement(dto.paymentStatus, total, dto.issueDate)
+  const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
 
   // Status MUST stay consistent with the payment amounts. The provider's
   // lifecycle status (dto.status) and its payment status are computed
@@ -1080,7 +1137,7 @@ export function mapSupplierInvoice(
     paid_amount: amounts.paidAmount,
     remaining_amount: amounts.remainingAmount,
     is_credit_note: isCreditNote,
-    notes: isCreditNote ? creditNoteUnlinkedNote(dto.note) : (dto.note || null),
+    notes: isCreditNote ? creditNoteNote(dto.note, null) : (dto.note || null),
   }
 
   const items = dto.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
@@ -1092,8 +1149,10 @@ export function mapSupplierInvoice(
     vatUnresolved: vat.unresolved,
     // supplier_invoices carries is_credit_note, so the row still reads as a
     // kreditfaktura on its own; what is missing is the same pointer at the
-    // original that the sales side lacks.
+    // original that the sales side lacks. No provider names the credited
+    // supplier invoice yet, so there is nothing to pair by.
     creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: null,
   }
 }
 

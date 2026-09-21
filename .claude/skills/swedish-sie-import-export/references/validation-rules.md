@@ -51,7 +51,7 @@
 - **Rule**: Sum of all #TRANS amounts within a #VER = 0.00
 - **Detection**: Parse each VER block, sum all TRANS amounts, check for exact zero
 - **Common cause**: VAT rounding across multiple line items producing 0.01 SEK discrepancy
-- **Remediation**: Add öresutjämning line using account 3741 (Öresutjämning) for the difference
+- **Remediation**: Add öresutjämning line using account 3740 (Öres- och kronutjämning) for the difference; BAS has no 3741
 - **Tolerance**: Some parsers (jsisie) offer `AllowUnbalancedVoucher` flag. Use only for analysis, never for production import.
 - **Severity**: ERROR. Block import of the specific verification unless tolerance is enabled.
 

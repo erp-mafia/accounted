@@ -138,6 +138,9 @@ function makeMapping(source: string, target: string): AccountMapping {
 
 function standardQueues(): Record<string, QueuedResult[]> {
   return {
+    // The IB difference account comes from the legal form (resolved once,
+    // lazily, from companies.entity_type; never defaulted).
+    companies: [{ data: { entity_type: 'aktiebolag' } }],
     sie_imports: [
       { data: null }, // checkDuplicateImport: no duplicate
       {}, // cleanupStaleImportRecords delete

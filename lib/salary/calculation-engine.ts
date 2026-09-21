@@ -4,6 +4,8 @@ import { lookupTaxAmount, calculateJamkningTax, calculateSidoinkomstTax } from '
 import { calculateAgeAtYearStart, decryptPersonnummer } from './personnummer'
 import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
+import type { SalaryCalculationPolicy } from './calculation-policy'
+import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -66,6 +68,14 @@ export interface SalaryCalculationInput {
   roundNetToWholeKrona?: boolean
 
   /**
+   * Company calculation conventions (lib/salary/calculation-policy.ts).
+   * Omitted = every default, which is the historical engine behaviour. Read
+   * here for partial_month, net_rounding and one_off_tax_rounding; the
+   * absence conventions are consumed by derive-absence-line-items.
+   */
+  calculationPolicy?: SalaryCalculationPolicy
+
+  /**
    * Pay period bounds (YYYY-MM-DD). Together with employmentStart/employmentEnd
    * they drive partial-month proration: an employee hired mid-period or
    * terminated mid-period receives only the workday-fraction of base salary.
@@ -77,6 +87,11 @@ export interface SalaryCalculationInput {
   employmentEnd?: string | null
 }
 
+/** Row types Step 3 consumes as signed absence; Step 4 must never see them again. */
+const ABSENCE_ITEM_TYPES: ReadonlySet<string> = new Set([
+  'sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation',
+])
+
 export interface CalculationLineItem {
   itemType: SalaryLineItemType
   amount: number
@@ -85,6 +100,12 @@ export interface CalculationLineItem {
   isVacationBasis: boolean
   isGrossDeduction: boolean
   isNetDeduction: boolean
+  /**
+   * Engångsskatt percentage (lib/salary/one-off-tax.ts): the line is taxed
+   * at this flat rate instead of through the monthly table. null/undefined =
+   * regular taxation. Only meaningful on positive taxable additions.
+   */
+  oneOffTaxPercent?: number | null
 }
 
 export interface CalculationStep {
@@ -143,12 +164,16 @@ function r(x: number): number {
  * Sum vacation-basis line items that ADD to base salary (overtime, bonus,
  * etc). Excludes monthly_salary/hourly_salary because those line items mirror
  * the engine's own baseSalary computation: counting them would double the
- * vacation basis.
+ * vacation basis. Excludes semesterersattning too: semesterlön is not
+ * semesterlönegrundande (SemL 16 §), so a manually entered semesterersättning
+ * payout must neither accrue vacation pay nor earn semesterersättning on
+ * itself.
  */
 function vacationBasisAdditions(lineItems: CalculationLineItem[]): number {
   return lineItems
     .filter(li => li.isVacationBasis)
     .filter(li => li.itemType !== 'monthly_salary' && li.itemType !== 'hourly_salary')
+    .filter(li => li.itemType !== 'semesterersattning')
     .reduce((sum, li) => sum + li.amount, 0)
 }
 
@@ -249,6 +274,65 @@ export function prorateBaseSalaryForPeriod(
   return ratio
 }
 
+type MonthlyBaseInput = Pick<
+  SalaryCalculationInput,
+  'monthlySalary' | 'employmentDegree' | 'employmentStart' | 'employmentEnd' | 'periodStart' | 'periodEnd' | 'calculationPolicy'
+>
+
+interface MonthlyBaseResult {
+  baseSalary: number
+  /** True when the employment did not cover the whole period and the base was scaled. */
+  prorated: boolean
+  /** Share of the period paid (0-1), for the breakdown step. */
+  ratio: number
+  /** Calendar days paid, only under partial_month = annual_calendar_days. */
+  calendarDays?: number
+}
+
+/**
+ * Degree-adjusted monthly base for the period, prorated for an employment
+ * that starts or ends inside it under the company's partial_month convention
+ * (lib/salary/calculation-policy.ts).
+ *
+ *   workdays (default)     : base × (workdays employed / workdays in period),
+ *                            exactly the historical proration.
+ *   annual_calendar_days   : round(base × 12 / 365) × calendar days employed,
+ *                            365 also in a leap year; a full month pays the
+ *                            full base.
+ */
+function prorateMonthlyBase(input: MonthlyBaseInput): MonthlyBaseResult {
+  const full = r(input.monthlySalary * (input.employmentDegree / 100))
+  const { periodStart, periodEnd, employmentStart, employmentEnd } = input
+  if (input.calculationPolicy?.partial_month !== 'annual_calendar_days') {
+    const ratio = prorateBaseSalaryForPeriod(employmentStart, employmentEnd, periodStart, periodEnd)
+    const prorated = ratio < 1 && !!periodStart && !!periodEnd
+    return { baseSalary: prorated ? r(full * ratio) : full, prorated, ratio }
+  }
+  if (!periodStart || !periodEnd || !employmentStart) return { baseSalary: full, prorated: false, ratio: 1 }
+  const start = maxDate(employmentStart, periodStart)
+  const end = employmentEnd ? minDate(employmentEnd, periodEnd) : periodEnd
+  if (start > end) return { baseSalary: 0, prorated: true, ratio: 0, calendarDays: 0 }
+  if (start === periodStart && end === periodEnd) return { baseSalary: full, prorated: false, ratio: 1 }
+  const days = Math.round((parseIsoDateUtc(end).getTime() - parseIsoDateUtc(start).getTime()) / DAY_MS) + 1
+  const periodDays = Math.round((parseIsoDateUtc(periodEnd).getTime() - parseIsoDateUtc(periodStart).getTime()) / DAY_MS) + 1
+  return {
+    baseSalary: r(r((full * 12) / 365) * days),
+    prorated: true,
+    ratio: days / periodDays,
+    calendarDays: days,
+  }
+}
+
+/**
+ * The base-salary amount for a monthly employee in a period. Shared by the
+ * calculation (Step 1) and by run-calculation's refresh of the displayed
+ * 'Grundlön' payslip row, so the row and the engine can never disagree on a
+ * partial month.
+ */
+export function monthlyBaseSalary(input: MonthlyBaseInput): number {
+  return prorateMonthlyBase(input).baseSalary
+}
+
 // ============================================================
 // Main calculation
 // ============================================================
@@ -278,30 +362,29 @@ export function calculateSalary(
   let baseSalary: number
   if (input.salaryType === 'monthly') {
     const degreeAdjusted = r(input.monthlySalary * (input.employmentDegree / 100))
-    const prorationRatio = prorateBaseSalaryForPeriod(
-      input.employmentStart,
-      input.employmentEnd,
-      input.periodStart,
-      input.periodEnd,
-    )
-    if (prorationRatio < 1 && input.periodStart && input.periodEnd) {
-      baseSalary = r(degreeAdjusted * prorationRatio)
+    const proration = prorateMonthlyBase(input)
+    if (proration.prorated && input.periodStart && input.periodEnd) {
+      baseSalary = proration.baseSalary
       const overlapStart = input.employmentStart && input.employmentStart > input.periodStart
         ? input.employmentStart
         : input.periodStart
       const overlapEnd = input.employmentEnd && input.employmentEnd < input.periodEnd
         ? input.employmentEnd
         : input.periodEnd
+      const calendarDays = input.calculationPolicy?.partial_month === 'annual_calendar_days'
       steps.push({
         label: 'Grundlön (proportionerad anställningsperiod)',
-        formula: 'månadslön × (sysselsättningsgrad / 100) × (arbetsdagar i anställning / arbetsdagar i period)',
+        formula: calendarDays
+          ? 'avrundad (månadslön × sysselsättningsgrad / 100 × 12 / 365) × kalenderdagar i anställning'
+          : 'månadslön × (sysselsättningsgrad / 100) × (arbetsdagar i anställning / arbetsdagar i period)',
         input: {
           monthly_salary: input.monthlySalary,
           employment_degree: input.employmentDegree,
           degree_adjusted: degreeAdjusted,
           overlap_start: overlapStart,
           overlap_end: overlapEnd,
-          proration_ratio: Math.round(prorationRatio * 10000) / 10000,
+          proration_ratio: Math.round(proration.ratio * 10000) / 10000,
+          ...(calendarDays ? { calendar_days: proration.calendarDays ?? 0 } : {}),
         },
         output: baseSalary,
       })
@@ -330,16 +413,24 @@ export function calculateSalary(
   // OB-tillägg + tiered overtime are treated as additions to gross salary on
   // top of the base salary. They were already computed in cash terms by the
   // shift-premium engine before the calc engine ran, so we just sum them in.
+  //
+  // 'other', 'correction' and a manually entered 'semesterersattning' are
+  // signed taxable cash rows too (a retroactive correction can be negative),
+  // so they are summed with their sign. Rows flagged as gross or net
+  // deductions belong to Steps 4 and 7 and rows that are not taxable are
+  // not wages; neither is an addition. The engine-derived semesterersättning
+  // row never reaches this list (run-calculation filters it by provenance).
   const ADDITION_TYPES: SalaryLineItemType[] = [
     'overtime', 'overtime_50', 'overtime_100',
     'ob_weekday_evening', 'ob_weekend', 'ob_night', 'ob_holiday',
     'bonus', 'commission',
+    'other', 'correction', 'semesterersattning',
   ]
   const additions = input.lineItems.filter(
-    li => ADDITION_TYPES.includes(li.itemType) && li.amount > 0
+    li => ADDITION_TYPES.includes(li.itemType) && li.isTaxable && !li.isGrossDeduction && !li.isNetDeduction
   )
   const totalAdditions = r(additions.reduce((sum, li) => sum + li.amount, 0))
-  if (totalAdditions > 0) {
+  if (totalAdditions !== 0) {
     steps.push({
       label: 'Tillägg (övertid, OB, bonus, provision)',
       formula: 'summa tillägg',
@@ -349,9 +440,7 @@ export function calculateSalary(
   }
 
   // ─── Step 3: Subtract absence deductions ───
-  const absenceItems = input.lineItems.filter(
-    li => ['sick_karens', 'sick_day2_14', 'sick_day15_plus', 'vab', 'parental_leave', 'unpaid_leave', 'vacation'].includes(li.itemType)
-  )
+  const absenceItems = input.lineItems.filter(li => ABSENCE_ITEM_TYPES.has(li.itemType))
   const totalAbsence = r(absenceItems.reduce((sum, li) => sum + li.amount, 0))
   if (totalAbsence !== 0) {
     steps.push({
@@ -363,7 +452,14 @@ export function calculateSalary(
   }
 
   // ─── Step 4: Bruttolöneavdrag (MUST be before tax) ───
-  const grossDeductionItems = input.lineItems.filter(li => li.isGrossDeduction)
+  // Absence rows are signed and already consumed in Step 3. The derived
+  // sick/VAB/parental rows also carry is_gross_deduction (it drives the
+  // booking split), so they must be excluded here or the same day is
+  // deducted twice: 31 500 kr with one VAB day gave 28 500 instead of 30 000
+  // (reported by Frey, 2026-09-18).
+  const grossDeductionItems = input.lineItems.filter(
+    li => li.isGrossDeduction && !ABSENCE_ITEM_TYPES.has(li.itemType),
+  )
   const totalGrossDeductions = r(Math.abs(grossDeductionItems.reduce((sum, li) => sum + li.amount, 0)))
   if (totalGrossDeductions > 0) {
     steps.push({
@@ -426,6 +522,29 @@ export function calculateSalary(
   })
 
   // ─── Step 6: Tax withholding ───
+  // Engångsskatt (lib/salary/one-off-tax.ts): lines with one_off_tax_percent
+  // leave the monthly table and are taxed at their verified flat rate,
+  // grouped per rate before the öre are dropped. A jämkning decision, the
+  // flat 30 % paths and F-skatt govern the whole payslip and ignore the
+  // split. The lines were validated at create/update and before the run;
+  // the throw here is the engine's own guard.
+  for (const line of input.lineItems) {
+    const oneOffError = validateOneOffTaxLine({
+      one_off_tax_percent: line.oneOffTaxPercent,
+      item_type: line.itemType,
+      amount: line.amount,
+      is_taxable: line.isTaxable,
+      is_gross_deduction: line.isGrossDeduction,
+      is_net_deduction: line.isNetDeduction,
+    })
+    if (oneOffError) throw new Error(oneOffError)
+  }
+  const oneOffByRate = groupOneOffBasesByRate(input.lineItems)
+  const oneOffBasis = r([...oneOffByRate.values()].reduce((sum, basis) => sum + basis, 0))
+  // Untouched when no line carries a percentage, so the table path is
+  // byte-for-byte the historical one (including a negative taxable income).
+  const regularTaxableIncome = oneOffByRate.size > 0 ? Math.max(0, r(taxableIncome - oneOffBasis)) : taxableIncome
+
   let taxWithheld: number
   const paymentYear = parseInt(input.paymentDate.split('-')[0])
 
@@ -466,14 +585,28 @@ export function calculateSalary(
       output: taxWithheld,
     })
   } else if (input.taxTableNumber) {
-    // Normal tax table lookup
-    taxWithheld = lookupTaxAmount(input.taxTableNumber, input.taxColumn, taxableIncome, taxRates)
+    // Normal tax table lookup on the regular part of the income; one-off
+    // bases are taxed per rate group below.
+    taxWithheld = lookupTaxAmount(input.taxTableNumber, input.taxColumn, regularTaxableIncome, taxRates)
     steps.push({
       label: `Skatteavdrag (tabell ${input.taxTableNumber}, kolumn ${input.taxColumn})`,
-      formula: `skattetabell ${input.taxTableNumber}, kolumn ${input.taxColumn}, inkomst ${fmtKr(taxableIncome)}`,
-      input: { table: input.taxTableNumber, column: input.taxColumn, taxable_income: taxableIncome },
+      formula: `skattetabell ${input.taxTableNumber}, kolumn ${input.taxColumn}, inkomst ${fmtKr(regularTaxableIncome)}`,
+      input: { table: input.taxTableNumber, column: input.taxColumn, taxable_income: regularTaxableIncome },
       output: taxWithheld,
     })
+    const oneOffRounding = input.calculationPolicy?.one_off_tax_rounding ?? 'truncate'
+    for (const [rate, basis] of [...oneOffByRate].sort((a, b) => a[0] - b[0])) {
+      const tax = oneOffTaxForGroup(basis, rate, oneOffRounding)
+      taxWithheld += tax
+      steps.push({
+        label: `Engångsskatt (${rate} %)`,
+        formula: oneOffRounding === 'nearest'
+          ? `engångsbelopp × ${rate} %, avrundat till hel krona`
+          : `engångsbelopp × ${rate} %, öretal bortfaller`,
+        input: { basis, percent: rate },
+        output: tax,
+      })
+    }
   } else {
     // Fallback: flat 30%, whole kronor (SFF 22 kap. 1 §)
     taxWithheld = calculateSidoinkomstTax(taxableIncome)
@@ -517,20 +650,25 @@ export function calculateSalary(
     })
   }
 
-  // ─── Step 7b: Öresavrundning (optional, uppåt till hel krona) ───
+  // ─── Step 7b: Öresavrundning (optional, hel krona) ───
   // Integer öre arithmetic: netSalary is already r()-rounded so netOre is
-  // exact; ceil-by-remainder avoids float noise. Only positive payouts round:
-  // a zero or negative net produces no payment-file line to round.
+  // exact; rounding by remainder avoids float noise. Only positive payouts
+  // round: a zero or negative net produces no payment-file line to round.
+  // Direction is the company's net_rounding convention: 'up' (default, never
+  // underpays) or 'nearest' (Fortnox parity; the öre difference can then be
+  // negative and books as a 3740 credit).
   let netRounding = 0
   if (input.roundNetToWholeKrona && netSalary > 0) {
     const netOre = Math.round(netSalary * 100)
     const remainderOre = netOre % 100
     if (remainderOre !== 0) {
-      netRounding = (100 - remainderOre) / 100
-      netSalary = (netOre + 100 - remainderOre) / 100
+      const nearest = input.calculationPolicy?.net_rounding === 'nearest'
+      const roundedOre = nearest ? Math.round(netOre / 100) * 100 : netOre + 100 - remainderOre
+      netRounding = (roundedOre - netOre) / 100
+      netSalary = roundedOre / 100
       steps.push({
-        label: 'Öresavrundning (uppåt till hel krona)',
-        formula: 'nettolön avrundas uppåt till hel krona',
+        label: nearest ? 'Öresavrundning (närmaste hela krona)' : 'Öresavrundning (uppåt till hel krona)',
+        formula: nearest ? 'nettolön avrundas till närmaste hela krona' : 'nettolön avrundas uppåt till hel krona',
         input: { net_before_rounding: r(netOre / 100), rounding: netRounding },
         output: netSalary,
       })

@@ -117,11 +117,18 @@ export async function activateIfComplete(
   connectionId: string,
   now = Date.now(),
 ): Promise<ActivationResult> {
+  // Seed the order cursor with the connection moment. Orders placed before
+  // the merchant connected are already in the books from the bank side, so a
+  // first sync that reached further back would only manufacture duplicates
+  // (#2631). Reaching further back is an explicit choice: POST
+  // /api/extensions/ext/woocommerce/backfill with a start date.
+  const connectedAt = new Date().toISOString()
   const { data, error } = await supabase
     .from('woocommerce_connections')
     .update({
       status: 'active',
-      connected_at: new Date().toISOString(),
+      connected_at: connectedAt,
+      last_order_synced_at: connectedAt,
       error_message: null,
       // The state has done its job once both legs have found the row.
       oauth_state: null,

@@ -1,3 +1,4 @@
+import { migrationJobRoutes } from './lib/migration-job-routes'
 import { readSIEIntakeFile } from '@/lib/import/sie-intake'
 import { submitSIEJob } from '@/lib/import/sie-jobs'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
@@ -59,6 +60,8 @@ import {
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
   requireFlowInitiator,
@@ -306,6 +309,7 @@ export const arcimMigrationExtension: Extension = {
   version: '2.0.0',
 
   apiRoutes: [
+    ...migrationJobRoutes,
     // ── List available providers ───────────────────────────────────
     {
       method: 'GET',
@@ -1444,14 +1448,17 @@ export const arcimMigrationExtension: Extension = {
           // Validate all accounts are mapped (same as manual upload)
           const unmapped = mappings.filter((m: import('@/lib/import/types').AccountMapping) => !m.targetAccount)
           if (unmapped.length > 0) {
-            return NextResponse.json({
-              error: 'validation',
-              message: `${unmapped.length} account(s) are not mapped`,
-              unmappedAccounts: unmapped.map((m: import('@/lib/import/types').AccountMapping) => ({
-                account: m.sourceAccount,
-                name: m.sourceName,
-              })),
-            }, { status: 400 })
+            // The structured envelope: the wizard used to print the legacy
+            // tag "validation" as the whole message.
+            return errorResponseFromCode('SIE_IMPORT_UNMAPPED_ACCOUNTS', moduleLog, {
+              requestId: ctx?.requestId,
+              details: {
+                unmappedAccounts: unmapped.map((m: import('@/lib/import/types').AccountMapping) => ({
+                  account: m.sourceAccount,
+                  name: m.sourceName,
+                })),
+              },
+            })
           }
 
           const job = await submitSIEJob(supabase,companyId,user.id,rawContent,mappings,{
@@ -1464,6 +1471,11 @@ export const arcimMigrationExtension: Extension = {
             warnings:artifactScan.flagged ? [formatSieArtifactWarning(artifactScan)] : [],
             statusUrl:'/api/import/sie/'+job.id}, {status:202})
         } catch (error) {
+          // The validator's sentence names the voucher or account that
+          // refused the file; wrapped as SIE_IMPORT_UNEXPECTED it reached the
+          // wizard as "Importens resultat kunde inte bekräftas" with the
+          // reason buried in details.reason.
+          if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }
@@ -1734,7 +1746,7 @@ export const arcimMigrationExtension: Extension = {
     // writes anything, so a wrong id is a clean 404; a provider failure inside
     // either pass is reported beside the results that were already persisted,
     // as `registrationLinksError` / `paymentRefreshError`, rather than by
-    // discarding them. The two passes are independent of each other.
+    // discarding them. A failed refresh defers registration linking for retry.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1808,37 +1820,13 @@ export const arcimMigrationExtension: Extension = {
             : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
         }
 
-        let registrationLinks: Awaited<ReturnType<typeof relinkRegistrationVouchers>> | null = null
-        let registrationLinksError: { code: string } | null = null
-        try {
-          registrationLinks = await relinkRegistrationVouchers({
-            supabase,
-            companyId,
-            consentId,
-            dryRun,
-          })
-          log.info('arcim registration relink completed', {
-            companyId,
-            dryRun,
-            providerInvoices: registrationLinks.providerInvoices,
-            matched: registrationLinks.matched,
-            linked: registrationLinks.linked,
-            refNotFetched: registrationLinks.refNotFetched,
-            ambiguous: registrationLinks.ambiguous,
-            amountMismatch: registrationLinks.amountMismatch,
-          })
-        } catch (error) {
-          log.error('arcim registration relink failed', error as Error)
-          registrationLinksError = { code: providerErrorCode(error) }
-        }
-
         // The same consent also knows which migrated supplier invoices the
         // provider considers settled. A migration can only write what its
         // mapper read, and the Bokio supplier-invoice mapper read fields that
         // schema does not have, so those rows stand as "Registrerad" with
         // their whole total open. Ask the provider and write what it says,
-        // by the same rule the import uses. Independent of the relink: a
-        // provider failure in one must not discard the other's result.
+        // by the same rule the import uses. This must run BEFORE the relink,
+        // which makes open rows ineligible for a later refresh.
         let paymentRefresh: Awaited<ReturnType<typeof refreshMigratedSupplierPaymentState>> | null = null
         let paymentRefreshError: { code: string } | null = null
         try {
@@ -1847,6 +1835,9 @@ export const arcimMigrationExtension: Extension = {
             companyId,
             consentId,
             dryRun,
+            // Dry runs leave these rows untouched, but the real payment pass
+            // has already made them ineligible for a provider-state refresh.
+            excludeInvoiceIds: result.links.map(link => link.supplier_invoice_id),
           })
           log.info('arcim supplier payment-state refresh completed', {
             companyId,
@@ -1860,6 +1851,35 @@ export const arcimMigrationExtension: Extension = {
         } catch (error) {
           log.error('arcim supplier payment-state refresh failed', error as Error)
           paymentRefreshError = { code: providerErrorCode(error) }
+        }
+
+        let registrationLinks: Awaited<ReturnType<typeof relinkRegistrationVouchers>> | null = null
+        let registrationLinksError: { code: string } | null = null
+        // Do not make a failed refresh permanently ineligible for retry.
+        if (paymentRefreshError) {
+          registrationLinksError = paymentRefreshError
+        } else {
+          try {
+            registrationLinks = await relinkRegistrationVouchers({
+              supabase,
+              companyId,
+              consentId,
+              dryRun,
+            })
+            log.info('arcim registration relink completed', {
+              companyId,
+              dryRun,
+              providerInvoices: registrationLinks.providerInvoices,
+              matched: registrationLinks.matched,
+              linked: registrationLinks.linked,
+              refNotFetched: registrationLinks.refNotFetched,
+              ambiguous: registrationLinks.ambiguous,
+              amountMismatch: registrationLinks.amountMismatch,
+            })
+          } catch (error) {
+            log.error('arcim registration relink failed', error as Error)
+            registrationLinksError = { code: providerErrorCode(error) }
+          }
         }
 
         return NextResponse.json({

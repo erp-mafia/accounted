@@ -23,8 +23,14 @@ vi.mock('@/lib/reconciliation/service', () => ({
 vi.mock('@/lib/reports/supplier-reconciliation', () => ({
   generateReconciliation: vi.fn(),
 }))
+// The EF declaration preview refuses every form but the NE filer itself; the
+// aggregator must only call it for that form, with the form it resolved.
+vi.mock('@/lib/bokslut/enskild-firma/ef-declaration-preview', () => ({
+  computeEfDeclarationPreview: vi.fn(),
+}))
 
 import { buildBokslutReadinessReport } from '../readiness-aggregator'
+import { computeEfDeclarationPreview } from '@/lib/bokslut/enskild-firma/ef-declaration-preview'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { generateARReconciliation } from '@/lib/reports/ar-reconciliation'
@@ -205,6 +211,11 @@ describe('buildBokslutReadinessReport', () => {
   it('returns the EF-only reminder for enskild firma', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
     vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN)
+    vi.mocked(computeEfDeclarationPreview).mockResolvedValue({
+      fiscalPeriod: PERIOD,
+      bookedSurplus: 80_000,
+      items: [],
+    })
     const supabase = makeSupabase({
       period: { data: PERIOD, error: null },
       settings: { data: { entity_type: 'enskild_firma' }, error: null },
@@ -214,7 +225,33 @@ describe('buildBokslutReadinessReport', () => {
 
     expect(report.entityType).toBe('enskild_firma')
     expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeDefined()
+    // The preview runs for the NE filer with the form the aggregator resolved.
+    expect(computeEfDeclarationPreview).toHaveBeenCalledWith(supabase, 'co-1', 'fp-1', {
+      entityType: 'enskild_firma',
+    })
+    expect(report.reminders.find((r) => r.code === 'ef_kapitalunderlag_missing')).toBeDefined()
   })
+
+  it.each(['aktiebolag', 'ideell_forening'])(
+    'never computes the EF declaration preview for %s',
+    async (entityType) => {
+      vi.mocked(validateYearEndReadiness).mockResolvedValue(baseValidation())
+      // Cast: RECON_CLEAN predates two ReconciliationStatus fields; the
+      // suite's older cases carry that as a baselined type error and this
+      // case must not add another instance.
+      vi.mocked(getReconciliationStatus).mockResolvedValue(RECON_CLEAN as never)
+      const supabase = makeSupabase({
+        period: { data: PERIOD, error: null },
+        settings: { data: { entity_type: entityType }, error: null },
+      })
+
+      const report = await buildBokslutReadinessReport(supabase, 'co-1', 'user-1', 'fp-1')
+
+      expect(report.entityType).toBe(entityType)
+      expect(computeEfDeclarationPreview).not.toHaveBeenCalled()
+      expect(report.reminders.find((r) => r.code === 'ef_skatt_via_ne')).toBeUndefined()
+    },
+  )
 
   it('surfaces blockers from the underlying validation and stays not-ready', async () => {
     vi.mocked(validateYearEndReadiness).mockResolvedValue(

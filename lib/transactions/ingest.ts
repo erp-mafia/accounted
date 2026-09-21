@@ -18,6 +18,7 @@ import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shi
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
+import { physicalAccountKey, reenableIfUnused, sameCashAccount } from '@/lib/cash-accounts/service'
 import type { Transaction, RawTransaction, IngestResult, IngestOptions, SupplierInvoice, Currency, ExchangeRate } from '@/types'
 
 /**
@@ -457,19 +458,49 @@ export async function ingestTransactions(
   // ingest call shares a settlement account: enable-banking calls this per
   // account (settlementAccount = account.ledger_account), CSV import passes the
   // single account the user picked. cash_accounts.ledger_account is unique per
-  // company, so this is a single-row lookup. Tolerate a miss: the row stays
+  // company, so at most one row matches. Tolerate a miss: the row stays
   // unbound (cash_account_id NULL) and reconciliation falls back to currency.
-  // We never auto-create a cash account here; that would race upsertFromPsd2's
-  // seed-promotion logic in lib/cash-accounts/service.ts.
+  // Nothing is auto-created here: a caller that lets the user pick a ledger
+  // (the bank-file execute route) runs ensureManualCashAccount first, so the
+  // lookup below finds the row.
+  //
+  // The same read yields every row's physical key (IBAN + currency) for the
+  // account guard: a broken reconnect leaves two rows for one bank account, and
+  // comparing row ids alone made the content check treat them as two accounts
+  // (see sameCashAccount). Without a settlement account the guard never
+  // rejects, so the read is skipped.
   let cashAccountId: string | null = null
+  const physicalKeyById = new Map<string, string>()
   if (options?.settlementAccount) {
-    const { data: ca } = await supabase
+    const { data: cashAccountRows } = await supabase
       .from('cash_accounts')
-      .select('id')
+      .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
       .eq('company_id', companyId)
-      .eq('ledger_account', options.settlementAccount)
-      .maybeSingle()
-    cashAccountId = (ca?.id as string | undefined) ?? null
+    type BoundRow = {
+      id: string
+      ledger_account: string
+      iban: string | null
+      currency: string
+      enabled?: boolean | null
+      bank_connection_id?: string | null
+      invoice_payee?: boolean | null
+    }
+    let boundRow: BoundRow | null = null
+    for (const row of (cashAccountRows ?? []) as BoundRow[]) {
+      if (row.ledger_account === options.settlementAccount) {
+        cashAccountId = row.id
+        boundRow = row
+      }
+      const key = physicalAccountKey(row)
+      if (key) physicalKeyById.set(row.id, key)
+    }
+    // Every ingest caller binds here, including the ones that never run
+    // ensureManualCashAccount (the v1 ingest endpoint). An account the company
+    // turned off as unused comes back on before rows land on it, so a hidden
+    // account never collects open transactions (desk crm#59). No-op for an
+    // enabled account and for one a bank connection holds; refuses, binding
+    // nothing, for a disabled invoice payee (owner/admin turns that on).
+    if (boundRow) await reenableIfUnused(supabase, companyId, boundRow)
   }
 
   // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
@@ -523,8 +554,7 @@ export async function ingestTransactions(
       if (bucketCurrency === undefined || bucketCurrency === MIXED_CURRENCIES) continue
       for (const entry of entries) {
         if (entry.isImportFeed) continue
-        const accountCompatible =
-          cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
+        const accountCompatible = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
         if (!accountCompatible) continue
         if (entry.currency !== null && bucketCurrency !== null && entry.currency !== bucketCurrency) continue
         bookedHandEnteredByBucket.set(k, (bookedHandEnteredByBucket.get(k) ?? 0) + 1)
@@ -546,10 +576,7 @@ export async function ingestTransactions(
       for (const [k, entries] of bucket) {
         for (const entry of entries) {
           const sameFeed = entry.isImportFeed && entry.source === batchSource
-          const accountCompatible =
-            cashAccountId === null ||
-            entry.cashAccountId === null ||
-            entry.cashAccountId === cashAccountId
+          const accountCompatible = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
           const idOrphaned = entry.externalId !== null && !incomingIdSet.has(entry.externalId)
           if (sameFeed && accountCompatible && idOrphaned) {
             driftCandidateStoredByBucket.set(k, (driftCandidateStoredByBucket.get(k) ?? 0) + 1)
@@ -658,7 +685,8 @@ export async function ingestTransactions(
     // mirror is the text-independent fallback.
     //
     // Account guard: when BOTH the incoming batch and a stored entry have a known
-    // cash_account_id, they must match, so a transaction on one bank account
+    // cash_account_id, they must be the same bank account (same row, or two rows
+    // sharing IBAN + currency: sameCashAccount), so a transaction on one bank account
     // never deduplicates a genuinely-different one on another account of the same
     // company (the content bucket is company-wide; only external_id embeds the
     // account). A null on either side falls back to bridge-allowed, leaving
@@ -707,8 +735,7 @@ export async function ingestTransactions(
       let handIdx = -1
       for (let i = 0; i < entries.length; i++) {
         const entry = entries[i]
-        const sameAccount =
-          cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
+        const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
         if (!sameAccount) continue
         // Currency guard, applies to ALL THREE match paths below. The bucket key
         // is (date, öre) with no currency, so a stored 250,00 SEK row and an
@@ -842,9 +869,7 @@ export async function ingestTransactions(
               e.source === batchSource &&
               e.externalId !== null &&
               !incomingIdSet.has(e.externalId) &&
-              (cashAccountId === null ||
-                e.cashAccountId === null ||
-                e.cashAccountId === cashAccountId)
+              sameCashAccount(cashAccountId, e.cashAccountId, physicalKeyById)
           )
           if (matched) break
         }
@@ -899,12 +924,11 @@ export async function ingestTransactions(
             (e) =>
               e.isImportFeed &&
               e.source !== batchSource &&
-              (cashAccountId === null || e.cashAccountId === null || e.cashAccountId === cashAccountId),
+              sameCashAccount(cashAccountId, e.cashAccountId, physicalKeyById),
           ).length
           const mirrorSymmetric = adjCrossFeed > 0 && incomingHere === adjCrossFeed
           for (const entry of entries) {
-            const sameAccount =
-              cashAccountId === null || entry.cashAccountId === null || entry.cashAccountId === cashAccountId
+            const sameAccount = sameCashAccount(cashAccountId, entry.cashAccountId, physicalKeyById)
             if (!sameAccount) continue
             if (descriptionsBridge(description, entry.desc)) {
               driftMatch = { entry, gap: sign * delta, signal: 'desc' }

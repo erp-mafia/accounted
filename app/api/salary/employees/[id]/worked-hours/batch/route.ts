@@ -4,6 +4,9 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { BatchUpsertWorkedDaysSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { findRunLockingDates } from '@/lib/salary/register-locks'
+import { assertWorkedDaysEmployee, mapWorkedDaysWriteError } from '@/lib/salary/worked-days'
 
 ensureInitialized()
 
@@ -32,13 +35,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   async (request, { supabase, companyId, log }, { params }) => {
     const { id: employeeId } = await params
 
-    const { data: employee } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('id', employeeId)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (!employee) {
+    const employee = await assertWorkedDaysEmployee(supabase, companyId, employeeId)
+    if (!employee.ok) {
       return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
     }
 
@@ -49,6 +47,25 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // Dedupe dates so the user can pass an array with accidental duplicates
     // (e.g. shift-clicking over the same date twice).
     const uniqueDates = Array.from(new Set(body.dates))
+
+    // This route keeps its own write algorithm, so it asks the register lock
+    // itself: dates a run in review, approved, paid or booked has already
+    // read are refused as one 409 before anything is prefetched or deleted.
+    const lock = await findRunLockingDates(supabase, companyId, uniqueDates)
+    if (!lock.ok) {
+      return NextResponse.json({ error: getUserErrorMessage(lock.details) }, { status: 500 })
+    }
+    if (lock.lock) {
+      const entry = getErrorEntry('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+      return NextResponse.json(
+        {
+          error: entry?.message_sv ?? 'Datumen är låsta av en lönekörning',
+          code: 'SALARY_REGISTER_DATES_LOCKED_BY_RUN',
+          details: lock.lock,
+        },
+        { status: entry?.httpStatus ?? 409 },
+      )
+    }
 
     // Read the rows we are about to replace BEFORE deleting them. The batch
     // carries one shared value for N dates, so it cannot express per-day notes,
@@ -162,8 +179,12 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         })
       if (error) {
         // 24h cap trigger uses ERRCODE check_violation (23514) and a Swedish
-        // message starting with "Total tid". Other failures are unexpected.
-        if (error.message?.includes('Total tid') || error.code === '23514') {
+        // message starting with "Total tid"; the shared classifier maps that
+        // to WORKED_HOURS_CONFLICT and any other CHECK violation to
+        // VALIDATION_ERROR. Both are per-date conflicts here; other failures
+        // are unexpected.
+        const classified = mapWorkedDaysWriteError(error).code
+        if (classified === 'WORKED_HOURS_CONFLICT' || classified === 'VALIDATION_ERROR') {
           // The conflict report says "nothing changed for this date": make
           // that true by reinserting the pre-existing row the bulk delete
           // destroyed. A date with no prior row has nothing to restore.

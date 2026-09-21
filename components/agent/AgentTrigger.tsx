@@ -219,8 +219,8 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
     // HTML. Segment hover is a background/10 overlay, visually equivalent to
     // the old whole-pill foreground/90 shift.
     <div
-      // Mobile: sit above the bottom nav (h-16 = 64px) AND the iOS home
-      // indicator (env(safe-area-inset-bottom)). Still needed after the FAB
+      // Mobile: sit 1rem above the bottom nav (--bottom-nav-h in globals.css:
+      // the tab row plus the iOS home indicator). Still needed after the FAB
       // went desktop-only: the collapsed handle above renders on mobile too.
       // Desktop: standard 20px lift, no mobile nav to worry about, except when
       // the page declares a bottom action bar (body[data-page-bottom-bar],
@@ -234,7 +234,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // data-agent-ui: opening the assistant must not dismiss an open
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

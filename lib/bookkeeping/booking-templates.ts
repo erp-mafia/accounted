@@ -15,6 +15,7 @@ import {
 } from './vat-entries'
 import { resolveSekAmount } from './currency-utils'
 import { templateAccountForForm } from '@/lib/company/entity-type'
+import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
 // ============================================================
 // Types
@@ -1609,7 +1610,11 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'equipment',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '1250',
+    // BAS 2026 head account for inventarier, verktyg och installationer, the
+    // same asset account the fixed-asset module defaults an equipment asset to
+    // (DEFAULT_ACCOUNTS_BY_CATEGORY.equipment). 1250 became a "(Fritt konto)"
+    // in BAS 2026; template-accounts-exist.test.ts pins both facts.
+    debit_account: '1220',
     credit_account: '1930',
     vat_treatment: 'standard_25',
     vat_rate: 0.25,
@@ -2485,10 +2490,15 @@ function isBasisAccount(account: string): boolean {
 export function buildMappingResultFromTemplate(
   template: BookingTemplate,
   transaction: Transaction,
-  entityType: EntityType
+  entityType: EntityType,
+  vatRegistered?: VatRegistration
 ): MappingResult {
   const isExpense = transaction.amount < 0
   const isBusiness = !template.default_private
+  // The template's treatment resolved for the company's VAT registration: a
+  // non-registered company books a rate-bearing template as exempt, reverse
+  // charge stays (lib/bookkeeping/vat-registration.ts).
+  const vatTreatment = vatTreatmentForRegistration(template.vat_treatment, vatRegistered)
 
   // Resolve entity-specific accounts (EF base, AB override, förening: base
   // with owner accounts translated to the member settlement account).
@@ -2508,10 +2518,10 @@ export function buildMappingResultFromTemplate(
 
   // Generate VAT lines
   const vatLines: VatJournalLine[] = []
-  if (isBusiness && template.vat_treatment && template.deductibility !== 'non_deductible') {
-    const vatRate = getVatRate(template.vat_treatment)
+  if (isBusiness && vatTreatment && template.deductibility !== 'non_deductible') {
+    const vatRate = getVatRate(vatTreatment)
 
-    if (template.vat_treatment === 'reverse_charge' && isExpense) {
+    if (vatTreatment === 'reverse_charge' && isExpense) {
       // EU/non-EU/domestic reverse charge: emit BOTH the fiktiv-moms pair
       // (2645|2647 / 2614) AND the basbelopp pair (44xx|45xx / 4598). The
       // basbelopp pair populates momsdeklaration rutor 20-24; without it
@@ -2559,7 +2569,7 @@ export function buildMappingResultFromTemplate(
       // Output VAT (income)
       const vatAmount = Math.round((absAmount * vatRate / (1 + vatRate)) * 100) / 100
       let vatAccount: string
-      switch (template.vat_treatment) {
+      switch (vatTreatment) {
         case 'standard_25': vatAccount = '2611'; break
         case 'reduced_12': vatAccount = '2621'; break
         case 'reduced_6': vatAccount = '2631'; break

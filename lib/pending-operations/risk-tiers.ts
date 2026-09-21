@@ -67,6 +67,13 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // booked debit 19xx / credit 1513 and linked. Storno-reversible like the
   // other bank-row matches, so the same tier as match_transaction_invoice.
   settle_rot_rut_payout: 'medium',
+  // Anläggningsregister rows are master data: no voucher, editable until
+  // depreciation is posted (then ASSET_CORRECTION_BLOCKED routes to storno).
+  create_asset: 'low',
+  update_asset: 'low',
+  // Posts the avyttring voucher (gain/loss, VAT, jämkning). Reversible via
+  // storno: same tier as post_annual_depreciation.
+  dispose_asset: 'medium',
   // Link an existing posted verifikat as payment for an invoice. Reversible by
   // deleting the invoice_payments row and reverting invoice status; no journal
   // entry is created or modified. Sits next to match_transaction_invoice

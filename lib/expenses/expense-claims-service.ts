@@ -26,6 +26,7 @@ import { createJournalEntry, findFiscalPeriod, reverseEntry } from '@/lib/bookke
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { findPayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
+import type { PayslipLineForClaim } from '@/lib/salary/expense-claim-lines'
 import { roundOre, sumOre } from '@/lib/money'
 import { ownerSettlementAccount, parseEntityType } from '@/lib/company/entity-type'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
@@ -441,9 +442,32 @@ export type DeleteExpenseClaimResult =
   | { ok: true; reversal_entry_id: string | null }
   | {
       ok: false
-      code: 'NOT_FOUND' | 'ALREADY_PAID' | 'ON_PAYSLIP' | 'UNLINKED' | 'DELETE_FAILED'
+      code: 'NOT_FOUND' | 'ALREADY_PAID' | 'ON_PAYSLIP' | 'DELETE_FAILED'
       detail?: string
     }
+
+type ClaimRemovalRefusal = Extract<DeleteExpenseClaimResult, { ok: false }>
+
+/**
+ * findPayslipLineForClaim throws on a failed query, while deleteExpenseClaim
+ * declares a result contract. Fold the throw into that contract once, here,
+ * so a caller that only inspects the result cannot miss a failed lookup.
+ */
+async function lookupPayslipLine(
+  supabase: SupabaseClient,
+  companyId: string,
+  claimId: string,
+): Promise<{ ok: true; payslip: PayslipLineForClaim | null } | ClaimRemovalRefusal> {
+  try {
+    return { ok: true, payslip: await findPayslipLineForClaim(supabase, companyId, claimId) }
+  } catch (error) {
+    return {
+      ok: false,
+      code: 'DELETE_FAILED',
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
 
 /**
  * Remove a registered claim. The booked verifikat is never deleted: it is
@@ -468,12 +492,12 @@ export async function deleteExpenseClaim(
   if (claim.status === 'paid') return { ok: false, code: 'ALREADY_PAID' }
 
   // Scheduled on a payslip (#2331). The FK is ON DELETE RESTRICT, so the
-  // database refuses the delete while a line references the claim. Once the
-  // run has left draft its stored totals include the line: refuse. On a draft
-  // run the line is removed first (before the storno, so a failure here
-  // leaves nothing half-done); the claim goes back to Att göra and can be
-  // re-added.
-  const payslip = await findPayslipLineForClaim(supabase, companyId, claimId)
+  // database refuses while a line references the claim. A run that has left
+  // draft has the line in its stored totals: refuse. On a draft run the line
+  // goes first, before the storno, so a failure here leaves nothing half-done.
+  const lookup = await lookupPayslipLine(supabase, companyId, claimId)
+  if (!lookup.ok) return lookup
+  const payslip = lookup.payslip
   if (payslip && payslip.run_status !== 'draft') {
     return {
       ok: false,
@@ -490,10 +514,35 @@ export async function deleteExpenseClaim(
     if (lineError) return { ok: false, code: 'DELETE_FAILED', detail: lineError.message }
   }
 
-  if (!claim.journal_entry_id) {
-    // Registered claims always book a verifikat; a missing link means the
-    // back-link write failed. Hard-deleting would orphan the posted entry.
-    return { ok: false, code: 'UNLINKED', detail: `claim ${claimId} has no journal_entry_id` }
+  let entryId = claim.journal_entry_id as string | null
+  if (!entryId) {
+    // journal_entry_id is NULL for two unrelated reasons and refusing both
+    // left the second one unreachable. Either the back-link write failed and
+    // the verifikat is still posted, or the verifikat was deleted and the FK
+    // (ON DELETE SET NULL) cleared the column. journal_entries keeps the
+    // reverse link, so let it decide: storno the entry that is still there,
+    // hard-delete the row whose entry is gone. Nothing is orphaned either way.
+    const { data: sourced, error: sourcedError } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('source_type', 'expense_claim')
+      .eq('source_id', claimId)
+      .maybeSingle()
+    if (sourcedError) return { ok: false, code: 'DELETE_FAILED', detail: sourcedError.message }
+
+    if (!sourced?.id) {
+      const { error: orphanError } = await supabase
+        .from('expense_claims')
+        .delete()
+        .eq('id', claimId)
+        .eq('company_id', companyId)
+      if (orphanError) return { ok: false, code: 'DELETE_FAILED', detail: orphanError.message }
+      return { ok: true, reversal_entry_id: null }
+    }
+    // The client is untyped, so say what the guard above already proved:
+    // without this the variable stays `string | null` for reverseEntry below.
+    entryId = sourced.id as string
   }
   // Retry safety: if a previous attempt posted the storno but failed to
   // delete the register row, the entry is already 'reversed' and
@@ -502,7 +551,7 @@ export async function deleteExpenseClaim(
   const { data: entry } = await supabase
     .from('journal_entries')
     .select('status, reversed_by_id')
-    .eq('id', claim.journal_entry_id)
+    .eq('id', entryId)
     .eq('company_id', companyId)
     .maybeSingle()
 
@@ -510,7 +559,7 @@ export async function deleteExpenseClaim(
   if (entry?.status === 'reversed') {
     reversalEntryId = entry.reversed_by_id ?? null
   } else {
-    const reversal = await reverseEntry(supabase, companyId, userId, claim.journal_entry_id)
+    const reversal = await reverseEntry(supabase, companyId, userId, entryId)
     reversalEntryId = reversal.id
   }
 

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { filesIncomeReturn, resolveCompanyEntityType } from '@/lib/company/entity-type'
+import type { EntityType } from '@/types'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliation'
 import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
@@ -126,7 +127,7 @@ export async function buildBokslutReadinessReport(
   }
 
   const period = periodResult.data
-  const entityType: BokslutReadinessReport['entityType'] = await resolveCompanyEntityType(
+  const entityType: EntityType = await resolveCompanyEntityType(
     supabase,
     companyId,
     settingsResult.data?.entity_type,
@@ -266,7 +267,10 @@ export async function buildBokslutReadinessReport(
     log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
   }
 
-  if (entityType === 'enskild_firma') {
+  // Only a form that files NE-bilagan gets the EF declaration reminders and
+  // preview; the preview itself refuses every other form, so the capability
+  // is read here rather than the form compared to a string.
+  if (filesIncomeReturn(entityType) === 'NE') {
     // Pre-compute the EF declaration so the wizard's overview reflects what
     // the user will see when they reach the dispositions step. Egenavgifter,
     // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
@@ -284,7 +288,8 @@ export async function buildBokslutReadinessReport(
     // (> 50 000 kr: the spärrbelopp). This is non-blocking but actionable:
     // the user should enter their IB equity on the dispositions step.
     try {
-      const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId)
+      // The resolved form rides along so the preview does not read it again.
+      const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId, { entityType })
       if (preview.bookedSurplus > 50_000) {
         reminders.push({
           code: 'ef_kapitalunderlag_missing',

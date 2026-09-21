@@ -14,7 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { KeyRound, Link2, Loader2, RefreshCw, ShoppingCart, Unlink } from 'lucide-react'
+import { History, KeyRound, Link2, Loader2, RefreshCw, ShoppingCart, Unlink } from 'lucide-react'
 import { PaymentMethodMappingForm } from '@/components/orders/PaymentMethodMappingForm'
 import {
   wooRequest,
@@ -23,6 +23,7 @@ import {
   WOO_SYNC_TIMEOUT_MS,
   type WooSyncPayload,
 } from '../lib/settings-actions'
+import { MAX_BACKFILL_YEARS } from '../types'
 import type { WooCommerceConnectionStatus, WooCommerceStatusResponse } from '../types'
 
 const STATUS_VARIANT: Record<
@@ -38,6 +39,17 @@ const STATUS_VARIANT: Record<
 /** Client twin of wooStoreScope(): store identity used by the mapping table. */
 function storeScopeOf(storeUrl: string): string {
   return storeUrl.replace(/^https:\/\//, '')
+}
+
+/** Bounds of the backfill date picker, mirroring parseBackfillFrom on the server. */
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function earliestBackfillDay(): string {
+  const floor = new Date()
+  floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
+  return isoDay(floor)
 }
 
 export default function WooCommerceSettingsPanel() {
@@ -61,6 +73,10 @@ export default function WooCommerceSettingsPanel() {
   // Per-store busy/confirm states, keyed by connection id.
   const [busyId, setBusyId] = useState<string | null>(null)
   const [confirmDisconnectId, setConfirmDisconnectId] = useState<string | null>(null)
+  // Backfill start date per store card, and which card's backfill is running
+  // (busyId blocks every control meanwhile; this one picks the label).
+  const [backfillFrom, setBackfillFrom] = useState<Record<string, string>>({})
+  const [backfillingId, setBackfillingId] = useState<string | null>(null)
 
   const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
 
@@ -177,6 +193,28 @@ export default function WooCommerceSettingsPanel() {
     }
   }
 
+  /** Same counts, two entry points: "Synka nu" and the explicit backfill. */
+  function showSyncOutcome(
+    payload: WooSyncPayload | null | undefined,
+    doneTitle: string,
+    failedTitle: string,
+  ) {
+    const summary = syncSummary(payload ?? null)
+    if (summary.reason === 'revoked') {
+      toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
+    } else if (summary.reason === 'partial') {
+      toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
+    } else if (summary.reason === 'empty') {
+      toast({ title: doneTitle, description: t('sync_done_empty') })
+    } else if (summary.reason === 'errors') {
+      toast({ title: doneTitle, description: t('sync_done_feed_errors', summary.values) })
+    } else if (summary.reason === 'feed') {
+      toast({ title: doneTitle, description: t('sync_done_feed', summary.values) })
+    } else {
+      toast({ title: doneTitle })
+    }
+  }
+
   async function handleSyncNow(connectionId: string) {
     if (busyId) return
     setBusyId(connectionId)
@@ -195,26 +233,45 @@ export default function WooCommerceSettingsPanel() {
         })
         return
       }
-      const summary = syncSummary(result.data)
-      if (summary.reason === 'revoked') {
-        toast({
-          title: t('sync_failed_title'),
-          description: t('sync_revoked'),
-          variant: 'destructive',
-        })
-      } else if (summary.reason === 'partial') {
-        toast({ title: t('sync_partial_title'), description: t('sync_partial', summary.values) })
-      } else if (summary.reason === 'empty') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_empty') })
-      } else if (summary.reason === 'errors') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_feed_errors', summary.values) })
-      } else if (summary.reason === 'feed') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_feed', summary.values) })
-      } else {
-        toast({ title: t('sync_done_title') })
-      }
+      showSyncOutcome(result.data, t('sync_done_title'), t('sync_failed_title'))
       await loadStatus()
     } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function handleBackfill(connectionId: string) {
+    if (busyId) return
+    const from = backfillFrom[connectionId] ?? ''
+    if (!from) {
+      toast({
+        title: t('backfill_failed_title'),
+        description: t('backfill_missing_date'),
+        variant: 'destructive',
+      })
+      return
+    }
+    setBusyId(connectionId)
+    setBackfillingId(connectionId)
+    try {
+      const result = await wooRequest<WooSyncPayload>({
+        url: '/api/extensions/ext/woocommerce/backfill',
+        body: { from, connection_id: connectionId },
+        locale,
+        timeoutMs: WOO_SYNC_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('backfill_failed_title'),
+          description: failureDescription(result, failureCopy),
+          variant: 'destructive',
+        })
+        return
+      }
+      showSyncOutcome(result.data, t('backfill_done_title'), t('backfill_failed_title'))
+      await loadStatus()
+    } finally {
+      setBackfillingId(null)
       setBusyId(null)
     }
   }
@@ -330,6 +387,8 @@ export default function WooCommerceSettingsPanel() {
         {connections.map((connection) => {
           const isActive = connection.status === 'active'
           const busy = busyId === connection.id
+          const backfilling = backfillingId === connection.id
+          const syncing = busy && !backfilling
           // Handlers early-return while ANY request runs (shared busyId), so
           // every card's controls disable; the spinner stays on the busy one.
           const blocked = busyId !== null
@@ -393,12 +452,12 @@ export default function WooCommerceSettingsPanel() {
                         onClick={() => handleSyncNow(connection.id)}
                         disabled={blocked}
                       >
-                        {busy ? (
+                        {syncing ? (
                           <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         ) : (
                           <RefreshCw className="mr-2 h-4 w-4" />
                         )}
-                        {busy ? t('syncing') : t('sync_now')}
+                        {syncing ? t('syncing') : t('sync_now')}
                       </Button>
                       <Button
                         variant="outline"
@@ -443,6 +502,42 @@ export default function WooCommerceSettingsPanel() {
                     disabled={blocked}
                     aria-label={t('transaction_sync_title')}
                   />
+                </div>
+              )}
+
+              {isActive && (
+                <div className="space-y-4 border-t border-border pt-4">
+                  <div className="min-w-0 max-w-prose space-y-1">
+                    <p className="text-sm font-medium">{t('backfill_title')}</p>
+                    <p className="text-sm text-muted-foreground">{t('backfill_description')}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Input
+                      type="date"
+                      className="w-48"
+                      value={backfillFrom[connection.id] ?? ''}
+                      min={earliestBackfillDay()}
+                      max={isoDay(new Date())}
+                      onChange={(event) =>
+                        setBackfillFrom((prev) => ({ ...prev, [connection.id]: event.target.value }))
+                      }
+                      aria-label={t('backfill_from_label')}
+                      disabled={blocked}
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleBackfill(connection.id)}
+                      disabled={blocked}
+                    >
+                      {backfilling ? (
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      ) : (
+                        <History className="mr-2 h-4 w-4" />
+                      )}
+                      {backfilling ? t('backfill_running') : t('backfill_submit')}
+                    </Button>
+                  </div>
                 </div>
               )}
 

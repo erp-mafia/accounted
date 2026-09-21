@@ -13,6 +13,16 @@ vi.mock('../lib/tic-client', () => ({
   getFiscalYears: vi.fn(),
 }))
 
+// SCB is the fallback for a TIC miss (Bolagsverket does not list ideella
+// föreningar). Off by default so every existing case stays a plain miss.
+vi.mock('@/lib/parties/scb/config', () => ({
+  isScbConfigured: vi.fn(() => false),
+  scbConfigFromEnv: vi.fn(() => ({})),
+}))
+vi.mock('@/lib/parties/scb/client', () => ({
+  createScbClient: vi.fn(),
+}))
+
 import { ticExtension } from '../index'
 import {
   searchCompanyByOrgNumber,
@@ -24,6 +34,9 @@ import {
 } from '../lib/tic-client'
 import { TICAPIError } from '../lib/tic-types'
 import type { TICCompanyDocument } from '../lib/tic-types'
+import { isScbConfigured } from '@/lib/parties/scb/config'
+import { createScbClient } from '@/lib/parties/scb/client'
+import { factsFromScbCompany } from '@/lib/parties/scb/map'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockBank = vi.mocked(getBankAccounts)
@@ -288,5 +301,86 @@ describe('TIC lookup route', () => {
     mockSearch.mockRejectedValue(new Error('boom'))
     const res = await lookupHandler(makeRequest('556036-0793'))
     expect(res.status).toBe(500)
+  })
+})
+
+describe('TIC lookup route: SCB fallback after a miss', () => {
+  const mockScbConfigured = vi.mocked(isScbConfigured)
+  const mockCreateScb = vi.mocked(createScbClient)
+  const lookupByOrgNumber = vi.fn()
+
+  // SCB's row for an ideell förening: the columns the register answers with.
+  const scbRow = {
+    OrgNr: '8024811658',
+    Företagsnamn: 'SEGELSÄLLSKAPET GAMBIT',
+    'Juridisk form': 'Ideell förening',
+    'Juridisk form, kod': '61',
+    PostAdress: 'Hamnvägen 3',
+    PostNr: '76140',
+    PostOrt: 'Norrtälje',
+    'Företagsstatus, kod': '1',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockSearch.mockResolvedValue(null)
+    lookupByOrgNumber.mockReset()
+    mockCreateScb.mockReturnValue({ lookupByOrgNumber } as never)
+  })
+
+  it('answers the miss with the registry hint when SCB knows the org number', async () => {
+    mockScbConfigured.mockReturnValue(true)
+    lookupByOrgNumber.mockResolvedValue({
+      found: true,
+      peOrgNr: '168024811658',
+      row: scbRow,
+      facts: factsFromScbCompany(scbRow),
+      fetchedAt: '2026-09-18T08:00:00.000Z',
+    })
+
+    const res = await lookupHandler(makeRequest('802481-1658'))
+    expect(res.status).toBe(404)
+    expect(lookupByOrgNumber).toHaveBeenCalledWith('8024811658')
+    await expect(res.json()).resolves.toEqual({
+      error: 'Company not found',
+      registry: {
+        source: 'scb',
+        companyName: 'Segelsällskapet Gambit',
+        legalEntityType: 'Ideell förening',
+        address: { street: 'Hamnvägen 3', postalCode: '76140', city: 'Norrtälje' },
+        registration: { fTax: null, vat: null },
+      },
+    })
+  })
+
+  it('stays a plain miss when SCB is not configured here', async () => {
+    mockScbConfigured.mockReturnValue(false)
+    const res = await lookupHandler(makeRequest('802481-1658'))
+    expect(res.status).toBe(404)
+    await expect(res.json()).resolves.toEqual({ error: 'Company not found' })
+    expect(lookupByOrgNumber).not.toHaveBeenCalled()
+  })
+
+  it('never asks SCB about a personnummer', async () => {
+    mockScbConfigured.mockReturnValue(true)
+    const res = await lookupHandler(makeRequest('19850420-1234'))
+    expect(res.status).toBe(404)
+    expect(lookupByOrgNumber).not.toHaveBeenCalled()
+  })
+
+  it('stays a plain miss when SCB has no row or the call fails', async () => {
+    mockScbConfigured.mockReturnValue(true)
+    lookupByOrgNumber.mockResolvedValueOnce({ found: false, peOrgNr: '168024811658', row: null, facts: [], fetchedAt: '' })
+    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+      error: 'Company not found',
+    })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    lookupByOrgNumber.mockRejectedValueOnce(new Error('scb down'))
+    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+      error: 'Company not found',
+    })
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
   })
 })

@@ -602,6 +602,40 @@ describe('deleteExpenseClaim', () => {
     const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c-x')
     expect(result).toEqual({ ok: false, code: 'NOT_FOUND' })
   })
+
+  it('reports a failed payslip lookup instead of throwing', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: 'je-1' } })
+    findPayslipLineForClaimMock.mockRejectedValue(new Error('db down'))
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: false, code: 'DELETE_FAILED', detail: 'db down' })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+  })
+
+  // journal_entry_id is NULL for two unrelated reasons; the recoverable one
+  // must not dead-end the row.
+  it('stornos the entry that journal_entries still points at when the back-link is missing', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: null } })
+    enqueue({ data: { id: 'je-1' } }) // journal_entries by source_id
+    enqueue({ data: { status: 'posted', reversed_by_id: null } })
+    enqueue({ data: null }) // expense_claims delete
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: 'je-storno' })
+    expect(reverseEntryMock).toHaveBeenCalledWith(sb, COMPANY, USER, 'je-1')
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+  })
+
+  it('hard-deletes the row when the verifikat is gone, with nothing left to storno', async () => {
+    enqueue({ data: { id: 'c1', status: 'registered', journal_entry_id: null } })
+    enqueue({ data: null }) // no journal_entries row for source_id
+    enqueue({ data: null }) // expense_claims delete
+
+    const result = await deleteExpenseClaim(sb, COMPANY, USER, 'c1')
+    expect(result).toEqual({ ok: true, reversal_entry_id: null })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(findCall('expense_claims', 'delete')).toBeTruthy()
+  })
 })
 
 describe('createPayoutBatch: claim scheduled on a payslip (#2331)', () => {

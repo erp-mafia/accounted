@@ -1,12 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Skill } from './types'
-import { workflowSkills } from '@/lib/agent-skills/workflows'
+import { workflowSkills as coreWorkflowSkills } from '@/lib/agent-skills/workflows'
+import { kvittojaktenSkills } from './kvittojakten'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 import { resolveOwnSkill } from '@/lib/agent-skills/company-skills'
 import { loadSkillCatalog } from '@/lib/agent-skills/catalog'
 
 /** Static workflow skills the server ships with. Tier: 'workflow'. */
-export { workflowSkills }
+export const workflowSkills: Skill[] = [...coreWorkflowSkills, ...kvittojaktenSkills]
 
 /**
  * Resolve a skill by slug. Checks the static workflow array first (synchronous,

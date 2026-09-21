@@ -32,13 +32,18 @@ const OpeningBalancesResponse = z.object({
   cutover_date: z.string(),
   ytd_gross: z.number(),
   ytd_tax: z.number(),
-  ytd_net: z.number(),
+  ytd_net: z.number().nullable(),
   vacation_paid_days_remaining: z.number(),
   vacation_days_taken_this_year: z.number(),
   vacation_saved_days_by_year: z.record(z.string(), z.number()),
   opening_semester_liability: z.number(),
   opening_semester_liability_avgifter: z.number(),
   karens_periods_adjustment: z.number(),
+  vacation_as_of_date: z.string().nullable(),
+  vacation_unpaid_days_remaining: z.number(),
+  vacation_advance_days_remaining: z.number(),
+  vacation_extra_paid_days_remaining: z.number(),
+  opening_advance_vacation_debt: z.number(),
   locked: z.boolean(),
   locked_by_run_id: z.string().uuid().nullable(),
 })
@@ -49,7 +54,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/opening-balances',
   summary: 'Get an employee\'s payroll cutover opening balances.',
   description:
-    'Returns the opening balances set for a mid-year migration (YTD gross/tax/net, vacation balances, opening semesterlöneskuld, karens adjustment) plus the lock state: locked=true once the employee has a booked salary run.',
+    'Returns the opening balances set for a mid-year migration (YTD gross/tax/net, the five vacation pools Betalda/Sparade per år/Obetalda/Förskott/Extra betalda with their as-of date, opening semesterlöneskuld and förskottsskuld, karens adjustment) plus the lock state: locked=true once the employee has a booked salary run. ytd_net is null when the previous system could not export historical net pay.',
   useWhen:
     'Verifying cutover state before the first calculated run, or checking whether balances can still be edited (locked=false).',
   doNotUseFor:
@@ -116,27 +121,36 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/opening-balances',
   summary: 'Set an employee\'s payroll cutover opening balances.',
   description:
-    'Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, paid vacation days remaining, paid days already taken this vacation year, sparade dagar keyed by origin year (5-year rule), opening semesterlöneskuld SEK (+avgifter), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.',
+    'Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, the vacation pools in the previous system\'s own terms (vacation_paid_days_remaining = Betalda, vacation_saved_days_by_year = Sparade per år, vacation_unpaid_days_remaining = Obetalda, vacation_advance_days_remaining = Förskott, vacation_extra_paid_days_remaining = Extra betalda), paid days already taken this vacation year, vacation_as_of_date (the day those pools are struck per), opening semesterlöneskuld SEK (+avgifter), opening_advance_vacation_debt (förskottsskuld SEK), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.',
   useWhen:
-    'Onboarding one employee during a mid-year migration from Fortnox/Visma/etc. For whole-company onboarding, prefer the bulk PUT /employees/opening-balances.',
+    'Onboarding one employee during a mid-year migration from Fortnox/Azets/Visma/etc. For whole-company onboarding, prefer the bulk PUT /employees/opening-balances.',
   doNotUseFor:
     'SIE opening balances on the LEDGER (2920/2940 arrive via the SIE import). Ongoing sick cases: import pre-cutover days via PUT /employees/{id}/absence instead.',
   pitfalls: [
-    'Full replace: omitted numeric fields reset to 0 (their defaults). Send the complete state every time.',
+    'Full replace: omitted numeric fields reset to 0 (their defaults) and an omitted vacation_as_of_date resets to null. Send the complete state every time.',
+    'vacation_as_of_date defaults to the day before cutover_date. Booked runs whose avvikelseperiod ends on or before it are treated as already inside the balance and not deducted again, so with salary_deviation_period = previous_month send the last day BEFORE the month the first run deducts (cutover 2026-09-01, first run deducts August: send 2026-07-31) or August\'s leave is never deducted.',
+    'ytd_net: send null when the previous system cannot export historical net pay; the payslip prints "Underlag saknas" instead of a false 0. Never send gross minus tax as net.',
     '409 OPENING_BALANCES_LOCKED once the employee has a booked run; correcting that run unlocks.',
-    'The opening liability is NOT booked by Accounted: it only feeds the vacation-liability report.',
+    'The opening liability and the förskottsskuld are NOT booked by Accounted: they only feed the vacation-liability report (the förskottsskuld as its own row, subtracted from the net liability).',
+    'Extra betalda join the paid pool: the ledger\'s entitled days = Betalda + Extra betalda + days already taken. Obetalda lapse at the vacation-year close; Förskott days taken reduce the next year\'s entitlement.',
     'YTD affects payslip display and reports only; per-month tax and avgifter caps never read it.',
   ],
   example: {
     request: {
-      cutover_date: '2026-07-01',
-      ytd_gross: 210000,
-      ytd_tax: 48000,
-      ytd_net: 162000,
+      cutover_date: '2026-09-01',
+      ytd_gross: 280000,
+      ytd_tax: 64000,
+      ytd_net: 216000,
+      vacation_as_of_date: '2026-07-31',
       vacation_paid_days_remaining: 12.5,
+      vacation_days_taken_this_year: 10,
+      vacation_extra_paid_days_remaining: 2,
       vacation_saved_days_by_year: { '2025': 5 },
+      vacation_unpaid_days_remaining: 0,
+      vacation_advance_days_remaining: 3,
       opening_semester_liability: 42000,
       opening_semester_liability_avgifter: 13196.4,
+      opening_advance_vacation_debt: 4500,
       karens_periods_adjustment: 1,
     },
     response: {

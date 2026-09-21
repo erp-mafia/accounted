@@ -1,4 +1,4 @@
-import type { CreateJournalEntryLineInput } from '@/types'
+import type { CreateJournalEntryLineInput, EntityType } from '@/types'
 
 export type DispositionKind =
   | 'bolagsskatt'
@@ -77,7 +77,8 @@ export interface CompletedDisposition {
  * the next one (bolagsskatt comes last because it depends on everything else).
  */
 export interface DispositionsProposal {
-  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  /** The company's legal form; the wizard reads its capabilities, never the name. */
+  entityType: EntityType
   fiscalPeriod: {
     id: string
     name: string

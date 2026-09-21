@@ -239,7 +239,11 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        salary_runs: { data: SAMPLE_RUN, error: null },
+        // 1. overlap guard reads live runs, 2. the insert returns the row
+        salary_runs: [
+          { data: [], error: null },
+          { data: SAMPLE_RUN, error: null },
+        ],
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -258,21 +262,80 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
     expect(body.data.status).toBe('draft')
   })
 
+  it('returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP when another run already reads those days', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        company_settings: { data: { salary_deviation_period: 'previous_month' }, error: null },
+        salary_runs: {
+          data: [
+            {
+              id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+              period_year: 2026,
+              period_month: 4,
+              deviation_period_start: null,
+              deviation_period_end: null,
+            },
+          ],
+          error: null,
+        },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+        method: 'POST',
+        body: JSON.stringify(validBody),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_DEVIATION_PERIOD_OVERLAP')
+    expect(body.error.details.conflicting_run_id).toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd')
+  })
+
+  it('returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID for one deviation date without the other', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createSalaryRun(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs`, {
+        method: 'POST',
+        body: JSON.stringify({ ...validBody, deviation_period_start: '2026-04-01' }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_DEVIATION_PERIOD_INVALID')
+  })
+
   it('returns 409 SALARY_RUN_DUPLICATE_PERIOD on unique-constraint violation', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        salary_runs: {
-          data: null,
-          error: {
-            code: '23505',
-            message: 'duplicate',
-            // The inline `UNIQUE (company_id, period_year, period_month)`
-            // constraint is auto-named `<table>_<columns>_key`. The route
-            // disambiguates 23505s by substring-matching on the columns.
-            constraint: 'salary_runs_company_id_period_year_period_month_key',
+        salary_runs: [
+          { data: [], error: null },
+          {
+            data: null,
+            error: {
+              code: '23505',
+              message: 'duplicate',
+              // The inline `UNIQUE (company_id, period_year, period_month)`
+              // constraint is auto-named `<table>_<columns>_key`. The route
+              // disambiguates 23505s by substring-matching on the columns.
+              constraint: 'salary_runs_company_id_period_year_period_month_key',
+            },
           },
-        },
+        ],
         idempotency_keys: { data: null, error: null },
       }),
     )
@@ -324,11 +387,12 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
   })
 
   it('returns a dry-run preview without committing when ?dry_run=true', async () => {
-    const fromSpy = vi.fn()
+    // Records every builder method per table so the assertion can separate
+    // the read the avvikelseperiod overlap guard makes from a write.
+    const calls: Array<{ table: string; method: string }> = []
     mockServiceClient.mockReturnValue({
       from: (table: string) => {
-        fromSpy(table)
-        return new Proxy({}, {
+        const proxy: ProxyHandler<object> = {
           get(_t, prop) {
             if (prop === 'then') {
               const data = table === 'company_members'
@@ -336,9 +400,11 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
                 : null
               return (resolve: (v: unknown) => void) => resolve({ data, error: null })
             }
-            return () => new Proxy({}, this!)
+            calls.push({ table, method: String(prop) })
+            return () => new Proxy({}, proxy)
           },
-        })
+        }
+        return new Proxy({}, proxy)
       },
     })
 
@@ -352,7 +418,11 @@ describe('POST /api/v1/companies/:companyId/salary-runs', () => {
 
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
-    expect(fromSpy).not.toHaveBeenCalledWith('salary_runs')
+    expect(calls.filter((c) => c.table === 'salary_runs').map((c) => c.method)).not.toContain('insert')
+    const body = await res.json()
+    // No settings row in this mock → same_month → the pay month itself.
+    expect(body.data.preview.deviation_period_start).toBe('2026-05-01')
+    expect(body.data.preview.deviation_period_end).toBe('2026-05-31')
   })
 })
 

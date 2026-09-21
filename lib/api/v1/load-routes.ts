@@ -58,6 +58,11 @@ import '@/app/api/v1/companies/[companyId]/invoices/bulk-create/route'
 import '@/app/api/v1/companies/[companyId]/invoices/[id]/pdf/route'
 import '@/app/api/v1/companies/[companyId]/customers/bulk-create/route'
 
+// API parity: fixed assets (anläggningsregister).
+import '@/app/api/v1/companies/[companyId]/assets/route'
+import '@/app/api/v1/companies/[companyId]/assets/[id]/route'
+import '@/app/api/v1/companies/[companyId]/assets/[id]/dispose/route'
+
 // Phase 3: transactions + reconciliation vertical.
 import '@/app/api/v1/companies/[companyId]/transactions/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/route'
@@ -125,6 +130,21 @@ import '@/app/api/v1/companies/[companyId]/employees/opening-balances/route'
 import '@/app/api/v1/companies/[companyId]/employees/[id]/vacation-balance/route'
 import '@/app/api/v1/companies/[companyId]/salary/vacation-year-close/route'
 
+// Payroll gap-closure 4: operator onboarding. Salary settings (customer
+// provisioning), worked days (tidrapport for hourly staff and OB) and the
+// salary payment file (pain.001 / Bankgirot LB) for a run.
+import '@/app/api/v1/companies/[companyId]/salary/settings/route'
+import '@/app/api/v1/companies/[companyId]/employees/[id]/worked-days/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-file/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-files/route'
+
+// Payroll gap-closure 5: employee benefits, recurring lines, rättelsekörning.
+import '@/app/api/v1/companies/[companyId]/employees/[id]/benefits/route'
+import '@/app/api/v1/companies/[companyId]/employees/[id]/benefits/[benefitId]/route'
+import '@/app/api/v1/companies/[companyId]/employees/[id]/recurring-lines/route'
+import '@/app/api/v1/companies/[companyId]/employees/[id]/recurring-lines/[lineId]/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/correct/route'
+
 // Phase 5 PR-3: Reports + import async. All reports wrap existing
 // lib/reports/* generators. Imports run inline today but record their
 // progress on the `operations` table for consistent polling-shape. KPI,
@@ -138,6 +158,7 @@ import '@/app/api/v1/companies/[companyId]/reports/income-statement/pdf/route'
 import '@/app/api/v1/companies/[companyId]/reports/general-ledger/route'
 import '@/app/api/v1/companies/[companyId]/reports/journal-register/route'
 import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/route'
+import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/filings/route'
 import '@/app/api/v1/companies/[companyId]/reports/monthly-breakdown/route'
 import '@/app/api/v1/companies/[companyId]/reports/ar-ledger/route'
 import '@/app/api/v1/companies/[companyId]/reports/supplier-ledger/route'

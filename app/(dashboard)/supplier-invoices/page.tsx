@@ -30,7 +30,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { supplierInvoiceDisplayFigures } from '@/lib/supplier-invoices/display-figures'
 import {
   canApproveSupplierInvoice,
   canMarkSupplierInvoiceBankEntered,
@@ -842,10 +842,11 @@ export default function SupplierInvoicesPage() {
                         öresavrundning flag is on; "kvar att betala" stays
                         öre-exact (it is the actual outstanding debt). */}
                     <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask')}>
-                      {formatCurrency(getDisplayTotal(
-                        { total: inv.total, currency: inv.currency, ore_rounding: inv.ore_rounding },
-                        { ore_rounding: false },
-                      ).displayed, inv.currency)}
+                      {formatCurrency(supplierInvoiceDisplayFigures({
+                        total: inv.total,
+                        currency: inv.currency,
+                        ore_rounding: inv.ore_rounding,
+                      }).toPay, inv.currency)}
                     </td>
                     <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums rr-mask lg:table-cell')}>
                       {formatCurrency(inv.remaining_amount, inv.currency)}

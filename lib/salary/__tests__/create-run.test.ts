@@ -6,17 +6,42 @@ vi.mock('../account-mapping', () => ({
   getLineItemAccount: vi.fn(() => '7210'),
 }))
 
+/** Thenable builder chain: every filter returns the chain, awaiting it (or
+ * .single()/.maybeSingle()) yields the configured result. */
+function chain(result: { data?: unknown; error?: unknown }) {
+  const promise = Promise.resolve({ data: null, error: null, ...result })
+  const c: Record<string, unknown> = {}
+  for (const m of ['select', 'eq', 'neq', 'gte', 'lte', 'order', 'limit', 'in']) {
+    c[m] = () => c
+  }
+  c.single = () => promise
+  c.maybeSingle = () => promise
+  c.then = promise.then.bind(promise)
+  return c
+}
+
 /**
- * Purpose-built mock: records inserts per table, supports the chains
- * create-run uses (insert().select().single(), select().eq().eq(),
- * delete().eq().eq()).
+ * Purpose-built mock: records inserts per table and answers the reads
+ * create-run makes (employees roster, company_settings for the
+ * avvikelseperiod, salary_runs for the overlap guard).
  */
 function mockDb(opts: {
   employees?: Array<Record<string, unknown>>
   failLineItems?: boolean
+  /** company_settings row; undefined = no row (fresh company). */
+  settings?: Record<string, unknown> | null
+  /** Live runs the overlap guard sees. */
+  existingRuns?: Array<Record<string, unknown>>
 }) {
   const inserts: Record<string, Array<Record<string, unknown>>> = {}
   const deletes: string[] = []
+
+  const readResult = (table: string): { data: unknown } => {
+    if (table === 'employees') return { data: opts.employees ?? [] }
+    if (table === 'company_settings') return { data: opts.settings ?? null }
+    if (table === 'salary_runs') return { data: opts.existingRuns ?? [] }
+    return { data: null }
+  }
 
   const client = {
     from: (table: string) => ({
@@ -29,28 +54,13 @@ function mockDb(opts: {
             : { error: null }
           return Promise.resolve(result)
         }
-        return {
-          select: () => ({
-            single: async () => ({
-              data: { id: `${table}-${inserts[table].length}`, ...row },
-              error: null,
-            }),
-          }),
-        }
+        return chain({ data: { id: `${table}-${inserts[table].length}`, ...row } })
       },
-      select: () => ({
-        eq: () => ({
-          eq: async () => ({ data: opts.employees ?? [], error: null }),
-        }),
-      }),
-      delete: () => ({
-        eq: () => ({
-          eq: async () => {
-            deletes.push(table)
-            return { data: null, error: null }
-          },
-        }),
-      }),
+      select: () => chain(readResult(table)),
+      delete: () => {
+        deletes.push(table)
+        return chain({ data: null })
+      },
     }),
   }
 
@@ -102,6 +112,82 @@ describe('createSalaryRunWithEmployees', () => {
 
     expect(inserts.salary_runs[0]).not.toHaveProperty('voucher_series')
     expect(inserts.salary_runs[0]).not.toHaveProperty('notes')
+  })
+
+  it('snapshots the pay month as the avvikelseperiod when the company has no setting', async () => {
+    const { client, inserts } = mockDb({ employees: [monthlyEmployee] })
+
+    const result = await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 9,
+      paymentDate: '2026-09-25',
+    })
+
+    expect(inserts.salary_runs[0]).toMatchObject({
+      deviation_period_start: '2026-09-01',
+      deviation_period_end: '2026-09-30',
+    })
+    expect(result.deviationWindow).toEqual({ start: '2026-09-01', end: '2026-09-30' })
+  })
+
+  it('reads the previous month when the company setting says so', async () => {
+    const { client, inserts } = mockDb({
+      employees: [monthlyEmployee],
+      settings: { salary_deviation_period: 'previous_month' },
+    })
+
+    await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 9,
+      paymentDate: '2026-09-25',
+    })
+
+    expect(inserts.salary_runs[0]).toMatchObject({
+      deviation_period_start: '2026-08-01',
+      deviation_period_end: '2026-08-31',
+    })
+  })
+
+  it('explicit dates win over the setting', async () => {
+    const { client, inserts } = mockDb({
+      employees: [monthlyEmployee],
+      settings: { salary_deviation_period: 'previous_month' },
+    })
+
+    await createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+      periodYear: 2026,
+      periodMonth: 9,
+      paymentDate: '2026-09-25',
+      deviationPeriodStart: '2026-08-16',
+      deviationPeriodEnd: '2026-09-15',
+    })
+
+    expect(inserts.salary_runs[0]).toMatchObject({
+      deviation_period_start: '2026-08-16',
+      deviation_period_end: '2026-09-15',
+    })
+  })
+
+  it('refuses a window another live run already reads, before inserting anything', async () => {
+    const { client, inserts } = mockDb({
+      employees: [monthlyEmployee],
+      settings: { salary_deviation_period: 'previous_month' },
+      existingRuns: [
+        { id: 'run-aug', period_year: 2026, period_month: 8, deviation_period_start: null, deviation_period_end: null },
+      ],
+    })
+
+    await expect(
+      createSalaryRunWithEmployees(client, 'company-1', 'user-1', {
+        periodYear: 2026,
+        periodMonth: 9,
+        paymentDate: '2026-09-25',
+      }),
+    ).rejects.toMatchObject({
+      code: 'SALARY_RUN_DEVIATION_PERIOD_OVERLAP',
+      details: { conflicting_run_id: 'run-aug' },
+    })
+    expect(inserts.salary_runs).toBeUndefined()
   })
 
   it('filters employees whose employment does not overlap the period', async () => {

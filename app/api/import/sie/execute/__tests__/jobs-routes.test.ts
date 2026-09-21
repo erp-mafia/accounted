@@ -146,6 +146,23 @@ describe('durable SIE HTTP boundaries',()=>{
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
+  it('carries the submission validator\'s own sentence instead of the generic validation text', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    submit.mockRejectedValueOnce(new actual.SIEJobValidationError('SIE-verifikation LESSLIE3 (2025-01-02) ligger utanför räkenskapsåret.'))
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231\n#VER A 1 20260201 "Sale"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'], 'year.se'))
+    form.set('mappings', JSON.stringify(['1930', '3001'].map(number => ({
+      sourceAccount: number, targetAccount: number, sourceName: 'Account', targetName: 'Account',
+      confidence: 1, matchType: 'manual', isOverride: true,
+    }))))
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(400)
+    const { error } = await response.json()
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message).toBe('SIE-verifikation LESSLIE3 (2025-01-02) ligger utanför räkenskapsåret.')
+    expect(error.message_en).toBe('SIE-verifikation LESSLIE3 (2025-01-02) ligger utanför räkenskapsåret.')
+  })
+
   it('names both invalid source mappings in the API response instead of a generic 400', async () => {
     const form = new FormData()
     form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'invalid-mappings.se'))

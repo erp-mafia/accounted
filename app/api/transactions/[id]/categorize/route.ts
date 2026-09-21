@@ -272,12 +272,15 @@ export const POST = withRouteContext(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('entity_type, fiscal_year_start_month')
+      .select('entity_type, fiscal_year_start_month, vat_registered')
       .eq('company_id', companyId)
       .single()
 
     const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
     const fiscalYearStartMonth: number = settings?.fiscal_year_start_month ?? 1
+    // Icke momsregistrerad verksamhet books no moms line on a bank
+    // transaction (lib/bookkeeping/vat-registration.ts); passed as loaded.
+    const vatRegistered: boolean | null = settings?.vat_registered ?? null
 
     let finalCategory: TransactionCategory
     if (body.template_id) {
@@ -334,14 +337,16 @@ export const POST = withRouteContext(
         matchMethod: 'exact_alias' as const,
         confidence: Number(cpTemplate.confidence),
       }
-      mappingResult = buildMappingResultFromCounterpartyTemplate(match, transaction as Transaction, entityType)
+      mappingResult = buildMappingResultFromCounterpartyTemplate(
+        match, transaction as Transaction, entityType, vatRegistered,
+      )
       txLog.info('using counterparty template', {
         counterparty: cpTemplate.counterparty_name,
         lines: cpTemplate.line_pattern ? 'multi' : 'simple',
       })
     } else if (body.template_id) {
       const template = getTemplateById(body.template_id)!
-      mappingResult = buildMappingResultFromTemplate(template, transaction as Transaction, entityType)
+      mappingResult = buildMappingResultFromTemplate(template, transaction as Transaction, entityType, vatRegistered)
       if (body.vat_amount != null) {
         // The underlag's moms replaces the template's rate-based line; the
         // helper refuses treatments it cannot apply to, which is a 400.
@@ -364,6 +369,7 @@ export const POST = withRouteContext(
           entityType,
           body.vat_treatment,
           body.vat_amount ?? null,
+          vatRegistered,
         )
       } catch (err) {
         if (body.vat_amount == null) throw err

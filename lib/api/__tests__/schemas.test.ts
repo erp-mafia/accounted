@@ -3317,3 +3317,40 @@ describe('HouseworkTypeSchema (articles.housework_type)', () => {
     }
   })
 })
+
+describe('salary calculation policy and engångsskatt shapes', () => {
+  it('UpdateSettingsSchema stores the full policy object with defaults filled', async () => {
+    const { UpdateSettingsSchema: Schema } = await import('../schemas')
+    const result = Schema.safeParse({ salary_calculation_policy: { sick_rate: 'annual_hourly' } })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.salary_calculation_policy).toEqual({
+        partial_month: 'workdays',
+        sick_rate: 'annual_hourly',
+        long_leave: 'workdays',
+        leave_context: 'all_registered',
+        net_rounding: 'up',
+        one_off_tax_rounding: 'truncate',
+      })
+    }
+    expect(Schema.safeParse({ salary_calculation_policy: { sick_rate: 'hourly' } }).success).toBe(false)
+    expect(Schema.safeParse({ salary_calculation_policy: { extra: 'x' } }).success).toBe(false)
+    expect(Schema.safeParse({ salary_calculation_policy: 'workdays' }).success).toBe(false)
+  })
+
+  it('CreateSalaryLineItemSchema takes one_off_tax_percent in 0-100, nullable, optional', async () => {
+    const { CreateSalaryLineItemSchema: Schema, UpdateSalaryLineItemSchema: Patch } = await import('../schemas')
+    const base = {
+      salary_run_employee_id: '11111111-1111-4111-8111-111111111111',
+      item_type: 'bonus',
+      description: 'Bonus',
+      amount: 5000,
+    }
+    expect(Schema.safeParse(base).success).toBe(true)
+    expect(Schema.safeParse({ ...base, one_off_tax_percent: 30 }).success).toBe(true)
+    expect(Schema.safeParse({ ...base, one_off_tax_percent: null }).success).toBe(true)
+    expect(Schema.safeParse({ ...base, one_off_tax_percent: 100.5 }).success).toBe(false)
+    expect(Schema.safeParse({ ...base, one_off_tax_percent: -1 }).success).toBe(false)
+    expect(Patch.safeParse({ one_off_tax_percent: null }).success).toBe(true)
+  })
+})

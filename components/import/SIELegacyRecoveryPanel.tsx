@@ -8,7 +8,7 @@ import { DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SlideOver, SlideOverBody, SlideOverClose, SlideOverContent, SlideOverFooter } from '@/components/ui/slide-over'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import type { SIELegacyRecoveryAssessment } from '@/lib/import/sie-legacy-recovery'
+import { legacySIENextStep, type SIELegacyRecoveryAssessment } from '@/lib/import/sie-legacy-recovery'
 import { formatDate } from '@/lib/utils'
 
 /** Show advisory legacy-year evidence without enabling any bookkeeping action. */
@@ -115,7 +115,14 @@ export default function SIELegacyRecoveryPanel({ importId, filename, onClose, on
                   <dd className="text-muted-foreground">{t(assessment.hasArchiveReference ? 'archiveReferenced' : 'archiveMissing')}</dd>
                 </div>
               </dl>
-              <p className="text-sm leading-6 text-muted-foreground">{t('nextStep')}</p>
+              {legacySIENextStep(assessment) === 'reset_year' ? (
+                <p className="text-sm leading-6 text-muted-foreground">
+                  {t('nextStepResetYear')}{' '}
+                  <Link href="/settings/bookkeeping" className="underline underline-offset-4">{t('openFiscalYears')}</Link>
+                </p>
+              ) : (
+                <p className="text-sm leading-6 text-muted-foreground">{t('nextStep')}</p>
+              )}
             </>
           )}
         </SlideOverBody>

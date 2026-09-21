@@ -132,6 +132,11 @@ export function validateSIEJobInput(content: string, parsed: ParsedSIEFile, mapp
   const mapped = new Set(mappings.filter(m => isAccountNumber(m.targetAccount)).map(m => m.sourceAccount))
   const required = new Set<string>()
   if (options.importTransactions) for (const voucher of parsed.vouchers) {
+    // A voucher without lines (#BTRANS only, or an empty block) is skipped at
+    // preparation as empty and never posted, so neither its size nor its date
+    // can refuse the file. One such voucher dated in the previous year refused
+    // the same file three times (Easy Online Stores, 2026-09-16).
+    if (!voucher.lines.length) continue
     for (const line of voucher.lines) required.add(line.account)
     const source = `${voucher.series}${voucher.number}`
     if (voucher.lines.length > SIE_LIMITS.chunkLines || Buffer.byteLength(JSON.stringify(voucher),'utf8') > SIE_LIMITS.chunkBytes) {

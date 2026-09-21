@@ -29,6 +29,8 @@ const SalaryRunDetail = z.object({
   period_year: z.number().int(),
   period_month: z.number().int(),
   payment_date: z.string(),
+  deviation_period_start: z.string().nullable(),
+  deviation_period_end: z.string().nullable(),
   status: SalaryRunStatus,
   voucher_series: z.string(),
   total_gross: z.number(),
@@ -54,7 +56,7 @@ const SalaryRunDetail = z.object({
 })
 
 const SALARY_RUN_DETAIL_COLUMNS =
-  'id, period_year, period_month, payment_date, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost, salary_entry_id, avgifter_entry_id, vacation_entry_id, agi_generated_at, agi_submitted_at, calculation_params, approved_by, approved_at, paid_at, booked_at, booked_by, notes, created_at, updated_at'
+  'id, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost, salary_entry_id, avgifter_entry_id, vacation_entry_id, agi_generated_at, agi_submitted_at, calculation_params, approved_by, approved_at, paid_at, booked_at, booked_by, notes, created_at, updated_at'
 
 registerEndpoint({
   operation: 'salary-runs.get',

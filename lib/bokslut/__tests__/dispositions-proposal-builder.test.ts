@@ -74,7 +74,11 @@ function supabaseFor(period: { period_start: string; period_end: string }, entit
   settingsBuilder.select.mockReturnValue(settingsBuilder)
   settingsBuilder.eq.mockReturnValue(settingsBuilder)
   return {
-    from: vi.fn((table: string) => (table === 'company_settings' ? settingsBuilder : periodBuilder)),
+    // companies is the canonical fallback resolveCompanyEntityType reads
+    // when the settings hint is not a known form; it answers the same.
+    from: vi.fn((table: string) =>
+      table === 'company_settings' || table === 'companies' ? settingsBuilder : periodBuilder,
+    ),
   } as unknown as SupabaseClient
 }
 
@@ -179,5 +183,34 @@ describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
     await expect(
       buildDispositionsProposal(supabase, 'company-1', 'period-1'),
     ).rejects.toBeInstanceOf(SchablonintaktRateNotConfiguredError)
+  })
+})
+
+describe('buildDispositionsProposal: forms without corporate tax dispositions', () => {
+  // The gate is the profile capability, not the form name: a förening used
+  // to fall into the same branch as an enskild firma only by accident of
+  // `!== 'aktiebolag'`, and the wizard then showed it the NE-bilaga section.
+  it.each(['enskild_firma', 'ideell_forening'] as const)(
+    'returns no proposals and computes no bolagsskatt for %s',
+    async (entityType) => {
+      const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' }, entityType)
+
+      const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+      expect(result.entityType).toBe(entityType)
+      expect(result.proposals).toEqual([])
+      expect(result.netResultBefore).toBe(100_000)
+      expect(result.taxAdjustments).toBeUndefined()
+      expect(vi.mocked(calculateBolagsskatt)).not.toHaveBeenCalled()
+      expect(vi.mocked(calculateOveravskrivningar)).not.toHaveBeenCalled()
+    },
+  )
+
+  it('refuses a form the registry does not know instead of defaulting it', async () => {
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' }, 'handelsbolag')
+
+    await expect(buildDispositionsProposal(supabase, 'company-1', 'period-1')).rejects.toThrow(
+      /Unknown company entity_type/,
+    )
   })
 })

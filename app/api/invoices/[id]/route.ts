@@ -243,7 +243,11 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('id', id)
       .single()
 
-    return NextResponse.json({ data: completeInvoice })
+    // Same non-blocking warnings channel as POST /api/invoices (#2749, #2558).
+    return NextResponse.json({
+      data: completeInvoice,
+      ...(build.warnings.length > 0 ? { warnings: build.warnings } : {}),
+    })
   },
   { requireWrite: true },
 )

@@ -65,6 +65,7 @@ import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { SidebarV2 } from './SidebarV2'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
@@ -529,15 +530,20 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     return <Icon className={className} />
   }
 
-  const isEmployer = entityType === 'aktiebolag' || paysSalaries
+  // Payroll shows by default for every juridisk person (a company that is a
+  // legal person of its own employs people as a matter of course); a form
+  // whose org number is the owner's personnummer opts in through
+  // pays_salaries. #782
+  const isEmployer =
+    (isEntityType(entityType) && !usesPersonnummerAsOrgNumber(entityType)) || paysSalaries
 
   // One gate for both navigations: a surface hides for the same reason in
   // the sidebar tree (nav-v2.ts) and in the phone menu.
   const passesGates = (item: NavGateFlags) => {
     if (item.hidden) return false
     if (hiddenNavHrefs.has(item.href)) return false
-    // Payroll (employerOnly) is hidden until the company is an employer, an
-    // aktiebolag, or any entity that has flagged pays_salaries. #782
+    // Payroll (employerOnly) is hidden until the company is an employer by
+    // form or has flagged pays_salaries. #782
     if (item.employerOnly && !isEmployer) return false
     // Dimension surfaces are hidden until the company opts in via the
     // bookkeeping settings toggle (company_settings.dimensions_enabled).
@@ -705,9 +711,12 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       {/* Mobile bottom navigation. data-mobile-nav is the brand-style hook:
           on branded hosts the brand style block re-tints the bar's tokens
           (--card/--border/--primary...) to the deep chrome, mirroring the
-          sidebar; on default hosts the attribute matches nothing. */}
-      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
-        <div className="flex items-center justify-around h-16 px-2">
+          sidebar; on default hosts the attribute matches nothing.
+          Height is --bottom-nav-h (globals.css): the tab row plus the safe
+          area inset, the same token every bottom-pinned bar offsets by, so
+          the nav and the bars cannot drift apart (#2738). */}
+      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+        <div className="flex items-center justify-around h-full px-2">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
             const enabled = isItemEnabled(item.href)

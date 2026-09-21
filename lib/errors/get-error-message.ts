@@ -53,6 +53,29 @@ function pick(b: Bilingual, locale: ErrorLocale): string {
   return b[locale] ?? b.sv
 }
 
+// A RESTRICT foreign key names the register that still depends on the row, so
+// the refusal can say what the row is and what to do instead. Keyed by
+// constraint name; consulted only for 23503.
+//
+// depreciation_schedules_journal_entry_id_fkey: delete_last_voucher on a
+// planenlig avskrivning. The database refuses at the DELETE, before anything
+// is removed, and that refusal is deliberate (issue #2779): a posted
+// avskrivning is corrected with storno, not deleted.
+const FOREIGN_KEY_REFUSAL_MAP: Record<string, Bilingual> = {
+  depreciation_schedules_journal_entry_id_fkey: {
+    sv: 'Verifikatet bokför en avskrivning i anläggningsregistret och kan inte raderas. Gör en rättelse (storno) i stället.',
+    en: 'This voucher posts a depreciation in the fixed asset register and cannot be deleted. Make a correction (storno) instead.',
+  },
+}
+
+function matchForeignKeyRefusal(obj: Record<string, unknown>, locale: ErrorLocale): string | null {
+  if (obj.code !== '23503' || typeof obj.message !== 'string') return null
+  for (const [constraint, text] of Object.entries(FOREIGN_KEY_REFUSAL_MAP)) {
+    if (obj.message.includes(`"${constraint}"`)) return pick(text, locale)
+  }
+  return null
+}
+
 // Postgres error codes -> localized messages
 const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '23505': { sv: 'En post med samma uppgifter finns redan.', en: 'A record with the same details already exists.' },
@@ -398,6 +421,11 @@ export function getErrorMessage(
   // 2. If it's an object, try various parsing strategies
   if (typeof error === 'object' && error !== null) {
     const obj = error as Record<string, unknown>
+
+    // Before the bare-envelope branch below: a raw PostgREST error has the
+    // same { code, message } shape and would be returned verbatim from there.
+    const foreignKeyRefusal = matchForeignKeyRefusal(obj, locale)
+    if (foreignKeyRefusal) return foreignKeyRefusal
 
     // Bare envelope inner-error shape: { code, message, message_en?, ... }.
     // Happens when a caller forwards `result.error` (the inner object) instead

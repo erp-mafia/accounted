@@ -53,6 +53,7 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'voucher-gap-explanations', label: 'Voucher gap explanations', description: 'Documented explanations for gaps in the voucher series, per BFNAR 2013:2.', matcher: (p) => /\/voucher-gap/.test(p) },
   { slug: 'fiscal-periods', label: 'Fiscal periods', description: 'Period lifecycle: lock, close, year-end, opening balances, FX revaluation. Async via the operations substrate.', matcher: (p) => /\/fiscal-periods(\/|$)/.test(p) },
   { slug: 'accounts', label: 'Accounts', description: 'Read the chart of accounts (BAS).', matcher: (p) => /\/accounts(\/|$)/.test(p) },
+  { slug: 'fixed-assets', label: 'Fixed assets', description: 'The anläggningsregister: register an asset (no voucher, the purchase is already booked), correct it while no depreciation is posted, and dispose it, which posts the avyttring voucher with gain or loss, VAT and jämkning.', matcher: (p) => /\/assets(\/|$)/.test(p) },
   { slug: 'documents', label: 'Documents', description: 'Multipart upload, signed-URL download (15-min TTL), link to journal entries.', matcher: (p) => /\/documents(\/|$)/.test(p) },
   { slug: 'inbox-items', label: 'Inbox items', description: 'Stamp incoming documents in the inbox to turn them into supplier invoices or transactions.', matcher: (p) => /\/inbox-items(\/|$)/.test(p) },
   { slug: 'dimensions', label: 'Dimensions', description: 'Cost-centre / project dimensions and their values for tagging journal lines.', matcher: (p) => /\/dimensions(\/|$)/.test(p) },

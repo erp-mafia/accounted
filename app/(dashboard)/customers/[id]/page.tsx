@@ -24,7 +24,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { cn, formatDate } from '@/lib/utils'
 import { invoiceNumberDisplay } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
-import type { Customer, CustomerType, CreateCustomerInput } from '@/types'
+import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
@@ -37,15 +37,20 @@ const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
   non_eu_business: 'type_non_eu_business',
 }
 
+/**
+ * The columns GET /api/customers/[id] selects from `invoices`. `status` is
+ * the lifecycle column the invoice list and detail pages read for the paid
+ * state; there is no payment_status column, and reading one here rendered
+ * every invoice on the customer card as "Obetald" (crm #91).
+ */
 interface RelatedInvoice {
   id: string
   invoice_number: string | null
   invoice_date: string
   due_date: string
-  status: string
+  status: InvoiceStatus
   total: number
   currency: string
-  payment_status: string
 }
 
 interface CustomerWithRelations extends Customer {
@@ -422,11 +427,11 @@ export default function CustomerDetailPage({
                 </span>
                 {/* Chips mark exceptions: an overdue invoice is the deviation
                     worth a chip; paid and not-yet-due render as muted text. */}
-                {invoice.payment_status === 'overdue' ? (
+                {invoice.status === 'overdue' ? (
                   <Badge variant="destructive">{t('invoice_status_overdue')}</Badge>
                 ) : (
                   <span className="min-w-14 text-right text-xs text-muted-foreground">
-                    {invoice.payment_status === 'paid'
+                    {invoice.status === 'paid'
                       ? t('invoice_status_paid')
                       : t('invoice_status_unpaid')}
                   </span>

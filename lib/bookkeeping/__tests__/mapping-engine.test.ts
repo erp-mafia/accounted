@@ -950,5 +950,62 @@ describe('mapping-engine', () => {
 
       expect(result.debit_account).toBe('5410')
     })
+
+    // VAT registration: the engine hands the company flag to every builder it
+    // delegates to, and its own rule builder resolves the rule's treatment
+    // through the same seam (lib/bookkeeping/vat-registration.ts).
+    describe('VAT registration', () => {
+      it('books a matched 25 % rule gross for a non-registered company and with 2641 otherwise', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        const tx = makeTransaction({ amount: -1250, merchant_name: 'Adobe', description: 'Adobe' })
+        const rule = makeRule({ merchant_pattern: 'Adobe', vat_treatment: 'standard_25' })
+
+        mockResult({ data: [rule], error: null })
+        const registered = await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'enskild_firma')
+        expect(registered.vat_lines).toEqual([
+          expect.objectContaining({ account_number: '2641', debit_amount: 250 }),
+        ])
+
+        mockResult({ data: [rule], error: null })
+        const same = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx, 'enskild_firma', undefined, true,
+        )
+        expect(same).toEqual(registered)
+
+        mockResult({ data: [rule], error: null })
+        const notRegistered = await evaluateMappingRules(
+          mockSupabase as never, 'company-1', tx, 'enskild_firma', undefined, false,
+        )
+        expect(notRegistered.debit_account).toBe(rule.debit_account)
+        expect(notRegistered.vat_lines).toEqual([])
+      })
+
+      it('hands the flag to the static template builder as loaded', async () => {
+        const { evaluateMappingRules } = await import('../mapping-engine')
+        const templates = await import('../booking-templates')
+        const template = { id: 'it_saas_subscription' }
+        vi.mocked(templates.findMatchingTemplates).mockReturnValueOnce([
+          { template, confidence: 0.9 } as never,
+        ])
+        vi.mocked(templates.buildMappingResultFromTemplate).mockReturnValueOnce({
+          rule: null,
+          template_id: 'it_saas_subscription',
+          debit_account: '5420',
+          credit_account: '1930',
+          risk_level: 'NONE',
+          confidence: 1,
+          requires_review: false,
+          default_private: false,
+          vat_lines: [],
+          description: 'stub',
+        })
+        const tx = makeTransaction({ amount: -100, merchant_name: 'Nomatch' })
+        mockResult({ data: [], error: null })
+
+        await evaluateMappingRules(mockSupabase as never, 'company-1', tx, 'enskild_firma', undefined, false)
+
+        expect(templates.buildMappingResultFromTemplate).toHaveBeenCalledWith(template, tx, 'enskild_firma', false)
+      })
+    })
   })
 })

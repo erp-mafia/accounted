@@ -231,3 +231,24 @@ describe('reconcileSupplierInvoiceVouchers', () => {
     expect(res.review[0].reason).toBe('voucher_contested')
   })
 })
+
+it('bounds a worker batch to its invoice IDs and candidate payment references', async () => {
+  vi.clearAllMocks()
+  queue([inv({ id: 'i1' })])
+  mFind.mockResolvedValueOnce([cand({ je: 'consumed' })] as never)
+  const calls: unknown[][] = []
+  const chain = { select: (...args: unknown[]) => { calls.push(['select', ...args]); return chain },
+    eq: (...args: unknown[]) => { calls.push(['eq', ...args]); return chain },
+    in: (...args: unknown[]) => { calls.push(['in', ...args]); return chain },
+    order: () => chain, range: () => Promise.resolve({ data: [inv({ id: 'i1' })], error: null }),
+    limit: (n: number) => { calls.push(['limit', n]); return Promise.resolve({ data: [{ journal_entry_id: 'consumed' }], error: null }) } }
+  mFetchAll.mockReset().mockImplementationOnce(async callback => (await callback({ from: 0, to: 999 })).data as never)
+  const supabase = { from: vi.fn(() => chain) }
+  const result = await reconcileSupplierInvoiceVouchers({ supabase: supabase as never, companyId: 'c1', userId: 'u1', invoiceIds: ['i1'], dryRun: true })
+  expect(mFetchAll).toHaveBeenCalledOnce()
+  expect(calls).toContainEqual(['in', 'id', ['i1']])
+  expect(calls).toContainEqual(['eq', 'journal_entry_id', 'consumed'])
+  expect(calls).toContainEqual(['limit', 1])
+  expect(result.links).toEqual([])
+  expect(mLink).not.toHaveBeenCalled()
+})

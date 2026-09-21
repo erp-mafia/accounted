@@ -211,6 +211,21 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
         </CardHeader>
       </Card>
 
+      {!vacation && proposal.notices?.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Semesterlöneskuld</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {proposal.notices.map((notice) => (
+              <p key={notice} className="text-sm text-muted-foreground">
+                {notice}
+              </p>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {vacation && (
         <Card>
           <CardHeader>

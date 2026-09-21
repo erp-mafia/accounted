@@ -38,6 +38,9 @@ const LineItemResponse = z.object({
   is_net_deduction: z.boolean(),
   account_number: z.string().nullable(),
   sort_order: z.number(),
+  one_off_tax_percent: z.number().nullable().optional(),
+  vacation_category: z.string().nullable().optional(),
+  vacation_saved_year: z.string().nullable().optional(),
 })
 
 registerEndpoint({
@@ -46,21 +49,24 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/lines',
   summary: 'Add a payslip line to an employee in a draft salary run.',
   description:
-    'Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre.',
+    'Creates a salary_line_items row (bonus, overtime, gross/net deduction, benefit, traktamente, ...) for one employee in a draft run. account_number auto-resolves from item_type when omitted. Amounts are rounded to whole öre. one_off_tax_percent (engångsskatt) taxes the line at that verified flat percentage instead of the monthly table; allowed on a positive taxable bonus, commission, other, correction or semesterersattning line. A vacation line (item_type vacation, quantity = days) may carry vacation_category to say which pool the days come from: paid (Betalda, the default), extra_paid (Extra betalda), saved (Sparade, optionally one origin year in vacation_saved_year), unpaid (Obetalda) or advance (Förskott).',
   useWhen:
-    'You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line.',
+    'You need to add a one-off pay component before calculating: a bonus, an expense reimbursement, a union fee, or a manual correction line. A bonus or final-settlement semesterersättning that Skatteverket taxes as an engångsbelopp: send one_off_tax_percent with the percentage you verified for the employee. Vacation days taken: an item_type vacation line with quantity = days and, when they are not this year\'s paid days, vacation_category.',
   doNotUseFor:
     'Editing the base monthly salary (PATCH the run-employee via the internal surface; not on v1 yet). Absence: register absence days instead (PUT /employees/{id}/absence); the engine derives sick/VAB lines itself.',
   pitfalls: [
     'Draft-only: returns 400 SALARY_RUN_LINE_NOT_DRAFT once the run has advanced.',
     'Line edits do not recompute tax or totals: call POST /salary-runs/{id}/calculate afterwards.',
-    'Engine-derived lines (absence, benefits) are regenerated on every :calculate; manual lines survive.',
+    'Engine-derived lines (absence, benefits, the semesterersättning row under vacation_rule semesterersattning) are regenerated on every :calculate; manual lines survive, including a semesterersattning line you add yourself.',
+    'one_off_tax_percent is the percentage YOU verified against Skatteverket\'s engångsbelopp table for the employee\'s yearly income; the API never estimates it. It is refused (400) on deductions, benefits, non-taxable rows and non-positive amounts. A valid jämkning decision on the employee overrides it. Equal percentages are summed before the öre are dropped, so splitting one bonus over two rows never changes the withholding.',
+    'vacation_category is only valid on item_type vacation (400 VALIDATION_ERROR otherwise) and vacation_saved_year only with category saved. Omitted category = paid. The vacation ledger splits the booked run\'s days by category: saved consumes the named origin year, or the oldest saved year first when omitted; unpaid and advance consume their own cutover pools.',
   ],
   example: {
     request: {
       item_type: 'bonus',
       description: 'Kvartalsbonus Q2',
       amount: 5000,
+      one_off_tax_percent: 30,
     },
     response: {
       data: {
@@ -69,6 +75,7 @@ registerEndpoint({
         description: 'Kvartalsbonus Q2',
         amount: 5000,
         account_number: '7210',
+        one_off_tax_percent: 30,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },

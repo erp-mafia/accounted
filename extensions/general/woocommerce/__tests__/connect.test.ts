@@ -66,6 +66,10 @@ describe('activateIfComplete', () => {
       error_message: null,
     })
     expect(typeof patch.connected_at).toBe('string')
+    // The order cursor starts at the connection moment: without this the
+    // first sync would backfill history the merchant already booked from
+    // the bank side (issue #2631).
+    expect(patch.last_order_synced_at).toBe(patch.connected_at)
     const eqCalls = calls.filter((c) => c.method === 'eq').map((c) => c.args)
     expect(eqCalls).toContainEqual(['id', 'conn-1'])
     expect(eqCalls).toContainEqual(['status', 'pending'])

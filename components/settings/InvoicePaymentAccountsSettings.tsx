@@ -272,6 +272,11 @@ export function InvoicePaymentAccountsSettings({
     // derive the same values here so sibling forms (the invoice editor's
     // bank-details check) see the payee without another settings round trip.
     const map: Partial<Record<Currency, InvoicePaymentAccount>> = { ...(settings.invoice_payment_accounts ?? {}) }
+    // A default the database dropped (hiding an account does that) leaves
+    // the map too; entries that never had a default stay as legacy values.
+    for (const prev of defaults) {
+      if (!fresh.defaults.some((row) => row.currency === prev.currency)) delete map[prev.currency]
+    }
     for (const row of fresh.defaults) {
       const account = fresh.accounts.find((a) => a.id === row.cash_account_id)
       if (account) map[row.currency] = cashAccountPayee(account)
@@ -391,6 +396,35 @@ export function InvoicePaymentAccountsSettings({
           ? t('saved_default', { currency, account: accountLabel(account) })
           : t('cleared_default', { currency }),
       )
+    }
+  }
+
+  /**
+   * Show or hide one account in the invoice picker. Hiding is the reversible
+   * alternative to deleting a cash account that may carry bookkeeping. The
+   * database drops the account's currency defaults in the same update
+   * (trg_mirror_invoice_payee_defaults), so one PATCH is the whole change.
+   */
+  async function setVisibleOnInvoices(account: CashAccount, visible: boolean) {
+    setIsSaving(true)
+    try {
+      const res = await fetch(`/api/cash-accounts/${account.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invoice_payee: visible }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      cancelEdit()
+      await afterWrite(
+        visible
+          ? t('shown_account', { account: accountLabel(account) })
+          : t('hidden_account', { account: accountLabel(account) }),
+      )
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -607,13 +641,23 @@ export function InvoicePaymentAccountsSettings({
                         <SettingsRowNote>{account.currency} · {account.ledger_account}</SettingsRowNote>
                       </SettingsRow>
                       {renderPayeeFields(account.currency, `payee-${account.id}`, account.iban ? account.iban.replace(/\s/g, '').toUpperCase() : null)}
-                      <div className="flex justify-end gap-2 px-1 py-3">
-                        <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
-                          {t('cancel')}
-                        </Button>
-                        <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
-                          {isSaving ? t('saving') : t('save_account')}
-                        </Button>
+                      <div className="flex items-center justify-between gap-2 px-1 py-3">
+                        <button
+                          type="button"
+                          onClick={() => setVisibleOnInvoices(account, !account.invoice_payee)}
+                          disabled={isSaving}
+                          className="text-xs text-muted-foreground underline underline-offset-2 transition-colors duration-150 hover:text-foreground disabled:opacity-50"
+                        >
+                          {account.invoice_payee ? t('hide_on_invoices') : t('show_on_invoices')}
+                        </button>
+                        <div className="flex gap-2">
+                          <Button type="button" variant="outline" size="sm" onClick={cancelEdit} disabled={isSaving}>
+                            {t('cancel')}
+                          </Button>
+                          <Button type="button" size="sm" onClick={saveEdit} disabled={isSaving}>
+                            {isSaving ? t('saving') : t('save_account')}
+                          </Button>
+                        </div>
                       </div>
                     </>
                   )}

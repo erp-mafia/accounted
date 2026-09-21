@@ -454,6 +454,65 @@ describe('counterparty-templates', () => {
       expect(result.vat_lines.some(l => l.account_number === '2645')).toBe(true)
     })
 
+    it('a non-registered company books a learned 25 % template gross with no ingående moms', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+        vat_treatment: 'standard_25',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.85 }
+      const tx = makeTransaction({ amount: -1250 })
+
+      const registered = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma', true)
+      expect(registered).toEqual(buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma'))
+      expect(registered.vat_lines).toHaveLength(1)
+
+      const notRegistered = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma', false)
+      expect(notRegistered.debit_account).toBe('6200')
+      expect(notRegistered.vat_lines).toEqual([])
+    })
+
+    it('a non-registered company keeps a learned reverse-charge pair', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6540',
+        credit_account: '1930',
+        vat_treatment: 'reverse_charge',
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.8 }
+      const tx = makeTransaction({ amount: -5000 })
+
+      expect(buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag', false).vat_lines).toEqual(
+        buildMappingResultFromCounterpartyTemplate(match, tx, 'aktiebolag').vat_lines,
+      )
+    })
+
+    it('a non-registered company drops the VAT line of a learned multi-line pattern and books the business line gross', () => {
+      const template = makeCategorizationTemplate({
+        debit_account: '6200',
+        credit_account: '1930',
+        vat_treatment: 'standard_25',
+        line_pattern: [
+          { type: 'business', account: '6200', side: 'debit', ratio: 1 },
+          { type: 'vat', account: '2641', side: 'debit', vat_rate: 0.25 },
+        ],
+      })
+      const match = { template, matchMethod: 'exact_alias' as const, confidence: 0.9 }
+      const tx = makeTransaction({ amount: -1250 })
+
+      const registered = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma', true)
+      expect(registered.all_lines_complete).toBe(true)
+      expect(registered.vat_lines).toEqual([
+        expect.objectContaining({ account_number: '2641', debit_amount: 250 }),
+        expect.objectContaining({ account_number: '6200', debit_amount: 1000 }),
+      ])
+
+      const notRegistered = buildMappingResultFromCounterpartyTemplate(match, tx, 'enskild_firma', false)
+      expect(notRegistered.all_lines_complete).toBe(true)
+      expect(notRegistered.vat_lines).toEqual([
+        expect.objectContaining({ account_number: '6200', debit_amount: 1250 }),
+      ])
+    })
+
     it('does not generate VAT lines for income transactions', () => {
       const template = makeCategorizationTemplate({
         debit_account: '1930',

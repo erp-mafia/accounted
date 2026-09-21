@@ -789,4 +789,53 @@ describe('POST batch-categorize', () => {
         'Kategoriseringsverifikation utan transaktionskoppling; automatisk storno misslyckades. Manuell avstämning krävs.',
     })
   })
+
+  // VAT registration: the batch route loads company_settings.vat_registered
+  // once and hands it to every item's mapping, so a non-registered company
+  // books no moms line (lib/bookkeeping/vat-registration.ts).
+  it.each([
+    { vat_registered: false, vatLineCount: 0 },
+    { vat_registered: true, vatLineCount: 1 },
+  ])(
+    'books a company with vat_registered = $vat_registered with $vatLineCount moms line(s)',
+    async ({ vat_registered, vatLineCount }) => {
+      const { supabase } = makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          {
+            data: {
+              id: TX_A,
+              company_id: COMPANY_ID,
+              date: '2026-05-12',
+              amount: -1250,
+              currency: 'SEK',
+              merchant_name: 'Adobe',
+              cash_account_id: null,
+              journal_entry_id: null,
+              is_ignored: false,
+            },
+            error: null,
+          },
+          { data: [{ id: TX_A }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      })
+      mockServiceClient.mockReturnValue(supabase)
+
+      const res = await POST(
+        makeRequest(
+          `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/batch-categorize`,
+          { items: [{ transaction_id: TX_A, categorization: { is_business: true, category: 'expense_software' } }] },
+        ),
+        batchParams(),
+      )
+
+      expect(res.status).toBe(200)
+      expect(createTxJE).toHaveBeenCalledTimes(1)
+      const mapping = createTxJE.mock.calls[0][4] as { debit_account: string; vat_lines: unknown[] }
+      expect(mapping.debit_account).toBe('5420')
+      expect(mapping.vat_lines).toHaveLength(vatLineCount)
+    },
+  )
 })

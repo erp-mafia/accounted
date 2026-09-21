@@ -1,6 +1,35 @@
 import type { Skill } from '../types'
+import {
+  ENTITY_TYPES,
+  ENTITY_TYPE_LABELS_SV,
+  creatableEntityTypes,
+  isEntityTypeCreatable,
+  plannedLegalForms,
+} from '@/lib/company/entity-type'
 
-const body = `# Onboarding: set up a company in Accounted from the conversation
+/**
+ * Which legal forms the agent may create, read from the registry at render
+ * time so a flag flip (NEXT_PUBLIC_IDEELL_FORENING_ENABLED is available to
+ * the Node server as process.env) changes the sentence without a deploy of
+ * this text. Planned forms are named so the agent stops instead of
+ * registering the nearest supported form.
+ */
+function supportedFormsSentence(): string {
+  const creatable = creatableEntityTypes()
+    .map((form) => `\`${form}\` (${ENTITY_TYPE_LABELS_SV[form]})`)
+    .join(', ')
+  const notYet = [
+    ...ENTITY_TYPES.filter((form) => !isEntityTypeCreatable(form)).map((form) => ENTITY_TYPE_LABELS_SV[form]),
+    ...plannedLegalForms().map((planned) => planned.label),
+  ].join(', ')
+  return (
+    `Forms that can be created today: ${creatable}. ` +
+    `Not yet: ${notYet}. When the registry or the user names one of those, say the form is not ` +
+    `supported yet and stop; never register it as another form (wrong equity chart).`
+  )
+}
+
+const buildBody = () => `# Onboarding: set up a company in Accounted from the conversation
 
 From "my company is not in Accounted yet" to a working ledger without the
 user opening the web app first. The only browser steps are the ones that
@@ -97,7 +126,7 @@ Rules baked into that split (same as the web onboarding):
   present the AB's choice rather than assuming it.
 
 \`not_found\`/\`unavailable\`: fall back to asking the \`still_to_ask\` list and
-continue. Only \`aktiebolag\` and \`enskild_firma\` are supported today.
+continue. ${supportedFormsSentence()}
 
 ## Step 2: preview, ONE confirm, create, keep moving
 
@@ -252,6 +281,10 @@ export const onboardingSkill: Skill = {
   summary:
     'Set up a company in chat: orgnr + previous system first, prefill via gnubok_lookup_company, one confirm to create, SIE history via preflight + staged import, then bank/Skatteverket cards.',
   tags: ['onboarding', 'setup', 'company', 'bank', 'skatteverket', 'sie', 'migration', 'agent-first'],
-  body,
+  // A getter: the supported-forms sentence is read per request, not at
+  // module load, so it follows the creation flag.
+  get body() {
+    return buildBody()
+  },
   tier: 'workflow',
 }

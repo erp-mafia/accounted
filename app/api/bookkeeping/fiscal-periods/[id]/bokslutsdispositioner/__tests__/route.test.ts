@@ -107,7 +107,10 @@ function put(body: unknown) {
   )
 }
 
-function periodClient(period: unknown, error: unknown = null) {
+/** Routes fiscal_periods to the period row and companies to the legal form
+ *  (resolveCompanyEntityType reads companies.entity_type; aktiebolag unless
+ *  a test says otherwise). */
+function periodClient(period: unknown, error: unknown = null, entityType = 'aktiebolag') {
   const builder = {
     select: vi.fn(),
     eq: vi.fn(),
@@ -115,7 +118,16 @@ function periodClient(period: unknown, error: unknown = null) {
   }
   builder.select.mockReturnValue(builder)
   builder.eq.mockReturnValue(builder)
-  return { from: vi.fn().mockReturnValue(builder) }
+  const companyBuilder = {
+    select: vi.fn(),
+    eq: vi.fn(),
+    maybeSingle: vi.fn().mockResolvedValue({ data: { entity_type: entityType }, error: null }),
+  }
+  companyBuilder.select.mockReturnValue(companyBuilder)
+  companyBuilder.eq.mockReturnValue(companyBuilder)
+  return {
+    from: vi.fn((table: string) => (table === 'companies' ? companyBuilder : builder)),
+  }
 }
 
 /** Like periodClient but also answers a companies.accounting_framework
@@ -132,7 +144,7 @@ function frameworkClient(period: unknown, framework: string | null) {
     select: vi.fn(),
     eq: vi.fn(),
     maybeSingle: vi.fn().mockResolvedValue({
-      data: framework === null ? null : { accounting_framework: framework },
+      data: framework === null ? null : { accounting_framework: framework, entity_type: 'aktiebolag' },
       error: null,
     }),
   }
@@ -368,6 +380,24 @@ describe('PUT /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =>
     )
     expect(body.data.netResultBefore).toBe(592_722.21)
   })
+
+  it.each(['ideell_forening', 'enskild_firma'])(
+    'refuses tax adjustments for %s with a 400 before touching the period',
+    async (entityType) => {
+      const supabase = periodClient(openPeriod, null, entityType)
+      requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { entity_type: string } }
+      }>(await put(validBody))
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('YEAR_END_DISPOSITIONS_WRONG_LEGAL_FORM')
+      expect(body.error.details.entity_type).toBe(entityType)
+      expect(saveTaxAdjustments).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalledWith('fiscal_periods')
+    },
+  )
 })
 
 describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () => {
@@ -751,6 +781,54 @@ describe('POST /api/bookkeeping/fiscal-periods/[id]/bokslutsdispositioner', () =
     expect(body.error.code).toBe('CONFLICT')
     expect(body.error.details).toEqual({ bookedAmount: 123_181, expectedAmount: 123_180 })
     expect(createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  describe('legal-form gate', () => {
+    const kinds = [
+      { kind: 'bolagsskatt' },
+      { kind: 'sarskild_loneskatt' },
+      { kind: 'periodiseringsfond_avsattning', desiredAmount: 10_000 },
+      { kind: 'periodiseringsfond_ateforing', returns: { '2129': 1_000 } },
+      { kind: 'overavskrivningar', additionalAmount: 8_000 },
+    ]
+
+    it.each(['ideell_forening', 'enskild_firma'])(
+      'refuses every disposition kind for %s with a 400 and posts nothing',
+      async (entityType) => {
+        for (const item of kinds) {
+          vi.clearAllMocks()
+          const supabase = periodClient(openPeriod, null, entityType)
+          requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+          requireWriteMock.mockResolvedValue({ ok: true })
+
+          const { status, body } = await parseJsonResponse<{
+            error: { code: string; details: { entity_type: string } }
+          }>(await post({ items: [item] }))
+
+          expect(status, item.kind).toBe(400)
+          expect(body.error.code, item.kind).toBe('YEAR_END_DISPOSITIONS_WRONG_LEGAL_FORM')
+          expect(body.error.details.entity_type).toBe(entityType)
+          expect(createJournalEntry, item.kind).not.toHaveBeenCalled()
+          expect(calculateBolagsskatt, item.kind).not.toHaveBeenCalled()
+          expect(calculateOveravskrivningar, item.kind).not.toHaveBeenCalled()
+          expect(supabase.from).not.toHaveBeenCalledWith('fiscal_periods')
+        }
+      },
+    )
+
+    it('reads the form from companies.entity_type and lets an aktiebolag through unchanged', async () => {
+      const supabase = periodClient(openPeriod, null, 'aktiebolag')
+      requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase, error: null })
+
+      const { status, body } = await parseJsonResponse<{
+        data: { created: Array<{ kind: string }> }
+      }>(await post({ items: [{ kind: 'bolagsskatt' }] }))
+
+      expect(status).toBe(200)
+      expect(body.data.created).toEqual([{ kind: 'bolagsskatt', entry: { id: 'entry-tax' } }])
+      expect(supabase.from).toHaveBeenCalledWith('companies')
+      expect(createJournalEntry).toHaveBeenCalledOnce()
+    })
   })
 
   it('rejects the removed uppskjuten_skatt kind as a validation error (K3 29.37)', async () => {

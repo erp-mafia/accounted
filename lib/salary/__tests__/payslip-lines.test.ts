@@ -262,3 +262,219 @@ describe('deletePayslipLine', () => {
     expect(result).toEqual({ ok: false, code: 'SALARY_LINE_NOT_FOUND' })
   })
 })
+
+describe('engångsskatt (one_off_tax_percent)', () => {
+  it('passes the percentage through to the row on create', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: { ...BASE_INPUT, one_off_tax_percent: 30 },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.one_off_tax_percent).toBe(30)
+  })
+
+  it('stores null when no percentage is given', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: BASE_INPUT,
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.one_off_tax_percent).toBeNull()
+  })
+
+  it('refuses a percentage on a net deduction line at create, before any write', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: { ...BASE_INPUT, item_type: 'net_deduction_union', amount: -300, is_net_deduction: true, one_off_tax_percent: 30 },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('VALIDATION_ERROR')
+      expect(result.details?.field).toBe('one_off_tax_percent')
+    }
+    const fromCalls = (mock.supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual(['salary_runs', 'salary_run_employees'])
+  })
+
+  it('validates one-off tax against the merged line before a sparse update', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, one_off_tax_percent: 34 } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { is_net_deduction: true },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('lets the same sparse update through when it also clears the percentage', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, one_off_tax_percent: 34 } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { is_net_deduction: true, one_off_tax_percent: null },
+      dryRun: true,
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.one_off_tax_percent).toBeNull()
+  })
+})
+
+describe('vacation_category on payslip lines', () => {
+  const VACATION_INPUT = {
+    ...BASE_INPUT,
+    item_type: 'vacation' as const,
+    description: 'Semester',
+    quantity: 2,
+    amount: -3000,
+  }
+
+  it('stores the category and saved year on a vacation line', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { salaryRunEmployeeId: SRE_ID },
+      input: { ...VACATION_INPUT, vacation_category: 'saved', vacation_saved_year: '2025' },
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      item_type: 'vacation',
+      vacation_category: 'saved',
+      vacation_saved_year: '2025',
+    })
+  })
+
+  it('writes null for both columns when the caller sends neither (paid by default)', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation' } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { salaryRunEmployeeId: SRE_ID },
+      input: VACATION_INPUT,
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({
+      vacation_category: null,
+      vacation_saved_year: null,
+    })
+  })
+
+  it('refuses a category on a non-vacation line with a 400 before writing', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { salaryRunEmployeeId: SRE_ID },
+      input: { ...BASE_INPUT, vacation_category: 'paid' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.code).toBe('VALIDATION_ERROR')
+      expect(result.details?.field).toBe('vacation_category')
+    }
+    expect(mock.findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('refuses a saved year without category saved', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+    const result = await createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { salaryRunEmployeeId: SRE_ID },
+      input: { ...VACATION_INPUT, vacation_category: 'paid', vacation_saved_year: '2025' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('VALIDATION_ERROR')
+  })
+
+  it('validates the merged row on update: a category patch onto a bonus line is refused', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: EXISTING_LINE })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { vacation_category: 'unpaid' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.details?.field).toBe('vacation_category')
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('accepts a category patch on a vacation line and clears it with null', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: null, vacation_saved_year: null } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { vacation_category: null, vacation_saved_year: null },
+    })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
+      vacation_category: null,
+      vacation_saved_year: null,
+    })
+  })
+
+  it('a category patch alone off saved retires the origin year (null returns the line to paid days)', async () => {
+    for (const category of [null, 'unpaid'] as const) {
+      mock.reset()
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+      mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: category, vacation_saved_year: null } })
+      const result = await updatePayslipLine(supabase, {
+        companyId: COMPANY_ID,
+        salaryRunId: RUN_ID,
+        lineId: LINE_ID,
+        patch: { vacation_category: category },
+      })
+      expect(result.ok).toBe(true)
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({
+        vacation_category: category,
+        vacation_saved_year: null,
+      })
+    }
+  })
+
+  it('keeps an explicitly patched saved year and refuses it without category saved', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'vacation', vacation_category: 'saved', vacation_saved_year: '2025' } })
+    const result = await updatePayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      lineId: LINE_ID,
+      patch: { vacation_category: null, vacation_saved_year: '2024' },
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.details?.field).toBe('vacation_category')
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+})

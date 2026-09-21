@@ -185,4 +185,31 @@ describe('selectAccount', () => {
       expect(prompt).toContain('KATEGORIER')
     })
   })
+
+  describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
+    it('resolves the category default to exempt for a non-registered company, standard_25 for a registered one', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_software'))
+      const yes = await selectAccount(input({ candidates: [], vatRegistered: true }))
+      expect(yes.vatTreatment).toBe('standard_25')
+
+      generateStructured.mockResolvedValue(pick('cat:expense_software'))
+      const no = await selectAccount(input({ candidates: [], vatRegistered: false }))
+      expect(no.account).toBe(getDefaultAccountForCategory('expense_software', 'aktiebolag'))
+      expect(no.vatTreatment).toBe('exempt')
+    })
+
+    it('resolves a candidate learned with 25 % moms to exempt for a non-registered company', async () => {
+      generateStructured.mockResolvedValue(pick('cand:0'))
+      const res = await selectAccount(input({ vatRegistered: false }))
+      expect(res.account).toBe('5410')
+      expect(res.fromCandidate).toBe(true)
+      expect(res.vatTreatment).toBe('exempt')
+    })
+
+    it('leaves an unknown registration (undefined) untouched', async () => {
+      generateStructured.mockResolvedValue(pick('cat:expense_software'))
+      const res = await selectAccount(input({ candidates: [], vatRegistered: undefined }))
+      expect(res.vatTreatment).toBe('standard_25')
+    })
+  })
 })

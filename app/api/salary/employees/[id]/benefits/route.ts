@@ -3,26 +3,60 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeBenefitSchema } from '@/lib/api/schemas'
-import { calculateBikeBenefit } from '@/lib/salary/benefits'
+import { createEmployeeBenefit, listEmployeeBenefits } from '@/lib/salary/employee-benefits'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
+
+/**
+ * Render a shared-module failure as this route's legacy `{ error }` envelope.
+ *
+ * `details.field` marks a message the module authored for the user (validity
+ * period, annual_market_value on a non-bike row) and is shown as is. Every
+ * other failure carries the raw Postgres message and SQLSTATE; rebuilt as an
+ * Error with a `code`, the shape PostgrestError has, it sends
+ * getUserErrorMessage down the same path (Postgres code map, then the
+ * fallbacks) the inline queries used to take, so the text is unchanged.
+ */
+function failureResponse(failure: { code: string; details?: Record<string, unknown> }) {
+  if (failure.code === 'EMPLOYEE_NOT_FOUND') {
+    return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
+  }
+  if (failure.code === 'NOT_FOUND') {
+    return NextResponse.json({ error: 'Förmån hittades inte' }, { status: 404 })
+  }
+  const details = failure.details ?? {}
+  if (failure.code === 'VALIDATION_ERROR' && typeof details.field === 'string') {
+    return NextResponse.json({ error: String(details.message) }, { status: 400 })
+  }
+  const pgError = Object.assign(
+    new Error(typeof details.message === 'string' ? details.message : ''),
+    { code: typeof details.pg_code === 'string' ? details.pg_code : undefined },
+  )
+  // A CHECK violation is bad input, not a server fault. The create schema
+  // mirrors every CHECK on the table (benefit_type, monthly_value >= 0,
+  // valid_to >= valid_from), so this is only the backstop for non-schema
+  // callers; answering 500 told the user to retry an insert that can never
+  // succeed.
+  const status = failure.code === 'VALIDATION_ERROR' ? 400 : 500
+  return NextResponse.json({ error: getUserErrorMessage(pgError) }, { status })
+}
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.benefits.list',
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    const { data, error } = await supabase
-      .from('employee_benefits')
-      .select('*')
-      .eq('employee_id', id)
-      .eq('company_id', companyId)
-      .order('valid_from', { ascending: false })
+    // Active rows only: this is the register the panel lets the user add to
+    // and remove from. A removed benefit that a payslip line derives from is
+    // kept as is_active=false for provenance (#2695), and the engine (step
+    // 8d) reads active rows only, so listing inactive rows here would show a
+    // "removed" benefit as live. History stays reachable on v1 (?active=false)
+    // and in the archive export.
+    const result = await listEmployeeBenefits(supabase, { companyId, employeeId: id, active: true })
+    if (!result.ok) return failureResponse(result)
 
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: result.data })
   },
 )
 
@@ -33,60 +67,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const validation = await validateBody(request, CreateEmployeeBenefitSchema)
     if (!validation.success) return validation.response
-    const body = validation.data
 
-    // Confirm employee belongs to the company
-    const { data: emp } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .single()
-    if (!emp) return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
+    const result = await createEmployeeBenefit(supabase, {
+      companyId,
+      employeeId: id,
+      userId: user.id,
+      input: validation.data,
+    })
+    if (!result.ok) return failureResponse(result)
 
-    // Bike benefit: derive monthly_value + metadata from the annual market value
-    let monthlyValue = body.monthly_value ?? 0
-    let metadata: Record<string, unknown> = body.metadata ?? {}
-
-    if (body.benefit_type === 'bike' && body.annual_market_value !== undefined) {
-      const calc = calculateBikeBenefit(body.annual_market_value)
-      monthlyValue = calc.monthlyValue
-      metadata = {
-        ...metadata,
-        annual_market_value: body.annual_market_value,
-        annual_taxable: calc.annualTaxable,
-        tax_free_portion: calc.taxFreePortion,
-      }
-    }
-
-    const { data, error } = await supabase
-      .from('employee_benefits')
-      .insert({
-        employee_id: id,
-        company_id: companyId,
-        user_id: user.id,
-        benefit_type: body.benefit_type,
-        description: body.description,
-        monthly_value: monthlyValue,
-        valid_from: body.valid_from,
-        valid_to: body.valid_to ?? null,
-        metadata,
-        is_active: body.is_active ?? true,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      // A CHECK violation is bad input, not a server fault. The create schema
-      // now mirrors every CHECK on the table (benefit_type, monthly_value >= 0,
-      // valid_to >= valid_from), so this is only the backstop for non-schema
-      // callers; answering 500 told the user to retry an insert that can never
-      // succeed.
-      const status = error.code === '23514' ? 400 : 500
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status })
-    }
-
-    return NextResponse.json({ data }, { status: 201 })
+    // No dry-run on this door: the outcome is always the inserted row.
+    const outcome = result.data
+    return NextResponse.json(
+      { data: outcome.committed ? outcome.row : outcome.preview },
+      { status: 201 },
+    )
   },
   { requireWrite: true },
 )

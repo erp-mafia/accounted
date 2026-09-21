@@ -93,3 +93,21 @@ export interface CompanySuggestion {
 
 /** Rows the picker shows; SCB may return more, the client keeps a picker a picker. */
 export const COMPANY_SUGGEST_MAX = 6
+
+/**
+ * What the register knew when the provider lookup missed. TIC is
+ * Bolagsverket-backed and does not list ideella föreningar (their org number
+ * comes from Skatteverket), so the TIC route falls back to SCB's
+ * företagsregister and, on a hit, answers 404 with this hint beside the
+ * miss: enough for the journey to settle the legal form and the name and
+ * skip the "not found" stop. Registrations (F-skatt, moms) are carried only
+ * when SCB states them; null means "still ask".
+ */
+export interface RegistryHint {
+  source: 'scb'
+  companyName: string
+  /** SCB's legal form label in the TIC vocabulary mapEntityType understands, or null. */
+  legalEntityType: string | null
+  address: { street: string | null; postalCode: string | null; city: string | null } | null
+  registration: { fTax: boolean | null; vat: boolean | null }
+}

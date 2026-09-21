@@ -1,4 +1,4 @@
-import { getDisplayTotal } from '@/lib/invoices/rounding'
+import { supplierInvoiceDisplayFigures } from './display-figures'
 import type { SupplierInvoice, SupplierInvoiceStatus } from '@/types'
 
 // Mirrors lib/invoices/invoice-list-sort.ts: pure comparators over the values
@@ -51,10 +51,11 @@ function displayedNumber(invoice: SupplierInvoice): string | null {
 // company fallback pinned off (supplier invoices never had a company-wide
 // rounding setting); sorting must rank the same displayed value.
 function displayedAmount(invoice: SupplierInvoice): number {
-  return getDisplayTotal(
-    { total: invoice.total, currency: invoice.currency, ore_rounding: invoice.ore_rounding },
-    { ore_rounding: false },
-  ).displayed
+  return supplierInvoiceDisplayFigures({
+    total: invoice.total,
+    currency: invoice.currency,
+    ore_rounding: invoice.ore_rounding,
+  }).toPay
 }
 
 function compareNullable<T>(

@@ -99,8 +99,8 @@ For each fiscal period, Accounted stores the reconciliation state automatically.
 For a printed audit trail (BFL 8 kap), generate the supplier ledger and AR
 ledger after reconciliation:
 
-- \`gnubok_get_ar_ledger\`: open customer balances should match unpaid invoices
-- \`gnubok_get_supplier_ledger\`: open supplier balances should match unpaid leverantörsfakturor
+- \`gnubok_get_ar_ledger\` (via \`gnubok_call_tool\`): open customer balances should match unpaid invoices
+- \`gnubok_get_supplier_ledger\` (via \`gnubok_call_tool\`): open supplier balances should match unpaid leverantörsfakturor
 
 ## Critical rules
 
@@ -111,7 +111,7 @@ ledger after reconciliation:
 
 ## Common errors
 
-- *"Balances disagree by exactly N"*: usually a single rounding entry at year-end (öresavrundning, 3741/7741) wasn't booked. Verify with \`gnubok_get_general_ledger\` filtered to the rounding accounts.
+- *"Balances disagree by exactly N"*: usually a single rounding entry at year-end (öresavrundning, BAS 3740) wasn't booked. Verify with \`gnubok_get_general_ledger\` filtered to the rounding account.
 - *"Unmatched count is 0 but balances disagree"*: opening balance issue. Check the previous period's UB matches this period's IB via \`gnubok_get_trial_balance(period=prev)\` vs \`gnubok_get_trial_balance(period=current, opening=true)\`.
 - *"Same transaction shows twice"*: either two PSD2 feeds (manual + Enable Banking) imported the same row, or the user manually created a voucher AND the bank imported the row. Reverse the duplicate via \`gnubok_reverse_journal_entry\`.
 
@@ -128,7 +128,9 @@ ledger after reconciliation:
 - \`gnubok_attach_document_to_transaction\` (file a receipt against a tx)
 - \`gnubok_reverse_journal_entry\` (storno)
 - \`gnubok_run_currency_revaluation\` (FX accounts only)
-- \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification)
+
+A staged write your client does not list in tools/list (gnubok_search_tools shows callable_via \"stage_tool\") is staged through \`gnubok_stage_tool({ tool, arguments })\` and approved as usual; an unlisted read goes through \`gnubok_call_tool\`.
+- \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification; the two ledgers via \`gnubok_call_tool\`)
 `
 
 export const bankReconciliationSkill: Skill = {

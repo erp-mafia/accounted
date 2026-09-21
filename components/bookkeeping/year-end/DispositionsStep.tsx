@@ -20,6 +20,7 @@ import type {
   TaxAdjustmentSnapshot,
 } from '@/lib/bokslut/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { filesIncomeReturn, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
 
 interface DispositionsStepProps {
   periodId: string
@@ -47,8 +48,10 @@ interface TaxAdjustmentDraft {
  * accepted ones. Mandatory p-fond reversals (cohort ≥ 6 years old) cannot be
  * skipped: checkbox stays disabled-on.
  *
- * EF companies get an empty `proposals` array from the server, so this step
- * renders a short pass-through note and lets the user continue.
+ * A form without corporate tax dispositions gets an empty `proposals` array
+ * from the server; this step then renders the form's own section (the
+ * NE-bilaga inputs when it files an NE return, otherwise a short note) and
+ * lets the user continue.
  */
 export function DispositionsStep({
   periodId,
@@ -225,9 +228,12 @@ export function DispositionsStep({
     (item) => item.status === 'needs_correction',
   ) ?? false
 
-  // EF: depreciation can apply (skattemässig hanteras separat); replace the
-  // AB-only dispositioner with a NE-bilaga declaration section.
-  if (proposal.entityType !== 'aktiebolag') {
+  // Three-way by capability, never by form name. Depreciation applies to
+  // every form (skattemässig hanteras separat). A form that files an NE
+  // return replaces the corporate dispositioner with the NE-bilaga
+  // declaration section; a form with neither (ideell förening today) gets
+  // a note that nothing further is prepared for it yet.
+  if (!supportsCorporateTaxDispositions(proposal.entityType)) {
     const fiscalYear = parseInt(proposal.fiscalPeriod.period_end.slice(0, 4), 10)
     return (
       <div className="space-y-6">
@@ -236,11 +242,21 @@ export function DispositionsStep({
           onPosted={() => void loadProposals()}
           onTaxDirtyChange={setTaxDepreciationDirty}
         />
-        <EfDeclarationSection
-          fiscalPeriodId={periodId}
-          bookedSurplus={proposal.netResultBefore}
-          fiscalYear={fiscalYear}
-        />
+        {filesIncomeReturn(proposal.entityType) === 'NE' ? (
+          <EfDeclarationSection
+            fiscalPeriodId={periodId}
+            bookedSurplus={proposal.netResultBefore}
+            fiscalYear={fiscalYear}
+          />
+        ) : (
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              Inga bokslutsdispositioner eller deklarationsjusteringar förbereds för den här
+              företagsformen ännu. Avskrivningarna ovan bokförs som vanligt; gå vidare för att
+              förhandsgranska bokslutet.
+            </CardContent>
+          </Card>
+        )}
         {taxDepreciationDirty && (
           <p className="text-sm text-attn" role="status">
             Spara eller återställ ändringarna i skattemässig avskrivning innan du lämnar steget.

@@ -22,6 +22,7 @@ import type {
 } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { ownerSettlementAccount } from '@/lib/company/entity-type'
+import { vatTreatmentForRegistration, type VatRegistration } from './vat-registration'
 
 const log = createLogger('mapping-engine')
 
@@ -84,7 +85,9 @@ export async function evaluateMappingRules(
   companyId: string,
   transaction: Transaction,
   entityType: EntityType,
-  settlementAccount?: string
+  settlementAccount?: string,
+  /** company_settings.vat_registered as the caller loaded it (lib/bookkeeping/vat-registration.ts). */
+  vatRegistered?: VatRegistration
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
 
@@ -130,10 +133,12 @@ export async function evaluateMappingRules(
 
   if (error || !rules || rules.length === 0) {
     // Try counterparty templates before static template fallback
-    const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType)
+    const counterpartyResult = await evaluateCounterpartyTemplates(
+      supabase, companyId, transaction, entityType, vatRegistered,
+    )
     if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
 
-    const templateResult = evaluateTemplateRules(transaction, entityType)
+    const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
     if (templateResult) return applySettlementAccount(templateResult, bankAccount)
     return getDefaultResult(transaction, bankAccount)
   }
@@ -141,16 +146,18 @@ export async function evaluateMappingRules(
   // Evaluate each rule in priority order
   for (const rule of rules as MappingRule[]) {
     if (matchesRule(rule, transaction)) {
-      return applySettlementAccount(buildResult(rule, transaction, entityType), bankAccount)
+      return applySettlementAccount(buildResult(rule, transaction, entityType, vatRegistered), bankAccount)
     }
   }
 
   // Try counterparty templates before static template fallback
-  const counterpartyResult = await evaluateCounterpartyTemplates(supabase, companyId, transaction, entityType)
+  const counterpartyResult = await evaluateCounterpartyTemplates(
+    supabase, companyId, transaction, entityType, vatRegistered,
+  )
   if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount)
 
   // Try template-based matching before default fallback
-  const templateResult = evaluateTemplateRules(transaction, entityType)
+  const templateResult = evaluateTemplateRules(transaction, entityType, vatRegistered)
   if (templateResult) return applySettlementAccount(templateResult, bankAccount)
 
   return getDefaultResult(transaction, bankAccount)
@@ -162,7 +169,8 @@ export async function evaluateMappingRules(
  */
 function evaluateTemplateRules(
   transaction: Transaction,
-  entityType: EntityType
+  entityType: EntityType,
+  vatRegistered?: VatRegistration
 ): MappingResult | null {
   const matches = findMatchingTemplates(transaction, entityType)
   if (matches.length === 0 || matches[0].confidence < 0.3) return null
@@ -171,7 +179,8 @@ function evaluateTemplateRules(
   const result = buildMappingResultFromTemplate(
     best.template,
     transaction,
-    entityType
+    entityType,
+    vatRegistered
   )
   // Override the confidence with the auto-match confidence (not 1.0)
   result.confidence = best.confidence
@@ -187,7 +196,8 @@ async function evaluateCounterpartyTemplates(
   supabase: SupabaseClient,
   companyId: string,
   transaction: Transaction,
-  entityType: EntityType
+  entityType: EntityType,
+  vatRegistered?: VatRegistration
 ): Promise<MappingResult | null> {
   try {
     const match = await findCounterpartyTemplate(supabase, companyId, transaction)
@@ -199,7 +209,8 @@ async function evaluateCounterpartyTemplates(
     return buildMappingResultFromCounterpartyTemplate(
       match,
       transaction,
-      entityType
+      entityType,
+      vatRegistered
     )
   } catch {
     // Non-critical: fall through to next fallback
@@ -304,7 +315,12 @@ function matchesRule(rule: MappingRule, transaction: Transaction): boolean {
 /**
  * Build a MappingResult from a matched rule
  */
-function buildResult(rule: MappingRule, transaction: Transaction, entityType: EntityType): MappingResult {
+function buildResult(
+  rule: MappingRule,
+  transaction: Transaction,
+  entityType: EntityType,
+  vatRegistered?: VatRegistration
+): MappingResult {
   // VAT figures land on journal entry lines, which are always SEK, so they
   // are derived from the SEK value of the transaction. The LENIENT resolver
   // is deliberate: buildTransactionEntryLines resolves the gross with the
@@ -357,10 +373,12 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType: En
     debitAccount = ownerSettlementAccount(entityType, 'withdrawal')
   }
 
-  // Generate VAT lines if applicable
+  // Generate VAT lines if applicable. The rule's treatment is resolved for
+  // the company's VAT registration first (lib/bookkeeping/vat-registration.ts).
+  const vatTreatment = vatTreatmentForRegistration(rule.vat_treatment, vatRegistered)
   const vatLines: VatJournalLine[] = []
-  if (isExpense && !rule.default_private && rule.vat_treatment) {
-    if (rule.vat_treatment === 'reverse_charge') {
+  if (isExpense && !rule.default_private && vatTreatment) {
+    if (vatTreatment === 'reverse_charge') {
       // Reverse charge: emit BOTH the fiktiv-moms pair (2645/2614) AND the
       // basbelopp pair (44xx|45xx / 4598). The basbelopp pair populates
       // momsdeklaration rutor 20-24; without it Skatteverket rejects with
@@ -389,10 +407,10 @@ function buildResult(rule: MappingRule, transaction: Transaction, entityType: En
           })
         }
       }
-    } else if (rule.vat_treatment === 'standard_25' || rule.vat_treatment === 'reduced_12' || rule.vat_treatment === 'reduced_6') {
+    } else if (vatTreatment === 'standard_25' || vatTreatment === 'reduced_12' || vatTreatment === 'reduced_6') {
       const vatRate =
-        rule.vat_treatment === 'standard_25' ? 0.25
-        : rule.vat_treatment === 'reduced_12' ? 0.12
+        vatTreatment === 'standard_25' ? 0.25
+        : vatTreatment === 'reduced_12' ? 0.12
         : 0.06
       const vatLine = generateInputVatLine(absSekAmount, vatRate)
       if (vatLine) {

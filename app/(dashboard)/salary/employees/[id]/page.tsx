@@ -250,6 +250,17 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       if (res.ok) {
         toast({ title: t('detail_deactivated') })
         router.push('/salary/employees')
+      } else {
+        // The server says why (a legacy jämkning beslut that must be completed
+        // or cleared first, a missing row, a database refusal): show it, the
+        // way handleSave does. Closing the dialog silently read as "the button
+        // does nothing". #2697
+        const result = await res.json().catch(() => null)
+        toast({
+          title: t('detail_deactivate_failed'),
+          description: getErrorMessage(result, { context: 'salary', statusCode: res.status }),
+          variant: 'destructive',
+        })
       }
     } finally {
       setDeactivating(false)

@@ -28,8 +28,9 @@ import {
   UPLOAD_ALLOWED_MIME_TYPES,
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
-  buildEmailBodyHtmlDocument,
 } from './lib/upload-and-extract'
+import { isSignatureImage, renderEmailBodyUnderlag } from './lib/email-body-underlag'
+import type { RenderedEmailBodyUnderlag } from './lib/email-body-underlag'
 import {
   verifyInboundWebhook,
   fetchReceivingEmail,
@@ -1930,15 +1931,45 @@ export const invoiceInboxExtension: Extension = {
         const attachments = rawAttachments.slice(0, MAX_ATTACHMENTS_PER_EMAIL)
         const truncatedCount = totalAttachments - attachments.length
 
+        // Signature-sized inline images (logos, tracking pixels, mail-client
+        // decorations) are never underlag on their own (#2751). Resend lists
+        // them as attachments, so a forwarded receipt whose text was the
+        // receipt took the attachment path on their account: the logo got
+        // filed and extracted, the body was never looked at. They are ignored
+        // next to real documents, and the mail is filed by its body when they
+        // are all it carries.
+        const signatureImages = attachments.filter((att) => isSignatureImage(att))
+        const documentAttachments = attachments.filter((att) => !isSignatureImage(att))
+
+        // The body rendering does not depend on the receiving inbox: one mail
+        // addressed to several inboxes renders once.
+        let bodyUnderlag: Promise<RenderedEmailBodyUnderlag | null> | undefined
+        const renderBodyUnderlag = () =>
+          (bodyUnderlag ??= renderEmailBodyUnderlag(
+            {
+              from,
+              to,
+              subject,
+              receivedAt: created_at,
+              messageId: message_id,
+              html: fullEmail.html,
+              text: fullEmail.text,
+            },
+            // A note next to signature images ("Skickat från min iPhone") is
+            // not a receipt; a body with nothing else is archived as before.
+            { requireSubstantive: signatureImages.length > 0 },
+          ))
+
         type AttachmentResult = { attachment_id: string; inbox_item_id?: string; error?: string; duplicate?: boolean }
         /**
          * What became of one attachment, for the mail's history event. Codes
          * only: the free-text error and the filename stay out of
          * processing_history (append-only, outside the erasure path).
+         * 'ignored' is a signature image: never downloaded, never a row.
          */
         type AttachmentOutcome = {
           id: string
-          outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
+          outcome: 'filed' | 'duplicate' | 'rejected' | 'failed' | 'ignored'
           inbox_item_id?: string
           reason?: string
           mime?: string
@@ -2011,14 +2042,27 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
-          if (attachments.length === 0) {
-            // Body-only mail: for many suppliers the HTML body IS the invoice
-            // (SaaS receipts, e-mail invoices), and often the only underlag the
-            // user has. Store the body as a text/html document and run the
-            // normal extract pipeline instead of dead-ending in an error row.
-            // Mails with an empty body keep the old error row.
-            const bodyDoc = buildEmailBodyHtmlDocument(fullEmail.html ?? null, bodyText)
-            if (bodyDoc && bodyDoc.byteLength <= MAX_FILE_SIZE) {
+          const ignoredOutcomes: AttachmentOutcome[] = signatureImages.map((att) => ({
+            id: att.id,
+            outcome: 'ignored' as const,
+            reason: 'signature_image',
+            mime: sanitiseMime(att.content_type),
+          }))
+
+          if (documentAttachments.length === 0) {
+            // Body-only mail: for app-store, SaaS and travel receipts the body
+            // IS the receipt, and often the only underlag the user has. Render
+            // it to a PDF with the received parts embedded and run the normal
+            // extract pipeline instead of dead-ending in an error row. An
+            // empty body, or a mail-client note next to signature images,
+            // keeps the error row: there is nothing to archive.
+            let bodyDoc: RenderedEmailBodyUnderlag | null = null
+            try {
+              bodyDoc = await renderBodyUnderlag()
+            } catch (err) {
+              console.error('[invoice-inbox/inbound] Email-body rendering failed:', err)
+            }
+            if (bodyDoc && bodyDoc.buffer.byteLength <= MAX_FILE_SIZE) {
               // Resend retries the webhook on failure: a retry after success
               // must not duplicate the body document. Body items carry the
               // email_id with a NULL attachment id. Scoped to the company:
@@ -2038,11 +2082,7 @@ export const invoiceInboxExtension: Extension = {
                   serviceSupabase,
                   userId,
                   companyId,
-                  {
-                    name: `mail-${sanitiseFilename(subject, 'meddelande')}.html`,
-                    buffer: bodyDoc,
-                    type: 'text/html',
-                  },
+                  bodyDoc,
                   'email',
                   {
                     from,
@@ -2054,7 +2094,7 @@ export const invoiceInboxExtension: Extension = {
                     kindHint,
                   }
                 )
-                return { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id, attachments: [] }
+                return { processed: 1, reason: 'email_body', inbox_item_id: result.inbox_item_id, attachments: ignoredOutcomes }
               } catch (err) {
                 // Fall through to the error row so the mail never vanishes.
                 console.error('[invoice-inbox/inbound] Email-body document failed:', err)
@@ -2071,13 +2111,17 @@ export const invoiceInboxExtension: Extension = {
               email_body_text: bodyText,
               resend_email_id: email_id,
               kind_hint: kindHint,
-              error_message: 'Email had no attachments',
+              error_message:
+                signatureImages.length > 0
+                  ? 'Mejlet innehöll bara signaturbilder och ingen mejltext att spara som underlag'
+                  : 'Email had no attachments',
               raw_email_payload: { messageId: message_id },
             })
-            return { processed: 0, reason: 'no_attachments', attachments: [] }
+            return { processed: 0, reason: 'no_attachments', attachments: ignoredOutcomes }
           }
 
           const results: AttachmentResult[] = []
+          attachmentOutcomes.push(...ignoredOutcomes)
 
           // Persist a "rejected" inbox row so the user has visibility into the drop.
           // Without this, attachments that fail MIME validation vanish silently,
@@ -2128,7 +2172,7 @@ export const invoiceInboxExtension: Extension = {
             }
           }
 
-          for (const att of attachments) {
+          for (const att of documentAttachments) {
             let replacedItemId: string | undefined
             try {
               // Scoped to the company so one mail to two inboxes files once
@@ -2169,24 +2213,52 @@ export const invoiceInboxExtension: Extension = {
                 const innerAttachments = parsed.attachments || []
                 const innerFrom = parsed.from?.text || from
                 const innerSubject = parsed.subject || subject
-                if (innerAttachments.length === 0) {
-                  // Gmail "Forward as attachment" of a body-only HTML invoice:
-                  // the forwarded mail's body is the underlag. Same treatment
-                  // as a direct body-only mail; empty bodies keep the rejection.
-                  const innerBodyDoc = buildEmailBodyHtmlDocument(
-                    typeof parsed.html === 'string' ? parsed.html : null,
-                    parsed.text ?? null
+                // Same signature-image rule as the outer mail: mailparser
+                // lists the forwarded mail's inline logos as attachments too.
+                // Ids keep their position in the full list so a redelivery
+                // dedupes against the same keys.
+                const innerIsSignature = innerAttachments.map((inner) =>
+                  isSignatureImage({
+                    content_type: inner.contentType,
+                    content_disposition: inner.contentDisposition,
+                    content_id: inner.contentId,
+                    size: inner.size,
+                  }),
+                )
+                const innerSignatureCount = innerIsSignature.filter(Boolean).length
+                if (innerSignatureCount === innerAttachments.length) {
+                  // Gmail "Forward as attachment" of a body-only receipt: the
+                  // forwarded mail's body is the underlag. Same treatment as a
+                  // direct body-only mail; empty bodies keep the rejection.
+                  for (let i = 0; i < innerAttachments.length; i++) {
+                    attachmentOutcomes.push({
+                      id: `${att.id}#${i}`,
+                      outcome: 'ignored',
+                      reason: 'signature_image',
+                      mime: sanitiseMime(innerAttachments[i].contentType),
+                    })
+                  }
+                  const innerTo = Array.isArray(parsed.to)
+                    ? parsed.to.map((a) => a.text).join(', ')
+                    : (parsed.to?.text ?? null)
+                  const innerBodyDoc = await renderEmailBodyUnderlag(
+                    {
+                      from: innerFrom,
+                      to: innerTo,
+                      subject: innerSubject,
+                      receivedAt: parsed.date?.toISOString() ?? created_at,
+                      messageId: parsed.messageId ?? message_id,
+                      html: typeof parsed.html === 'string' ? parsed.html : null,
+                      text: parsed.text ?? null,
+                    },
+                    { requireSubstantive: innerSignatureCount > 0 },
                   )
-                  if (innerBodyDoc && innerBodyDoc.byteLength <= MAX_FILE_SIZE) {
+                  if (innerBodyDoc && innerBodyDoc.buffer.byteLength <= MAX_FILE_SIZE) {
                     const innerBodyResult = await uploadAndExtract(
                       serviceSupabase,
                       userId,
                       companyId,
-                      {
-                        name: `mail-${sanitiseFilename(innerSubject, 'meddelande')}.html`,
-                        buffer: innerBodyDoc,
-                        type: 'text/html',
-                      },
+                      innerBodyDoc,
                       'email',
                       {
                         from: innerFrom,
@@ -2215,6 +2287,10 @@ export const invoiceInboxExtension: Extension = {
                   const innerBuffer = inner.content
                   if (!innerBuffer) continue
                   const innerId = `${att.id}#${i}`
+                  if (innerIsSignature[i]) {
+                    attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'signature_image', mime: innerType })
+                    continue
+                  }
                   if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
                     const rejectedId = await logRejection(innerId, innerName, innerType, `Avvisad bilaga från vidarebefordrat mejl: filtypen ${innerType} stöds inte`)
                     results.push({ attachment_id: innerId, error: `Unsupported type ${innerType}` })
@@ -3353,7 +3429,7 @@ export const invoiceInboxExtension: Extension = {
         try {
           const { data: settings } = await ctx.supabase
             .from('company_settings')
-            .select('entity_type')
+            .select('entity_type, vat_registered')
             .eq('company_id', ctx.companyId)
             .maybeSingle()
           // Resolved, never defaulted: a guessed form proposes the wrong
@@ -3375,12 +3451,15 @@ export const invoiceInboxExtension: Extension = {
           // evaluateMappingRules applies the settlement account itself on every
           // return path. Applying it again rewrote a legitimate 1930 leg, which
           // on an own-account transfer collapsed both sides onto one account.
+          // A non-registered company is proposed no moms line either
+          // (lib/bookkeeping/vat-registration.ts); the flag is passed as loaded.
           const mapping = await evaluateMappingRules(
             ctx.supabase,
             ctx.companyId,
             tx as Transaction,
             entityType,
             settlementAccount,
+            settings?.vat_registered ?? null,
           )
 
           // getDefaultResult is the engine's way of saying it has nothing: a

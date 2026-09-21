@@ -1,147 +1,18 @@
 import { NextResponse } from 'next/server'
-import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 import { validateBody } from '@/lib/api/validate'
-import { K3ComponentSchema } from '@/lib/api/schemas'
 import {
-  BAS_RANGES_BY_CATEGORY,
   createAsset,
-  inBasRange,
   listAssets,
   defaultAccountsForCategory,
+  assetDeleteBlockReason,
 } from '@/lib/bokslut/assets/asset-service'
-import { validateComponents } from '@/lib/bokslut/assets/k3-components'
+import { CreateAssetSchema } from '@/lib/bokslut/assets/asset-api'
 import {
   findK2ExcludedAccount,
   k2ExcludedAccountMessages,
 } from '@/lib/bokslut/assets/k2-account-guard'
-import type { AssetCategory, WritableDepreciationMethod } from '@/types'
-
-const ASSET_CATEGORIES: readonly AssetCategory[] = [
-  'immaterial',
-  'building',
-  'land_improvement',
-  'machinery',
-  'equipment',
-  'vehicle',
-  'computer',
-  'other_tangible',
-] as const
-
-const DEPRECIATION_METHODS: readonly WritableDepreciationMethod[] = [
-  'linear',
-] as const
-
-const CreateAssetSchema = z
-  .object({
-    name: z.string().min(1),
-    category: z.enum(ASSET_CATEGORIES as unknown as [AssetCategory, ...AssetCategory[]]),
-    acquisition_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    // Positive: a zero-value asset would dodge the depreciation engine and
-    // create a no-op row that confuses the balance sheet.
-    acquisition_cost: z.number().positive(),
-    salvage_value: z.number().nonnegative().optional(),
-    useful_life_months: z.number().int().positive(),
-    depreciation_method: z
-      .enum(DEPRECIATION_METHODS as unknown as [
-        WritableDepreciationMethod,
-        ...WritableDepreciationMethod[],
-      ])
-      .optional(),
-    restvarde_target: z.null().optional(),
-    bas_asset_account: z.string().regex(/^\d{4}$/).optional(),
-    bas_accumulated_account: z.string().regex(/^\d{4}$/).optional(),
-    bas_expense_account: z.string().regex(/^\d{4}$/).optional(),
-    // K3 component depreciation (BFNAR 2012:1 ch.17.4). Only meaningful for
-    // companies with accounting_framework='k3': the route handler rejects
-    // K3_REQUIRED_FOR_COMPONENTS for K2 companies. When present, the engine
-    // dispatches to per-component linear depreciation instead of the
-    // asset-level depreciation_method.
-    k3_components: z.array(K3ComponentSchema).nullable().optional(),
-    notes: z.string().optional(),
-  })
-  .superRefine((value, ctx) => {
-    // Defense-in-depth: when the user overrides BAS accounts, refuse anything
-    // outside the legitimate range for the asset category so the chart stays
-    // BAS-aligned and INK2R mappings continue to work.
-    validateBasOverrides(value, ctx)
-    validateK3Components(value, ctx)
-  })
-
-function validateK3Components(
-  value: {
-    acquisition_cost: number
-    k3_components?: { name: string; cost: number; useful_life_months: number; salvage_value?: number }[] | null
-  },
-  ctx: z.RefinementCtx,
-): void {
-  if (value.k3_components === undefined || value.k3_components === null) return
-  const { errors } = validateComponents({
-    acquisition_cost: value.acquisition_cost,
-    k3_components: value.k3_components,
-  })
-  for (const message of errors) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['k3_components'],
-      message,
-    })
-  }
-}
-
-function validateBasOverrides(
-  value: {
-    category: AssetCategory
-    bas_asset_account?: string
-    bas_accumulated_account?: string
-    bas_expense_account?: string
-  },
-  ctx: z.RefinementCtx,
-): void {
-  const ranges = BAS_RANGES_BY_CATEGORY[value.category]
-  if (value.bas_asset_account && !inBasRange(value.bas_asset_account, ranges.asset)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['bas_asset_account'],
-      message: `Account must be in range ${ranges.asset[0]}-${ranges.asset[1]} for ${value.category}`,
-    })
-  }
-  if (
-    value.bas_accumulated_account &&
-    !inBasRange(value.bas_accumulated_account, ranges.accumulated)
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['bas_accumulated_account'],
-      message: `Account must be in range ${ranges.accumulated[0]}-${ranges.accumulated[1]} for ${value.category}`,
-    })
-  }
-  if (value.bas_expense_account && !inBasRange(value.bas_expense_account, ranges.expense)) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['bas_expense_account'],
-      message: `Account must be in range ${ranges.expense[0]}-${ranges.expense[1]} for ${value.category}`,
-    })
-  }
-  // Anskaffningskonto and ackumulerade-avskrivningar-konto live in the same
-  // class range (e.g. 1010-1099 for immaterial, 1100-1199 for buildings), so
-  // a user could pick the same account for both. That would silently net
-  // acquisition cost against accumulated depreciation in one bucket and
-  // break the INK2R 720x mappings. Force them apart.
-  if (
-    value.bas_asset_account &&
-    value.bas_accumulated_account &&
-    value.bas_asset_account === value.bas_accumulated_account
-  ) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['bas_accumulated_account'],
-      message:
-        'Anskaffningskonto och ackumulerade-avskrivningar-konto måste vara olika konton.',
-    })
-  }
-}
 
 export const GET = withRouteContext('assets.list', async (request, ctx) => {
   const { supabase, companyId, log, requestId } = ctx
@@ -171,10 +42,17 @@ export const GET = withRouteContext('assets.list', async (request, ctx) => {
       }
     }
 
-    const annotated = data.map((asset) => ({
-      ...asset,
-      has_posted_depreciation: postedAssetIds.has(asset.id),
-    }))
+    // deletable: a row that never reached the books (no posted depreciation,
+    // not disposed) may be removed with DELETE /api/assets/[id]; the UI shows
+    // "Ta bort" only then. Same rule the delete enforces server-side.
+    const annotated = data.map((asset) => {
+      const posted = postedAssetIds.has(asset.id)
+      return {
+        ...asset,
+        has_posted_depreciation: posted,
+        deletable: assetDeleteBlockReason(asset, posted) === null,
+      }
+    })
     return NextResponse.json({ data: annotated })
   } catch (err) {
     return errorResponse(err, log, { requestId })

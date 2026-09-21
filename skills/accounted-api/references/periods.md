@@ -43,6 +43,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -135,6 +136,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -203,6 +205,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -303,6 +306,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -384,6 +388,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -441,6 +446,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -493,6 +499,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -552,6 +559,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -622,6 +630,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -676,6 +685,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -740,6 +750,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -799,6 +810,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -857,6 +869,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }

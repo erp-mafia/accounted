@@ -93,14 +93,21 @@ describe('MCP lazy authentication', () => {
     expect(mocks.validateApiKey).not.toHaveBeenCalled()
   })
 
-  it('the discovery instructions say a WRITE outside tools/list is out of reach and point at callable_via', async () => {
+  it('the discovery instructions explain every callable_via value, and no longer say the bridge refuses writes', async () => {
     // Feedback seq 372962: "writes must be named directly" read as if any
-    // client could; on tools/list-only hosts a search-only write is a dead end.
+    // client could. Until issue #2800 the honest answer was "a search-only
+    // write is a dead end"; now a staging write rides gnubok_stage_tool and
+    // only a write that commits directly is out of reach.
     const response = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
     const body = await response.json()
     expect(body.result.instructions).not.toContain('writes must be named directly')
-    expect(body.result.instructions).toContain('a WRITE outside tools/list is then out of reach')
+    expect(body.result.instructions).not.toContain('the bridge refuses writes')
     expect(body.result.instructions).toContain('callable_via')
+    for (const reach of ['"call_tool"', '"stage_tool"', '"none"']) {
+      expect(body.result.instructions).toContain(reach)
+    }
+    expect(body.result.instructions).toContain('gnubok_stage_tool')
+    expect(body.result.instructions).toContain('gnubok_approve_pending_operation')
     expect(body.result.instructions).toContain('blocked_by')
   })
 

@@ -147,12 +147,16 @@ export type CoreEvent =
       bankName: string | null
       provider: 'enable_banking' | 'accounted_connect'
       trigger: 'agent' | 'cron' | 'manual'
-      errorClass: 'session_expired' | 'bank_unavailable' | 'connector' | 'unknown'
+      errorClass: 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'connector' | 'unknown'
       status: string
       /** Redacted summary (class name + scrubbed phrase); never a raw provider body. */
       diagnostic: string
       httpStatus?: number
       ebCode?: string
+      /** rate_limited only: the cooldown applied, in seconds. */
+      cooldownSeconds?: number
+      /** rate_limited only: the bank's own Retry-After in seconds, when it sent one. */
+      bankRetryAfterSeconds?: number
       userId: string
       companyId: string
     } }

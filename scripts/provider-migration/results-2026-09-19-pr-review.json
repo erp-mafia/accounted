@@ -1,0 +1,94 @@
+{
+  "project": "metjnjrhvujscngnpzdv",
+  "syntheticProviderResponses": true,
+  "reports": [
+    {
+      "provider": "visma",
+      "company": "a20465c0-64da-4232-b0ef-99b8525e36f9",
+      "job": "28daedb1-014f-4a19-860f-878f8257173c",
+      "count": 300,
+      "detailEvery": 0,
+      "delay": 0,
+      "budget": 60000,
+      "invocations": [
+        {
+          "crashed": true,
+          "rateLimited": true
+        },
+        {
+          "jobs": 1,
+          "batches": 0,
+          "elapsedMs": 557,
+          "providerRequests": 0,
+          "detailRequests": 0,
+          "maxDatabaseMs": 244,
+          "largestWriteBytes": 19048,
+          "rssBytes": 160759808,
+          "leaseChecked": true,
+          "injected": true,
+          "rateLimited": false
+        },
+        {
+          "jobs": 1,
+          "batches": 62,
+          "elapsedMs": 12076,
+          "providerRequests": 0,
+          "detailRequests": 0,
+          "maxDatabaseMs": 241,
+          "largestWriteBytes": 19072,
+          "rssBytes": 156012544,
+          "leaseChecked": true,
+          "injected": true,
+          "rateLimited": false
+        }
+      ],
+      "state": "completed",
+      "elapsedMs": 25138
+    },
+    {
+      "provider": "bokio",
+      "company": "8729084f-5fd1-45ab-995b-4b4c3e1dd345",
+      "job": "536dc184-5676-4fe7-871a-3aac61b6e89a",
+      "count": 300,
+      "detailEvery": 0,
+      "delay": 0,
+      "budget": 60000,
+      "invocations": [
+        {
+          "crashed": true,
+          "rateLimited": true
+        },
+        {
+          "jobs": 1,
+          "batches": 0,
+          "elapsedMs": 604,
+          "providerRequests": 0,
+          "detailRequests": 0,
+          "maxDatabaseMs": 210,
+          "largestWriteBytes": 19058,
+          "rssBytes": 172048384,
+          "leaseChecked": true,
+          "injected": true,
+          "rateLimited": false
+        },
+        {
+          "jobs": 1,
+          "batches": 62,
+          "elapsedMs": 11627,
+          "providerRequests": 0,
+          "detailRequests": 0,
+          "maxDatabaseMs": 199,
+          "largestWriteBytes": 19088,
+          "rssBytes": 114933760,
+          "leaseChecked": true,
+          "injected": true,
+          "rateLimited": false
+        }
+      ],
+      "state": "completed",
+      "elapsedMs": 20180
+    }
+  ],
+  "verification": "PR review: explicit encryption keys and source party identity, synthetic data only",
+  "limits": "Provider responses are synthetic; no real SIE ledger, live provider account or hosted scheduler is exercised."
+}

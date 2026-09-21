@@ -6,6 +6,7 @@ import type { RawTransaction } from '@/types'
 import { generateExternalId } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
+import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { ParsedBankTransaction, BankFileFormatId } from '@/lib/import/bank-file/types'
@@ -33,6 +34,24 @@ interface ExecuteRequest {
   skip_duplicates: boolean
   auto_categorize: boolean
   settlement_account?: string
+}
+
+/** The currency most rows of the file are denominated in ('SEK' when none say). */
+function dominantCurrency(transactions: ParsedBankTransaction[]): string {
+  const counts = new Map<string, number>()
+  for (const tx of transactions) {
+    const currency = (tx.currency || 'SEK').toUpperCase()
+    counts.set(currency, (counts.get(currency) ?? 0) + 1)
+  }
+  let best = 'SEK'
+  let bestCount = 0
+  for (const [currency, count] of counts) {
+    if (count > bestCount) {
+      best = currency
+      bestCount = count
+    }
+  }
+  return best
 }
 
 /**
@@ -71,6 +90,67 @@ export const POST = withRouteContext(
     }
 
     const opLog = log.child({ filename, fileHash: file_hash, txCount: transactions.length })
+
+    // The wizard offers any active 19xx chart account, but a row only binds to
+    // a cash_accounts row (ingestTransactions looks the ledger up and tolerates
+    // a miss). Without this step a picked ledger with no cash account was
+    // silently dropped: every row stayed unbound and the booking dialog fell
+    // back to 1930. Find or create the manual row first, before any import
+    // record exists, so a refused account leaves nothing behind.
+    if (settlement_account !== undefined) {
+      if (typeof settlement_account !== 'string' || !/^19\d{2}$/.test(settlement_account)) {
+        return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, { requestId })
+      }
+      // The ledger must be an active class 19 account in this company's own
+      // chart, the same set the wizard offers: a cash account on a ledger the
+      // chart does not know would strand every row at booking time.
+      const { data: chartRow, error: chartError } = await supabase
+        .from('chart_of_accounts')
+        .select('account_number')
+        .eq('company_id', companyId)
+        .eq('account_number', settlement_account)
+        .eq('is_active', true)
+        .maybeSingle()
+      if (chartError) {
+        opLog.error('settlement account chart lookup failed', chartError, {
+          settlementAccount: settlement_account,
+        })
+        return errorResponseFromCode('BANK_FILE_EXECUTE_FAILED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(chartError) },
+        })
+      }
+      if (!chartRow) {
+        return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, {
+          requestId,
+          details: { account: settlement_account },
+        })
+      }
+      // One file is one physical account, so its rows share that account's
+      // currency. Wise and camt.053 files can still carry a few rows in
+      // another currency; the account is denominated in the one most rows
+      // use, exactly as ingest binds every row of a batch to one account.
+      const batchCurrency = dominantCurrency(transactions)
+      try {
+        // Named after the ledger, not the currency: two manual accounts in
+        // the same currency must stay distinguishable in the account pickers.
+        await ensureManualCashAccount(
+          supabase, companyId, settlement_account, batchCurrency, `Bankkonto ${settlement_account}`,
+        )
+      } catch (err) {
+        opLog.error('settlement cash account unavailable', err as Error, {
+          settlementAccount: settlement_account,
+          currency: batchCurrency,
+        })
+        return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE', opLog, {
+          requestId,
+          details: {
+            account: settlement_account,
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
+          },
+        })
+      }
+    }
 
     try {
       const { data: importRecord, error: importError } = await supabase

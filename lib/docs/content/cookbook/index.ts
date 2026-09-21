@@ -8,6 +8,8 @@
  *     12% → 6% rate-change transition)
  *   - run-payroll-and-agi: draft → calculate → approve → mark-paid →
  *     book → generate-agi state machine
+ *   - onboard-payroll-customer: operator-side setup (settings, employees,
+ *     cutover) and the monthly input loop, incl. the payment file
  *   - year-end-closing: IB/UB continuity per BFL 5 kap, year-end procedures,
  *     irreversible close per BFL 5 kap 8 §
  */
@@ -17,6 +19,7 @@ import { COOKBOOK_WEBHOOKS_MD } from './webhooks'
 import { COOKBOOK_INGEST_BANK_MD } from './ingest-bank-transactions'
 import { COOKBOOK_VAT_DECLARATION_MD } from './file-vat-declaration'
 import { COOKBOOK_PAYROLL_AGI_MD } from './run-payroll-and-agi'
+import { COOKBOOK_ONBOARD_PAYROLL_MD } from './onboard-payroll-customer'
 import { COOKBOOK_YEAR_END_MD } from './year-end-closing'
 
 interface CookbookEntry {
@@ -71,6 +74,12 @@ export const COOKBOOK: CookbookEntry[] = [
     title: 'Run payroll and generate the AGI XML',
     markdown: COOKBOOK_PAYROLL_AGI_MD,
     description: 'Calculate, approve, mark paid, book, generate the AGI XML for manual submission to Skatteverket Mina Sidor.',
+  },
+  {
+    slug: 'onboard-payroll-customer',
+    title: 'Onboard a payroll customer and run the first month',
+    markdown: COOKBOOK_ONBOARD_PAYROLL_MD,
+    description: 'For payroll operators: provision a company, set payroll settings, load employees and cutover balances, push the month\'s absence and worked days, run, pay with a pain.001 file, book, file the AGI.',
   },
   {
     slug: 'year-end-closing',

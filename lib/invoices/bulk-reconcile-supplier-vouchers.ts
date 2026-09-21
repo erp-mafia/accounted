@@ -113,6 +113,8 @@ export interface ReconcileOptions {
   dryRun?: boolean
   /** Max invoices to process in one run. Default 2000. */
   maxInvoices?: number
+  /** A durable import's current batch. Omitted preserves the maintenance scan. */
+  invoiceIds?: string[]
   onProgress?: (done: number, total: number) => void
 }
 
@@ -159,12 +161,14 @@ export async function reconcileSupplierInvoiceVouchers(
   //    stable. Fully-paid invoices ('paid') are excluded by the status filter,
   //    making re-runs naturally idempotent.
   const invoices = await fetchAllRows<ReconcileInvoiceRow>(
-    ({ from, to }) =>
-      supabase
+    ({ from, to }) => {
+      let query = supabase
         .from('supplier_invoices')
         .select(SELECT_COLUMNS)
         .eq('company_id', companyId)
         .in('status', PAYABLE_STATUSES)
+      if (opts.invoiceIds) query = query.in('id', opts.invoiceIds)
+      return query
         .order('due_date', { ascending: true })
         .order('id', { ascending: true })
         .range(from, to) as unknown as PromiseLike<{
@@ -172,7 +176,8 @@ export async function reconcileSupplierInvoiceVouchers(
         // as an array; ReconcileInvoiceRow models the runtime single-object shape.
         data: ReconcileInvoiceRow[] | null
         error: { message: string } | null
-      }>,
+      }>
+    },
   )
 
   const payables = invoices.filter(
@@ -192,7 +197,7 @@ export async function reconcileSupplierInvoiceVouchers(
   // 2. Pre-load every voucher already consumed as a supplier payment (for ANY
   //    invoice in the company). Neither the matcher nor the RPC stop the SAME
   //    voucher being linked to a SECOND invoice, so we enforce exclusivity here.
-  const existingPayments = await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
+  const existingPayments = opts.invoiceIds ? [] : await fetchAllRows<{ journal_entry_id: string | null }>(({ from, to }) =>
     supabase
       .from('supplier_invoice_payments')
       .select('journal_entry_id')
@@ -222,6 +227,19 @@ export async function reconcileSupplierInvoiceVouchers(
       invoice as unknown as SupplierInvoice & { supplier?: Supplier },
       { limit: 5 },
     )
+    if (opts.invoiceIds) {
+      // A durable batch must not scan every historical payment in the company.
+      // Check only its (at most five per invoice) proposed vouchers, with one
+      // bounded existence read each so duplicated old payments cannot truncate
+      // the result and hide another consumed voucher.
+      await Promise.all(candidates.map(async candidate => {
+        const { data, error } = await supabase.from('supplier_invoice_payments')
+          .select('journal_entry_id').eq('company_id', companyId)
+          .eq('journal_entry_id', candidate.journal_entry_id).limit(1)
+        if (error) throw new Error(error.message)
+        if (data?.length) consumedVouchers.add(candidate.journal_entry_id)
+      }))
+    }
     // Drop vouchers already used elsewhere in the company.
     const fresh = candidates.filter((c) => !consumedVouchers.has(c.journal_entry_id))
 

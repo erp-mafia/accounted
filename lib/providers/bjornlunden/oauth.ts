@@ -1,3 +1,4 @@
+import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import type { TokenResponse } from '../types';
 import {
   fetchWithTimeout,
@@ -14,6 +15,7 @@ export async function fetchBjornLundenToken(
     BL_AUTH_URL,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },

@@ -7,6 +7,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { createSalaryRunWithEmployees } from '@/lib/salary/create-run'
+import { SalaryDeviationPeriodError } from '@/lib/salary/deviation-period'
 import { runSalaryCalculation } from '@/lib/salary/run-calculation'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 
@@ -50,6 +51,8 @@ export const GET = withRouteContext(
  *   period       → month after the latest non-corrected run, else current month
  *   payment_date → company_settings.salary_pay_day (default 25) in the period month
  *   series       → per-source-type map entry for 'salary_payment'
+ *   deviation    → company_settings.salary_deviation_period unless
+ *                  deviation_period_start/end are passed explicitly
  * The run is seeded with every active employee (shared lib — same behavior as
  * the MCP tool) and calculated immediately; a calculation failure is
  * non-fatal (201 with calculation.ok=false, user lands on the draft).
@@ -143,10 +146,15 @@ export const POST = withRouteContext(
         paymentDate,
         voucherSeries,
         notes: body.notes,
+        deviationPeriodStart: body.deviation_period_start,
+        deviationPeriodEnd: body.deviation_period_end,
       })
       run = created.run
       employeeCount = created.employeeCount
     } catch (err) {
+      if (err instanceof SalaryDeviationPeriodError) {
+        return errorResponseFromCode(err.code, log, { requestId, details: err.details })
+      }
       const message = err instanceof Error ? err.message : 'unknown error'
       // Race with a concurrent create — the lib maps 23505 to this message.
       if (message.includes('already exists')) {

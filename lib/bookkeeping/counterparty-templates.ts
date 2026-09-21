@@ -7,7 +7,13 @@ import {
   generateInputVatLine,
   generateReverseChargeLines,
   getVatRate,
+  isReverseChargeVatAccount,
 } from './vat-entries'
+import {
+  isNotVatRegistered,
+  vatTreatmentForRegistration,
+  type VatRegistration,
+} from './vat-registration'
 import { dimensionsBagKey } from './dimension-resolver'
 import { resolveSekAmount } from './currency-utils'
 import { createLogger } from '@/lib/logger'
@@ -503,7 +509,8 @@ export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection
 export function buildMappingResultFromCounterpartyTemplate(
   match: CounterpartyTemplateMatch,
   transaction: Transaction,
-  _entityType: EntityType
+  _entityType: EntityType,
+  vatRegistered?: VatRegistration
 ): MappingResult {
   const tmpl = match.template
   const isExpense = transaction.amount < 0
@@ -513,7 +520,7 @@ export function buildMappingResultFromCounterpartyTemplate(
     const learned = patternDirection(tmpl.line_pattern)
     const mirror =
       (learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)
-    return buildMultiLineMappingResult(tmpl, match, transaction, mirror)
+    return buildMultiLineMappingResult(tmpl, match, transaction, mirror, vatRegistered)
   }
 
   // Legacy single debit/credit path.
@@ -523,14 +530,20 @@ export function buildMappingResultFromCounterpartyTemplate(
     transaction.amount, transaction.amount_sek, transaction.currency, transaction.exchange_rate
   ))
 
+  // The learned treatment resolved for the company's VAT registration: a
+  // pattern learned while the company booked 2641 it could never reclaim
+  // must not keep doing so (lib/bookkeeping/vat-registration.ts).
+  const vatTreatment = vatTreatmentForRegistration(
+    tmpl.vat_treatment as VatTreatment | null, vatRegistered,
+  )
+
   const learned = legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
   if ((learned === 'expense' && !isExpense) || (learned === 'income' && isExpense)) {
-    return buildLegacyMismatchResult(tmpl, match, absAmount, isExpense)
+    return buildLegacyMismatchResult(tmpl, match, absAmount, isExpense, vatTreatment)
   }
 
   const vatLines: VatJournalLine[] = []
-  if (isExpense && tmpl.vat_treatment) {
-    const vatTreatment = tmpl.vat_treatment as VatTreatment
+  if (isExpense && vatTreatment) {
     if (vatTreatment === 'reverse_charge') {
       const rcLines = generateReverseChargeLines(absAmount)
       for (const rcl of rcLines) {
@@ -593,11 +606,13 @@ function buildLegacyMismatchResult(
   tmpl: CategorizationTemplate,
   match: CounterpartyTemplateMatch,
   absAmount: number,
-  isExpense: boolean
+  isExpense: boolean,
+  /** tmpl.vat_treatment resolved for the company's VAT registration. */
+  vatTreatment: VatTreatment | null
 ): MappingResult {
   const vatLines: VatJournalLine[] = []
-  if (!isExpense && tmpl.vat_treatment) {
-    if (tmpl.vat_treatment === 'reverse_charge') {
+  if (!isExpense && vatTreatment) {
+    if (vatTreatment === 'reverse_charge') {
       for (const rcl of generateReverseChargeLines(absAmount)) {
         vatLines.push({
           account_number: rcl.account_number,
@@ -607,7 +622,7 @@ function buildLegacyMismatchResult(
         })
       }
     } else {
-      const vatRate = getVatRate(tmpl.vat_treatment as VatTreatment)
+      const vatRate = getVatRate(vatTreatment)
       if (vatRate > 0) {
         const vatLine = generateInputVatLine(absAmount, vatRate)
         if (vatLine) {
@@ -653,7 +668,8 @@ function buildMultiLineMappingResult(
   tmpl: CategorizationTemplate,
   match: CounterpartyTemplateMatch,
   transaction: Transaction,
-  mirror: boolean = false
+  mirror: boolean = false,
+  vatRegistered?: VatRegistration
 ): MappingResult {
   const pattern = tmpl.line_pattern!
   // Journal lines are always booked in SEK (see legacy path).
@@ -666,12 +682,19 @@ function buildMultiLineMappingResult(
   const side = (s: 'debit' | 'credit'): 'debit' | 'credit' =>
     mirror ? (s === 'debit' ? 'credit' : 'debit') : s
 
+  // A non-registered company keeps no deductible or output VAT line from the
+  // learned pattern; the business ratios then allocate the full amount.
+  // Reverse-charge legs stay: self-assessment is a separate obligation from
+  // deduction (lib/bookkeeping/vat-registration.ts).
+  const keepsVatEntry = (account: string): boolean =>
+    !isNotVatRegistered(vatRegistered) || isReverseChargeVatAccount(account)
+
   const allLines: VatJournalLine[] = []
 
   // 1. Compute VAT lines first (from rate, exact)
   let totalVat = 0
   for (const entry of pattern) {
-    if (entry.type === 'vat' && entry.vat_rate) {
+    if (entry.type === 'vat' && entry.vat_rate && keepsVatEntry(entry.account)) {
       const vatAmount = Math.round(absAmount * entry.vat_rate / (1 + entry.vat_rate) * 100) / 100
       totalVat += vatAmount
       allLines.push({

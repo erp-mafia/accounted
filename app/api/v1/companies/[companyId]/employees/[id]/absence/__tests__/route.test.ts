@@ -90,6 +90,16 @@ const SAMPLE_DAY = {
   updated_at: '2026-03-03T08:00:00Z',
 }
 
+/** March 2026 pay month, calculated, legacy NULL window: locks 2026-03-01..31. */
+const REVIEW_RUN_MARCH = {
+  id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  status: 'review',
+  period_year: 2026,
+  period_month: 3,
+  deviation_period_start: null,
+  deviation_period_end: null,
+}
+
 function makeRequest(url: string, init?: RequestInit): Request {
   return new Request(url, {
     ...init,
@@ -274,6 +284,35 @@ describe('PUT /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(body.error.code).toBe('ABSENCE_HOURS_CONFLICT')
   })
 
+  it('refuses dates a calculated run has already read: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run, nothing written', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: { id: EMPLOYEE_ID }, error: null },
+      salary_runs: { data: [REVIEW_RUN_MARCH], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await putAbsence(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence`,
+        { method: 'PUT', body: JSON.stringify(validBody) },
+      ),
+      absenceParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error.details).toMatchObject({
+      salary_run_id: REVIEW_RUN_MARCH.id,
+      status: 'review',
+      deviation_period_start: '2026-03-01',
+      deviation_period_end: '2026-03-31',
+      locked_dates: ['2026-03-02', '2026-03-03', '2026-03-04', '2026-03-05', '2026-03-06'],
+    })
+    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
+  })
+
   it('returns a dry-run preview without writing', async () => {
     const supabaseMock = makeFlexibleSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -385,6 +424,32 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/absence', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.deleted_count).toBe(3)
+  })
+
+  it('refuses a range a calculated run has already read: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN, nothing deleted', async () => {
+    const supabaseMock = makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      employees: { data: { id: EMPLOYEE_ID }, error: null },
+      salary_runs: { data: [REVIEW_RUN_MARCH], error: null },
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await deleteAbsence(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/employees/${EMPLOYEE_ID}/absence?from=2026-03-30&to=2026-04-02`,
+        { method: 'DELETE' },
+      ),
+      absenceParams(COMPANY_ID, EMPLOYEE_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error.details).toMatchObject({
+      salary_run_id: REVIEW_RUN_MARCH.id,
+      locked_dates: ['2026-03-30', '2026-03-31'],
+    })
+    expect(supabaseMock.tableCalls).not.toContain('salary_absence_days')
   })
 
   it('requires from and to', async () => {

@@ -7,6 +7,8 @@ import { InboxPipeline, type InboxPipeStage } from '@/components/extensions/gene
 import { useRouter } from 'next/navigation'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { KvittojaktenButton } from '@/components/dashboard/KvittojaktenButton'
+import type { AiClient } from '@/lib/onboarding/ai-clients'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -225,7 +227,7 @@ interface InboxAddress {
 // at read time, and the filed item ids are what the panel links to.
 interface InboundMailAttachment {
   id: string
-  outcome: 'filed' | 'duplicate' | 'rejected' | 'failed'
+  outcome: 'filed' | 'duplicate' | 'rejected' | 'failed' | 'ignored'
   inbox_item_id?: string
   reason?: string
   mime?: string
@@ -713,6 +715,23 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         if (json.data) setWhatsapp(json.data)
       } catch {
         // Same: not every company has it.
+      }
+    })()
+  }, [])
+
+  // Kvittojakten through the user's own AI client: shown only when a client
+  // is connected AND something lacks an underlag. A failed read hides the
+  // button; it only ever adds a shortcut.
+  const [agentHandoff, setAgentHandoff] = useState<{ clients: AiClient[]; count: number } | null>(null)
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/receipt-hunt/agent-handoff')
+        if (!res.ok) return
+        const json = (await res.json()) as { data?: { clients: AiClient[]; count: number } }
+        if (json.data) setAgentHandoff(json.data)
+      } catch {
+        // No button.
       }
     })()
   }, [])
@@ -1440,6 +1459,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {/* The hunt lived only in Settings, so the button that fills this
               page sat on a different page. It runs in passes and reports as it
               goes, because a backlog does not clear in one request. */}
+          {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
+            <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
+          )}
           {mailConnected && (
             <Button variant="ghost" size="sm" onClick={hunting ? stopHunt : hunt} disabled={false}>
               {hunting ? (
@@ -2218,7 +2240,7 @@ function InboundMailRow({
           .map((tag) => `${mail.inbox_local_part}${tag ? `+${tag}` : ''}@${domain}`)
           .join(', ')
       : t('inbound_mail_former_address')
-  const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0 }
+  const counts = { filed: 0, duplicate: 0, rejected: 0, failed: 0, ignored: 0 }
   for (const a of mail.attachments ?? []) {
     if (a.outcome in counts) counts[a.outcome] += 1
   }
@@ -2234,6 +2256,9 @@ function InboundMailRow({
     if (counts.rejected > 0) parts.push(t('inbound_outcome_rejected', { count: counts.rejected }))
     if (counts.failed > 0) parts.push(t('inbound_outcome_failed', { count: counts.failed }))
   }
+  // Signature images (logos, tracking pixels) are never underlag; say so
+  // whatever else the mail became, so a "why only the text" is answered.
+  if (counts.ignored > 0) parts.push(t('inbound_outcome_ignored', { count: counts.ignored }))
   const hasFailure =
     mail.outcome === 'rate_limited' || mail.outcome === 'fan_out_capped' || counts.rejected > 0 || counts.failed > 0
   // Every row the mail produced, in attachment order, each a click away.

@@ -399,10 +399,27 @@ export async function attachBookingSuggestions<
 }
 
 /**
+ * Partial unique index journal_entries_system_source_live_unique (migration
+ * 20260920145033): one live (draft or posted) source_type = 'system' entry per
+ * (company_id, source_id). The booking below writes source_id = the
+ * skattekonto row id, so a second Bokför racing the first for the same row
+ * fails at the draft INSERT with 23505 before any draft exists. The engine
+ * wraps the failure in BookkeepingDatabaseError and keeps only the Postgres
+ * message, which names the index: match on that, the same technique as
+ * isPeriodLockTriggerError.
+ */
+const SYSTEM_SOURCE_LIVE_UNIQUE_INDEX = 'journal_entries_system_source_live_unique'
+
+function isSystemSourceLiveUniqueError(err: unknown): boolean {
+  return err instanceof Error && err.message.includes(SYSTEM_SOURCE_LIVE_UNIQUE_INDEX)
+}
+
+/**
  * Create a draft journal entry for one skattekonto_transactions row.
  *
  * Throws SkattekontoBookingError on:
- *   - already-booked rows (journal_entry_id present)
+ *   - already-booked rows (journal_entry_id present, or a live verifikat for
+ *     the row already exists: journal_entries_system_source_live_unique)
  *   - missing/locked fiscal period for the transaktionsdatum
  *   - no rule match → user must categorize manually
  *
@@ -576,17 +593,33 @@ export async function bokforSkattekontoTransaction(
     lines,
   }
 
-  const entry = await createDraftEntry(supabase, companyId, userId, input)
+  // The database is the arbiter of "one live verifikat per skattekonto row";
+  // the precheck above is only the friendly fast path. A concurrent Bokför
+  // that lost the race fails right here with nothing left behind, and gets
+  // the same Swedish message the precheck gives.
+  let entry: JournalEntry
+  try {
+    entry = await createDraftEntry(supabase, companyId, userId, input)
+  } catch (err) {
+    if (isSystemSourceLiveUniqueError(err)) {
+      throw new SkattekontoBookingError(
+        'Transaktionen är redan bokförd.',
+        'ALREADY_BOOKED',
+      )
+    }
+    throw err
+  }
 
   // Link the row back so the dashboard can show "Bokförd" status. The
   // backlink is a conditional CLAIM, not a blind write: `.is('journal_entry_id',
-  // null)` makes concurrent submissions race on the same row and lets exactly
-  // one win. Zero affected rows means another request already booked the row
-  // between our precheck and now: surface ALREADY_BOOKED instead of
-  // double-posting. The just-created draft is left behind unlinked: the
-  // engine has no sanctioned draft-discard function and journal tables must
-  // never be raw-deleted, so an orphan draft (legally deletable by the user
-  // in /bookkeeping) is the safe leftover.
+  // null)` lets exactly one writer win the row. A concurrent Bokför can no
+  // longer reach this point (the unique index above stops it), so zero
+  // affected rows now means a concurrent Koppla (match to an existing
+  // verifikat) took the row between our precheck and now: surface
+  // ALREADY_BOOKED instead of double-posting. The just-created draft is left
+  // behind unlinked: the engine has no sanctioned draft-discard function and
+  // journal tables must never be raw-deleted, so an orphan draft (legally
+  // deletable by the user in /bookkeeping) is the safe leftover.
   const { data: claimed, error: claimError } = await supabase
     .from('skattekonto_transactions')
     .update({ journal_entry_id: entry.id })

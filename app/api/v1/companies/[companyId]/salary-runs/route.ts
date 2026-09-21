@@ -26,6 +26,11 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { CreateSalaryRunSchema } from '@/lib/api/schemas'
+import {
+  assertNoDeviationOverlap,
+  resolveDeviationWindowForNewRun,
+  SalaryDeviationPeriodError,
+} from '@/lib/salary/deviation-period'
 import { eventBus } from '@/lib/events'
 
 const SalaryRunStatus = z.enum(['draft', 'review', 'approved', 'paid', 'booked', 'corrected'])
@@ -35,6 +40,8 @@ const SalaryRunSummary = z.object({
   period_year: z.number().int(),
   period_month: z.number().int(),
   payment_date: z.string(),
+  deviation_period_start: z.string().nullable(),
+  deviation_period_end: z.string().nullable(),
   status: SalaryRunStatus,
   voucher_series: z.string(),
   total_gross: z.number(),
@@ -53,7 +60,7 @@ const SalaryRunSummary = z.object({
 const SalaryRunsListResponse = listEnvelope(SalaryRunSummary)
 
 const SALARY_RUN_SUMMARY_COLUMNS =
-  'id, period_year, period_month, payment_date, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_employer_cost, agi_generated_at, agi_submitted_at, approved_at, paid_at, booked_at, created_at'
+  'id, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_employer_cost, agi_generated_at, agi_submitted_at, approved_at, paid_at, booked_at, created_at'
 
 const ListFilters = z.object({
   period_year: z.coerce
@@ -186,7 +193,7 @@ const SalaryRunCreated = SalaryRunSummary.extend({
 })
 
 const SALARY_RUN_DETAIL_COLUMNS =
-  'id, period_year, period_month, payment_date, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost, salary_entry_id, avgifter_entry_id, vacation_entry_id, agi_generated_at, agi_submitted_at, calculation_params, approved_by, approved_at, paid_at, booked_at, booked_by, notes, created_at, updated_at'
+  'id, period_year, period_month, payment_date, deviation_period_start, deviation_period_end, status, voucher_series, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost, salary_entry_id, avgifter_entry_id, vacation_entry_id, agi_generated_at, agi_submitted_at, calculation_params, approved_by, approved_at, paid_at, booked_at, booked_by, notes, created_at, updated_at'
 
 registerEndpoint({
   operation: 'salary-runs.create',
@@ -202,6 +209,7 @@ registerEndpoint({
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.',
+    'Avvikelseperiod: absence and worked days are read from deviation_period_start..deviation_period_end, NOT necessarily from the pay month. Omit both to use the company setting (salary_deviation_period: same_month by default, previous_month for "innevarande månads lön, föregående månads avvikelser"), or pass both explicitly. A window that overlaps another live run returns 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (the same day would be deducted twice); one date without the other, or a span over 62 days, returns 400 SALARY_RUN_DEVIATION_PERIOD_INVALID.',
     'period_month is 1-12. The DB CHECK enforces this: a 0 or 13 returns 400 VALIDATION_ERROR before reaching the DB.',
     'voucher_series defaults to "A". If the company uses a dedicated salary voucher series, set it explicitly.',
     'A newly-created run has no employees: :calculate without employees returns 400 SALARY_RUN_NO_EMPLOYEES.',
@@ -212,6 +220,8 @@ registerEndpoint({
       period_month: 5,
       payment_date: '2026-05-25',
       voucher_series: 'L',
+      deviation_period_start: '2026-04-01',
+      deviation_period_end: '2026-04-30',
     },
     response: {
       data: {
@@ -219,6 +229,8 @@ registerEndpoint({
         period_year: 2026,
         period_month: 5,
         payment_date: '2026-05-25',
+        deviation_period_start: '2026-04-01',
+        deviation_period_end: '2026-04-30',
         status: 'draft',
         voucher_series: 'L',
       },
@@ -245,6 +257,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
+    // Avvikelseperiod: explicit dates win, else the company setting. Refused
+    // when it overlaps another live run (same absence day deducted twice).
+    // Resolved before the dry-run branch so a dry run surfaces the 409 too.
+    let deviationWindow: { start: string; end: string }
+    try {
+      const resolved = await resolveDeviationWindowForNewRun(ctx.supabase, ctx.companyId!, {
+        periodYear: body.period_year,
+        periodMonth: body.period_month,
+        explicitStart: body.deviation_period_start,
+        explicitEnd: body.deviation_period_end,
+      })
+      deviationWindow = resolved.window
+      await assertNoDeviationOverlap(ctx.supabase, ctx.companyId!, deviationWindow)
+    } catch (err) {
+      if (err instanceof SalaryDeviationPeriodError) {
+        return v1ErrorResponseFromCode(err.code, ctx.log, {
+          requestId: ctx.requestId,
+          details: err.details,
+        })
+      }
+      throw err
+    }
+
     if (ctx.dryRun) {
       return dryRunPreview(
         {
@@ -252,6 +287,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           period_year: body.period_year,
           period_month: body.period_month,
           payment_date: body.payment_date,
+          deviation_period_start: deviationWindow.start,
+          deviation_period_end: deviationWindow.end,
           status: 'draft' as const,
           voucher_series: body.voucher_series,
           total_gross: 0,
@@ -284,6 +321,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         period_year: body.period_year,
         period_month: body.period_month,
         payment_date: body.payment_date,
+        deviation_period_start: deviationWindow.start,
+        deviation_period_end: deviationWindow.end,
         voucher_series: body.voucher_series,
         notes: body.notes ?? null,
         status: 'draft',

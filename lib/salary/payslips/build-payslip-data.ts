@@ -6,6 +6,7 @@
  * here so the logic can't drift between callers.
  */
 import type { PayslipData, PayslipLineItem } from '@/lib/salary/pdf/payslip-template'
+import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { decryptPersonnummer, maskPersonnummer } from '@/lib/salary/personnummer'
 
 const EMPLOYMENT_LABELS: Record<string, string> = {
@@ -18,6 +19,8 @@ export interface PayslipRunSource {
   period_year: number
   period_month: number
   payment_date: string
+  deviation_period_start?: string | null
+  deviation_period_end?: string | null
 }
 
 export interface PayslipEmployeeSource {
@@ -48,7 +51,13 @@ export function buildPayslipData(params: {
   const lineItems: PayslipLineItem[] = ((sre.line_items || []) as Array<Record<string, unknown>>)
     .sort((a, b) => ((a.sort_order as number) || 0) - ((b.sort_order as number) || 0))
     .map(li => ({
-      description: li.description as string,
+      // A line taxed at a flat engångsskatt says so on the payslip: the
+      // "Preliminär skatt" total then differs from the table amount and the
+      // breakdown's "Engångsskatt (x %)" step explains the difference.
+      description:
+        li.one_off_tax_percent !== null && li.one_off_tax_percent !== undefined
+          ? `${li.description as string} (engångsskatt ${li.one_off_tax_percent as number} %)`
+          : (li.description as string),
       quantity: li.quantity as number | undefined,
       unitPrice: li.unit_price as number | undefined,
       amount: li.amount as number,
@@ -118,6 +127,12 @@ export function buildPayslipData(params: {
     periodYear: run.period_year,
     periodMonth: run.period_month,
     paymentDate: run.payment_date,
+    // Only printed when the deductions come from another month than the
+    // salary: the employee otherwise cannot tell why August's sick day sits
+    // on the September payslip.
+    deviationPeriodLabel: hasCustomDeviationWindow(run)
+      ? `${runDeviationWindow(run).start} - ${runDeviationWindow(run).end}`
+      : null,
     lineItems,
     grossSalary,
     taxWithheld: effectiveTax,
@@ -130,7 +145,7 @@ export function buildPayslipData(params: {
     totalEmployerCost: grossSalary + effectiveAvgifter + vacationAccrual + vacationAccrualAvgifter,
     ytdGross: sre.ytd_gross as number,
     ytdTax: sre.ytd_tax as number,
-    ytdNet: sre.ytd_net as number,
+    ytdNet: sre.ytd_net as number | null,
     bankAccount,
     breakdownSteps,
   }

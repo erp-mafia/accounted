@@ -1,28 +1,26 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { EntityType } from '@/types'
 import { flagEnabled } from '@/lib/env/public-flags'
+import { LEGAL_FORMS, PLANNED_LEGAL_FORMS } from '@/lib/company/forms'
+import type { LegalFormProfile, PlannedLegalForm } from '@/lib/company/forms'
 
 /**
- * The one place that knows which legal forms Accounted books for and what
- * follows from each of them.
+ * The one place that knows which legal forms Accounted books for, and the
+ * readers every call site uses to ask what a form can do.
+ *
+ * The facts themselves live in one profile per form under
+ * lib/company/forms/ (contract: docs/LEGAL-FORMS.md). Call sites read a
+ * capability (`filesIncomeReturn(form) === 'INK2'`, `hasOwners(form)`) and
+ * never compare the form to a string: `=== 'aktiebolag'` sends every later
+ * form down the branch it was not written for, silently. The
+ * `literal-legal-form` ratchet in scripts/checks/no-new-antipatterns.mjs
+ * keeps the remaining literal sites from growing.
  *
  * Before this module the form was a binary flag spread over ~300 files:
  * `=== 'aktiebolag' ? A : B` ternaries and `?? 'enskild_firma'` /
  * `?? 'aktiebolag'` defaults. Widening the `EntityType` union compiled
  * everywhere and changed nothing, so a third form silently booked as an
- * enskild firma in the app and as an aktiebolag in bokslut and MCP. Every
- * form-dependent fact now goes through `byEntityType`, whose `Record` arms
- * make the compiler refuse the next widening until each site has an answer.
- *
- * Domain facts (issue #2072, DECISIONS.md 2026-09-08):
- * - Ideell förening closes its result to 2069 "Årets resultat" and carries
- *   it to 2068 at the next year start, mirroring the AB 2099/2098 pair on the
- *   BAS 2060-2069 group for föreningar.
- * - A förening has no owner: there are no egna uttag/insättningar (EF
- *   2013/2018) and no delägarskuld (AB 2893). Money settled with a member is
- *   a plain short-term liability, 2890.
- * - A förening is a juridisk person, so BFL 3 kap does not force the
- *   calendar year on it (the EF rule) and its default method is accrual.
+ * enskild firma in the app and as an aktiebolag in bokslut and MCP.
  */
 export const ENTITY_TYPES = [
   'enskild_firma',
@@ -34,13 +32,6 @@ export const ENTITY_TYPES = [
 type MissingFromList = Exclude<EntityType, (typeof ENTITY_TYPES)[number]>
 const entityTypesAreExhaustive: MissingFromList extends never ? true : never = true
 void entityTypesAreExhaustive
-
-/** Statutory Swedish names, kept in Swedish in both locales. */
-export const ENTITY_TYPE_LABELS_SV: Record<EntityType, string> = {
-  enskild_firma: 'Enskild firma',
-  aktiebolag: 'Aktiebolag',
-  ideell_forening: 'Ideell förening',
-}
 
 export class UnknownEntityTypeError extends Error {
   readonly code = 'COMPANY_ENTITY_TYPE_UNKNOWN'
@@ -63,9 +54,27 @@ export function parseEntityType(value: unknown): EntityType {
 }
 
 /**
- * Exhaustive dispatch on the legal form. `Record<EntityType, T>` makes every
- * arm mandatory at compile time; the runtime check catches a corrupt string
- * that slipped past the DB CHECK.
+ * The profile behind a form. The runtime check catches a corrupt string that
+ * slipped past the DB CHECK; the compile-time one is the `Record` in
+ * lib/company/forms/index.ts.
+ */
+export function legalFormProfile(entityType: EntityType): LegalFormProfile {
+  if (!Object.prototype.hasOwnProperty.call(LEGAL_FORMS, entityType)) {
+    throw new UnknownEntityTypeError(entityType)
+  }
+  return LEGAL_FORMS[entityType]
+}
+
+/** Statutory Swedish names, kept in Swedish in both locales. */
+export const ENTITY_TYPE_LABELS_SV: Record<EntityType, string> = Object.fromEntries(
+  ENTITY_TYPES.map((form) => [form, LEGAL_FORMS[form].label]),
+) as Record<EntityType, string>
+
+/**
+ * Exhaustive dispatch on the legal form for the few sites where the answer
+ * is genuinely per form and not a capability (a registry mapping, a test
+ * fixture). Everywhere else read a profile field: a new form should be one
+ * profile, not one more arm at every call site.
  */
 export function byEntityType<T>(entityType: EntityType, arms: Record<EntityType, T>): T {
   if (!Object.prototype.hasOwnProperty.call(arms, entityType)) {
@@ -95,21 +104,36 @@ export async function resolveCompanyEntityType(
   return parseEntityType(data?.entity_type)
 }
 
+// ── Creation gate ────────────────────────────────────────────────────
+
+export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
+
+/**
+ * One reader per `creationFlag` a profile declares. The literal
+ * `process.env.NEXT_PUBLIC_...` spelling is what Next.js inlines into client
+ * bundles; a computed key would read undefined in the browser, so the read
+ * cannot live in the profile. `legal-forms.test.ts` proves every flagged
+ * profile has a reader here.
+ */
+const CREATION_FLAG_READERS: Readonly<Record<string, () => string | undefined>> = {
+  [IDEELL_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED,
+}
+
+export function creationFlagReader(flag: string): (() => string | undefined) | undefined {
+  return CREATION_FLAG_READERS[flag]
+}
+
 /**
  * Creation gate for forms still in beta. `NEXT_PUBLIC_` so the onboarding
  * picker and the server-side create paths read the same switch; the DB CHECK
  * accepts the value regardless, so flipping the flag never needs a migration.
- * The literal `process.env.NEXT_PUBLIC_...` spelling is what Next.js inlines
- * into client bundles; a computed key would read undefined in the browser.
+ * A flag without a reader is closed: silently open would be the worse bug.
  */
-export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
-
 export function isEntityTypeCreatable(entityType: EntityType): boolean {
-  return byEntityType(entityType, {
-    enskild_firma: true,
-    aktiebolag: true,
-    ideell_forening: flagEnabled(process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED),
-  })
+  const { creationFlag } = legalFormProfile(entityType)
+  if (!creationFlag) return true
+  const read = CREATION_FLAG_READERS[creationFlag]
+  return read ? flagEnabled(read()) : false
 }
 
 /** Forms a user may pick right now (feature flags applied). */
@@ -117,7 +141,14 @@ export function creatableEntityTypes(): EntityType[] {
   return ENTITY_TYPES.filter(isEntityTypeCreatable)
 }
 
-// ── Domain facts ─────────────────────────────────────────────────────
+/** Forms that are scoped but not creatable, for the picker's "kommer snart" stop. */
+export function plannedLegalForms(): ReadonlyArray<PlannedLegalForm> {
+  return PLANNED_LEGAL_FORMS
+}
+
+// ── Capability readers ───────────────────────────────────────────────
+// Thin readers over the profile. A call site that reads `hasOwners(form)`
+// says what it needs, and the profile can grow without touching it.
 
 export interface ResultClosingAccounts {
   /** Account the year's net result is closed to. */
@@ -131,11 +162,8 @@ export interface ResultClosingAccounts {
 }
 
 export function resultClosingAccounts(entityType: EntityType): ResultClosingAccounts {
-  return byEntityType<ResultClosingAccounts>(entityType, {
-    enskild_firma: { closing: '2010', closingName: 'Eget kapital', priorYearCarry: null },
-    aktiebolag: { closing: '2099', closingName: 'Årets resultat', priorYearCarry: '2098' },
-    ideell_forening: { closing: '2069', closingName: 'Årets resultat', priorYearCarry: '2068' },
-  })
+  const { closing, closingName, priorYearCarry } = legalFormProfile(entityType).equity
+  return { closing, closingName, priorYearCarry }
 }
 
 /**
@@ -147,53 +175,82 @@ export function ownerSettlementAccount(
   entityType: EntityType,
   direction: 'withdrawal' | 'contribution',
 ): string {
-  return byEntityType(entityType, {
-    enskild_firma: direction === 'withdrawal' ? '2013' : '2018',
-    aktiebolag: '2893',
-    ideell_forening: '2890',
-  })
+  return legalFormProfile(entityType).equity.settlement[direction]
+}
+
+/** Whether someone owns the company; false for a förening, which has members. */
+export function hasOwners(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.hasOwners
 }
 
 /** Owner-side accounts a booking template may name in its base/AB columns. */
-const OWNER_SETTLEMENT_ACCOUNTS = new Set(['2013', '2018', '2893'])
+const OWNER_SETTLEMENT_ACCOUNTS = new Set(
+  ENTITY_TYPES.flatMap((form) => {
+    const { hasOwners: owned, settlement } = LEGAL_FORMS[form].equity
+    return owned ? [settlement.withdrawal, settlement.contribution] : []
+  }),
+)
 
 /**
  * Resolve a booking template's account for the form. Templates carry a base
- * (enskild firma) account and an optional `_ab` override; an ideell förening
- * takes the base account (6991 for a course, 3100 for exempt revenue) except
- * that any owner account becomes the member settlement account, since a
- * förening has no egna uttag/insättningar and no delägarskuld.
+ * (enskild firma) account and an optional `_ab` override; a form without
+ * owners takes its column's account except that any owner account becomes
+ * the member settlement account, since it has no egna uttag/insättningar
+ * and no delägarskuld.
  */
 export function templateAccountForForm(
   entityType: EntityType,
   base: string | undefined,
   abOverride: string | undefined,
 ): string | undefined {
-  return byEntityType(entityType, {
-    enskild_firma: base,
-    aktiebolag: abOverride ?? base,
-    ideell_forening:
-      base && OWNER_SETTLEMENT_ACCOUNTS.has(base) ? ownerSettlementAccount('ideell_forening', 'withdrawal') : base,
-  })
+  const profile = legalFormProfile(entityType)
+  const picked = profile.bookkeeping.templateColumn === 'ab' ? (abOverride ?? base) : base
+  if (!profile.equity.hasOwners && picked && OWNER_SETTLEMENT_ACCOUNTS.has(picked)) {
+    return profile.equity.settlement.withdrawal
+  }
+  return picked
 }
 
-/** Only an aktiebolag prepares an årsredovisning in Accounted today. */
+/** Whether the product prepares an årsredovisning for the form. */
 export function preparesArsredovisning(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: false, aktiebolag: true, ideell_forening: false })
+  return legalFormProfile(entityType).filings.arsredovisning
+}
+
+/** The income return the product prepares for the form; null when none is modelled. */
+export function filesIncomeReturn(entityType: EntityType): LegalFormProfile['filings']['incomeReturn'] {
+  return legalFormProfile(entityType).filings.incomeReturn
+}
+
+/** Whether the year-end books the year's income tax as a liability (AB 2510/8910). */
+export function booksCurrentTax(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.booksCurrentTax
+}
+
+/** Periodiseringsfond and överavskrivningar proposals in the year-end wizard. */
+export function supportsCorporateTaxDispositions(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.corporateTaxDispositions
+}
+
+/** Whether the product offers the form a given accounting framework. */
+export function supportsAccountingFramework(
+  entityType: EntityType,
+  framework: LegalFormProfile['filings']['frameworks'][number],
+): boolean {
+  return legalFormProfile(entityType).filings.frameworks.includes(framework)
 }
 
 /** BFL 3 kap 1 §: a fysisk person (enskild firma) is bound to the calendar year. */
 export function fiscalYearLockedToCalendar(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: true, aktiebolag: false, ideell_forening: false })
+  return legalFormProfile(entityType).fiscalYear.calendarOnly
 }
 
 /** The org number is the owner's personnummer only for an enskild firma. */
 export function usesPersonnummerAsOrgNumber(entityType: EntityType): boolean {
-  return byEntityType(entityType, { enskild_firma: true, aktiebolag: false, ideell_forening: false })
+  return legalFormProfile(entityType).identity.orgId === 'personnummer'
 }
 
 export function defaultAccountingMethod(entityType: EntityType): 'accrual' | 'cash' {
-  return byEntityType(entityType, { enskild_firma: 'cash', aktiebolag: 'accrual', ideell_forening: 'accrual' })
+  return legalFormProfile(entityType).bookkeeping.defaultMethod
 }
 
 /**
@@ -202,5 +259,10 @@ export function defaultAccountingMethod(entityType: EntityType): 'accrual' | 'ca
  * förening: BFNAR 2010:1; AB prepares under K2.
  */
 export function simplifiedYearEndRegelverk(entityType: EntityType): 'K1' | 'K2' {
-  return byEntityType(entityType, { enskild_firma: 'K1', aktiebolag: 'K2', ideell_forening: 'K1' })
+  return legalFormProfile(entityType).bookkeeping.simplifiedRegelverk
+}
+
+/** Swedish nouns that differ by law, for standalone labels. Sentences stay form-neutral. */
+export function legalFormGlossary(entityType: EntityType): LegalFormProfile['glossary'] {
+  return legalFormProfile(entityType).glossary
 }

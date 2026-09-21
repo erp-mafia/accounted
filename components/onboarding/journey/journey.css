@@ -282,6 +282,10 @@
 .jny-filter { max-width: 340px; }
 .jny-filter input { font-size: 17px; letter-spacing: 0.01em; }
 
+/* ── form picker: the quiet line for the forms the lookup normally settles ── */
+.jny-more { margin-top: 18px; font-size: 12.5px; color: hsl(var(--muted-foreground)); }
+.jny-more .jny-btn-quiet { font-size: inherit; padding: 0; text-decoration: underline; text-underline-offset: 3px; }
+
 /* ── done scene: profile card + notes ────────────────────────────── */
 .jny-card {
   margin: 22px auto 0; max-width: 380px; text-align: left;

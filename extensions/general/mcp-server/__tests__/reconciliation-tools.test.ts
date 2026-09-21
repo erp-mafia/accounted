@@ -87,12 +87,38 @@ describe('reconciliation MCP tools', () => {
     expect(out.bridge).toEqual([{ key: 'x' }])
   })
 
-  it('status with an unknown account_key throws', async () => {
+  it('status with an unknown account_key names the format and what exists', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    statusMock.mockResolvedValue(null)
+    await expect(
+      tool('gnubok_get_reconciliation_status').execute({ account_key: '1930' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/Unknown account_key "1930" for this company\. Format: .*No reconciliation accounts yet/)
+  })
+
+  it('status for skattekonto with no Skatteverket token says so instead of "unknown"', async () => {
+    // Easy Online Stores brief 2026-09-16, F6: "Unknown account_key" before
+    // Skatteverket is connected cost the evaluator time. No token row is
+    // queued, so the lookup resolves to null and the key is "not connected".
     const { supabase } = createQueuedMockSupabase()
     statusMock.mockResolvedValue(null)
     await expect(
       tool('gnubok_get_reconciliation_status').execute({ account_key: 'skattekonto' }, COMPANY, USER, supabase as never),
-    ).rejects.toThrow(/Unknown account_key/)
+    ).rejects.toThrow(/Skattekontot är inte kopplat för bolaget/)
+  })
+
+  it('items and match share the same account_key explanation', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    itemsMock.mockResolvedValue(null)
+    await expect(
+      tool('gnubok_list_reconciliation_items').execute({ account_key: 'skattekonto' }, COMPANY, USER, supabase as never),
+    ).rejects.toThrow(/Skattekontot är inte kopplat/)
+    matchMock.mockResolvedValue(null)
+    await expect(
+      tool('gnubok_reconcile_match').execute(
+        { account_key: 'manual:1510', use_proposals: true, dry_run: true },
+        COMPANY, USER, supabase as never, { type: 'api_key', id: 'key-1' } as never,
+      ),
+    ).rejects.toThrow(/Unknown account_key "manual:1510"/)
   })
 
   it('items forwards bucket and paging', async () => {

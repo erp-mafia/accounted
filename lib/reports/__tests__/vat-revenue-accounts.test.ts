@@ -28,6 +28,7 @@ function row(
     account_class?: number
     default_vat_rate?: number | string | null
     default_vat_treatment?: string | null
+    vat_box?: string | null
   } = {},
 ) {
   return {
@@ -36,6 +37,7 @@ function row(
     account_class: overrides.account_class ?? Number(account_number.charAt(0)),
     default_vat_rate: overrides.default_vat_rate ?? null,
     default_vat_treatment: overrides.default_vat_treatment ?? null,
+    vat_box: overrides.vat_box ?? null,
   }
 }
 
@@ -242,5 +244,72 @@ describe('fetchDynamicVatAccounts (shared helper regression)', () => {
     expect(result.staticRateByAccount.get('3000')).toBe(0.25)
     expect(result.staticRateByAccount.has('3001')).toBe(false)
     expect(result.rateByAccount.size).toBe(0)
+  })
+})
+
+describe('fetchDynamicVatAccounts (26xx momsruta override)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('routes an overridden VAT account to its box and drops it from the BAS box', async () => {
+    fetchAllRowsMock.mockResolvedValue([
+      // Fortnox layout: EU-förvärv on 2615 (BAS says import, ruta 60).
+      row('2615', 'Utgående moms varuförvärv EU 25 %', { vat_box: '30' }),
+      // Import on 2616 (BAS says VMB, ruta 10).
+      row('2616', 'Utgående moms import av varor 25 %', { vat_box: '60' }),
+      // 2617 is not in BAS at all: without the override it feeds nothing.
+      row('2617', 'Utgående moms tjänster utanför EU 25 %', { vat_box: '30' }),
+      // Input VAT on a custom number.
+      row('2649', 'Ingående moms blandad', { vat_box: '48' }),
+    ])
+
+    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
+
+    expect(result.explicitAccounts).toEqual(new Set(['2615', '2616', '2617', '2649']))
+    expect(result.mappingByAccount.get('2615')).toEqual({ box: 'ruta30', side: 'credit' })
+    expect(result.mappingByAccount.get('2616')).toEqual({ box: 'ruta60', side: 'credit' })
+    expect(result.mappingByAccount.get('2617')).toEqual({ box: 'ruta30', side: 'credit' })
+    expect(result.mappingByAccount.get('2649')).toEqual({ box: 'ruta48', side: 'debit' })
+    expect(result.accounts).toEqual(['2615', '2616', '2617', '2649'])
+    // No revenue arithmetic leaks in from class 2.
+    expect(result.rateByAccount.size).toBe(0)
+    expect(result.rcBasisRateByAccount.size).toBe(0)
+  })
+
+  it('ignores class-2 rows without an override, 2650, and invalid values', async () => {
+    fetchAllRowsMock.mockResolvedValue([
+      row('2615', 'Utgående moms import 25 %'),
+      row('2650', 'Redovisningskonto för moms', { vat_box: '48' }),
+      row('2440', 'Leverantörsskulder', { vat_box: '30' }),
+      row('2616', 'Utgående moms VMB', { vat_box: '49' }),
+      row('2618', 'Vilande utgående moms', { vat_box: 'none' }),
+    ])
+
+    const result = await fetchDynamicVatAccounts(supabase, 'company-1')
+
+    expect(result.explicitAccounts.size).toBe(0)
+    expect(result.mappingByAccount.size).toBe(0)
+    expect(result.accounts).toEqual([])
+  })
+
+  it('asks the chart for class 2 alongside the treatment classes', async () => {
+    fetchAllRowsMock.mockResolvedValue([])
+    await fetchDynamicVatAccounts(supabase, 'company-1')
+    const inMock = vi.fn().mockReturnValue({ order: () => ({ range: () => ({}) }) })
+    const query = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      in: inMock,
+    }
+    const fetcher = fetchAllRowsMock.mock.calls[0][0] as (
+      range: { from: number; to: number },
+    ) => unknown
+    ;(supabase as unknown as { from: unknown }).from = () => query
+    fetcher({ from: 0, to: 999 })
+    expect(query.select).toHaveBeenCalledWith(
+      'account_number, account_name, account_class, default_vat_rate, default_vat_treatment, vat_box',
+    )
+    expect(inMock).toHaveBeenCalledWith('account_class', [2, 3, 4, 5, 6])
   })
 })

@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -12,16 +13,28 @@ import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { CreditCard, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
+import { CreditCard, History, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
 import {
   stripeRequest,
   syncSummary,
   STRIPE_SYNC_TIMEOUT_MS,
   type StripeSyncPayload,
 } from '../lib/settings-actions'
+import { MAX_BACKFILL_YEARS } from '../types'
 import type { StripeStatusResponse } from '../types'
 
 type ConnectionInfo = NonNullable<StripeStatusResponse['connection']>
+
+/** Bounds of the backfill date picker, mirroring parseBackfillFrom on the server. */
+function isoDay(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+function earliestBackfillDay(): string {
+  const floor = new Date()
+  floor.setUTCFullYear(floor.getUTCFullYear() - MAX_BACKFILL_YEARS)
+  return isoDay(floor)
+}
 
 const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
   active: 'success',
@@ -47,6 +60,8 @@ export default function StripeSettingsPanel() {
   const [disconnecting, setDisconnecting] = useState(false)
   const [confirmDisconnect, setConfirmDisconnect] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [backfillFrom, setBackfillFrom] = useState('')
+  const [backfilling, setBackfilling] = useState(false)
   const [togglingTransactionSync, setTogglingTransactionSync] = useState(false)
 
   // The failure copy is the same sentence for every action here: all four calls
@@ -155,32 +170,69 @@ export default function StripeSettingsPanel() {
         })
         return
       }
-      // Honest summary: report what Stripe actually returned. An all-zero run is
-      // a real answer ("the account had nothing in the window"), a revoked
-      // connection is not, and a body that never parsed is neither.
-      const summary = syncSummary(result.data)
-      if (summary.reason === 'revoked') {
-        toast({
-          title: t('sync_failed_title'),
-          description: t('sync_revoked'),
-          variant: 'destructive',
-        })
-      } else if (summary.reason === 'empty') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_empty') })
-      } else if (summary.reason === 'errors') {
-        toast({
-          title: t('sync_done_title'),
-          description: t('sync_done_feed_errors', summary.values),
-        })
-      } else if (summary.reason === 'feed') {
-        toast({ title: t('sync_done_title'), description: t('sync_done_feed', summary.values) })
-      } else {
-        // The sync ran, but the response never said what it did. Claim only that.
-        toast({ title: t('sync_done_title') })
-      }
+      showSyncOutcome(result.data, t('sync_done_title'), t('sync_failed_title'))
       await loadStatus()
     } finally {
       setSyncing(false)
+    }
+  }
+
+  /**
+   * Same counts, two entry points: "Synka nu" and the explicit backfill.
+   * Honest summary: report what Stripe actually returned. An all-zero run is
+   * a real answer ("the account had nothing in the window"), a revoked
+   * connection is not, and a body that never parsed is neither.
+   */
+  function showSyncOutcome(
+    payload: StripeSyncPayload | null | undefined,
+    doneTitle: string,
+    failedTitle: string,
+  ) {
+    const summary = syncSummary(payload ?? null)
+    if (summary.reason === 'revoked') {
+      toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
+    } else if (summary.reason === 'empty') {
+      toast({ title: doneTitle, description: t('sync_done_empty') })
+    } else if (summary.reason === 'errors') {
+      toast({ title: doneTitle, description: t('sync_done_feed_errors', summary.values) })
+    } else if (summary.reason === 'feed') {
+      toast({ title: doneTitle, description: t('sync_done_feed', summary.values) })
+    } else {
+      // The sync ran, but the response never said what it did. Claim only that.
+      toast({ title: doneTitle })
+    }
+  }
+
+  async function handleBackfill() {
+    if (backfilling) return
+    if (!backfillFrom) {
+      toast({
+        title: t('backfill_failed_title'),
+        description: t('backfill_missing_date'),
+        variant: 'destructive',
+      })
+      return
+    }
+    setBackfilling(true)
+    try {
+      const result = await stripeRequest<StripeSyncPayload>({
+        url: '/api/extensions/ext/stripe/backfill',
+        body: { from: backfillFrom },
+        locale,
+        timeoutMs: STRIPE_SYNC_TIMEOUT_MS,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('backfill_failed_title'),
+          description: failureDescription(result, failureCopy),
+          variant: 'destructive',
+        })
+        return
+      }
+      showSyncOutcome(result.data, t('backfill_done_title'), t('backfill_failed_title'))
+      await loadStatus()
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -404,6 +456,39 @@ export default function StripeSettingsPanel() {
           </div>
         )}
 
+        {isActive && connection && (
+          <div className="space-y-4 rounded-lg border border-border p-4">
+            <div className="min-w-0 max-w-prose space-y-1">
+              <p className="text-sm font-medium">{t('backfill_title')}</p>
+              <p className="text-sm text-muted-foreground">{t('backfill_description')}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                type="date"
+                className="w-48"
+                value={backfillFrom}
+                min={earliestBackfillDay()}
+                max={isoDay(new Date())}
+                onChange={(event) => setBackfillFrom(event.target.value)}
+                aria-label={t('backfill_from_label')}
+                disabled={backfilling}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleBackfill}
+                disabled={backfilling}
+              >
+                {backfilling ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <History className="mr-2 h-4 w-4" />
+                )}
+                {backfilling ? t('backfill_running') : t('backfill_submit')}
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

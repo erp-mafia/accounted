@@ -5,6 +5,7 @@ import { createLogger } from '@/lib/logger'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
 
 const log = createLogger('cash-accounts')
 
@@ -231,9 +232,32 @@ async function loadCashAccountTopology(
  * Identity of the physical bank account a row represents: normalized IBAN
  * plus currency, or null for rows without an IBAN (manual, CSV, kassa).
  */
-function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
+export function physicalAccountKey(row: Pick<CashAccount, 'iban' | 'currency'>): string | null {
   const iban = normalizeIban(row.iban)
   return iban ? `${iban}|${currencyKey(row.currency)}` : null
+}
+
+/**
+ * Whether two cash_accounts row ids may be the same bank account, for the
+ * content-dedup account guard in lib/transactions/ingest.ts.
+ *
+ * A null id on either side stays compatible (legacy rows without a binding).
+ * Two different ids are the same account only when BOTH rows carry a physical
+ * key and the keys are equal: a broken reconnect leaves two rows for one
+ * (IBAN, currency), and a merge legitimately keeps the retired one as a manual
+ * row while booked transactions remain on it. A row WITHOUT a key (manual, CSV,
+ * kassa) never matches another id: a missing IBAN is not evidence of identity.
+ *
+ * @param physicalKeyById row id -> physicalAccountKey, rows without a key omitted
+ */
+export function sameCashAccount(
+  a: string | null,
+  b: string | null,
+  physicalKeyById: ReadonlyMap<string, string>,
+): boolean {
+  if (a === null || b === null || a === b) return true
+  const keyA = physicalKeyById.get(a)
+  return keyA !== undefined && keyA === physicalKeyById.get(b)
 }
 
 /**
@@ -921,6 +945,58 @@ export interface Psd2LedgerResolution {
 }
 
 /**
+ * The subset of `ledgers` that carry bookkeeping history: at least one line on
+ * a posted or reversed verifikat. Driven from the journal_entries side (see
+ * lib/bookkeeping/entry-lines.ts); only called when a company actually has
+ * twin rows, so the entry scan is paid on the rare path.
+ */
+export async function ledgersWithPostedLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  ledgers: string[],
+): Promise<Set<string>> {
+  if (ledgers.length === 0) return new Set()
+  const lines = await fetchEntryLines<{ account_number: string }>({
+    supabase,
+    lineColumns: 'account_number',
+    filterEntries: (q) => q.eq('company_id', companyId).in('status', ['posted', 'reversed']),
+    filterLines: (q) => q.in('account_number', ledgers),
+    attachEntriesAs: null,
+  })
+  return new Set(lines.map((l) => l.account_number))
+}
+
+/** What {@link pickKeeper} needs to rank the rows of one physical account. */
+export type TwinCandidate = Pick<CashAccount, 'id' | 'ledger_account' | 'is_primary' | 'created_at'>
+
+/**
+ * Which of several rows for ONE physical account (same IBAN + currency) is the
+ * account going forward. The signal is bookkeeping HISTORY, not liveness (two
+ * liveness signals were contradicted by prod, see DECISIONS.md 2026-08-28):
+ * the row whose ledger already carries posted lines keeps the bank account on
+ * one ledger; then the primary row; then the oldest.
+ *
+ * Returns null when MORE than one ledger carries posted lines: the account is
+ * already split across two ledgers, no automatic choice is safe, and any
+ * correction there is a storno the user has to decide on.
+ */
+export function pickKeeper<T extends TwinCandidate>(
+  rows: readonly T[],
+  postedLedgers: ReadonlySet<string>,
+): T | null {
+  const withHistory = rows.filter((r) => postedLedgers.has(r.ledger_account))
+  if (withHistory.length > 1) return null
+  if (withHistory.length === 1) return withHistory[0]
+  const primary = rows.find((r) => r.is_primary)
+  if (primary) return primary
+  return (
+    [...rows].sort(
+      (a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id),
+    )[0] ?? null
+  )
+}
+
+/**
  * Decide which BAS account a PSD2 account should book to, IBAN first.
  *
  * The IBAN identifies the physical bank account; the provider's account `uid`
@@ -953,12 +1029,14 @@ export async function resolvePsd2LedgerAccount(
   },
 ): Promise<Psd2LedgerResolution | null> {
   const exclude = input.exclude ?? new Set<string>()
-  const wanted = normalizeIban(input.iban)
+  // (IBAN, currency), never the IBAN alone: multi-currency accounts copy one
+  // IBAN onto every currency pocket, and a EUR pocket must not reuse the SEK row.
+  const wanted = physicalAccountKey({ iban: input.iban ?? null, currency: input.currency })
 
   if (wanted) {
     const { data, error } = await supabase
       .from('cash_accounts')
-      .select('id, iban, ledger_account')
+      .select('id, iban, currency, ledger_account, is_primary, created_at')
       .eq('company_id', companyId)
       .not('iban', 'is', null)
 
@@ -970,12 +1048,29 @@ export async function resolvePsd2LedgerAccount(
         error: error.message,
       })
     } else {
-      const match = ((data ?? []) as Array<{ id: string; iban: string | null; ledger_account: string }>)
-        .find(row => normalizeIban(row.iban) === wanted)
       // A ledger already claimed earlier in the caller's loop cannot be handed
       // out twice, even on an IBAN hit: two rows on one ledger violate the
       // (company_id, ledger_account) UNIQUE constraint.
-      if (match && !exclude.has(match.ledger_account)) {
+      const matches = ((data ?? []) as Array<TwinCandidate & Pick<CashAccount, 'iban' | 'currency'>>)
+        .filter(row => physicalAccountKey(row) === wanted && !exclude.has(row.ledger_account))
+      let match: TwinCandidate | null = matches[0] ?? null
+      if (matches.length > 1) {
+        // Twin rows left by a broken reconnect: land on the row with the
+        // bookkeeping history instead of whichever PostgREST returned first.
+        // A group already split across two posted ledgers has no keeper; rank
+        // it by primary, then oldest, so the choice is at least stable.
+        let posted = new Set<string>()
+        try {
+          posted = await ledgersWithPostedLines(supabase, companyId, matches.map(r => r.ledger_account))
+        } catch (postedError) {
+          log.warn('resolvePsd2LedgerAccount posted-lines lookup failed', {
+            companyId,
+            error: postedError instanceof Error ? postedError.message : String(postedError),
+          })
+        }
+        match = pickKeeper(matches, posted) ?? pickKeeper(matches, new Set())
+      }
+      if (match) {
         return {
           ledgerAccount: match.ledger_account,
           reuseCashAccountId: match.id,
@@ -1019,12 +1114,41 @@ const REBIND_ID_CHUNK_SIZE = 100
  *
  * @returns the number of rows rebound
  */
-async function rebindMovableTransactions(
+export async function rebindMovableTransactions(
   supabase: SupabaseClient,
   companyId: string,
   fromCashAccountId: string,
   toCashAccountId: string,
 ): Promise<number> {
+  const movableIds = await findMovableTransactionIds(supabase, companyId, fromCashAccountId)
+  let moved = 0
+  for (const chunk of chunkIds(movableIds, REBIND_ID_CHUNK_SIZE)) {
+    const { data, error } = await supabase
+      .from('transactions')
+      .update({ cash_account_id: toCashAccountId })
+      .eq('company_id', companyId)
+      .eq('cash_account_id', fromCashAccountId)
+      .in('id', chunk)
+      .is('journal_entry_id', null)
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .select('id')
+    if (error) throw new Error(error.message)
+    moved += (data ?? []).length
+  }
+  return moved
+}
+
+/**
+ * Ids of the transactions on one cash_accounts row that
+ * {@link rebindMovableTransactions} may move. Read-only, so a dry run can
+ * report what a rebind would do.
+ */
+export async function findMovableTransactionIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromCashAccountId: string,
+): Promise<string[]> {
   const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
     supabase
       .from('transactions')
@@ -1037,7 +1161,7 @@ async function rebindMovableTransactions(
       .order('id', { ascending: true })
       .range(from, to),
   )
-  if (candidates.length === 0) return 0
+  if (candidates.length === 0) return []
 
   const candidateIds = candidates.map((row) => row.id)
   const anchored = new Set<string>()
@@ -1067,23 +1191,7 @@ async function rebindMovableTransactions(
     }
   }
 
-  const movableIds = candidateIds.filter((id) => !anchored.has(id))
-  let moved = 0
-  for (const chunk of chunkIds(movableIds, REBIND_ID_CHUNK_SIZE)) {
-    const { data, error } = await supabase
-      .from('transactions')
-      .update({ cash_account_id: toCashAccountId })
-      .eq('company_id', companyId)
-      .eq('cash_account_id', fromCashAccountId)
-      .in('id', chunk)
-      .is('journal_entry_id', null)
-      .is('invoice_id', null)
-      .is('supplier_invoice_id', null)
-      .select('id')
-    if (error) throw new Error(error.message)
-    moved += (data ?? []).length
-  }
-  return moved
+  return candidateIds.filter((id) => !anchored.has(id))
 }
 
 /** One account's refreshed balance snapshot, as the sync loop stores it. */
@@ -1409,6 +1517,70 @@ export async function upsertFromPsd2(
 }
 
 /**
+ * Turn a disabled cash account back on because transactions are being put on
+ * it. One definition for every path that binds rows to an account by ledger:
+ * ensureManualCashAccount (bank-file import, create_transactions, Stripe sync)
+ * and the move-transaction route.
+ *
+ * The company turned the account off as unused (setEnabled); rows arriving on
+ * it mean it is in use again. Binding them to a hidden account instead would
+ * recreate exactly what the disable guard refuses (open transactions on a
+ * disabled account), refusing would stall unattended callers, and a second
+ * row is impossible under UNIQUE (company_id, ledger_account). A row a bank
+ * connection holds is left alone: its flag is the connection's, not ours.
+ *
+ * The one account it never turns on is an invoice payee. `enabled` is one of
+ * isUsableInvoicePayee's conditions and flipping it by hand is owner/admin
+ * only: a payee may have been turned off because its printed payment details
+ * are stale (an account closed at the bank), and an import must not put them
+ * back on customer invoices. That refuses with CASH_ACCOUNT_DISABLED_PAYEE and
+ * binds nothing; an owner or admin turns the account on in settings first.
+ * Only a giro or bank account (1920-1999) can be a payee, so the unattended
+ * Stripe sync (1686) never meets this.
+ *
+ * Returns whether it wrote. Throws if the write fails or matches no row, so
+ * the caller never binds rows to an account that stayed hidden.
+ */
+export async function reenableIfUnused(
+  supabase: SupabaseClient,
+  companyId: string,
+  row: {
+    id: string
+    enabled?: boolean | null
+    bank_connection_id?: string | null
+    invoice_payee?: boolean | null
+  },
+): Promise<boolean> {
+  if (row.enabled !== false || (row.bank_connection_id ?? null) !== null) return false
+  if (row.invoice_payee === true) {
+    throw Object.assign(
+      new Error('cash_accounts re-enable refused: the account is an invoice payee, an owner or admin must turn it on'),
+      { code: 'CASH_ACCOUNT_DISABLED_PAYEE' },
+    )
+  }
+  const { data, error } = await supabase
+    .from('cash_accounts')
+    .update({ enabled: true })
+    .eq('company_id', companyId)
+    .eq('id', row.id)
+    .is('bank_connection_id', null)
+    .select('id')
+  if (error) throw new Error(`cash_accounts re-enable failed: ${error.message}`)
+  // The guarded UPDATE matched nothing: a bank connection claimed the row (or
+  // it went away) between the caller's read and this write. Fail closed rather
+  // than let the caller bind rows after a re-enable that did not happen; a
+  // retry reads the row as connection-held and takes the no-op path above.
+  if (!data || data.length === 0) {
+    throw new Error('cash_accounts re-enable failed: the account changed while it was being turned back on, try again')
+  }
+  log.info('re-enabled a disabled cash account: transactions are being put on it', {
+    companyId,
+    cashAccountId: row.id,
+  })
+  return true
+}
+
+/**
  * Find (or create) a manual cash account for a BAS ledger slot, so transactions
  * ingested outside the PSD2 flow (create_transactions / CSV) can carry a real
  * cash_account_id instead of NULL. Without the link, reconciliation 404s on the
@@ -1434,25 +1606,37 @@ export async function ensureManualCashAccount(
 ): Promise<string> {
   const existing = await supabase
     .from('cash_accounts')
-    .select('id, currency')
+    .select('id, currency, enabled, bank_connection_id, invoice_payee')
     .eq('company_id', companyId)
     .eq('ledger_account', ledgerAccount)
     .maybeSingle()
   if (existing.error) {
     throw new Error(`ensureManualCashAccount lookup failed: ${existing.error.message}`)
   }
-  if (existing.data) {
-    const row = existing.data as { id: string; currency: string | null }
-    // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
-    // currency. A different-currency transaction pointing at the same ledger is
-    // a real conflict (e.g. a SEK row landing on a ledger already claimed for
-    // USD): fail loudly instead of binding it to the wrong-currency account.
+  // (company_id, ledger_account) is UNIQUE, so a ledger holds exactly one
+  // currency. A different-currency transaction pointing at the same ledger is
+  // a real conflict (e.g. a SEK row landing on a ledger already claimed for
+  // USD): fail loudly instead of binding it to the wrong-currency account.
+  // Applied to the row found up front and to the winner of a 23505 race alike.
+  const idIfSameCurrency = (row: { id: string; currency: string | null }): string => {
     if (row.currency && row.currency.toUpperCase() !== currency.toUpperCase()) {
       throw new Error(
         `Cash account ${ledgerAccount} is denominated in ${row.currency}, not ${currency.toUpperCase()}`,
       )
     }
     return row.id
+  }
+  if (existing.data) {
+    const row = existing.data as {
+      id: string
+      currency: string | null
+      enabled: boolean
+      bank_connection_id: string | null
+      invoice_payee: boolean | null
+    }
+    const id = idIfSameCurrency(row)
+    await reenableIfUnused(supabase, companyId, { ...row, id })
+    return id
   }
 
   const insert = await supabase
@@ -1474,11 +1658,13 @@ export async function ensureManualCashAccount(
     if (insert.error.code === '23505') {
       const reread = await supabase
         .from('cash_accounts')
-        .select('id')
+        .select('id, currency')
         .eq('company_id', companyId)
         .eq('ledger_account', ledgerAccount)
         .maybeSingle()
-      if (reread.data) return (reread.data as { id: string }).id
+      if (reread.data) {
+        return idIfSameCurrency(reread.data as { id: string; currency: string | null })
+      }
     }
     log.error('ensureManualCashAccount insert failed', {
       companyId,
@@ -1492,21 +1678,97 @@ export async function ensureManualCashAccount(
 }
 
 /**
- * Toggle a cash account's enabled flag. Used by the AccountPicker when a user
- * opts in or out of syncing a particular PSD2 account.
+ * Toggle the enabled flag of a cash account no bank connection holds: the
+ * seeded manual row, a SIE-imported one, or one a disconnect released.
+ *
+ * The rules live in the UPDATE's own predicate, not in a read before it, so
+ * they hold for every caller and cannot go stale between check and write:
+ *   - never a row a bank connection holds (bank_connection_id set). Its flag
+ *     mirrors bank_connections.accounts_data[].enabled, which is also what the
+ *     sync reads; upsertFromPsd2 rewrites it from there. Flipping only this
+ *     copy would hide an account that keeps syncing, or show one the picker
+ *     turned off because another company claims it.
+ *   - never disable the primary: getPrimary() does not filter on enabled, so
+ *     the __PRIMARY_SEK__ counter account would keep routing to a hidden row.
+ *
+ * Returns null when no row qualified; the caller re-reads to say why. Open
+ * transactions are the caller's check (hasOpenTransactions): they live in
+ * another table, and ensureManualCashAccount re-enables on the ingest side.
  */
 export async function setEnabled(
   supabase: SupabaseClient,
   companyId: string,
   cashAccountId: string,
   enabled: boolean,
-): Promise<void> {
-  const { error } = await supabase
+): Promise<CashAccount | null> {
+  let q = supabase
     .from('cash_accounts')
     .update({ enabled })
     .eq('company_id', companyId)
     .eq('id', cashAccountId)
+    .is('bank_connection_id', null)
+  if (!enabled) q = q.eq('is_primary', false)
+  const { data, error } = await q.select('*').maybeSingle()
   if (error) throw new Error(`cash_accounts setEnabled failed: ${error.message}`)
+  return (data as CashAccount | null) ?? null
+}
+
+/**
+ * Whether a cash account still has work pending: an unbooked, non-ignored
+ * transaction. Disabling an account with open work would hide it from
+ * Konton and the booking flows while its rows still need a decision.
+ *
+ * A NULL journal_entry_id alone overcounts: a row split over several
+ * verifikat (transaction_voucher_links, #1553) carries the same NULL but is
+ * not open work, so junction-anchored rows are subtracted.
+ *
+ * lib/transactions/is-booked.ts names a third anchor, invoice_payments and
+ * supplier_invoice_payments. It is not subtracted here on purpose:
+ * match_batch_allocate sets journal_entry_id itself (20260824120000), so only
+ * rows from before that can be payment-anchored alone, and counting one as
+ * open errs toward refusing the disable, never toward hiding open work.
+ *
+ * No row cap: an arbitrary `.limit()` here could return a page that happens
+ * to be all junction-anchored while a genuinely open row sits past it,
+ * letting the guard wave through an account that still has unbokförda
+ * affärshändelser (BFL 5 kap). fetchAllRows pages past PostgREST's 1000-row
+ * cap instead (regression test: 60 candidates, only the 60th genuinely open).
+ */
+export async function hasOpenTransactions(
+  supabase: SupabaseClient,
+  companyId: string,
+  cashAccountId: string,
+): Promise<boolean> {
+  const candidates = await fetchAllRows<{ id: string }>(({ from, to }) =>
+    supabase
+      .from('transactions')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('cash_account_id', cashAccountId)
+      .is('journal_entry_id', null)
+      .eq('is_ignored', false)
+      .order('id', { ascending: true })
+      .range(from, to),
+  )
+  const candidateIds = candidates.map((row) => row.id)
+  if (candidateIds.length === 0) return false
+  // lib/reconciliation/bank-reconciliation.ts already imports this module, so
+  // its fetchJunctionLinkedTxIds() can't be imported back here without a
+  // cycle; the same two-column lookup, inlined, chunked at the same size the
+  // rebind helpers above use to stay under PostgREST's URL length limit.
+  const junctionLinked = new Set<string>()
+  for (const idChunk of chunkIds(candidateIds, REBIND_ID_CHUNK_SIZE)) {
+    const { data: linkRows, error: linkError } = await supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id')
+      .eq('company_id', companyId)
+      .in('transaction_id', idChunk)
+    if (linkError) throw new Error(`cash_accounts hasOpenTransactions junction lookup failed: ${linkError.message}`)
+    for (const row of (linkRows ?? []) as { transaction_id: string }[]) {
+      junctionLinked.add(row.transaction_id)
+    }
+  }
+  return candidateIds.some((id) => !junctionLinked.has(id))
 }
 
 /**

@@ -16,7 +16,12 @@
  * fiscal year is a legitimate target.
  */
 
-import { mostRecentEndedVatPeriod } from './period-defaults'
+import {
+  compareVatPeriods,
+  currentVatPeriod,
+  mostRecentEndedVatPeriod,
+  nextVatPeriod,
+} from './period-defaults'
 import type { MomsPeriod, VatPeriodType } from '@/types'
 
 export interface VatPeriodSelection {
@@ -29,13 +34,20 @@ export interface VatPeriodSelection {
 /**
  * Decide the view's initial period from the company's moms_period setting:
  * the setting's cadence, seeded to the most recently ended period in it.
+ *
+ * `isFiled` (issue #2746): when the most recently ended period is already
+ * recorded as filed (through the Skatteverket connection or marked by hand),
+ * the seed steps forward past every filed period, but never past the period
+ * running today. A quarterly filer who filed Q2 in August lands on Q3 instead
+ * of reopening a finished declaration on every visit until October.
  */
 export function resolveInitialVatPeriodSelection(opts: {
   momsPeriod: MomsPeriod | null
   over40m: boolean
   today?: Date
+  isFiled?: (periodType: 'monthly' | 'quarterly', year: number, period: number) => boolean
 }): VatPeriodSelection {
-  const { momsPeriod, over40m } = opts
+  const { momsPeriod, over40m, isFiled } = opts
   const today = opts.today ?? new Date()
 
   // The 'quarterly' fallback only shapes state that is never shown: the view
@@ -46,6 +58,15 @@ export function resolveInitialVatPeriodSelection(opts: {
   if (cadence === 'yearly') {
     return { periodType: 'yearly', year: today.getFullYear(), period: 1 }
   }
-  const ended = mostRecentEndedVatPeriod(cadence, today, { over40m })
-  return { periodType: cadence, year: ended.year, period: ended.period }
+  let selected = mostRecentEndedVatPeriod(cadence, today, { over40m })
+  if (isFiled) {
+    const current = currentVatPeriod(cadence, today)
+    while (
+      compareVatPeriods(selected, current) < 0 &&
+      isFiled(cadence, selected.year, selected.period)
+    ) {
+      selected = nextVatPeriod(cadence, selected)
+    }
+  }
+  return { periodType: cadence, year: selected.year, period: selected.period }
 }

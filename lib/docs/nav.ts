@@ -38,6 +38,7 @@ export const DOCS_NAV: DocsNavSection[] = [
       { label: 'Ingest and categorise bank transactions', href: '/docs/api/cookbook/ingest-bank-transactions', summary: 'Push CSV/CAMT into the engine, get AI suggestions, commit.' },
       { label: 'Compute and review a VAT declaration', href: '/docs/api/cookbook/file-vat-declaration', summary: 'Compute momsdeklaration rutor 05-62 and reconcile before manual Skatteverket submission.' },
       { label: 'Run payroll and generate AGI', href: '/docs/api/cookbook/run-payroll-and-agi', summary: 'Calculate, approve, mark paid, book, generate AGI XML for manual Skatteverket upload.' },
+      { label: 'Onboard a payroll customer', href: '/docs/api/cookbook/onboard-payroll-customer', summary: 'Provision a company, settings, employees, cutover balances, monthly inputs, payment file.' },
       { label: 'Set up webhooks and verify signatures', href: '/docs/api/cookbook/webhooks', summary: 'Subscribe to events, verify HMAC, handle retries idempotently.' },
       { label: 'Year-end closing', href: '/docs/api/cookbook/year-end-closing', summary: 'Lock periods, run year-end, set opening balances.' },
     ],

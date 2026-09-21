@@ -195,6 +195,12 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/general-ledger': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/journal-register': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/vat-declaration': 'reports:read',
+  // The company's own record of which VAT periods are filed (#2746). Marking a
+  // period is bookkeeping state, not a Skatteverket submission, so it rides
+  // bookkeeping:write rather than skatteverket:write.
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/filings': 'reports:read',
+  'POST /api/v1/companies/:companyId/reports/vat-declaration/filings': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/reports/vat-declaration/filings': 'bookkeeping:write',
   'GET /api/v1/companies/:companyId/reports/monthly-breakdown': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/ar-ledger': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/supplier-ledger': 'reports:read',
@@ -260,6 +266,36 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // Payroll gap-closure 3.4: vacation ledger + year close.
   'GET /api/v1/companies/:companyId/employees/:id/vacation-balance': 'payroll:read',
   'POST /api/v1/companies/:companyId/salary/vacation-year-close': 'payroll:write',
+  // Payroll gap-closure 4 (operator onboarding, 2026-09-18): the three pieces
+  // an external payroll operator still had to do in the app. Salary settings
+  // (pay day, avvikelseperiod, payment format, bank, öre rounding, voucher
+  // series) for customer provisioning; worked days (tidrapport) so hourly
+  // staff and OB can be driven over the API; the pain.001 / Bankgirot LB
+  // salary payment file for a run.
+  'GET /api/v1/companies/:companyId/salary/settings': 'payroll:read',
+  'PATCH /api/v1/companies/:companyId/salary/settings': 'payroll:write',
+  'GET /api/v1/companies/:companyId/employees/:id/worked-days': 'payroll:read',
+  'PUT /api/v1/companies/:companyId/employees/:id/worked-days': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id/worked-days': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/payment-file': 'payroll:write',
+  // Payroll gap-closure 5 (2026-09-19): the remaining employee-side inputs and
+  // the one lifecycle verb an operator needs after booking. Benefits
+  // (bilförmån, kost, friskvård...) and recurring lines (standing monthly
+  // rows) are per-employee registers the engine reads at calculate time;
+  // :correct is the rättelsekörning (storno of the booked verifikat, a new
+  // draft for the same period).
+  'GET /api/v1/companies/:companyId/employees/:id/benefits': 'payroll:read',
+  'POST /api/v1/companies/:companyId/employees/:id/benefits': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/employees/:id/benefits/:benefitId': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId': 'payroll:write',
+  'GET /api/v1/companies/:companyId/employees/:id/recurring-lines': 'payroll:read',
+  'POST /api/v1/companies/:companyId/employees/:id/recurring-lines': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/correct': 'payroll:write',
+  // The archived payment files of a run (issue #2724): every generated
+  // pain.001 / LB file is räkenskapsinformation and kept 7 years.
+  'GET /api/v1/companies/:companyId/salary-runs/:id/payment-files': 'payroll:read',
 
   // Dimensions (kostnadsställe/projekt): dimensions PR2. Reads ride
   // reports:read (registry data feeds report filters/pickers); value creation
@@ -275,6 +311,18 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // link article_id / copy housework_type + revenue_account. Rides
   // invoices:read (the register exists to serve invoicing).
   'GET /api/v1/companies/:companyId/articles': 'invoices:read',
+
+  // Fixed assets (anläggningsregister). Reads ride reports:read (the register
+  // feeds the depreciation proposal and the balance-sheet notes); create and
+  // update are register writes, dispose posts the avyttring voucher: all three
+  // are bookkeeping:write like gnubok_post_annual_depreciation.
+  'GET /api/v1/companies/:companyId/assets': 'reports:read',
+  'POST /api/v1/companies/:companyId/assets': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/assets/:id': 'reports:read',
+  'PATCH /api/v1/companies/:companyId/assets/:id': 'bookkeeping:write',
+  // Removing a never-posted row is a register write like create/update.
+  'DELETE /api/v1/companies/:companyId/assets/:id': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/assets/:id/dispose': 'bookkeeping:write',
 
   // Webhooks (Phase 6 PR-1)
   'GET /api/v1/companies/:companyId/webhooks': 'webhooks:manage',

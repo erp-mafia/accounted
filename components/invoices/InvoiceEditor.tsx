@@ -21,13 +21,18 @@ import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { getVatRules } from '@/lib/invoices/vat-rules'
+import {
+  explainVatTreatment,
+  getVatRules,
+  requiresSwedishVatAcknowledgement,
+} from '@/lib/invoices/vat-rules'
 import {
   resolveLineVatRates,
   planCustomerSwitchVatSnap,
-  hasSwedishVatToForeignBusiness,
   FALLBACK_VAT_RATE,
 } from '@/components/invoices/line-vat-rates'
+import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   deriveNextStep,
   deriveForvalChips,
@@ -63,6 +68,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import CustomerForm from '@/components/customers/CustomerForm'
+import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { BankDetailsSetupDialog } from '@/components/invoices/BankDetailsSetupDialog'
 import { FirstInvoiceLogoPrompt } from '@/components/invoices/FirstInvoiceLogoPrompt'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -238,6 +244,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const hasEmailSend = useCapability(CAPABILITY.email_send)
   const supabase = createClient()
   const t = useTranslations('invoice_editor')
+  const tVat = useTranslations('vat_treatment_notice')
   const ts = useTranslations('self_billing')
   const ta = useTranslations('accruals')
   const tCommon = useTranslations('common')
@@ -512,6 +519,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [showReview, setShowReview] = useState(false)
+  // Explicit confirm for Swedish VAT to an EU customer whose reverse charge
+  // is blocked (#2749). Reset every time the review dialog closes.
+  const [swedishVatAcknowledged, setSwedishVatAcknowledged] = useState(false)
   const [pendingData, setPendingData] = useState<FormData | null>(null)
   const [createdInvoiceId, setCreatedInvoiceId] = useState<string | null>(null)
   const [showSendPrompt, setShowSendPrompt] = useState(false)
@@ -519,6 +529,9 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   const [isPreviewing, setIsPreviewing] = useState(false)
   const [, setDefaultNotes] = useState<string | null>(null)
   const [isCreateCustomerOpen, setIsCreateCustomerOpen] = useState(false)
+  // Name typed into the picker when the user chose "Skapa kund" from its
+  // no-match state; '' when opened from the link below the picker.
+  const [createCustomerPrefill, setCreateCustomerPrefill] = useState('')
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false)
   const [hasBankDetails, setHasBankDetails] = useState<boolean | null>(null)
   const [showBankSetup, setShowBankSetup] = useState(false)
@@ -578,7 +591,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // matching keyup (which arrives after compositionend with a real key) can
   // still act on an Android action-key press.
   const entryComposingKeyRef = useRef(false)
-  const customerTriggerRef = useRef<HTMLButtonElement>(null)
+  const customerTriggerRef = useRef<HTMLInputElement>(null)
   const entryListId = useId()
   const settingsPanelId = useId()
   // True only when the user had zero invoices when this page loaded. The
@@ -1321,6 +1334,50 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     }
   }, [watchCustomerId, customers, setValue])
 
+  // One-click VIES check from the draft (#2749). /api/vat/validate has
+  // already stamped the customer row; mirror it on the local copy so the
+  // rate plan flips to reverse charge, and move the lines still sitting on
+  // the old default (25 %) onto the new one (0 %) exactly like a customer
+  // switch: a rate the user set deliberately stays put. The review snapshot
+  // (pendingData) gets the same snaps so a confirm from inside the dialog
+  // posts the corrected lines. The session cache is left alone on purpose:
+  // a refreshed customers list re-runs the sync effect above, which also
+  // resets due_date, and that must not happen under an open edit. SWR
+  // revalidates it on its own schedule with the server value.
+  function handleCustomerVatValidated(result: { vat_number: string }) {
+    if (!selectedCustomer) return
+    const validatedCustomer: Customer = {
+      ...selectedCustomer,
+      vat_number: result.vat_number,
+      vat_number_validated: true,
+      vat_number_validated_at: new Date().toISOString(),
+    }
+    const nextDefaultRate = resolveLineVatRates(validatedCustomer).defaultRate
+    const snaps = planCustomerSwitchVatSnap({
+      items: watchItems ?? [],
+      previousDefaultRate: previousDefaultRateRef.current,
+      nextDefaultRate,
+    })
+    for (const snap of snaps) {
+      setValue(`items.${snap.index}.vat_rate`, snap.rate, { shouldDirty: true })
+    }
+    if (snaps.length > 0) {
+      setPendingData((prev) =>
+        prev
+          ? {
+              ...prev,
+              items: prev.items.map((item, index) => {
+                const snap = snaps.find((candidate) => candidate.index === index)
+                return snap ? { ...item, vat_rate: snap.rate } : item
+              }),
+            }
+          : prev,
+      )
+    }
+    previousDefaultRateRef.current = nextDefaultRate
+    setSelectedCustomer(validatedCustomer)
+  }
+
   async function handleCreateCustomer(data: CreateCustomerInput) {
     setIsCreatingCustomer(true)
 
@@ -1366,11 +1423,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // `defaultRates` / `defaultRate` is what the form OFFERS by itself
   // (getAvailableVatRates). See components/invoices/line-vat-rates.ts.
   const vatRatePlan = resolveLineVatRates(selectedCustomer)
-  // One ochre sentence, and only once a Swedish rate is actually selected on an
-  // invoice to a foreign business: 0% is the rule, a non-zero rate is lawful
-  // only for the ML 6 kap. supplies taxed where they are performed.
-  const showTaxedWherePerformedHint =
-    vatRegistered && hasSwedishVatToForeignBusiness({ plan: vatRatePlan, items: watchItems ?? [] })
+  // Effective rates of the priced lines, as the server will store them: an
+  // absent rate falls back to the customer default (build-invoice-write).
+  // Empty for a non-momsregistrerad seller, who charges nothing.
+  const effectiveLineVatRates = vatRegistered
+    ? (watchItems ?? [])
+        .filter((item) => item?.line_type !== 'text')
+        .map((item) => item?.vat_rate ?? vatRatePlan.defaultRate)
+    : []
+  // Why the treatment is what it is (#2749, #2558): the same sentence the
+  // draft page, the MCP approval card and the API responses carry. Empty
+  // when there is nothing to explain. Swedish VAT to an EU customer whose
+  // reverse charge is blocked needs an explicit confirm before creation.
+  const vatWarnings =
+    selectedCustomer && vatRegistered ? explainVatTreatment(selectedCustomer, effectiveLineVatRates) : []
+  const needsSwedishVatAcknowledgement = requiresSwedishVatAcknowledgement(vatWarnings, effectiveLineVatRates)
   // A non-momsregistrerad company never charges VAT: hide the Moms column and
   // book every line momsfritt. `vatRegistered` is the single switch the whole
   // form keys off: no rate picker, no warning, no VAT in the totals/preview.
@@ -2304,29 +2371,22 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               name="customer_id"
               control={control}
               render={({ field }) => (
-                <Select value={field.value} onValueChange={field.onChange}>
-                  <SelectTrigger
-                    ref={customerTriggerRef}
-                    className="h-12 font-display text-base"
-                    aria-required="true"
-                  >
-                    <SelectValue placeholder={t('select_customer_placeholder')} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Radix renders an empty viewport as a bare few-pixel
-                        sliver; give the zero-customer state real content. */}
-                    {customers.length === 0 && (
-                      <div className="px-3 py-2 text-[13px] text-muted-foreground">
-                        {customersLoading ? t('loading_customers') : t('no_customers_yet')}
-                      </div>
-                    )}
-                    {customers.map((customer) => (
-                      <SelectItem key={customer.id} value={customer.id}>
-                        {customer.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <CustomerCombobox
+                  value={field.value}
+                  customers={customers}
+                  keepId={keepCustomerId}
+                  onChange={field.onChange}
+                  inputRef={customerTriggerRef}
+                  className="h-12 font-display text-base"
+                  aria-required
+                  loading={customersLoading}
+                  loadingLabel={t('loading_customers')}
+                  emptyLabel={t('no_customers_yet')}
+                  onCreateCustomer={(prefill) => {
+                    setCreateCustomerPrefill(prefill)
+                    setIsCreateCustomerOpen(true)
+                  }}
+                />
               )}
             />
             {selectedCustomer && (
@@ -2350,7 +2410,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <button
               type="button"
               className={cn(QUIET_LINK_CLASS, 'mt-3 inline-block')}
-              onClick={() => setIsCreateCustomerOpen(true)}
+              onClick={() => {
+                setCreateCustomerPrefill('')
+                setIsCreateCustomerOpen(true)
+              }}
             >
               + {t('create_customer')}
             </button>
@@ -3174,12 +3237,17 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               )}
             </div>
 
-            {/* Taxed-where-performed disclosure, muted: the page's single
-                ochre line is the next-step line (design decision d). */}
-            {showTaxedWherePerformedHint && (
-              <p className="mt-3 text-[12.5px] leading-5 text-muted-foreground">
-                {t('vat_taxed_where_performed_hint')}
-              </p>
+            {/* Why the VAT treatment is what it is, muted: the page's single
+                ochre line is the next-step line (design decision d). The
+                VIES check for an unvalidated EU customer sits inline. */}
+            {selectedCustomer && vatWarnings.length > 0 && (
+              <VatTreatmentNotice
+                className="mt-3"
+                tone="muted"
+                customer={selectedCustomer}
+                lineVatRates={effectiveLineVatRates}
+                onValidated={handleCustomerVatValidated}
+              />
             )}
           </section>
 
@@ -3656,11 +3724,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         {/* Sticky action bar: position sticky, NEVER fixed (DialogContent's
             transform re-anchors fixed children in bare mode). It binds to the
             dialog scroll container in bare mode and to the page panel /
-            window otherwise; the mobile page offset clears the bottom nav. */}
+            window otherwise; the page offset (--bottom-nav-h) clears the
+            mobile bottom nav. */}
         <div
           className={cn(
             'sticky z-20 mt-7 border-t border-border bg-background',
-            bare ? 'bottom-0 px-6' : 'bottom-[calc(4rem+env(safe-area-inset-bottom,0px))] md:bottom-0',
+            bare ? 'bottom-0 px-6' : 'bottom-[var(--bottom-nav-h)]',
           )}
         >
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
@@ -3716,9 +3785,13 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
       {selectedCustomer && vatRules && (
         <ConfirmationDialog
           open={showReview}
-          onOpenChange={setShowReview}
+          onOpenChange={(open) => {
+            if (!open) setSwedishVatAcknowledged(false)
+            setShowReview(open)
+          }}
           onConfirm={handleConfirm}
           isSubmitting={isSubmitting}
+          confirmDisabled={needsSwedishVatAcknowledgement && !swedishVatAcknowledged}
           title={watchDocumentType === 'proforma'
             ? t('review_dialog_title_proforma')
             : watchDocumentType === 'quote'
@@ -3779,6 +3852,32 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             vatRegistered={vatRegistered}
             paymentLink={paymentLinkMode}
           />
+          {/* Muted here too: the dialog's ochre line is its warningText.
+              Swedish VAT to an EU customer whose reverse charge is blocked
+              needs the explicit tick before the invoice exists (#2749). */}
+          {vatWarnings.length > 0 && (
+            <div className="mt-4 space-y-3">
+              <VatTreatmentNotice
+                tone="muted"
+                customer={selectedCustomer}
+                lineVatRates={effectiveLineVatRates}
+                onValidated={handleCustomerVatValidated}
+              />
+              {needsSwedishVatAcknowledgement && (
+                <div className="flex items-start gap-2">
+                  <Checkbox
+                    id="swedish-vat-acknowledged"
+                    checked={swedishVatAcknowledged}
+                    onCheckedChange={(checked) => setSwedishVatAcknowledged(checked === true)}
+                    className="mt-0.5"
+                  />
+                  <Label htmlFor="swedish-vat-acknowledged" className="text-sm font-normal leading-5">
+                    {tVat('acknowledge_swedish_vat')}
+                  </Label>
+                </div>
+              )}
+            </div>
+          )}
         </ConfirmationDialog>
       )}
 
@@ -3791,6 +3890,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
           <CustomerForm
             onSubmit={handleCreateCustomer}
             isLoading={isCreatingCustomer}
+            initialData={createCustomerPrefill ? { name: createCustomerPrefill } : undefined}
           />
         </DialogContent>
       </Dialog>

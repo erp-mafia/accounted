@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { bookkeepingErrorResponse, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
-import { revokeLinksForRun } from '@/lib/salary/payslips/links'
-import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
+import { correctSalaryRun } from '@/lib/salary/correct-run'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
+
+const NOT_BOOKED_MESSAGE = 'Kan bara korrigera bokförda lönekörningar'
+const PERIOD_CONFLICT_MESSAGE = 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.'
 
 /**
  * Create a correction for a booked salary run.
@@ -23,6 +24,9 @@ ensureInitialized()
  * Both original and correction are visible in the journal per BFL.
  *
  * AGI must be re-generated with same FK570 (correction flag) per agi-filing.md.
+ *
+ * The orchestration lives in lib/salary/correct-run.ts (shared with the v1
+ * verb); this route keeps the legacy `{ error }` messages and status codes.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.run.correct',
@@ -30,157 +34,48 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const { id } = await params
     const { user, supabase, companyId, log } = ctx
 
-    // Load the original booked run
-    const { data: originalRun, error: runError } = await supabase
-      .from('salary_runs')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .eq('status', 'booked')
-      .single()
+    const result = await correctSalaryRun(supabase, {
+      companyId: companyId!,
+      userId: user.id,
+      runId: id,
+    })
 
-    if (runError || !originalRun) {
-      return NextResponse.json({ error: 'Kan bara korrigera bokförda lönekörningar' }, { status: 400 })
-    }
-
-    // Reverse all journal entries from the original run (storno per BFL 5 kap 5§)
-    const entryIds = [
-      originalRun.salary_entry_id,
-      originalRun.avgifter_entry_id,
-      originalRun.vacation_entry_id,
-      originalRun.pension_entry_id,
-    ].filter(Boolean) as string[]
-
-    for (const entryId of entryIds) {
-      try {
-        await reverseEntry(supabase, companyId, user.id, entryId)
-      } catch (err) {
-        // Entry may already be reversed: continue
-        if (err instanceof EntryAlreadyReversedError) continue
-        const typed = bookkeepingErrorResponse(err)
-        if (typed) return typed
-        return NextResponse.json(
-          { error: getUserErrorMessage(err, { context: 'salary' }) },
-          { status: 500 },
-        )
-      }
-    }
-
-    // Mark original as corrected
-    await supabase
-      .from('salary_runs')
-      .update({ status: 'corrected' })
-      .eq('id', id)
-
-    // The storno replaces the payslips — previously emailed payslip links for
-    // the original run must stop resolving (they show as "ersatt" to the
-    // employee). Fresh links are issued when the correction run's payslips
-    // are sent.
-    await revokeLinksForRun(supabase, id)
-
-    // Create new correction run for same period
-    // Remove the unique constraint conflict by using the original run's unique key
-    // The unique constraint is (company_id, period_year, period_month) so we need
-    // to delete the uniqueness or handle it. Since original is now 'corrected',
-    // and we want a new run for the same period, we update the unique constraint.
-    // Actually the DB still enforces uniqueness. The correction run needs the same period.
-    // Solution: drop the old unique index and add a partial one excluding corrected runs,
-    // OR just use the same run ID pattern. Let's create the correction run and handle the conflict.
-
-    const { data: correctionRun, error: createError } = await supabase
-      .from('salary_runs')
-      .insert({
-        company_id: companyId,
-        user_id: user.id,
-        period_year: originalRun.period_year,
-        period_month: originalRun.period_month,
-        payment_date: originalRun.payment_date,
-        voucher_series: originalRun.voucher_series,
-        is_correction: true,
-        corrects_run_id: originalRun.id,
-        notes: `Korrigering av lönekörning ${originalRun.period_year}-${String(originalRun.period_month).padStart(2, '0')}`,
-      })
-      .select()
-      .single()
-
-    if (createError) {
-      // If unique constraint violation, the period already has an active run
-      if (createError.code === '23505') {
-        return NextResponse.json({
-          error: 'Det finns redan en aktiv lönekörning för denna period. Ta bort den först.',
-        }, { status: 409 })
-      }
-      return NextResponse.json({ error: getUserErrorMessage(createError) }, { status: 500 })
-    }
-
-    // Copy employees from original run to correction run (with snapshots)
-    const { data: originalEmployees } = await supabase
-      .from('salary_run_employees')
-      .select('*, line_items:salary_line_items(*)')
-      .eq('salary_run_id', id)
-
-    for (const origEmp of originalEmployees || []) {
-      const { data: newSre } = await supabase
-        .from('salary_run_employees')
-        .insert({
-          salary_run_id: correctionRun.id,
-          employee_id: origEmp.employee_id,
-          company_id: companyId,
-          employment_degree: origEmp.employment_degree,
-          monthly_salary: origEmp.monthly_salary,
-          salary_type: origEmp.salary_type,
-          hours_worked: origEmp.hours_worked,
-          tax_table_number: origEmp.tax_table_number,
-          tax_column: origEmp.tax_column,
-        })
-        .select()
-        .single()
-
-      if (newSre) {
-        // Copy line items
-        const lineItems = (origEmp.line_items || []) as Array<Record<string, unknown>>
-        for (const li of lineItems) {
-          await supabase.from('salary_line_items').insert({
-            salary_run_employee_id: newSre.id,
-            company_id: companyId,
-            item_type: li.item_type,
-            description: li.description,
-            quantity: li.quantity,
-            unit_price: li.unit_price,
-            amount: li.amount,
-            is_taxable: li.is_taxable,
-            is_avgift_basis: li.is_avgift_basis,
-            is_vacation_basis: li.is_vacation_basis,
-            is_gross_deduction: li.is_gross_deduction,
-            is_net_deduction: li.is_net_deduction,
-            account_number: li.account_number,
-            sort_order: li.sort_order,
-            // Provenance must survive the copy: without these back-links a
-            // recalculation of the correction run treats the copied derived
-            // rows as manual and step 8d/8d3 derives them a second time.
-            source_benefit_id: li.source_benefit_id ?? null,
-            source_recurring_line_id: li.source_recurring_line_id ?? null,
-          })
+    if (!result.ok) {
+      switch (result.code) {
+        case 'SALARY_RUN_NOT_FOUND':
+        case 'SALARY_RUN_CORRECT_NOT_BOOKED':
+          return NextResponse.json({ error: NOT_BOOKED_MESSAGE }, { status: 400 })
+        case 'SALARY_RUN_ALREADY_CORRECTED':
+          // A run that is already 'corrected' never passed the legacy
+          // status='booked' filter; only the insert conflict was a 409.
+          if (result.details.reason === 'status_corrected') {
+            return NextResponse.json({ error: NOT_BOOKED_MESSAGE }, { status: 400 })
+          }
+          return NextResponse.json({ error: PERIOD_CONFLICT_MESSAGE }, { status: 409 })
+        case 'DB_ERROR':
+          if (result.stage === 'load_run') {
+            return NextResponse.json({ error: NOT_BOOKED_MESSAGE }, { status: 400 })
+          }
+          return NextResponse.json({ error: getUserErrorMessage(result.error) }, { status: 500 })
+        case 'REVERSAL_FAILED': {
+          const typed = bookkeepingErrorResponse(result.error)
+          if (typed) return typed
+          return NextResponse.json(
+            { error: getUserErrorMessage(result.error, { context: 'salary' }) },
+            { status: 500 },
+          )
         }
       }
     }
 
-    // Vacation ledger sync: the original run flipped to 'corrected', so its
-    // vacation_days_taken drop out of the recomputed taken_days. Non-fatal:
-    // the ledger self-heals when the correction run books.
-    const ledgerSync = await syncVacationLedgerForEmployees(
-      supabase,
-      companyId,
-      (originalEmployees || []).map((sre) => sre.employee_id as string),
-    )
-    if (!ledgerSync.ok) {
-      log.warn('vacation ledger sync failed after correction', { message: ledgerSync.message })
+    for (const warning of result.warnings) {
+      log.warn('salary run correction warning', { salaryRunId: id, message: warning })
     }
 
     return NextResponse.json({
-      data: correctionRun,
+      data: result.correctionRun,
       message: 'Korrigeringskörning skapad. Originalverifikationer har makulerats (storno). Redigera och beräkna om den nya körningen.',
-      reversed_entry_count: entryIds.length,
+      reversed_entry_count: result.reversedEntryIds.length,
     }, { status: 201 })
   },
   { requireWrite: true },

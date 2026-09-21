@@ -6,6 +6,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto, PostalAddress,
 } from '../dto';
+import { creditNoteTypeCode } from '../dto';
 
 // Field names follow WINT's v1 swagger exactly (PascalCase). Amounts arrive as
 // JSON numbers; account numbers arrive as INTEGERS and must leave every mapper
@@ -110,6 +111,13 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
   const totalTax = num(raw['TotalTax']);
   const paid = isWintInvoicePaid(raw);
   const balance = paid ? 0 : (num(raw['LeftToPay']) ?? total);
+  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
+  // No "is a credit invoice" flag is known on WINT's v1 surface. The one
+  // credit field this mapper reads, `CreditStatus`, says what happened TO an
+  // invoice (it has been credited), which describes the original, so the
+  // negative total is the signal.
+  const invoiceTypeCode = creditNoteTypeCode(false, total);
+  const wintStatus = deriveWintInvoiceStatus(raw);
 
   const rows = (raw['Rows'] as Record<string, unknown>[] | undefined) ?? [];
   const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
@@ -152,8 +160,9 @@ export function mapWintToSalesInvoice(raw: Record<string, unknown>): SalesInvoic
     issueDate: dateOnly(raw['PostingDate']) ?? '',
     dueDate: dateOnly(raw['DueDate']),
     deliveryDate: dateOnly(raw['DeliveryDate']),
+    invoiceTypeCode,
     currencyCode: currency,
-    status: deriveWintInvoiceStatus(raw),
+    status: invoiceTypeCode && wintStatus !== 'cancelled' && wintStatus !== 'draft' ? 'credited' : wintStatus,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['CustomerName'] ?? '') as string,

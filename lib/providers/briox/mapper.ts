@@ -8,6 +8,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import { creditNoteTypeCode } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
@@ -45,10 +46,10 @@ function isFullyPaid(raw: Record<string, unknown>): boolean {
   return total != null && total > 0 && balance != null && balance <= 0;
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
+function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote = false): InvoiceStatusCode {
   const status = raw['status'] as string | undefined;
   if (status === 'cancelled') return 'cancelled';
-  if (status === 'credited') return 'credited';
+  if (isCreditNote || status === 'credited') return 'credited';
   if (isFullyPaid(raw)) return 'paid';
   if (status === 'booked' || raw['booked'] === true) return 'booked';
   if (status === 'sent' || raw['sent'] === true) return 'sent';
@@ -87,6 +88,16 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
   // to 0 so the DTO is internally consistent (paid ⇒ nothing outstanding).
   const paid = isFullyPaid(raw);
   const balance = paid ? 0 : (num(raw['balance']) ?? total);
+  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
+  // No Briox credit flag could be verified for this mapper (its API reference
+  // is not public and no Briox-migrated invoice in production had a negative
+  // total on 2026-09-20), so the negative total is the whole signal.
+  // `status: 'credited'` is deliberately NOT one: beside positive amounts it
+  // reads as "this invoice has been credited" (as Bokio's `credited` and
+  // WINT's `CreditStatus` do), and typing that 381 would reverse the sign of
+  // the original receivable. The amount is the one reading that cannot be
+  // wrong in that direction.
+  const invoiceTypeCode = creditNoteTypeCode(false, total);
 
   const rows = (raw['rows'] as Record<string, unknown>[] | undefined) ?? [];
   // Line-level amounts arrive from the same string-serializing API as the
@@ -137,8 +148,9 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     invoiceNumber: String(raw['invoice_number'] ?? raw['id'] ?? ''),
     issueDate: (raw['invoice_date'] as string) ?? '',
     dueDate: raw['due_date'] as string | undefined,
+    invoiceTypeCode,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
     supplier: buildParty(''),
     customer: buildParty(
       (raw['customer_name'] ?? '') as string,

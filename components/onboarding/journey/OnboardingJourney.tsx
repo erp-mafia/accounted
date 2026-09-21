@@ -38,17 +38,62 @@ import {
   type FirstYearEndOption,
 } from '@/lib/onboarding-journey/fiscal-options'
 import type { EntityType } from '@/types'
-import { isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import {
+  ENTITY_TYPE_LABELS_SV,
+  creatableEntityTypes,
+  fiscalYearLockedToCalendar,
+  isEntityType,
+  isEntityTypeCreatable,
+  plannedLegalForms,
+  usesPersonnummerAsOrgNumber,
+} from '@/lib/company/entity-type'
+import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
-/** Display order of the form picker (AB first, as before); flags filter it. */
-const FORM_PICKER_ORDER: EntityType[] = ['aktiebolag', 'enskild_firma', 'ideell_forening']
+/** The two chips every picker shows (AB first, as before). */
+const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
+
+/**
+ * The picker stays two chips. Any other creatable form is reached through
+ * the quiet line under them, and becomes a chip only when the org number
+ * itself points at it (an 8-series number after every lookup missed): the
+ * lookup normally settles those forms before the picker is reached.
+ */
+function pickerForms(orgNumber: string | null | undefined): { chips: EntityType[]; viaLine: EntityType[] } {
+  const creatable = creatableEntityTypes()
+  const suggested = suggestedFormForOrgNumber(orgNumber)
+  const others = creatable.filter((form) => !FORM_PICKER_FIRST.includes(form))
+  return {
+    chips: [
+      ...FORM_PICKER_FIRST.filter((form) => creatable.includes(form)),
+      ...others.filter((form) => form === suggested),
+    ],
+    viaLine: others.filter((form) => form !== suggested),
+  }
+}
 
 /** i18n key per legal form for the picker chips and the summary card. */
 const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
+}
+
+/**
+ * Per-form sentence for the picker's info text, shown only while the form is
+ * creatable; null when the base text already covers the form.
+ */
+const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
+  aktiebolag: null,
+  enskild_firma: null,
+  ideell_forening: 'journey_form_info_forening',
+}
+
+/** Statutory label for a planned-form code the reducer stored, or null. */
+function plannedFormLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  if (isEntityType(code)) return ENTITY_TYPE_LABELS_SV[code]
+  return plannedLegalForms().find((planned) => planned.code === code)?.label ?? null
 }
 import JourneyTrack from './JourneyTrack'
 import Question from './Question'
@@ -172,7 +217,14 @@ export default function OnboardingJourney({
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
-  const isEf = entity === 'enskild_firma'
+  // Two capabilities drive every wording difference between the forms.
+  // personOwned: the org number is the owner's personnummer (enskild
+  // firma), so the company IS the person and the questions say "du" and
+  // "firman"; every juridisk person shares the form-neutral "företaget"
+  // copy. calendarOnly: BFL 3 kap 1 § binds a fysisk person to the
+  // calendar year, so the fiscal-year questions collapse to first-year-or-not.
+  const personOwned = isEntityType(entity) && usesPersonnummerAsOrgNumber(entity)
+  const calendarOnly = isEntityType(entity) && fiscalYearLockedToCalendar(entity)
 
   const monthLong = useMemo(() => {
     const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'long' })
@@ -548,6 +600,16 @@ export default function OnboardingJourney({
 
   const flyProps = { flyTargetRef: bandRef, flyTargetFrac: STATION_FRACS[station] }
 
+  // A form whose org number is the owner's personnummer (enskild firma)
+  // is identified by its form label in rows and previews, never by the
+  // number, which would print a personnummer in plain text.
+  function identFor(legalEntityType: string | null | undefined, orgNumber: string): string {
+    const mapped = mapEntityType(legalEntityType)
+    return mapped && usesPersonnummerAsOrgNumber(mapped)
+      ? t(FORM_LABEL_KEY[mapped])
+      : formatOrgNumber(orgNumber)
+  }
+
   function renderStep() {
     const s = state.settings
     switch (state.step) {
@@ -594,10 +656,7 @@ export default function OnboardingJourney({
               <>
                 <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
                   {suggestions.map((s, i) => {
-                    // A sole trader's org number is their personnummer:
-                    // the row names the form instead, never the number.
-                    const isSoleTrader = mapEntityType(s.legalEntityType) === 'enskild_firma'
-                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(s.orgNumber)
+                    const ident = identFor(s.legalEntityType, s.orgNumber)
                     const sub = [ident, s.city, s.active ? null : t('journey_suggest_inactive')]
                       .filter(Boolean)
                       .join(' · ')
@@ -631,10 +690,7 @@ export default function OnboardingJourney({
                 <p className="jny-enterhint">{t('journey_search_pick')}</p>
                 <ChipRow
                   options={state.searchHits.map((h) => {
-                    // A sole trader's org number is their personnummer: the
-                    // chip names the form instead, never the number.
-                    const isSoleTrader = mapEntityType(h.result.legalEntityType) === 'enskild_firma'
-                    const ident = isSoleTrader ? t('journey_form_ef') : formatOrgNumber(h.orgNumber)
+                    const ident = identFor(h.result.legalEntityType, h.orgNumber)
                     const city = h.result.address?.city
                     return {
                       key: h.orgNumber,
@@ -656,7 +712,7 @@ export default function OnboardingJourney({
                     <InkText text={preview.result.companyName} step={40} />
                     <span className="jny-found-sub">
                       {[
-                        mapEntityType(preview.result.legalEntityType) === 'enskild_firma' ? t('journey_form_ef') : formatOrgNumber(preview.orgNumber),
+                        identFor(preview.result.legalEntityType, preview.orgNumber),
                         preview.result.address?.city,
                       ]
                         .filter(Boolean)
@@ -704,31 +760,79 @@ export default function OnboardingJourney({
           </Question>
         )
 
-      case 'form':
+      case 'planned': {
+        // The registry named a form Accounted has scoped but cannot create
+        // yet: say so before the picker, so the nearest supported form is
+        // not picked by mistake. The picker stays one chip away.
+        const label = plannedFormLabel(state.plannedForm) ?? t('journey_form_planned_group')
         return (
-          <Question title={t('journey_form_title')} info={t('journey_form_info')}>
+          <Question title={t('journey_planned_title', { form: label })} sub={t('journey_planned_sub')}>
             <ChipRow
-              options={FORM_PICKER_ORDER.filter(isEntityTypeCreatable).map((key) => ({
-                key,
-                label: t(FORM_LABEL_KEY[key]),
-              }))}
-              onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
+              options={[
+                { key: 'edit', label: t('journey_notfound_edit') },
+                { key: 'continue', label: t('journey_planned_continue') },
+              ]}
+              onPick={(k) => dispatch({ type: k === 'edit' ? 'PLANNED_EDIT' : 'PLANNED_CONTINUE' })}
               {...flyProps}
             />
           </Question>
         )
+      }
+
+      case 'form': {
+        const { chips, viaLine } = pickerForms(s.org_number)
+        const info = [
+          t('journey_form_info'),
+          ...chips.map((form) => FORM_INFO_KEY[form]).filter((key) => key !== null).map((key) => t(key)),
+          t('journey_form_info_tail'),
+        ].join(' ')
+        const plannedLabel = plannedFormLabel(state.plannedForm)
+        return (
+          <Question
+            title={t('journey_form_title')}
+            info={info}
+            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+          >
+            <ChipRow
+              options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
+              onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
+              {...flyProps}
+            />
+            {/* One quiet line: the forms the lookup normally settles on its
+                own stay reachable without a third chip; with none creatable
+                the line says they are coming. */}
+            {viaLine.length > 0 ? (
+              viaLine.map((form) => (
+                <p key={form} className="jny-more">
+                  {t('journey_form_more_pre', { form: t(FORM_LABEL_KEY[form]) })}{' '}
+                  <button
+                    type="button"
+                    className="jny-btn-quiet"
+                    onClick={() => dispatch({ type: 'ENTITY_PICKED', entityType: form })}
+                  >
+                    {t('journey_form_more_link', { form: t(FORM_LABEL_KEY[form]).toLowerCase() })}
+                  </button>
+                  .
+                </p>
+              ))
+            ) : chips.length === FORM_PICKER_FIRST.length ? (
+              <p className="jny-more">{t('journey_form_more_soon')}</p>
+            ) : null}
+          </Question>
+        )
+      }
 
       case 'name': {
         const suggested = s.company_name ?? ''
         return (
           <Question
-            title={isEf ? t('journey_name_ef_title') : t('journey_name_ab_title')}
-            sub={isEf ? t('journey_name_ef_sub') : t('journey_name_ab_sub')}
+            title={personOwned ? t('journey_name_ef_title') : t('journey_name_ab_title')}
+            sub={personOwned ? t('journey_name_ef_sub') : t('journey_name_ab_sub')}
           >
             <NameInput
               key={state.step}
               initial={suggested}
-              placeholder={isEf ? t('journey_name_ef_placeholder') : t('journey_name_ab_placeholder')}
+              placeholder={personOwned ? t('journey_name_ef_placeholder') : t('journey_name_ab_placeholder')}
               hint={
                 <>
                   {t('journey_press')} <b>Enter</b>
@@ -743,7 +847,7 @@ export default function OnboardingJourney({
 
       case 'address':
         return (
-          <Question title={isEf ? t('journey_addr_ef_title') : t('journey_addr_ab_title')}>
+          <Question title={personOwned ? t('journey_addr_ef_title') : t('journey_addr_ab_title')}>
             <AddressFields
               initial={{ street: s.address_line1 ?? '', postalCode: s.postal_code ?? '', city: s.city ?? '' }}
               onChange={(v) => dispatch({ type: 'DRAFT_SETTINGS', settings: { address_line1: v.street, postal_code: v.postalCode, city: v.city } })}
@@ -766,7 +870,7 @@ export default function OnboardingJourney({
       case 'fskatt':
         return (
           <Question
-            title={isEf ? t('journey_fskatt_ef_title') : t('journey_fskatt_ab_title')}
+            title={personOwned ? t('journey_fskatt_ef_title') : t('journey_fskatt_ab_title')}
             info={t('journey_fskatt_info')}
           >
             <ChipRow
@@ -781,7 +885,7 @@ export default function OnboardingJourney({
         )
 
       case 'fy': {
-        if (isEf) {
+        if (calendarOnly) {
           return (
             <Question
               title={t('journey_fy_ef_title')}
@@ -870,11 +974,11 @@ export default function OnboardingJourney({
           : null
         return (
           <Question
-            title={isEf ? t('journey_fystart_ef_title') : t('journey_fystart_ab_title')}
+            title={personOwned ? t('journey_fystart_ef_title') : t('journey_fystart_ab_title')}
             sub={
               regIso
                 ? t('journey_fystart_reg_sub', { date: formatDayMonthYear(regIso) })
-                : isEf
+                : personOwned
                   ? t('journey_fystart_ef_sub')
                   : t('journey_fystart_ab_sub')
             }
@@ -901,7 +1005,7 @@ export default function OnboardingJourney({
         return (
           <FyEndStep
             t={t}
-            isEf={isEf}
+            calendarOnly={calendarOnly}
             startDate={s.first_year_start ?? ''}
             monthShort={monthShort}
             formatDate={formatDayMonthYear}
@@ -913,7 +1017,7 @@ export default function OnboardingJourney({
       case 'momsyn':
         return (
           <Question
-            title={isEf ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
+            title={personOwned ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
             info={t('journey_momsyn_info')}
           >
             <ChipRow
@@ -932,7 +1036,7 @@ export default function OnboardingJourney({
         if (s.vat_number) info += ' ' + t('journey_moms_info_vatnr', { vatNumber: s.vat_number })
         return (
           <Question
-            title={isEf ? t('journey_moms_ef_title') : t('journey_moms_ab_title')}
+            title={personOwned ? t('journey_moms_ef_title') : t('journey_moms_ab_title')}
             sub={state.lookupRan && state.ticLookup?.registration.vat ? t('journey_moms_sub_registered') : undefined}
             info={info}
           >
@@ -954,7 +1058,7 @@ export default function OnboardingJourney({
       case 'method':
         return (
           <Question
-            title={isEf ? t('journey_method_ef_title') : t('journey_method_ab_title')}
+            title={personOwned ? t('journey_method_ef_title') : t('journey_method_ab_title')}
             info={t('journey_method_info')}
             attn={state.serverError === 'generic' ? t('journey_err_generic') : undefined}
           >
@@ -1193,7 +1297,7 @@ function FyStartWithSuggestion({
 
 function FyEndStep({
   t,
-  isEf,
+  calendarOnly,
   startDate,
   monthShort,
   formatDate,
@@ -1201,7 +1305,8 @@ function FyEndStep({
   flyProps,
 }: {
   t: TFn
-  isEf: boolean
+  /** BFL 3 kap 1 §: the first year must end 31 December, so no other end month is offered. */
+  calendarOnly: boolean
   startDate: string
   monthShort: string[]
   formatDate: (iso: string) => string
@@ -1212,7 +1317,7 @@ function FyEndStep({
   const [showMonths, setShowMonths] = useState(false)
   const [preview, setPreview] = useState<FirstYearEndOption | null>(null)
   const [sy, sm] = startDate.split('-').map(Number)
-  const options = isEf
+  const options = calendarOnly
     ? efFirstYearEndOptions(sy, sm)
     : abFirstYearEndOptions(sy, sm, endMonth)
   const cells: 24 | 36 = sm - 1 + 19 > 24 ? 36 : 24
@@ -1223,7 +1328,7 @@ function FyEndStep({
     <Question
       title={t('journey_fyend_title')}
       sub={t('journey_fyend_sub')}
-      info={isEf ? t('journey_fyend_ef_info') : t('journey_fyend_ab_info')}
+      info={calendarOnly ? t('journey_fyend_ef_info') : t('journey_fyend_ab_info')}
     >
       <YearBand
         cells={cells}
@@ -1261,7 +1366,7 @@ function FyEndStep({
             <span className="jny-rec">{t('journey_fyend_months', { count: o.months })}</span>
           </button>
         ))}
-        {!isEf ? (
+        {!calendarOnly ? (
           <button type="button" className="jny-pick" onClick={() => setShowMonths(true)}>
             {t('journey_fyend_other_month')}
           </button>

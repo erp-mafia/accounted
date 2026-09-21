@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
-import { deriveToolMeta, tools } from '../server'
+import { deriveToolMeta, isDefaultCatalogTool, tools } from '../server'
 
 const INVOICE_ID = '22222222-2222-4222-8222-222222222222'
 const tool = () => tools.find((candidate) => candidate.name === 'gnubok_delete_draft_invoice')!
@@ -26,8 +26,10 @@ describe('gnubok_delete_draft_invoice: registration', () => {
     expect(tool().annotations.readOnlyHint).toBe(false)
     expect(tool().annotations.destructiveHint).toBe(true)
     expect(tool().annotations.idempotentHint).toBe(false)
-    // tools/list budget is at zero headroom: search-only catalog visibility.
-    expect(tool().catalogVisibility).toBe('search')
+    // Default catalog (issue #2748): a search-only WRITE is absent from
+    // tools/list and refused by gnubok_call_tool, so the claude.ai connector
+    // could not delete a draft at all.
+    expect(isDefaultCatalogTool(tool())).toBe(true)
     expect(TOOL_SCOPE_MAP.gnubok_delete_draft_invoice).toBe('invoices:write')
     // 'high' risk: never auto-committed, approval is always required.
     expect(OPERATION_RISK_TIERS.delete_draft_invoice).toBe('high')

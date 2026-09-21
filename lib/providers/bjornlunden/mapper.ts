@@ -9,6 +9,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
+import { creditNoteTypeCode } from '../dto';
 import { readNumber, resolveVatTriple } from '../amounts';
 
 /**
@@ -100,13 +101,21 @@ export function mapBLToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceD
     balance: amount(balance, currency),
   };
 
+  const invoiceTypeCode = creditNoteTypeCode(false, totalAmount);
+  const blStatus = deriveBLInvoiceStatus(raw);
+
   return {
     id: String(raw['entityId'] ?? raw['invoiceNumber'] ?? ''),
     invoiceNumber: String(raw['invoiceNumber'] ?? ''),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
+    // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
+    // The sandbox-verified field list above carries no credit flag; a credit
+    // invoice arrives with a negative amount (9 such rows in production were
+    // imported as paid invoices, #2789), so the amount is the signal.
+    invoiceTypeCode,
     currencyCode: currency,
-    status: deriveBLInvoiceStatus(raw),
+    status: invoiceTypeCode && blStatus !== 'cancelled' && blStatus !== 'draft' ? 'credited' : blStatus,
     supplier: { name: '', identifications: [] },
     customer,
     lines: [], // BL doesn't include line items in list responses

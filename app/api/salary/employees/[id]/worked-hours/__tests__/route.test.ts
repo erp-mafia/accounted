@@ -20,7 +20,20 @@ import { createRecordingSupabase } from './recording-supabase'
 import { computePremiumLines } from '@/lib/salary/shift-premium-engine'
 import type { ShiftPremiumRule } from '@/types'
 
-const { supabase, enqueue, reset, insertedRows, selectedColumns } = createRecordingSupabase()
+const { supabase, enqueue, reset, insertedRows, selectedColumns, ops } = createRecordingSupabase()
+
+/** The register-lock lookup every write makes right after the employee check. */
+const enqueueNoLockingRuns = () => enqueue({ data: [] })
+
+/** July 2026 pay month, calculated, legacy NULL window: locks 2026-07-01..31. */
+const REVIEW_RUN_JULY = {
+  id: 'run-jul',
+  status: 'review',
+  period_year: 2026,
+  period_month: 7,
+  deviation_period_start: null,
+  deviation_period_end: null,
+}
 
 const requireAuthMock = vi.fn()
 vi.mock('@/lib/auth/require-auth', () => ({
@@ -115,6 +128,7 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
 
   it('upserts a worked day (happy path)', async () => {
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } }) // loadEmployee
+    enqueueNoLockingRuns()
     enqueue({ data: null }) // delete existing
     enqueue({ data: { id: 'wd-1', work_date: '2026-07-01', hours: 8 } }) // insert
 
@@ -132,8 +146,29 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
     expect(response.status).toBe(404)
   })
 
+  it('returns 409 with the Swedish message and the run when a calculated run already read the date', async () => {
+    enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } }) // loadEmployee
+    enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+
+    const response = await POST(post({ work_date: '2026-07-01', hours: 8 }), params)
+    const { status, body } = await parseJsonResponse<{
+      error: string
+      code: string
+      details: { salary_run_id: string; locked_dates: string[] }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error).toContain('avvikelseperioden')
+    expect(body.details).toMatchObject({ salary_run_id: 'run-jul', locked_dates: ['2026-07-01'] })
+    // Neither the delete nor the insert of the replace ran.
+    expect(ops.filter((op) => op.table === 'salary_worked_days')).toHaveLength(0)
+    expect(insertedRows()).toHaveLength(0)
+  })
+
   it('writes start_time and end_time to the database', async () => {
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } }) // loadEmployee
+    enqueueNoLockingRuns()
     enqueue({ data: null }) // delete existing
     enqueue({
       data: {
@@ -163,6 +198,7 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
 
   it('stores NULL times when the caller omits the shift window', async () => {
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } })
+    enqueueNoLockingRuns()
     enqueue({ data: null })
     enqueue({ data: { id: 'wd-1' } })
 
@@ -176,6 +212,7 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
     // has zero overlap with the engine's 08:00-17:00 fallback, so before the
     // times were persisted this employee got no OB-tillägg at all.
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } })
+    enqueueNoLockingRuns()
     enqueue({ data: null })
     enqueue({ data: { id: 'wd-1' } })
 
@@ -210,6 +247,7 @@ describe('POST /api/salary/employees/[id]/worked-hours', () => {
     // Saturday 2026-07-04, 18:00 -> 23:00 = 5 h. With a full-day weekend rule the
     // 08:00-17:00 fallback would have billed 9 h of the wrong hours instead.
     enqueue({ data: { id: 'emp-1', salary_type: 'hourly' } })
+    enqueueNoLockingRuns()
     enqueue({ data: null })
     enqueue({ data: { id: 'wd-1' } })
 

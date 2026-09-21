@@ -3,6 +3,22 @@ import type { WebhookEventPayload } from 'resend'
 
 const verifyMock = vi.fn()
 const rpcMock = vi.fn()
+const maybeSingleMock = vi.fn()
+
+function mockDeliveryRow(
+  row: { to_addresses: string[]; cc_addresses: string[]; bcc_addresses: string[] } | null,
+  error: { message: string } | null = null,
+) {
+  maybeSingleMock.mockResolvedValue({ data: row, error })
+}
+
+const fromMock = vi.fn(() => ({
+  select: () => ({
+    eq: () => ({
+      eq: () => ({ maybeSingle: maybeSingleMock }),
+    }),
+  }),
+}))
 
 vi.mock('resend', () => ({
   Resend: class {
@@ -11,7 +27,7 @@ vi.mock('resend', () => ({
 }))
 
 vi.mock('@/lib/auth/api-keys', () => ({
-  createServiceClientNoCookies: () => ({ rpc: rpcMock }),
+  createServiceClientNoCookies: () => ({ rpc: rpcMock, from: fromMock }),
 }))
 
 import { emailExtension } from '@/extensions/general/email'
@@ -187,6 +203,7 @@ describe('verifyDeliveryWebhook', () => {
     vi.clearAllMocks()
     process.env.RESEND_API_KEY = 'test-key'
     process.env.RESEND_DELIVERY_WEBHOOK_SECRET = 'whsec_test'
+    mockDeliveryRow(null)
   })
 
   it('passes the Svix headers through to the provider verifier', () => {
@@ -220,6 +237,7 @@ describe('POST /api/extensions/ext/email/delivery-status', () => {
     vi.clearAllMocks()
     process.env.RESEND_API_KEY = 'test-key'
     process.env.RESEND_DELIVERY_WEBHOOK_SECRET = 'whsec_test'
+    mockDeliveryRow(null)
   })
 
   it('is unauthenticated: the signature is the credential', () => {
@@ -300,6 +318,120 @@ describe('POST /api/extensions/ext/email/delivery-status', () => {
 
     expect(response.status).toBe(200)
     expect(body.data).toEqual({ applied: false, reason: 'no_matching_delivery' })
+  })
+
+  it('names the domain when a bounce is for an address outside the send', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({
+        to: ['forward@other.se'],
+        bounce: { message: 'General bounce', subType: 'General', type: 'Transient' },
+      }),
+    })
+    mockDeliveryRow({
+      to_addresses: ['customer@example.com'],
+      cc_addresses: ['copy@example.com'],
+      bcc_addresses: [],
+    })
+    rpcMock.mockResolvedValue({ data: 'delivery-1', error: null })
+
+    const response = await deliveryRoute.handler(webhookRequest())
+
+    expect(response.status).toBe(200)
+    expect(rpcMock).toHaveBeenCalledWith(
+      'apply_invoice_delivery_provider_event',
+      expect.objectContaining({
+        p_status: 'bounced',
+        p_detail: 'General bounce Transient/General (reported for ***@other.se)',
+        p_recipient_addresses: ['forward@other.se'],
+      }),
+    )
+  })
+
+  it('says so when a bounce names no recipient at all', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({
+        to: [],
+        bounce: { message: 'General bounce', subType: 'General', type: 'Transient' },
+      }),
+    })
+    mockDeliveryRow({ to_addresses: ['customer@example.com'], cc_addresses: [], bcc_addresses: [] })
+    rpcMock.mockResolvedValue({ data: 'delivery-1', error: null })
+
+    await deliveryRoute.handler(webhookRequest())
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      'apply_invoice_delivery_provider_event',
+      expect.objectContaining({
+        p_detail: 'General bounce Transient/General (reported without a recipient)',
+        p_recipient_addresses: [],
+      }),
+    )
+  })
+
+  it('keeps the plain detail when the bounce is for a listed recipient', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({
+        to: ['Copy@Example.com'],
+        bounce: { message: 'Mailbox full', subType: 'MailboxFull', type: 'Transient' },
+      }),
+    })
+    mockDeliveryRow({
+      to_addresses: ['customer@example.com'],
+      cc_addresses: ['copy@example.com'],
+      bcc_addresses: [],
+    })
+    rpcMock.mockResolvedValue({ data: 'delivery-1', error: null })
+
+    await deliveryRoute.handler(webhookRequest())
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      'apply_invoice_delivery_provider_event',
+      expect.objectContaining({ p_detail: 'Mailbox full Transient/MailboxFull' }),
+    )
+  })
+
+  it('does not read the send for a delivered report', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.delivered',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({ to: ['forward@other.se'] }),
+    })
+    rpcMock.mockResolvedValue({ data: 'delivery-1', error: null })
+
+    await deliveryRoute.handler(webhookRequest())
+
+    expect(fromMock).not.toHaveBeenCalled()
+    expect(rpcMock).toHaveBeenCalledWith(
+      'apply_invoice_delivery_provider_event',
+      expect.objectContaining({ p_status: 'delivered', p_detail: null }),
+    )
+  })
+
+  it('still applies the bounce when the recipient read fails', async () => {
+    verifyMock.mockReturnValue({
+      type: 'email.bounced',
+      created_at: '2026-07-24T08:00:00.000Z',
+      data: baseData({
+        to: ['forward@other.se'],
+        bounce: { message: 'General bounce', subType: 'General', type: 'Transient' },
+      }),
+    })
+    mockDeliveryRow(null, { message: 'connection reset' })
+    rpcMock.mockResolvedValue({ data: 'delivery-1', error: null })
+
+    const response = await deliveryRoute.handler(webhookRequest())
+
+    expect(response.status).toBe(200)
+    expect(rpcMock).toHaveBeenCalledWith(
+      'apply_invoice_delivery_provider_event',
+      expect.objectContaining({ p_detail: 'General bounce Transient/General' }),
+    )
   })
 
   it('fails loudly on a database error so the provider retries', async () => {

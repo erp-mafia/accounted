@@ -120,10 +120,13 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, vat_registered')
       .eq('company_id', companyId)
       .maybeSingle()
     const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+    // A non-registered company books no moms line, so its edited preview
+    // carries no rate-based VAT either (lib/bookkeeping/vat-registration.ts).
+    const vatRegistered: boolean | null = settings?.vat_registered ?? null
 
     const isBusiness = newCategory !== 'private'
 
@@ -132,7 +135,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     // override on a VAT-less treatment is a caller error; a preserved one from
     // before the edit is simply stale and gets dropped.
     const probe = getCategoryAccountMapping(
-      newCategory, (tx as Transaction).amount, isBusiness, entityType, newVatTreatment,
+      newCategory, (tx as Transaction).amount, isBusiness, entityType, newVatTreatment, vatRegistered,
     )
     const carriesRateVat =
       isBusiness &&
@@ -163,6 +166,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
         entityType,
         newVatTreatment,
         newVatAmount,
+        vatRegistered,
       )
     } catch (err) {
       return NextResponse.json(

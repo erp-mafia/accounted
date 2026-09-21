@@ -39,7 +39,7 @@ import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
-import type { Currency, Customer, InvoiceDocumentType } from '@/types'
+import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
 // document_type (structural: change via delete + recreate), invoice_number
@@ -238,6 +238,7 @@ registerEndpoint({
     'items is a FULL REPLACE (no per-line merge): send the complete new line set, minimum one item. Omitting items keeps the current lines untouched. VAT rates are re-validated against the customer type and totals are recomputed server-side.',
     'items are always built against the invoice\'s EXISTING customer: customer_id cannot change on PATCH.',
     'default_dimensions replaces the entire bag (no per-key merge): read the current value first if you want to add a tag. Send {} to clear all tags. Codes are validated against the dimension registry at :send, not at PATCH time.',
+    'When items are replaced, the VAT treatment is decided again from the customer\'s current row (customer_type, vat_number validation, country), so it can differ from the draft\'s stored one: an eu_business whose country is SE gets Swedish VAT, never reverse charge. The 200 may carry meta.warnings about the treatment (same codes as POST /invoices: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED, EU_BUSINESS_VAT_NUMBER_MISSING, EU_BUSINESS_COUNTRY_IS_SE, SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER, SWEDISH_VAT_TO_EXPORT_CUSTOMER). The update succeeded; the warning says why the rates are what they are.',
   ],
   example: {
     request: { due_date: '2026-07-15', notes: 'Förlängd förfallotid' },
@@ -388,11 +389,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
         deduction_personnummer_last4: string | null
       }
 
-      // The builder only reads customer_type + vat_number_validated: narrow
-      // projection keeps customer PII out of this path.
+      // Narrow projection keeps customer PII out of this path. Every column
+      // the builder reads is a required key of its customer type, so dropping
+      // one from this string no longer compiles: see POST /invoices for how
+      // `country` went missing (#2783).
       const { data: customer, error: customerErr } = await ctx.supabase
         .from('customers')
-        .select('id, customer_type, vat_number_validated')
+        .select('id, customer_type, vat_number, vat_number_validated, country')
         .eq('company_id', ctx.companyId!)
         .eq('id', cur.customer_id as string)
         .maybeSingle()
@@ -414,7 +417,9 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       const build = await buildInvoiceWriteData({
         supabase: ctx.supabase,
         companyId: ctx.companyId!,
-        customer: customer as unknown as Customer,
+        // personal_number withheld on purpose, as on POST /invoices: explicit
+        // null, so the ROT/RUT customer-card fallback is visibly off here.
+        customer: { ...customer, personal_number: null },
         documentType: ((cur.document_type as string) || 'invoice') as InvoiceDocumentType,
         input: {
           customer_id: cur.customer_id as string,
@@ -476,10 +481,13 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       // Never echo the encrypted personnummer blob in a preview.
       const { deduction_personnummer_encrypted: _omit, ...previewFields } = build.invoiceFields
 
+      // meta.warnings on every return of this branch: the builder's
+      // VAT-treatment explanation (#2749, #2558). Non-blocking, absent when
+      // there is nothing to say; the dry run carries the same list.
       if (ctx.dryRun) {
         return dryRunPreview(
           { ...current, ...previewFields, ...updateData, items: build.items },
-          { requestId: ctx.requestId, log: ctx.log },
+          { requestId: ctx.requestId, log: ctx.log, warnings: build.warnings },
         )
       }
 
@@ -536,10 +544,10 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           invoiceId,
           pgCode: (refetchErr as { code?: string } | null)?.code,
         })
-        return ok(updatedRow, { requestId: ctx.requestId })
+        return ok(updatedRow, { requestId: ctx.requestId, warnings: build.warnings })
       }
 
-      return ok(complete, { requestId: ctx.requestId })
+      return ok(complete, { requestId: ctx.requestId, warnings: build.warnings })
     }
 
     if (ctx.dryRun) {
@@ -567,6 +575,7 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       })
     }
 
+    // Metadata-only update: no line changed, so no rate to explain.
     return ok(data, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },

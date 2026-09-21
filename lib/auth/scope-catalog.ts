@@ -359,9 +359,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_export_sie:                      'reports:read',
   gnubok_audit_package:                   'reports:read',
   gnubok_import_sie:                      'bookkeeping:write',
-  // Byte-exact SIE upload URL feeding gnubok_import_sie (same write intent).
   gnubok_sie_import_status:              'reports:read',
-  gnubok_create_sie_upload:               'bookkeeping:write',
+  // Preflight is analysis, not a ledger write, and the byte-exact upload URL
+  // only stages a file for it (documents bucket, 50 MB cap, two-hour TTL,
+  // per-company pending prefix). A read key can therefore check a file
+  // before anyone holds a write key; the ledger write stays the staged
+  // gnubok_import_sie (Easy Online Stores evaluation, 2026-09-16).
+  gnubok_sie_preflight:                   'reports:read',
+  gnubok_create_sie_upload:               'reports:read',
   // Rot/rut begäran om utbetalning (records a payout request on generate)
   gnubok_generate_rot_rut_file:           'invoices:write',
   // Supplier CRUD
@@ -419,7 +424,15 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_rot_rut_payout_requests:         'invoices:read',
   // Skatteverkets utbetalning: bank row booked against its begäran (stages)
   gnubok_settle_rot_rut_payout:                'transactions:write',
+  // Anläggningsregister: reads ride reports:read (register data feeds the
+  // depreciation proposal); writes are bookkeeping:write like the posting.
+  gnubok_list_assets:                          'reports:read',
+  gnubok_get_asset:                            'reports:read',
+  gnubok_create_asset:                         'bookkeeping:write',
+  gnubok_update_asset:                         'bookkeeping:write',
+  gnubok_dispose_asset:                        'bookkeeping:write',
   gnubok_list_verifikat_without_documents:     'transactions:read',
+  gnubok_receipt_hunt_worklist:                'transactions:read',
   gnubok_find_voucher_candidates_for_invoice:  'invoices:read',
   gnubok_propose_dispositioner:                'reports:read',
   gnubok_propose_accruals:                     'reports:read',

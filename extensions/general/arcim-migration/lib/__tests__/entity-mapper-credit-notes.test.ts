@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { mapSalesInvoice } from '../entity-mapper'
 import type { InvoiceStatusCode, PartyDto, SalesInvoiceDto } from '@/lib/providers/dto'
+import { mapFortnoxToSalesInvoice } from '@/lib/providers/fortnox/mapper'
+import { mapBrioxToSalesInvoice } from '@/lib/providers/briox/mapper'
 
 /**
  * Guards the kreditfaktura shape written by mapSalesInvoice.
@@ -36,6 +38,7 @@ function makeDto(over: {
   paid?: boolean
   balance?: number
   note?: string
+  creditedInvoiceRef?: SalesInvoiceDto['creditedInvoiceRef']
 } = {}): SalesInvoiceDto {
   const s = over.signOfAmounts ?? 1
   const net = (over.net ?? 1000) * s
@@ -73,6 +76,7 @@ function makeDto(over: {
       balance: { value: over.balance ?? gross, currencyCode: 'SEK' },
     },
     note: over.note,
+    creditedInvoiceRef: over.creditedInvoiceRef,
   }
 }
 
@@ -127,12 +131,22 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     expect(vatUnresolved).toBe(false)
   })
 
-  it('forces the terminal status whatever lifecycle status the provider sends', () => {
-    for (const status of ['draft', 'sent', 'booked', 'paid', 'overdue'] as InvoiceStatusCode[]) {
+  it('forces the terminal status whatever issued lifecycle status the provider sends', () => {
+    for (const status of ['sent', 'booked', 'paid', 'overdue', 'credited'] as InvoiceStatusCode[]) {
       const { invoice } = map({ invoiceTypeCode: '381', status, paid: true, balance: 0 })
       expect(invoice.status, `status=${status}`).toBe('credited')
       expect(STATUSES).toContain(invoice.status as string)
     }
+  })
+
+  it('keeps a credit note the source never issued a draft', () => {
+    // Bokio's credit-note enum is draft | published. A draft has not reduced
+    // anything yet: it lands the way an in-app credit note starts, as a draft
+    // with reversed amounts, and does not mark the original credited.
+    const { invoice } = map({ invoiceTypeCode: '381', status: 'draft' })
+    expect(invoice.status).toBe('draft')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.paid_amount).toBe(0)
   })
 
   it('collects nothing on a credit note', () => {
@@ -159,6 +173,34 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     // has to be legible on the record itself years later.
     const { invoice } = map({ invoiceTypeCode: '381' })
     expect(invoice.notes).toContain('Referens till ursprungsfakturan')
+  })
+
+  it('carries the credited invoice the provider named, for the pairing pass', () => {
+    // Bokio's invoiceRef names the credited invoice by its own id and number.
+    // The mapper cannot turn that into an Accounted id (the original may be
+    // inserted later in the run, or by an earlier run), so it hands the
+    // reference on and reports the row unpaired as written.
+    const ref = { id: 'a419cf69-db6f-4de9-992c-b1a60942a443', invoiceNumber: 'IN-2024-001' }
+    const { invoice, creditNoteUnlinked, creditedInvoiceRef } = map({ invoiceTypeCode: '381', creditedInvoiceRef: ref })
+    expect(creditedInvoiceRef).toEqual(ref)
+    expect(creditNoteUnlinked).toBe(true)
+    expect(invoice).not.toHaveProperty('credited_invoice_id')
+  })
+
+  it('names the credited invoice in notes when the provider sent its number', () => {
+    // Whether or not the pairing pass finds that invoice here, the number
+    // must be legible on the record (ML 17 kap 22-23 §).
+    const { invoice } = map({
+      invoiceTypeCode: '381',
+      creditedInvoiceRef: { id: 'a419cf69-db6f-4de9-992c-b1a60942a443', invoiceNumber: 'IN-2024-001' },
+    })
+    expect(invoice.notes).toContain('Krediterar faktura IN-2024-001')
+    expect(invoice.notes).not.toContain('Referens till ursprungsfakturan saknas')
+  })
+
+  it('does not carry a reference for an ordinary invoice', () => {
+    const { creditedInvoiceRef } = map({ status: 'sent', creditedInvoiceRef: { invoiceNumber: 'stray' } })
+    expect(creditedInvoiceRef).toBeNull()
   })
 
   it('preserves the provider note alongside the disclosure', () => {
@@ -199,6 +241,128 @@ describe('mapSalesInvoice: kreditfaktura', () => {
     expect(invoice.status).toBe('paid')
     expect(invoice.paid_amount).toBe(1250)
     expect(invoice.remaining_amount).toBe(0)
-    expect(invoice.paid_at).toBe('2026-03-10')
+    // The fixture names no payment date, so none is written: the issue date
+    // is not a settlement date (#2719).
+    expect(invoice.paid_at).toBeNull()
+  })
+
+  it('keeps a credit note the source voided cancelled', () => {
+    // A makulerad kreditfaktura never reduced anything. Importing it as
+    // 'credited' would let it count as an effective credit.
+    const { invoice } = map({ invoiceTypeCode: '381', status: 'cancelled' })
+    expect(invoice.status).toBe('cancelled')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.paid_amount).toBe(0)
+  })
+})
+
+/**
+ * #2789: what a provider's own credit note becomes, end to end through the
+ * provider mapper and the importer. Before the fix a Fortnox kreditfaktura
+ * landed as status 'paid' with paid_amount equal to its negative total, no
+ * reference to the invoice it credits and no disclosure: 3 200 such rows
+ * across 92 companies in production, none of them ever 'credited'.
+ */
+describe('mapSalesInvoice: a provider credit note end to end (#2789)', () => {
+  // InvoiceFull as Fortnox serialises it: `Credit` is the string "true",
+  // amounts are negative, the row carries the sign on the quantity and the
+  // balance is settled against the debit invoice.
+  const fortnoxCredit = {
+    DocumentNumber: '1043', CustomerNumber: '12', CustomerName: 'Kund AB',
+    InvoiceDate: '2026-03-10', DueDate: '2026-04-09', Currency: 'SEK',
+    Credit: 'true', CreditInvoiceReference: '1038',
+    Booked: true, Sent: true, Cancelled: false, VATIncluded: false,
+    Net: -1000, TotalVAT: -250, Total: -1250, Balance: 0,
+    InvoiceRows: [
+      { RowId: 1, Description: 'Konsulttimmar', DeliveredQuantity: '-2.00', Price: 500, Total: -1000, VAT: 25, Unit: 'tim' },
+    ],
+  }
+
+  const importRow = (dto: SalesInvoiceDto) => mapSalesInvoice(dto, 'user-1', 'company-1', 'customer-1')
+
+  it('Fortnox: lands as a credited kreditfaktura that names the invoice it credits', () => {
+    const { invoice, items, creditNoteUnlinked, creditedInvoiceRef } = importRow(mapFortnoxToSalesInvoice(fortnoxCredit))
+    expect(invoice.status).toBe('credited')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.subtotal).toBe(-1000)
+    expect(invoice.vat_amount).toBe(-250)
+    expect(invoice.vat_rate).toBe(25)
+    // Nothing is collected on a credit note: not a negative payment either.
+    expect(invoice.paid_amount).toBe(0)
+    expect(invoice.remaining_amount).toBe(0)
+    expect(invoice.paid_at).toBeNull()
+    expect(items[0]).toMatchObject({ quantity: -2, unit_price: 500, line_total: -1000, vat_amount: -250 })
+    // ML 17 kap 22-23 §: the reference to the original, legible on the record.
+    expect(invoice.notes).toContain('Krediterar faktura 1038')
+    expect(creditedInvoiceRef).toEqual({ id: '1038', invoiceNumber: '1038' })
+    expect(creditNoteUnlinked).toBe(true)
+  })
+
+  it('Fortnox: the list form, which carries no Credit flag, is still a credit note', () => {
+    const { Credit: _credit, CreditInvoiceReference: _ref, InvoiceRows: _rows, Net: _net, TotalVAT: _vat, ...listForm } = fortnoxCredit
+    const { invoice, creditedInvoiceRef } = importRow(mapFortnoxToSalesInvoice(listForm))
+    expect(invoice.status).toBe('credited')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.paid_amount).toBe(0)
+    expect(creditedInvoiceRef).toBeNull()
+    expect(invoice.notes).toContain('Referens till ursprungsfakturan saknas')
+  })
+
+  it('Fortnox: the credited original stays an ordinary invoice with its positive amounts', () => {
+    const original = { ...fortnoxCredit, DocumentNumber: '1038', Credit: 'false', CreditInvoiceReference: '1043',
+      Net: 1000, TotalVAT: 250, Total: 1250, Balance: 0,
+      InvoiceRows: [{ ...fortnoxCredit.InvoiceRows[0], DeliveredQuantity: '2.00', Total: 1000 }] }
+    const { invoice, creditNoteUnlinked } = importRow(mapFortnoxToSalesInvoice(original))
+    expect(invoice.total).toBe(1250)
+    expect(invoice.status).toBe('paid')
+    expect(creditNoteUnlinked).toBe(false)
+  })
+
+  it('Briox: a negative-total document lands as a credited kreditfaktura', () => {
+    const { invoice, items, creditNoteUnlinked } = importRow(mapBrioxToSalesInvoice({
+      id: 71, invoice_number: '2044', invoice_date: '2026-03-10', due_date: '2026-04-09',
+      total_amount: '-1250.00', net_amount: '-1000.00', vat_amount: '-250.00', balance: '0.00', customer_name: 'Kund AB', booked: true,
+      rows: [{ id: 1, description: 'Konsulttimmar', quantity: '-2', price: '500.00', total: '-1000.00', vat_rate: '25' }],
+    }))
+    expect(invoice.status).toBe('credited')
+    expect(invoice.total).toBe(-1250)
+    expect(invoice.paid_amount).toBe(0)
+    expect(items[0]).toMatchObject({ quantity: -2, unit_price: 500, line_total: -1000, vat_amount: -250 })
+    expect(creditNoteUnlinked).toBe(true)
+  })
+
+  it('keeps the relative sign of the rows on a credit note that also charges something', () => {
+    // 65 of the Fortnox credit notes in production mix signs: goods credited,
+    // a restocking fee charged. Their rows sum to the header as sent. Taking
+    // the magnitude of every row would turn the fee into a second credit and
+    // the rows would no longer add up to the header (-1100 against -900).
+    const mixed = { ...fortnoxCredit, Net: -900, TotalVAT: -225, Total: -1125,
+      InvoiceRows: [
+        { RowId: 1, Description: 'Retur vara', DeliveredQuantity: '-2.00', Price: 500, Total: -1000, VAT: 25 },
+        { RowId: 2, Description: 'Returavgift', DeliveredQuantity: '1.00', Price: 100, Total: 100, VAT: 25 },
+      ] }
+    const { invoice, items } = importRow(mapFortnoxToSalesInvoice(mixed))
+    expect(invoice.subtotal).toBe(-900)
+    expect(invoice.total).toBe(-1125)
+    expect(items[0]).toMatchObject({ quantity: -2, unit_price: 500, line_total: -1000, vat_amount: -250 })
+    expect(items[1]).toMatchObject({ quantity: 1, unit_price: 100, line_total: 100, vat_amount: 25 })
+    const net = items.reduce((sum, item) => sum + Number(item.line_total), 0)
+    expect(net).toBe(invoice.subtotal)
+  })
+
+  it('keeps the relative sign of the rows when the provider states the credit note in magnitudes', () => {
+    // The same document as Bokio or the gateway would state it: credited rows
+    // positive, the fee negative, the header a magnitude.
+    const dto = makeDto({ invoiceTypeCode: '381', net: 900, vat: 225 })
+    dto.lines = [
+      { id: '1', description: 'Retur vara', quantity: 2, unitPrice: { value: 500, currencyCode: 'SEK' },
+        lineExtensionAmount: { value: 1000, currencyCode: 'SEK' }, taxPercent: 25, taxAmount: { value: 250, currencyCode: 'SEK' } },
+      { id: '2', description: 'Returavgift', quantity: -1, unitPrice: { value: 100, currencyCode: 'SEK' },
+        lineExtensionAmount: { value: -100, currencyCode: 'SEK' }, taxPercent: 25, taxAmount: { value: -25, currencyCode: 'SEK' } },
+    ]
+    const { invoice, items } = importRow(dto)
+    expect(invoice.subtotal).toBe(-900)
+    expect(items[0]).toMatchObject({ quantity: -2, unit_price: 500, line_total: -1000, vat_amount: -250 })
+    expect(items[1]).toMatchObject({ quantity: 1, unit_price: 100, line_total: 100, vat_amount: 25 })
   })
 })

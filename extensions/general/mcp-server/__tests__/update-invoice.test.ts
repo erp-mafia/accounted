@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
-import { tools } from '../server'
+import { tools, isDefaultCatalogTool } from '../server'
 
 const INVOICE_ID = '22222222-2222-4222-8222-222222222222'
 const CUSTOMER_ID = '11111111-1111-4111-8111-111111111111'
@@ -89,7 +89,12 @@ describe('gnubok_update_invoice: registration', () => {
     expect(tool().annotations.readOnlyHint).toBe(false)
     expect(tool().annotations.destructiveHint).toBe(false)
     expect(tool().annotations.idempotentHint).toBe(true)
-    expect(tool().catalogVisibility).toBe('search')
+    // Default catalog (issue #2748): a search-only WRITE is unreachable from
+    // the claude.ai connector. The pre-read stays search-only, so the tool
+    // must tell the agent to reach it through the bridge.
+    expect(isDefaultCatalogTool(tool())).toBe(true)
+    expect(tool().description).toContain('gnubok_call_tool')
+    expect(tool().description.length).toBeLessThanOrEqual(280)
     expect(TOOL_SCOPE_MAP.gnubok_update_invoice).toBe('invoices:write')
     expect(OPERATION_RISK_TIERS.update_invoice).toBe('medium')
   })
@@ -854,5 +859,56 @@ describe('gnubok_update_invoice: accrual and override pass-back (issue #1642)', 
       accrual_period_end: '2027-08-31',
       accrual_balance_account: '2990',
     })
+  })
+})
+
+describe('gnubok_update_invoice: says why the VAT treatment is what it is (#2749, #2558)', () => {
+  /** eu_business whose number was never VIES-validated: the rule gives Swedish VAT. */
+  const EU_UNVALIDATED_CUSTOMER = {
+    id: CUSTOMER_ID,
+    customer_type: 'eu_business',
+    vat_number: 'DE123456789',
+    vat_number_validated: false,
+    country: 'DE',
+  }
+
+  it('stages the replacement lines at 25 % and names the failed reverse-charge condition', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueItemsEdit(enqueue, EU_UNVALIDATED_CUSTOMER, null)
+
+    const result = (await tool().execute(
+      {
+        invoice_id: INVOICE_ID,
+        items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000 }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult & {
+      message: string
+      preview: { vat_warnings?: Array<{ code: string }> }
+    }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.items?.[0]).toMatchObject({ vat_rate: 25 })
+    expect(result.preview.vat_warnings?.map((w) => w.code)).toEqual(['EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'])
+    expect(result.message).toContain('WARNING: EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED')
+  })
+
+  it('explains nothing on a header-only edit: no line changes, no rates to explain', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: draftInvoice() })
+    enqueue({ data: { id: 'op-header' } })
+
+    const result = (await tool().execute(
+      { invoice_id: INVOICE_ID, notes: 'Ny anteckning' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as StagedResult & { message: string; preview: { vat_warnings?: unknown } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_warnings).toBeUndefined()
+    expect(result.message).not.toContain('WARNING')
   })
 })

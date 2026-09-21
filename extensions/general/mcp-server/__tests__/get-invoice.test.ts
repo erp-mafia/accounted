@@ -14,7 +14,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
-import { tools } from '../server'
+import { tools, isStagingTool } from '../server'
+import { toolCallableVia } from '../tool-reach'
 
 const getInvoice = tools.find((t) => t.name === 'gnubok_get_invoice')!
 
@@ -129,10 +130,19 @@ describe('gnubok_get_invoice: registration', () => {
     expect(TOOL_SCOPE_MAP.gnubok_get_invoice).toBe('invoices:read')
   })
 
-  it('is search-only in the catalog (tools/list context budget)', () => {
-    // payload-size.bench.test.ts sits at its ceiling, and the tool this one
-    // serves (gnubok_update_invoice) is search-only as well.
+  it('is search-only in the catalog but bridged, and the update tool says so', () => {
+    // payload-size.bench.test.ts sits at its ceiling. A search-only READ is
+    // still reachable through gnubok_call_tool, unlike the update tool it
+    // serves, which had to join the default catalog (issue #2748) and now
+    // names the bridge so an agent that only knows tools/list gets here.
     expect(getInvoice.catalogVisibility).toBe('search')
+    expect(toolCallableVia(getInvoice, isStagingTool(getInvoice))).toBe('call_tool')
+    const updateInvoice = tools.find((t) => t.name === 'gnubok_update_invoice')!
+    const itemsNote = (updateInvoice.inputSchema as { properties: { items: { description: string } } })
+      .properties.items.description
+    expect(updateInvoice.description).toContain('gnubok_get_invoice')
+    expect(updateInvoice.description).toContain('gnubok_call_tool')
+    expect(itemsNote).toContain('gnubok_call_tool')
   })
 
   it('keeps its description within the 280-char budget and names the update tool', () => {

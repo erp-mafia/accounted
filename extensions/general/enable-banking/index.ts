@@ -18,6 +18,14 @@ import {
 import { buildPrefilledCredentials, wantsCompanyId } from './lib/prefill-credentials'
 import { syncAccountTransactions } from './lib/sync'
 import { emitBankSyncFailed } from './lib/sync-failure-event'
+import {
+  applyRateLimitCooldown,
+  holdSyncLease,
+  rateLimitCooldownMs,
+  rateLimitHoldUntil,
+} from './lib/sync-lease'
+import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
+import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
 import {
@@ -45,6 +53,28 @@ const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_ATTACH = { maxRequests: 10, windowMs: 60_000 }
 
 const MAX_ENABLED_UIDS = 50
+
+/**
+ * 429 BANK_RATE_LIMITED for the manual sync: the same answer whether the bank
+ * just refused or a held cooldown stopped the call before it was made.
+ * `error` is Swedish because both sync buttons toast it verbatim.
+ */
+function bankRateLimitedResponse(connectionId: string, until: number, now: number): NextResponse {
+  const messages = rateLimitMessages(until, now)
+  const seconds = retryAfterSeconds(until, now)
+  return NextResponse.json(
+    {
+      error: messages.sv,
+      error_en: messages.en,
+      code: 'BANK_RATE_LIMITED',
+      retryable: true,
+      connection_id: connectionId,
+      next_allowed_at: new Date(until).toISOString(),
+      retry_after_seconds: seconds,
+    },
+    { status: 429, headers: { 'Retry-After': String(seconds) } }
+  )
+}
 
 /**
  * Enable Banking (PSD2) extension
@@ -783,6 +813,15 @@ export const enableBankingExtension: Extension = {
           return NextResponse.json({ error: 'Connection is not active' }, { status: 400 })
         }
 
+        // The bank rate-limited this consent (here, through a sibling company
+        // on the same session, the cron or an agent): a person is never put
+        // on the ordinary 15-minute lease, but a call the bank will refuse
+        // only spends quota, so this one is answered from the held cooldown.
+        const rateLimitedUntil = rateLimitHoldUntil(connection, Date.now())
+        if (rateLimitedUntil !== null) {
+          return bankRateLimitedResponse(connection.id, rateLimitedUntil, Date.now())
+        }
+
         try {
           // Keep the full list for write-back; sync only the enabled subset.
           // undefined enabled === true for back-compat with rows that predate
@@ -796,6 +835,20 @@ export const enableBankingExtension: Extension = {
               { status: 400 }
             )
           }
+
+          // Hold the shared sync lease without checking it: a person asking
+          // for a sync is never put on a cooldown, but the cron and the
+          // agent-triggered sync stay off this connection meanwhile.
+          // Best effort: a courtesy to the automatic paths must never fail
+          // the sync the user asked for.
+          await holdSyncLease(supabase, { connectionId: connection.id }, Date.now() + SYNC_COOLDOWN_MS).catch(
+            (leaseError: unknown) => {
+              log.warn('[enable-banking] Sync: could not hold the sync lease', {
+                connection_id,
+                message: leaseError instanceof Error ? leaseError.message : String(leaseError),
+              })
+            },
+          )
 
           const toDate = new Date().toISOString().split('T')[0]
           const fromDate = new Date(Date.now() - days_back * 24 * 60 * 60 * 1000)
@@ -989,6 +1042,27 @@ export const enableBankingExtension: Extension = {
             trigger: 'manual',
             error,
           })
+          // A bank 429 keeps every path away for hours, not minutes. The hold
+          // covers every connection on the session, which crosses companies:
+          // RLS limits a user update to the active company, so this one write
+          // takes the service-role client.
+          const failedAt = Date.now()
+          const cooldownMs = rateLimitCooldownMs(error)
+          if (cooldownMs !== null) {
+            const { createServiceClient } = await import('@/lib/supabase/server')
+            await applyRateLimitCooldown(await createServiceClient(), connection, error, failedAt)
+            // Status, error_message and last_synced_at stay as they are: the
+            // consent is fine and nothing was synced. Never the body in the log.
+            log.warn('[enable-banking] Sync: bank rate limit', {
+              status: error instanceof AspspUnavailableError ? error.status : undefined,
+              rateLimit: error instanceof AspspUnavailableError ? error.rateLimit : undefined,
+              cooldownMs,
+              user_id: user.id,
+              connection_id,
+              bankName: connection.bank_name,
+            })
+            return bankRateLimitedResponse(connection.id, failedAt + cooldownMs, failedAt)
+          }
 
           // The bank refused a window it has answered before, or every
           // narrower one: not a dead session and not a broken connection, so

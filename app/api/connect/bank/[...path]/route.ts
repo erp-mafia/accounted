@@ -90,6 +90,8 @@ interface EbResult {
   /** null for the RFC 9110 bodyless statuses. */
   text: string | null
   contentType: string | null
+  /** The bank's Retry-After, so an installation can honour a 429's timing. */
+  retryAfter: string | null
 }
 
 /**
@@ -114,7 +116,13 @@ async function forwardToEb(method: string, path: string, body?: unknown): Promis
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     })
     const text = NULL_BODY_STATUS.has(res.status) ? null : await res.text()
-    return { status: res.status, ok: res.ok, text, contentType: res.headers.get('content-type') }
+    return {
+      status: res.status,
+      ok: res.ok,
+      text,
+      contentType: res.headers.get('content-type'),
+      retryAfter: res.headers.get('retry-after'),
+    }
   } finally {
     clearTimeout(timeout)
   }
@@ -126,7 +134,10 @@ function passthrough(res: EbResult): NextResponse {
   }
   return new NextResponse(res.text, {
     status: res.status,
-    headers: { 'Content-Type': res.contentType ?? 'application/json' },
+    headers: {
+      'Content-Type': res.contentType ?? 'application/json',
+      ...(res.retryAfter ? { 'Retry-After': res.retryAfter } : {}),
+    },
   })
 }
 

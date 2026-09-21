@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'r
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import type { BooksFindings } from '@/lib/onboarding/findings'
+import { singleFlight } from '@/lib/onboarding/single-flight'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
 import { booksReducer, initialState, stationOf, type BooksEntry, type BooksFlags } from '@/lib/onboarding-books/reducer'
@@ -88,20 +89,27 @@ export default function BooksJourney(props: BooksJourneyProps) {
   const clearDraft = navigation.clear
 
   /* ── findings: the verdict every station ends on ─────────────────── */
-  const loadFindings = useCallback(async () => {
-    setLoadingFindings(true)
-    try {
-      const res = await fetch('/api/onboarding/findings')
-      if (!res.ok) return null
-      const json = (await res.json()) as { data: BooksFindings }
-      setFindings(json.data)
-      return json.data
-    } catch {
-      return null
-    } finally {
-      setLoadingFindings(false)
-    }
-  }, [])
+  // Single flight: a step change and the action that caused it both ask, and
+  // the read scans the ledger. They share one request, and a trigger that
+  // lands mid-request gets exactly one fresh read after it.
+  const loadFindings = useMemo(
+    () =>
+      singleFlight(async () => {
+        setLoadingFindings(true)
+        try {
+          const res = await fetch('/api/onboarding/findings')
+          if (!res.ok) return null
+          const json = (await res.json()) as { data: BooksFindings }
+          setFindings(json.data)
+          return json.data
+        } catch {
+          return null
+        } finally {
+          setLoadingFindings(false)
+        }
+      }),
+    [],
+  )
 
   useEffect(() => {
     if (navigation.ready && state.step !== 'sie' && state.step !== 'provider') void loadFindings()

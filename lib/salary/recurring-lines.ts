@@ -42,10 +42,11 @@ export interface RecurringLineFlags {
  * touches the semester base (is_vacation_basis false on the deduction row:
  * the loneväxling-style choice recorded in DECISIONS.md).
  *
- * Recurring ADDITIONS ('other') are deliberately not supported: the engine's
- * calculateSalary only treats ADDITION_TYPES as additions and never reads a
- * generic taxable row into gross/tax/AGA, so a recurring 'other' would show
- * on the payslip without being paid or declared. Teach the engine first.
+ * Recurring ADDITIONS ('other') are deliberately not supported here. The
+ * engine's calculateSalary does pay a signed taxable 'other' or 'correction'
+ * row into gross/tax/AGA (Step 2), but a standing taxable addition belongs
+ * on monthly_salary or a benefit, not on a generic row that no report can
+ * classify; widen RECURRING_LINE_ITEM_TYPES deliberately if that changes.
  */
 export function recurringLineFlags(itemType: RecurringLineItemType): RecurringLineFlags {
   if (itemType === 'gross_deduction_pension' || itemType === 'gross_deduction_other') {

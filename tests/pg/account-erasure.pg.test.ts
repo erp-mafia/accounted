@@ -90,6 +90,9 @@ const RETAINED = new Set([
   'sie_account_mappings.user_id',
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
+  'migration_jobs.user_id', // Company import provenance and recovery.
+  'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
+  'migration_source_records.user_id', // Stable provider identities.
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.
   'skattekonto_file_imports.user_id',
@@ -129,6 +132,7 @@ const RETAINED = new Set([
   'expense_claims.user_id',
   'expense_payout_batches.user_id',
   'mileage_trips.user_id',
+  'salary_payment_files.user_id', // Archived bank payment files: BFL 7 kap. 1 §, seven-year retention.
   'salary_payslip_deliveries.user_id',
   'salary_payslip_links.user_id',
   'salary_runs.approved_by',

@@ -48,11 +48,22 @@ function post(body: unknown) {
 
 const validBatch = { dates: ['2026-07-01', '2026-07-02'], hours: 8 }
 
-/** Queue the reads the route does before its inserts: employee, prefetch, delete. */
+/** Queue the reads the route does before its inserts: employee, register lock, prefetch, delete. */
 function enqueuePreamble(existing: unknown[] = []) {
   enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+  enqueue({ data: [] }) // register lock lookup: no locking runs
   enqueue({ data: existing }) // prefetch of rows about to be replaced
   enqueue({ data: null }) // bulk delete
+}
+
+/** July 2026 pay month, calculated, legacy NULL window: locks 2026-07-01..31. */
+const REVIEW_RUN_JULY = {
+  id: 'run-jul',
+  status: 'review',
+  period_year: 2026,
+  period_month: 7,
+  deviation_period_start: null,
+  deviation_period_end: null,
 }
 
 describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
@@ -120,6 +131,29 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
 
     const response = await POST(post(validBatch), params)
     expect(response.status).toBe(404)
+  })
+
+  it('returns 409 with the Swedish message and the run when a calculated run already read a date, touching nothing', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+
+    const response = await POST(post(validBatch), params)
+    const { status, body } = await parseJsonResponse<{
+      error: string
+      code: string
+      details: { salary_run_id: string; locked_dates: string[] }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error).toContain('avvikelseperioden')
+    expect(body.details).toMatchObject({
+      salary_run_id: 'run-jul',
+      locked_dates: ['2026-07-01', '2026-07-02'],
+    })
+    // No prefetch, no bulk delete, no insert: the lock is checked first.
+    expect(ops.filter((op) => op.table === 'salary_worked_days')).toHaveLength(0)
+    expect(insertedRows()).toHaveLength(0)
   })
 
   it('keeps each day its own note when the batch carries none', async () => {
@@ -354,6 +388,7 @@ describe('POST /api/salary/employees/[id]/worked-hours/batch', () => {
 
   it('aborts without deleting anything when the prefetch fails', async () => {
     enqueue({ data: { id: 'emp-1' } }) // employee ownership check
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ error: { message: 'connection reset', code: '08006' } }) // prefetch fails
 
     const response = await POST(post(validBatch), params)

@@ -67,6 +67,21 @@ describe('SIE durable input boundaries', () => {
     expect(database.storage.from).not.toHaveBeenCalled()
   })
 
+  it('lets a line-less voucher dated outside the fiscal year through: it is skipped as empty, never posted', () => {
+    // One #BTRANS-only voucher dated in the previous year refused the same
+    // file three times (Easy Online Stores, 2026-09-16).
+    const source = '#RAR 0 20260101 20261231\n' + content +
+      '\n#VER "LESSLIE" 2 20250102 "Tomt verifikat"\n{\n#BTRANS 1930 {} 100 20250102\n}'
+    expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings, options)).not.toThrow()
+  })
+
+  it('still names a voucher with lines that lies outside the fiscal year', () => {
+    const source = '#RAR 0 20260101 20261231\n' + content +
+      '\n#VER "LESSLIE" 3 20250102 "Fel år"\n{\n#TRANS 1930 {} 100\n#TRANS 3001 {} -100\n}'
+    expect(() => validateSIEJobInput(source, parseSIEFile(source), mappings, options))
+      .toThrow('SIE-verifikation LESSLIE3 (2025-01-02) ligger utanför räkenskapsåret.')
+  })
+
   it.each(['#IB 0', '#UB 0', '#RES 0'])('rejects amounts on a non-reportable target in %s', record => {
     const source = '#RAR 0 20260101 20261231\n' + content + `\n${record} 9999 100`
     const custom = [...mappings, { ...mappings[1], sourceAccount: '9999', targetAccount: '9999' }]

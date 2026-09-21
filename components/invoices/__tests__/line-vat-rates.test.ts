@@ -12,7 +12,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   FALLBACK_VAT_RATE,
-  hasSwedishVatToForeignBusiness,
   planCustomerSwitchVatSnap,
   resolveLineVatRates,
 } from '@/components/invoices/line-vat-rates'
@@ -167,31 +166,5 @@ describe('planCustomerSwitchVatSnap', () => {
   })
 })
 
-describe('hasSwedishVatToForeignBusiness', () => {
-  it('is true only once a non-zero rate is actually selected', () => {
-    const plan = resolveLineVatRates(euValidated)
-    expect(hasSwedishVatToForeignBusiness({ plan, items: [{ vat_rate: 0 }] })).toBe(false)
-    expect(hasSwedishVatToForeignBusiness({ plan, items: [{ vat_rate: 12 }] })).toBe(true)
-    expect(
-      hasSwedishVatToForeignBusiness({ plan, items: [{ vat_rate: 0 }, { vat_rate: 25 }] }),
-    ).toBe(true)
-  })
-
-  it('stays silent for a domestic customer, where 25% is the normal case', () => {
-    const plan = resolveLineVatRates(swedish)
-    expect(hasSwedishVatToForeignBusiness({ plan, items: [{ vat_rate: 25 }] })).toBe(false)
-  })
-
-  it('ignores free-text rows and an unpicked customer', () => {
-    const plan = resolveLineVatRates(euValidated)
-    expect(
-      hasSwedishVatToForeignBusiness({ plan, items: [{ line_type: 'text', vat_rate: 25 }] }),
-    ).toBe(false)
-    expect(
-      hasSwedishVatToForeignBusiness({
-        plan: resolveLineVatRates(null),
-        items: [{ vat_rate: 25 }],
-      }),
-    ).toBe(false)
-  })
-})
+// The "Swedish VAT to a foreign business" sentence moved to
+// explainVatTreatment() (lib/invoices/__tests__/vat-rules.test.ts).

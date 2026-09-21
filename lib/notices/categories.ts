@@ -64,6 +64,42 @@ function boundedDiscriminator(parts: string[]): string {
 // ── Predicates (one query each; soft-fail to null) ──
 
 /**
+ * no_fiscal_year: the company has no fiscal period at all. A head count, so
+ * it costs one index probe on every other company. A FAILED count is never
+ * read as zero: telling a company with real books that it has no fiscal year
+ * would be worse than saying nothing, so errors soft-fail to null like every
+ * other predicate. The discriminator is constant: the state has one shape,
+ * and the `category:` prefix lets the dismissal be reaped once a year exists.
+ */
+export async function detectNoFiscalYear(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<Notice | null> {
+  try {
+    const { count, error } = await supabase
+      .from('fiscal_periods')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', companyId)
+    if (error) return logAndNull('no_fiscal_year', companyId, error)
+    if (count === null || count > 0) return null
+    return {
+      id: 'no_fiscal_year:0',
+      category: 'no_fiscal_year',
+      severity: 'warning',
+      messageKey: 'no_fiscal_year',
+      actionKey: 'no_fiscal_year_action',
+      actionHref: '/settings/bookkeeping',
+    }
+  } catch (err) {
+    return logAndNull(
+      'no_fiscal_year',
+      companyId,
+      err instanceof Error ? { message: err.message } : null,
+    )
+  }
+}
+
+/**
  * bank_connection_broken: connections whose status is already terminal
  * ('expired' | 'error'): same predicate as BankSyncStatusChip's "attention"
  * state. Disjoint from bank_connection_expiring by the status filter.

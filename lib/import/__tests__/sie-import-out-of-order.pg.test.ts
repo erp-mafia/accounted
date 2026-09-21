@@ -431,6 +431,7 @@ describe('out-of-order SIE opening balances', () => {
       '2025-12-31',
       closingBalances(),
       new Map([['1930', '1930'], ['2010', '2010']]),
+      '2099',
     )
 
     expect(resync.resynced).toBe(true)
@@ -586,6 +587,7 @@ describe('out-of-order SIE opening balances', () => {
       '2024-12-31',
       closingBalances(150),
       new Map([['1930', '1930'], ['2010', '2010']]),
+      '2099',
     )
 
     expect(gapResync).toEqual({
@@ -628,6 +630,7 @@ describe('out-of-order SIE opening balances', () => {
       '2025-12-31',
       closingBalances(250),
       new Map([['1930', '1930'], ['2010', '2010']]),
+      '2099',
     )
 
     expect(adjacentResync.resynced).toBe(true)
@@ -713,6 +716,7 @@ describe('out-of-order SIE opening balances', () => {
       '2025-12-31',
       closingBalances(),
       new Map([['1930', '1930'], ['2010', '2010']]),
+      '2099',
     )
 
     expect(result).toEqual({

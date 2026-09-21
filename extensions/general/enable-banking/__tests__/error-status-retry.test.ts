@@ -14,6 +14,21 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
+// The shared sync lease has its own tests (lib/__tests__/sync-lease.test.ts).
+vi.mock('../lib/sync-lease', async () => {
+  const actual = await vi.importActual<typeof import('../lib/sync-lease')>('../lib/sync-lease')
+  return {
+    ...actual,
+    holdSyncLease: vi.fn().mockResolvedValue(undefined),
+    applyRateLimitCooldown: vi.fn().mockResolvedValue(null),
+  }
+})
+
+const SERVICE_CLIENT = { service: true }
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: vi.fn(async () => SERVICE_CLIENT),
+}))
+
 vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))
@@ -21,6 +36,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 import { SYNC_FAILED_MESSAGE, CONNECTOR_UNAVAILABLE_MESSAGE, ConnectorSyncError } from '../lib/api-client'
 import { enableBankingExtension } from '../index'
 import { syncAccountTransactions } from '../lib/sync'
+import { applyRateLimitCooldown, holdSyncLease } from '../lib/sync-lease'
 
 const syncRoute = enableBankingExtension.apiRoutes?.find(
   r => r.method === 'POST' && r.path === '/sync'
@@ -124,6 +140,38 @@ describe('POST /sync (enable-banking): retry from error status', () => {
         error_message: null,
         last_synced_at: expect.any(String),
       })
+    )
+  })
+
+  it('holds the shared sync lease before calling the bank, without ever waiting on it', async () => {
+    // "Synka nu" is never put on a cooldown, but the cron and the
+    // agent-triggered sync must stay off the connection meanwhile.
+    ;(syncAccountTransactions as unknown as Mock).mockImplementation(async () => {
+      expect(holdSyncLease).toHaveBeenCalledTimes(1)
+      return { imported: 0, duplicates: 0, errors: 0 }
+    })
+    const ctx = makeContext(makeConnection({ status: 'active' }), vi.fn())
+
+    const res = await syncRoute.handler(makeRequest(), ctx)
+
+    expect(res.status).toBe(200)
+    expect(holdSyncLease).toHaveBeenCalledWith(expect.anything(), { connectionId: 'conn-1' }, expect.any(Number))
+  })
+
+  it('hands a rate-limited sync to the cooldown through the service-role client', async () => {
+    // The hold covers every connection on the session, which crosses
+    // companies; RLS limits the user client to the active company.
+    const error = new ConnectorSyncError(429, 'HTTP_429', '')
+    ;(syncAccountTransactions as unknown as Mock).mockRejectedValue(error)
+    const ctx = makeContext(makeConnection({ status: 'active', session_id: 'sess-1' }), vi.fn())
+
+    await syncRoute.handler(makeRequest(), ctx)
+
+    expect(applyRateLimitCooldown).toHaveBeenCalledWith(
+      SERVICE_CLIENT,
+      expect.objectContaining({ id: 'conn-1', session_id: 'sess-1' }),
+      error,
+      expect.any(Number),
     )
   })
 

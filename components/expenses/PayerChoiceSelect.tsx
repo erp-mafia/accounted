@@ -4,6 +4,7 @@ import { useTranslations } from 'next-intl'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { PAYER_ORDER, type PayerChoice } from '@/lib/expenses/payer'
+import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import type { AccountingMethod } from '@/types'
 
 export type { ExpensePayer, PayerChoice } from '@/lib/expenses/payer'
@@ -36,16 +37,18 @@ export function PayerChoiceSelect({
   disabled?: boolean
 }) {
   const t = useTranslations('inbox_workspace')
-  // An enskild firma owner makes an egen insättning, not a loan to the
-  // company: no debt, nothing to pay out, so the help line says so.
-  const isEf = useCompanyOptional()?.company?.entity_type === 'enskild_firma'
+  // A form whose org number is the owner's personnummer has no separate
+  // legal person to owe the owner: the money is an egen insättning, not a
+  // loan, so the help line says so instead of naming a debt.
+  const entityType = useCompanyOptional()?.company?.entity_type
+  const ownerIsTheCompany = isEntityType(entityType) && usesPersonnummerAsOrgNumber(entityType)
   // Företaget carries no help line: the button under it ("Matcha mot
   // transaktion") already says what happens. The other answers name the
   // liability the company takes on, which is the consequence worth reading.
   const helpKey = (choice: PayerChoice): string | null =>
     choice === 'company'
       ? null
-      : choice === 'owner' && isEf
+      : choice === 'owner' && ownerIsTheCompany
         ? 'payer_help_owner_ef'
         : choice === 'unpaid' && accountingMethod === 'cash'
           ? 'payer_help_unpaid_cash'

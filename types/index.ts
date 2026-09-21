@@ -1,6 +1,7 @@
-// Entity types (legal forms). Every form-dependent fact goes through
-// lib/company/entity-type.ts (byEntityType): adding a member here must
-// fail compilation there until each site has an answer for it.
+// Entity types (legal forms). Every form-dependent fact lives in one profile
+// per form under lib/company/forms/ (docs/LEGAL-FORMS.md); call sites read a
+// capability through lib/company/entity-type.ts and never compare the form to
+// a string. Adding a member here fails compilation until the profile exists.
 export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
@@ -618,6 +619,15 @@ export interface CompanySettings {
   // Öresavrundning (migration 20260813143000): round each net payout up to
   // whole kronor; the 0-99 öre diff books on 3740 via a derived line item.
   salary_net_rounding: boolean
+  // Avvikelseperiod (migration 20260918120000): the month a new salary run
+  // reads absence and worked days from. 'previous_month' is the common
+  // Swedish setup (innevarande månads lön, föregående månads avvikelser).
+  salary_deviation_period: 'same_month' | 'previous_month'
+  // Calculation conventions (migration 20260919120100): jsonb validated by
+  // SalaryCalculationPolicySchema (lib/salary/calculation-policy.ts). The
+  // column default is {} = every convention at its default = the historical
+  // engine; the API stores the full object.
+  salary_calculation_policy?: Partial<import('@/lib/salary/calculation-policy').SalaryCalculationPolicy>
 
   // Sandbox
   is_sandbox: boolean
@@ -1910,6 +1920,8 @@ export interface BASAccount {
   // null = no default (line keeps its own rate). Öresavrundning (3740) = 0.
   default_vat_rate: number | null
   default_vat_treatment: import('@/lib/vat/account-vat-treatment').AccountVatTreatment | null
+  // Momsruta override for 26xx VAT accounts; null = BAS mapping by number.
+  vat_box: import('@/lib/vat/account-vat-box').AccountVatBox | null
   description: string | null
   sru_code: string | null
   k2_excluded: boolean
@@ -2607,6 +2619,12 @@ export type PendingOperationType =
   // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
   // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
   | 'settle_rot_rut_payout'
+  // Anläggningsregister (gnubok_create_asset / gnubok_update_asset /
+  // gnubok_dispose_asset): the register rows are master data (no voucher),
+  // the disposal posts the avyttring voucher via disposeAsset().
+  | 'create_asset'
+  | 'update_asset'
+  | 'dispose_asset'
 // 'failed_partial' (issue #842, DB CHECK widened in 20260722134114): terminal
 // state for ops whose executor posted an irreversible side-effect (voucher,
 // credit note) and then failed a later step. Not re-committable, not pending
@@ -4260,6 +4278,9 @@ export interface SalaryRun {
   period_year: number
   period_month: number
   payment_date: string
+  // Avvikelseperiod snapshotted at creation; null on both = the pay month.
+  deviation_period_start: string | null
+  deviation_period_end: string | null
   status: SalaryRunStatus
   voucher_series: string
   total_gross: number
@@ -4325,7 +4346,9 @@ export interface SalaryRunEmployee {
   calculation_breakdown: Record<string, unknown> | null
   ytd_gross: number
   ytd_tax: number
-  ytd_net: number
+  /** null = unknown: the cutover opening balance had no historical net
+   *  (migration 20260919130000); the payslip prints "Underlag saknas". */
+  ytd_net: number | null
   created_at: string
   updated_at: string
   // Relations
@@ -4351,6 +4374,16 @@ export interface SalaryLineItem {
   sort_order: number
   /** The registered utlägg an expense_reimbursement line repays (#2331). */
   source_expense_claim_id?: string | null
+  /** Engångsskatt percentage (migration 20260919120200); null = taxed by the monthly table. */
+  one_off_tax_percent?: number | null
+  /** Engine provenance (migration 20260919120000): 'vacation_compensation' on the
+   *  semesterersättning row run-calculation derives; null on manual rows. */
+  calculation_source?: 'vacation_compensation' | null
+  /** Which vacation pool a vacation line draws from (migration 20260919130100);
+   *  null = paid. Only on item_type 'vacation'. */
+  vacation_category?: 'paid' | 'extra_paid' | 'saved' | 'unpaid' | 'advance' | null
+  /** Origin year (YYYY) of the sparade dagar a 'saved' line consumes; null = oldest first. */
+  vacation_saved_year?: string | null
   created_at: string
   updated_at: string
 }

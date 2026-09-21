@@ -65,7 +65,7 @@ const DEFAULT_BRANDING: BrandingConfig = {
   // visual only; we don't churn the support inbox or app domain alongside it.
   supportEmail: 'support@gnubok.se',
   privacyEmail: 'privacy@gnubok.se',
-  securityEmail: 'security@arcim.io',
+  securityEmail: 'support@accounted.se',
   authEmailFrom: 'noreply@gnubok.se',
   appUrl: process.env.NEXT_PUBLIC_APP_URL || 'https://app.gnubok.se',
   // The visible brand mark now renders as text via <BrandWordmark>; this

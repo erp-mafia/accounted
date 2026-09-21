@@ -175,7 +175,8 @@ registerEndpoint({
     'Weekends are skipped by default: pass include_weekends=true for schedules that span them.',
     'Upsert REPLACES the (date, type) rows in the range: hours/notes are overwritten, not merged.',
     'A day whose combined absence + worked hours exceed 24h returns 409 ABSENCE_HOURS_CONFLICT and the whole range is rejected (atomic).',
-    'Registering absence does not recompute an open salary run: call POST /salary-runs/{id}/calculate afterwards.',
+    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
+    'Registering absence does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.',
   ],
   example: {
     request: { from: '2026-03-03', to: '2026-03-07', absence_type: 'sick' },
@@ -264,10 +265,11 @@ registerEndpoint({
   useWhen:
     'An absence event was registered by mistake or ended early: "Anna came back Thursday, delete Thu-Fri sick days".',
   doNotUseFor:
-    'Correcting hours on a day: PUT the day again instead. Rows already consumed by a BOOKED run: deleting them does not un-book the run; use the run correction flow.',
+    'Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.',
   pitfalls: [
     'Without ?type, ALL absence types in the range are deleted.',
     'deleted_count: 0 with a 200 means nothing matched: not an error.',
+    'Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.',
   ],
   example: {
     response: {

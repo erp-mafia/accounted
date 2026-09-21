@@ -214,7 +214,9 @@ export default function BankFileConfirmStep({
           onClick={() => onExecute({
             skip_duplicates: true,
             auto_categorize: false,
-            settlement_account: selectedAccount !== '1930' ? selectedAccount : undefined,
+            // Always sent, 1930 included: ingest binds the rows to the account
+            // named here, and an omitted default imported every row unbound.
+            settlement_account: selectedAccount,
           })}
           disabled={isLoading}
         >

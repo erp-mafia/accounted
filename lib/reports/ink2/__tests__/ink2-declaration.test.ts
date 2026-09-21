@@ -252,8 +252,8 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     expect(result.ink2s['7651']).toBe(60_000)
     expect(result.ink2s['7653']).toBe(4_000)
     // 442 000 + 60 000 + 4 000
-    expect(result.ink2s['8020']).toBe(506_000)
-    expect(result.ink2s['8021']).toBe(0)
+    expect(result.ink2s['7670']).toBe(506_000)
+    expect(result.ink2s['7770']).toBe(0)
     expect(result.ink2['7104']).toBe(506_000)
   })
 
@@ -263,7 +263,7 @@ describe('generateINK2Declaration: closed fiscal year', () => {
     // 7525 appears on INK2R as a bokslutsdisposition but must not inflate the
     // taxable result: it already reduced årets resultat.
     expect(result.ink2r['7525']).toBe(100_000)
-    expect(result.ink2s['8020']).toBe(506_000)
+    expect(result.ink2s['7670']).toBe(506_000)
   })
 })
 
@@ -280,8 +280,8 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
 
     // Whole kronor, ören dropped: 100 000. 506 000 - 100 000.
     expect(result.ink2s['7763']).toBe(100_000)
-    expect(result.ink2s['8020']).toBe(406_000)
-    expect(result.ink2s['8021']).toBe(0)
+    expect(result.ink2s['7670']).toBe(406_000)
+    expect(result.ink2s['7770']).toBe(0)
     expect(result.ink2['7104']).toBe(406_000)
     expect(result.ink2['7114']).toBe(0)
   })
@@ -298,8 +298,8 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
 
     // 506 000 - 600 000 = -94 000: nothing on 4.15, the remainder rolls forward.
     expect(result.ink2s['7763']).toBe(600_000)
-    expect(result.ink2s['8020']).toBe(0)
-    expect(result.ink2s['8021']).toBe(94_000)
+    expect(result.ink2s['7670']).toBe(0)
+    expect(result.ink2s['7770']).toBe(94_000)
     expect(result.ink2['7104']).toBe(0)
     expect(result.ink2['7114']).toBe(94_000)
   })
@@ -318,7 +318,7 @@ describe('generateINK2Declaration: prior-year deficit (INK2S 4.14 a)', () => {
     const withDeficit = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
     const sru = generateSRUSubmission(withDeficit).blanketterSru
     expect(sru).toContain('#UPPGIFT 7763 100000')
-    expect(sru).toContain('#UPPGIFT 8020 406000')
+    expect(sru).toContain('#UPPGIFT 7670 406000')
     expect(validateBlanketterSru(sru).isValid).toBe(true)
   })
 })

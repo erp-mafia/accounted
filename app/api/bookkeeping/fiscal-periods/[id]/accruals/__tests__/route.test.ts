@@ -81,6 +81,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
 
   it('returns the snapshot plus autoDetected suggestions', async () => {
     mockBuildAccrualsProposal.mockResolvedValue({
+      notices: [],
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],
     })
@@ -119,6 +120,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
   it('threads entity_type enskild_firma to the detector', async () => {
     mockGetCompanyEntityType.mockResolvedValue('enskild_firma')
     mockBuildAccrualsProposal.mockResolvedValue({
+      notices: [],
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],
     })
@@ -139,6 +141,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
   it('falls back to null entityType when the entity type cannot be resolved', async () => {
     mockGetCompanyEntityType.mockResolvedValue(null)
     mockBuildAccrualsProposal.mockResolvedValue({
+      notices: [],
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],
     })
@@ -158,6 +161,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/accruals', () => {
 
   it('still returns the snapshot when auto-detect throws', async () => {
     mockBuildAccrualsProposal.mockResolvedValue({
+      notices: [],
       fiscalPeriod: { id: 'period-1', name: 'FY 2025', period_start: '2025-01-01', period_end: '2025-12-31' },
       proposals: [],
     })

@@ -104,23 +104,41 @@ describe('gnubok_generate_agi', () => {
 describe('gnubok_create_salary_run', () => {
   it('stages without calling the transactional helper', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    // 1. employees count head
+    // 1. company_settings.salary_deviation_period (avvikelseperiod)
+    enqueue({ data: { salary_deviation_period: 'previous_month' } })
+    // 2. salary_runs overlap guard
+    enqueue({ data: [] })
+    // 3. employees count head
     enqueue({ data: null, count: 3 })
-    // 2-3. resolvePeriodStatusForDate calls company_settings + fiscal_periods
+    // 4-5. resolvePeriodStatusForDate calls company_settings + fiscal_periods
     enqueue({ data: null })
     enqueue({ data: null })
-    // 4. pending_operations.insert
+    // 6. pending_operations.insert
     enqueue({ data: { id: 'op-2' }, error: null })
 
     const result = (await createSalaryRun.execute(
       { period_year: 2026, period_month: 3, payment_date: '2026-03-25' },
       'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
-    )) as { staged: boolean; risk_level: string; preview: { period: string; employee_count: number } }
+    )) as {
+      staged: boolean
+      risk_level: string
+      preview: {
+        period: string
+        employee_count: number
+        deviation_period_start: string
+        deviation_period_end: string
+        deviation_period_source: string
+      }
+    }
 
     expect(result.staged).toBe(true)
     expect(result.risk_level).toBe('medium')
     expect(result.preview.period).toBe('2026-03')
     expect(result.preview.employee_count).toBe(3)
+    // The approver sees which month's absence the run will read.
+    expect(result.preview.deviation_period_start).toBe('2026-02-01')
+    expect(result.preview.deviation_period_end).toBe('2026-02-28')
+    expect(result.preview.deviation_period_source).toBe('setting')
     expect(mockCreateRun).not.toHaveBeenCalled()
   })
 

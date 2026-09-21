@@ -6,8 +6,9 @@ import type {
   JournalDto, AccountingEntryDto,
   AccountingAccountDto, AccountType,
   CompanyInformationDto,
-  AmountType, PartyDto,
+  AmountType, PartyDto, CreditedInvoiceRefDto,
 } from '../dto';
+import { creditNoteTypeCode } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 import { sourceVoucherFromParts } from '../source-voucher';
 import { roundOre } from '@/lib/money';
@@ -94,9 +95,53 @@ function isFullyPaid(raw: Record<string, unknown>): boolean {
   return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
 }
 
-function deriveInvoiceStatus(raw: Record<string, unknown>): InvoiceStatusCode {
+/**
+ * Whether Fortnox flags the document as a credit invoice.
+ *
+ * Fortnox's field reference describes `Credit` as a boolean, but its OpenAPI
+ * schema types it as a STRING ("true" / "false"), and so do client libraries
+ * written against the live API. The flag also exists only on the detail form
+ * (`InvoiceFull`), never on the list form. The old test,
+ * `raw['Credit'] === true`, is consistent with never having fired: on
+ * 2026-09-20 production held 3 200 Fortnox invoices with a negative total and
+ * not one with status 'credited'. Every credit note had fallen through to
+ * isFullyPaid (a credit invoice's balance is never positive) and was imported
+ * as a PAID invoice with a negative paid amount (#2789). Both spellings are
+ * read; the negative total covers the list form (see creditNoteTypeCode).
+ */
+function isFlaggedCredit(raw: Record<string, unknown>): boolean {
+  const flag = raw['Credit'];
+  return flag === true || (typeof flag === 'string' && flag.trim().toLowerCase() === 'true');
+}
+
+/**
+ * The invoice a Fortnox credit invoice credits, from `CreditInvoiceReference`.
+ *
+ * Fortnox documents the field as "reference to the credit invoice, if one
+ * exists", which is the debit invoice's side of the link. On the credit
+ * invoice itself the same field is read here as the debit invoice's number.
+ * That direction is NOT confirmed against a live payload (the repo holds no
+ * Fortnox credit fixture and chunk payloads are sealed), so everything
+ * downstream is built to be safe if it is wrong: the field is read only on a
+ * document typed 381, a reference to the document itself is dropped, and the
+ * importer pairs only with a different invoice that exists under that number
+ * and never by amount. An absent or empty reference leaves the credit note
+ * unpaired with the gap disclosed on the row, exactly as before.
+ *
+ * Fortnox sends the value as a string or a number, "0" / 0 when there is
+ * none, and an invoice's document number is both its id and its printed
+ * number.
+ */
+function creditedInvoiceRefOf(raw: Record<string, unknown>): CreditedInvoiceRefDto | undefined {
+  const value = raw['CreditInvoiceReference'];
+  const reference = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!reference || reference === '0' || reference === String(raw['DocumentNumber'] ?? '')) return undefined;
+  return { id: reference, invoiceNumber: reference };
+}
+
+function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean): InvoiceStatusCode {
   if (raw['Cancelled'] === true) return 'cancelled';
-  if (raw['Credit'] === true) return 'credited';
+  if (isCreditNote) return 'credited';
   if (isFullyPaid(raw)) return 'paid';
   if (raw['Booked'] === true) return 'booked';
   if (raw['Sent'] === true) return 'sent';
@@ -173,6 +218,8 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
   // would otherwise leave balance = total alongside paid = true.
   const paid = isFullyPaid(raw);
   const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
+  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
+  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), total);
 
   // Whether the row amounts include VAT. Absent on the list form, where there
   // are no rows anyway; false is the default when the detail form omits it.
@@ -244,8 +291,12 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
     invoiceNumber: String(raw['DocumentNumber'] ?? ''),
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
+    invoiceTypeCode,
+    // Amounts stay as Fortnox states them, negative on a credit invoice: the
+    // importer resolves the sign convention once for every provider.
+    creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw) : undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
     supplier: buildParty(
       (raw['CompanyName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,
@@ -327,7 +378,9 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw),
+    // The supplier side is unchanged by #2789: see the PR for why its credit
+    // notes are a separate fix (the supplier importer normalises no sign).
+    status: deriveInvoiceStatus(raw, raw['Credit'] === true),
     supplier: buildParty(
       (raw['SupplierName'] ?? '') as string,
       raw['OrganisationNumber'] as string | undefined,

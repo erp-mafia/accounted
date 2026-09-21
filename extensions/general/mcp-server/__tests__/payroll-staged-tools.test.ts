@@ -344,6 +344,7 @@ describe('gnubok_register_absence', () => {
   it('stages with day-count preview and dateForPeriodCheck', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
     enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
@@ -388,6 +389,24 @@ describe('gnubok_register_absence', () => {
         'company-1', 'user-1', supabase as never, { type: 'agent_chat' },
       ),
     ).rejects.toThrow(/EMPLOYEE_NOT_FOUND/)
+  })
+
+  it('refuses to stage dates a calculated run already read: the dry-run preflight reports the lock', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
+    enqueue({
+      data: [
+        { id: 'run-mar', status: 'review', period_year: 2026, period_month: 3, deviation_period_start: null, deviation_period_end: null },
+      ],
+    }) // register lock lookup: March is calculated
+
+    await expect(
+      registerAbsence.execute(
+        { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-06', absence_type: 'sick' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_REGISTER_DATES_LOCKED_BY_RUN/)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
   })
 })
 
@@ -455,6 +474,7 @@ describe('gnubok_delete_absence', () => {
   it('stages with a deleted-day-count preview', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee (dry-run preflight)
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ data: null, count: 3 }) // dry-run count query
     enqueue({ data: { first_name: 'Anna', last_name: 'Andersson' } }) // name for title/preview
     enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
@@ -475,6 +495,7 @@ describe('gnubok_delete_absence', () => {
   it('throws when the range contains nothing to delete', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'emp-1' } })
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ data: null, count: 0 })
 
     await expect(

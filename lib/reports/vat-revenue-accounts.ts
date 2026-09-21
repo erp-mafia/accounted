@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { ACCOUNT_TO_BOX, BOX_LABELS, type MomsBox } from '@/lib/vat/moms-box-mapping'
+import { isAccountVatBox, isVatBoxAccount, vatBoxRutaMapping } from '@/lib/vat/account-vat-box'
 import {
   defaultRateForVatTreatment,
   isAccountVatTreatment,
@@ -120,11 +121,14 @@ export async function fetchDynamicVatAccounts(
     account_class: number
     default_vat_rate: number | string | null
     default_vat_treatment: string | null
+    vat_box?: string | null
   }>(
     ({ from, to }) => supabase.from('chart_of_accounts')
-      .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
+      .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment, vat_box')
       .eq('company_id', companyId)
-      .in('account_class', [3, 4, 5, 6])
+      // Class 2 rides along for the 26xx momsruta override (vat_box); every
+      // other class-2 row is dropped in the loop below.
+      .in('account_class', [2, 3, 4, 5, 6])
       .order('account_number', { ascending: true })
       .range(from, to),
   )
@@ -132,6 +136,17 @@ export async function fetchDynamicVatAccounts(
   const result = emptyDynamicVatAccounts()
   for (const row of rows) {
     const account = row.account_number
+
+    if (row.account_class === 2) {
+      // A VAT account with an explicit momsruta leaves its BAS box (explicit)
+      // and feeds the chosen one. A class-2 row without an override is not a
+      // VAT classification at all.
+      if (!isVatBoxAccount(account) || !isAccountVatBox(row.vat_box)) continue
+      result.explicitAccounts.add(account)
+      result.mappingByAccount.set(account, vatBoxRutaMapping(row.vat_box))
+      result.accounts.push(account)
+      continue
+    }
 
     if (isAccountVatTreatment(row.default_vat_treatment)) {
       result.explicitAccounts.add(account)

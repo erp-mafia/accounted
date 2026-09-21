@@ -4,25 +4,45 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateEmployeeRecurringLineSchema } from '@/lib/api/schemas'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { roundOre } from '@/lib/money'
+import {
+  createEmployeeRecurringLine,
+  listEmployeeRecurringLines,
+  type RecurringLineFailure,
+} from '@/lib/salary/employee-recurring-lines'
 
 ensureInitialized()
+
+/**
+ * Map a module failure to the dashboard's `{ error: string }` envelope. A
+ * VALIDATION_ERROR carries either field issues (the module's own checks,
+ * already in user copy) or the raw check_violation from the insert, which
+ * getErrorMessage renders exactly as the route did before the module.
+ */
+function failureResponse(failure: RecurringLineFailure): NextResponse {
+  switch (failure.code) {
+    case 'EMPLOYEE_NOT_FOUND':
+      return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
+    case 'NOT_FOUND':
+      return NextResponse.json({ error: 'Raden hittades inte' }, { status: 404 })
+    case 'VALIDATION_ERROR': {
+      const issues = failure.details?.issues as Array<{ message: string }> | undefined
+      const message = issues?.[0]?.message ?? getUserErrorMessage(failure.cause)
+      return NextResponse.json({ error: message }, { status: 400 })
+    }
+    default:
+      return NextResponse.json({ error: getUserErrorMessage(failure.cause) }, { status: 500 })
+  }
+}
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.recurring_lines.list',
   async (_request, { supabase, companyId }, { params }) => {
     const { id } = await params
 
-    const { data, error } = await supabase
-      .from('employee_recurring_lines')
-      .select('*')
-      .eq('employee_id', id)
-      .eq('company_id', companyId)
-      .order('valid_from', { ascending: false })
+    const result = await listEmployeeRecurringLines(supabase, { companyId, employeeId: id })
+    if (!result.ok) return failureResponse(result)
 
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-
-    return NextResponse.json({ data })
+    return NextResponse.json({ data: result.data })
   },
 )
 
@@ -33,49 +53,16 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const validation = await validateBody(request, CreateEmployeeRecurringLineSchema)
     if (!validation.success) return validation.response
-    const body = validation.data
 
-    // Confirm employee belongs to the company. maybeSingle separates the two
-    // empty outcomes: a lookup failure is a 500, only zero rows is a 404.
-    const { data: emp, error: empError } = await supabase
-      .from('employees')
-      .select('id')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (empError) {
-      return NextResponse.json({ error: getUserErrorMessage(empError) }, { status: 500 })
-    }
-    if (!emp) return NextResponse.json({ error: 'Anställd hittades inte' }, { status: 404 })
+    const result = await createEmployeeRecurringLine(supabase, {
+      companyId,
+      employeeId: id,
+      userId: user.id,
+      input: validation.data,
+    })
+    if (!result.ok) return failureResponse(result)
 
-    const { data, error } = await supabase
-      .from('employee_recurring_lines')
-      .insert({
-        employee_id: id,
-        company_id: companyId,
-        user_id: user.id,
-        item_type: body.item_type,
-        description: body.description,
-        amount: roundOre(body.amount),
-        account_number: body.account_number ?? null,
-        valid_from: body.valid_from,
-        valid_to: body.valid_to ?? null,
-        metadata: body.metadata ?? {},
-        is_active: body.is_active ?? true,
-      })
-      .select()
-      .single()
-
-    if (error) {
-      // The create schema mirrors every CHECK on the table (item_type
-      // whitelist, amount sign, account format, valid_to >= valid_from), so a
-      // check_violation here is only the backstop for non-schema callers: bad
-      // input, not a server fault.
-      const status = error.code === '23514' ? 400 : 500
-      return NextResponse.json({ error: getUserErrorMessage(error) }, { status })
-    }
-
-    return NextResponse.json({ data }, { status: 201 })
+    return NextResponse.json({ data: result.data }, { status: 201 })
   },
   { requireWrite: true },
 )

@@ -65,6 +65,9 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   run_year_end: 'type_run_year_end',
   run_currency_revaluation: 'type_run_currency_revaluation',
   post_annual_depreciation: 'type_post_annual_depreciation',
+  create_asset: 'type_create_asset',
+  update_asset: 'type_update_asset',
+  dispose_asset: 'type_dispose_asset',
   explain_voucher_gap: 'type_explain_voucher_gap',
   // SIE
   import_sie: 'type_import_sie',
@@ -134,6 +137,9 @@ export const singleActionWarnings: Record<string, string> = {
   import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
   explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
   post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
+  create_asset: 'Genom att klicka godkänn så läggs tillgången till i anläggningsregistret. Ingen verifikation bokförs.',
+  update_asset: 'Genom att klicka godkänn så uppdateras tillgången i anläggningsregistret. Ingen verifikation bokförs.',
+  dispose_asset: 'Genom att klicka godkänn så bokförs avyttringen: tillgången lämnar registret och en verifikation med vinst eller förlust skapas.',
 }
 
 /**

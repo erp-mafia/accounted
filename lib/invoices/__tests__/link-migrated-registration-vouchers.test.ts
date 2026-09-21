@@ -574,3 +574,15 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 })
+
+it('limits a durable batch to its source voucher numbers and preserves dry-run safety', async () => {
+  mock = createQueuedMockSupabase()
+  queue({ vouchers: [voucher({ id: 'v1' })], entries: [{ id: 'v1', status: 'posted' }],
+    lines: supplierLines('v1'), supplierRefs: [], customerRefs: [] })
+  const result = await linkMigratedRegistrationVouchers({ supabase: mock.supabase as unknown as SupabaseClient,
+    companyId: COMPANY, invoices: [input({ invoiceId: 'i1' })], bounded: true, dryRun: true })
+  expect(result.linked).toBe(1)
+  expect(mock.calls.some(c => c.table === 'journal_entries' && c.method === 'in' && c.args[0] === 'source_voucher_number'
+    && JSON.stringify(c.args[1]) === '[329]')).toBe(true)
+  expect(mock.calls.filter(c => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+})

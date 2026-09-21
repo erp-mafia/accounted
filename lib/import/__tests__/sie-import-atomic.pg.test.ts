@@ -477,11 +477,11 @@ describe('write_sie_job_entries RPC', () => {
     expect(numbers.rows.map((r) => r.voucher_number)).toEqual([1, 2, 3, 4])
   })
 
-  it('keeps the 3741 öresutjämning line the importer adds for sub-krona rounding', async () => {
+  it('keeps the 3740 öresutjämning line the importer adds for sub-krona rounding', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
 
     // 100.00 debit against 99.63 credit; the importer closes the 0.37 gap on
-    // 3741 rather than editing a source line (tiered rounding, sie-import.ts).
+    // 3740 rather than editing a source line (tiered rounding, sie-import.ts).
     const payload = [
       {
         sourceId: 'A1',
@@ -492,7 +492,7 @@ describe('write_sie_job_entries RPC', () => {
         lines: [
           { account_number: '5010', debit_amount: 100, credit_amount: 0, currency: 'SEK', sort_order: 0 },
           { account_number: '1930', debit_amount: 0, credit_amount: 99.63, currency: 'SEK', sort_order: 1 },
-          { account_number: '3741', debit_amount: 0, credit_amount: 0.37, currency: 'SEK', line_description: 'Öresutjämning', sort_order: 2 },
+          { account_number: '3740', debit_amount: 0, credit_amount: 0.37, currency: 'SEK', line_description: 'Öresutjämning', sort_order: 2 },
         ],
       },
     ]
@@ -511,7 +511,7 @@ describe('write_sie_job_entries RPC', () => {
     expect(lines.rows).toEqual([
       { account_number: '5010', debit_amount: '100', credit_amount: '0', line_description: null, sort_order: 0 },
       { account_number: '1930', debit_amount: '0', credit_amount: '99.63', line_description: null, sort_order: 1 },
-      { account_number: '3741', debit_amount: '0', credit_amount: '0.37', line_description: 'Öresutjämning', sort_order: 2 },
+      { account_number: '3740', debit_amount: '0', credit_amount: '0.37', line_description: 'Öresutjämning', sort_order: 2 },
     ])
   })
 

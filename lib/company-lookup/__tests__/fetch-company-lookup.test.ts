@@ -59,6 +59,40 @@ describe('fetchCompanyLookup', () => {
     expect(outcome).toEqual({ status: 'not_found' })
   })
 
+  it("carries the SCB registry hint beside the TIC handler's 404", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(404, {
+        error: 'Company not found',
+        registry: {
+          source: 'scb',
+          companyName: 'Segelsällskapet Gambit',
+          legalEntityType: 'Ideell förening',
+          address: { street: 'Hamnvägen 3', postalCode: '76140', city: 'Norrtälje' },
+          registration: { fTax: null, vat: true },
+        },
+      }),
+    )
+    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    expect(outcome).toEqual({
+      status: 'not_found',
+      registry: {
+        source: 'scb',
+        companyName: 'Segelsällskapet Gambit',
+        legalEntityType: 'Ideell förening',
+        address: { street: 'Hamnvägen 3', postalCode: '76140', city: 'Norrtälje' },
+        registration: { fTax: null, vat: true },
+      },
+    })
+  })
+
+  it('drops a malformed registry hint and keeps the miss', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(404, { error: 'Company not found', registry: { source: 'tic', companyName: 42 } }),
+    )
+    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    expect(outcome).toEqual({ status: 'not_found' })
+  })
+
   it("maps the dispatcher's 404 (Extension not found) to disabled, not not_found", async () => {
     fetchMock.mockResolvedValue(jsonResponse(404, { error: 'Extension not found' }))
     const outcome = await fetchCompanyLookup('556677-8899', { ticEnabled: true })

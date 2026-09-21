@@ -510,3 +510,49 @@ describe('POST /api/v1/.../transactions/{id}/categorize private marking in a loc
     expect(updates.transactions).toBeUndefined()
   })
 })
+
+describe('VAT registration (lib/bookkeeping/vat-registration.ts)', () => {
+  // The v1 route reaches the same category-mapping seam as the dashboard:
+  // the real builder runs here, so the posted mapping is what is asserted.
+  it.each([
+    { vat_registered: false, vatLineCount: 0 },
+    { vat_registered: true, vatLineCount: 1 },
+  ])(
+    'books a company with vat_registered = $vat_registered with $vatLineCount moms line(s)',
+    async ({ vat_registered, vatLineCount }) => {
+      const { supabase } = makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: [
+          {
+            data: {
+              id: TX_ID,
+              company_id: COMPANY_ID,
+              date: '2026-05-12',
+              amount: -1250,
+              currency: 'SEK',
+              merchant_name: 'Adobe',
+              cash_account_id: null,
+              journal_entry_id: null,
+            },
+            error: null,
+          },
+          { data: [{ id: TX_ID }], error: null },
+        ],
+        company_settings: { data: { entity_type: 'ideell_forening', vat_registered }, error: null },
+        fiscal_periods: { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null },
+      })
+      mockServiceClient.mockReturnValue(supabase)
+
+      const res = await POST(
+        makeRequest({ is_business: true, category: 'expense_software' }),
+        routeParams(),
+      )
+
+      expect(res.status).toBe(200)
+      expect(createTxJE).toHaveBeenCalledTimes(1)
+      const mapping = createTxJE.mock.calls[0][4] as { debit_account: string; vat_lines: unknown[] }
+      expect(mapping.debit_account).toBe('5420')
+      expect(mapping.vat_lines).toHaveLength(vatLineCount)
+    },
+  )
+})

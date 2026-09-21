@@ -19,7 +19,9 @@ import { findFiscalPeriod, createDraftEntry, commitEntry } from '@/lib/bookkeepi
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import {
   attachBookingSuggestions,
+  bokforSkattekontoTransaction,
   bokforSkattekontoTransactionsBatch,
+  SkattekontoBookingError,
 } from '../lib/skattekonto-booking'
 
 /**
@@ -585,5 +587,93 @@ describe('bokforSkattekontoTransactionsBatch', () => {
     // The gate fires before the engine is touched: no orphan draft.
     expect(vi.mocked(createDraftEntry)).not.toHaveBeenCalled()
     expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+  it('maps the live-unique index violation to ALREADY_BOOKED: the losing Bokför never claims or commits', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row }) // tx fetch: still unbooked at precheck time
+
+    // journal_entries_system_source_live_unique (migration 20260920145033)
+    // refuses the second live 'system' entry for this row at the draft
+    // INSERT; the engine wraps the 23505 in BookkeepingDatabaseError.
+    vi.mocked(createDraftEntry).mockRejectedValueOnce(
+      new Error(
+        'Database operation "create_draft_entry" failed: duplicate key value violates unique constraint "journal_entries_system_source_live_unique"',
+      ),
+    )
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({
+      id: row.id,
+      ok: false,
+      error_code: 'ALREADY_BOOKED',
+      error_message: 'Transaktionen är redan bokförd.',
+    })
+    expect(result.summary).toEqual({ total: 1, succeeded: 0, failed: 1 })
+    // The loser has no draft, so there is nothing to claim and nothing to
+    // commit: the only skattekonto_transactions access is the precheck fetch.
+    expect(fromCount(supabase, 'skattekonto_transactions')).toBe(1)
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+
+  it('leaves other draft-insert failures unmapped (UNKNOWN), so only our index reads as ALREADY_BOOKED', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+    enqueue({ data: row })
+
+    vi.mocked(createDraftEntry).mockRejectedValueOnce(
+      new Error(
+        'Database operation "create_draft_entry" failed: duplicate key value violates unique constraint "journal_entries_rot_rut_payout_live_unique"',
+      ),
+    )
+
+    const result = await bokforSkattekontoTransactionsBatch(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      [row.id],
+    )
+
+    expect(result.results[0]).toMatchObject({ id: row.id, ok: false, error_code: 'UNKNOWN' })
+    expect(vi.mocked(commitEntry)).not.toHaveBeenCalled()
+  })
+})
+
+describe('bokforSkattekontoTransaction (single row)', () => {
+  it('throws ALREADY_BOOKED with the precheck message when the live-unique index refuses the draft', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    const row = makeSkvRow({ transaktionstext: 'Intäktsränta' })
+    enqueue({ data: row }) // tx fetch
+    enqueue({ data: SEED_RULES })
+    enqueue({ data: { entity_type: 'aktiebolag' } })
+
+    vi.mocked(createDraftEntry).mockRejectedValueOnce(
+      new Error(
+        'Database operation "create_draft_entry" failed: duplicate key value violates unique constraint "journal_entries_system_source_live_unique"',
+      ),
+    )
+
+    const err = await bokforSkattekontoTransaction(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'user-1',
+      row.id,
+    ).catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(SkattekontoBookingError)
+    expect((err as SkattekontoBookingError).code).toBe('ALREADY_BOOKED')
+    expect((err as SkattekontoBookingError).message).toBe('Transaktionen är redan bokförd.')
+    // No claim attempted: the row was only read.
+    expect(fromCount(supabase, 'skattekonto_transactions')).toBe(1)
   })
 })

@@ -301,6 +301,8 @@ describe('POST /items/:id/suggest-booking', () => {
       expect.objectContaining({ id: 'tx-1' }),
       'aktiebolag',
       expect.anything(),
+      // company_settings.vat_registered as loaded: this settings row has none.
+      null,
     )
   })
 
@@ -314,7 +316,7 @@ describe('POST /items/:id/suggest-booking', () => {
     mock.enqueue({ data: { entity_type: 'enskild_firma' } }) // companies fallback (never a guessed default)
     await route.handler(req(), buildCtx(mock.supabase))
     expect(evaluateMappingRules).toHaveBeenCalledWith(
-      expect.anything(), 'company-1', expect.anything(), 'enskild_firma', expect.anything(),
+      expect.anything(), 'company-1', expect.anything(), 'enskild_firma', expect.anything(), null,
     )
   })
 

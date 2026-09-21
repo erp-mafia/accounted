@@ -26,10 +26,14 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { calculateSalary } from './calculation-engine'
+import { calculateSalary, monthlyBaseSalary } from './calculation-engine'
+import { SalaryCalculationPolicySchema } from './calculation-policy'
+import { isAutomaticVacationLine, VACATION_COMPENSATION_SOURCE } from './calculated-line-items'
+import { validateOneOffTaxLine } from './one-off-tax'
 import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
+import { monthWindow, runDeviationWindow } from './deviation-period'
 import { getLineItemAccount } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { computePremiumLines } from './shift-premium-engine'
@@ -151,15 +155,32 @@ export async function runSalaryCalculation(
   // 2b. Company-level öresavrundning toggle: round each net payout up to a
   //     whole krona (banks that reject öre in salary files). maybeSingle: a
   //     company without a settings row keeps the default (off).
+  //     The same row carries the calculation conventions
+  //     (lib/salary/calculation-policy.ts); a missing row or an empty object
+  //     is every default, which is the historical engine. An unparseable
+  //     policy (only reachable by direct SQL: the API validates on write)
+  //     refuses the run rather than silently calculating on defaults.
   const { data: companySettings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('salary_net_rounding')
+    .select('salary_net_rounding, salary_calculation_policy')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) {
     return { ok: false, code: 'DATABASE_ERROR', details: settingsError }
   }
   const roundNetToWholeKrona = companySettings?.salary_net_rounding === true
+  const policyParse = SalaryCalculationPolicySchema.safeParse(companySettings?.salary_calculation_policy ?? {})
+  if (!policyParse.success) {
+    return {
+      ok: false,
+      code: 'VALIDATION_ERROR',
+      details: {
+        reason: 'salary_calculation_policy_invalid',
+        issues: policyParse.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+      },
+    }
+  }
+  const calculationPolicy = policyParse.data
 
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
@@ -202,6 +223,29 @@ export async function runSalaryCalculation(
     }
     if (emp.f_skatt_status === 'a_skatt' && !emp.is_sidoinkomst && !emp.tax_table_number) {
       validationErrors.push(`${name}: Skattetabell saknas (krävs för A-skatt)`)
+    }
+    // The calendar-day long-leave convention is a five-day-week rule; the
+    // derivation would throw on any other schedule, so refuse up front with
+    // the employee named instead of a 500 mid-loop.
+    if (
+      calculationPolicy.long_leave === 'calendar_after_five_workdays' &&
+      (emp.workdays_per_week ?? 5) !== 5
+    ) {
+      validationErrors.push(`${name}: Kalenderdagsavdrag kräver femdagarsvecka (arbetsdagar per vecka måste vara 5)`)
+    }
+    // Engångsskatt lines were validated when written, but the DB CHECK is
+    // the only gate for rows that arrived another way. Same reason: name the
+    // line here rather than let the engine throw.
+    for (const li of (sre.line_items || []) as Array<Record<string, unknown>>) {
+      const oneOffError = validateOneOffTaxLine({
+        one_off_tax_percent: li.one_off_tax_percent as number | null | undefined,
+        item_type: li.item_type as string,
+        amount: li.amount as number,
+        is_taxable: li.is_taxable as boolean,
+        is_gross_deduction: li.is_gross_deduction as boolean,
+        is_net_deduction: li.is_net_deduction as boolean,
+      })
+      if (oneOffError) validationErrors.push(`${name}: ${li.description as string}: ${oneOffError}`)
     }
   }
   if (validationErrors.length > 0) {
@@ -276,7 +320,7 @@ export async function runSalaryCalculation(
   //     adjustment that reaches sjuklön) is worse than failing the
   //     calculation, and matches how this function treats every other query
   //     error.
-  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number }>
+  let ytdByEmployee: Map<string, { gross: number; tax: number; net: number | null }>
   try {
     const openingRows = await loadOpeningBalances(supabase, companyId, rosterEmployeeIds)
     for (const opening of openingRows) {
@@ -301,12 +345,23 @@ export async function runSalaryCalculation(
     }
   }
 
-  // 7. Pay period bounds: used to load per-day absence + worked-day records.
+  // 7. Two windows. The pay month (periodStart..periodEnd) prorates the fixed
+  //    salary for employments that start or end mid-month. The avvikelseperiod
+  //    (deviation.start..deviation.end) is where per-day absence and worked-day
+  //    records are read from: the same month by default, the previous month
+  //    for companies that run "föregående månads avvikelser". It is snapshotted
+  //    on the run at creation; older runs without it fall back to the pay month.
   const periodYear = run.period_year as number
   const periodMonth = run.period_month as number
-  const periodStart = `${periodYear}-${String(periodMonth).padStart(2, '0')}-01`
-  const periodEndDate = new Date(Date.UTC(periodYear, periodMonth, 0)) // last day of month
-  const periodEnd = periodEndDate.toISOString().slice(0, 10)
+  const payMonth = monthWindow(periodYear, periodMonth)
+  const periodStart = payMonth.start
+  const periodEnd = payMonth.end
+  const deviation = runDeviationWindow({
+    period_year: periodYear,
+    period_month: periodMonth,
+    deviation_period_start: run.deviation_period_start as string | null | undefined,
+    deviation_period_end: run.deviation_period_end as string | null | undefined,
+  })
 
   // 7b. Load active shift_premium_rules once per run. Filtered by company.
   // Inactive rules excluded: the engine also re-checks, but this saves
@@ -344,7 +399,7 @@ export async function runSalaryCalculation(
     //     still reaches into pre-cutover time; past that horizon the
     //     adjustment is stale and imported day rows carry the truth.
     const opening = openingByEmployee.get(emp.id)
-    const lookbackStartMs = Date.parse(`${periodStart}T00:00:00Z`) - 365 * 86_400_000
+    const lookbackStartMs = Date.parse(`${deviation.start}T00:00:00Z`) - 365 * 86_400_000
     const karensAdjustmentApplies =
       opening !== undefined &&
       opening.karensPeriodsAdjustment > 0 &&
@@ -355,10 +410,18 @@ export async function runSalaryCalculation(
       employeeId: emp.id,
       monthlySalary: sre.monthly_salary || 0,
       payrollConfig: config,
-      periodStart,
-      periodEnd,
+      periodStart: deviation.start,
+      periodEnd: deviation.end,
       karensPeriodsAdjustment: karensAdjustmentApplies ? opening.karensPeriodsAdjustment : 0,
       dailyDivisor: dailyDivisor(emp.workdays_per_week),
+      // Scheduled hours per day weight partial absence rows (4 h of an 8 h day
+      // is half a day). hours_per_week already reflects the employment degree.
+      hoursPerDay:
+        (emp.hours_per_week > 0 ? emp.hours_per_week : 40) /
+        (emp.workdays_per_week > 0 ? emp.workdays_per_week : 5),
+      hoursPerWeek: emp.hours_per_week > 0 ? emp.hours_per_week : 40,
+      workdaysPerWeek: emp.workdays_per_week > 0 ? emp.workdays_per_week : 5,
+      calculationPolicy,
     })
 
     // 8b. For hourly employees, derive worked hours from the calendar.
@@ -372,8 +435,8 @@ export async function runSalaryCalculation(
         .select('hours, work_date, start_time, end_time')
         .eq('company_id', companyId)
         .eq('employee_id', emp.id)
-        .gte('work_date', periodStart)
-        .lte('work_date', periodEnd)
+        .gte('work_date', deviation.start)
+        .lte('work_date', deviation.end)
       if (workedError) {
         return { ok: false, code: 'DATABASE_ERROR', details: workedError }
       }
@@ -386,8 +449,8 @@ export async function runSalaryCalculation(
       )
       opLog.info('Derived hours_worked from calendar', {
         employeeId: emp.id,
-        periodStart,
-        periodEnd,
+        periodStart: deviation.start,
+        periodEnd: deviation.end,
         rowCount: workedDayRows.length,
         derivedHoursWorked,
       })
@@ -424,10 +487,19 @@ export async function runSalaryCalculation(
     // matches the per-run monthly salary the engine actually uses. The engine
     // recomputes baseSalary from sre.monthly_salary (not from this line item),
     // so this update is display-only: it keeps the row consistent after the
-    // user edits this month's salary on the draft.
+    // user edits this month's salary on the draft. monthlyBaseSalary is the
+    // engine's own Step 1, so a partial month (and the company's
+    // partial_month convention) shows the same figure the calculation used.
     if (emp.salary_type === 'monthly') {
-      const baseAmount =
-        Math.round((sre.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
+      const baseAmount = monthlyBaseSalary({
+        monthlySalary: sre.monthly_salary || 0,
+        employmentDegree: emp.employment_degree,
+        employmentStart: emp.employment_start,
+        employmentEnd: emp.employment_end,
+        periodStart,
+        periodEnd,
+        calculationPolicy,
+      })
       await supabase
         .from('salary_line_items')
         .update({ amount: baseAmount })
@@ -668,7 +740,9 @@ export async function runSalaryCalculation(
         if (DERIVED_PREMIUM_TYPES.includes(li.item_type as ShiftPremiumItemType)) return false
         if (li.source_benefit_id) return false
         if (li.source_recurring_line_id) return false
-        if (li.item_type === 'semesterersattning') return false
+        // Only the engine's own semesterersättning row is re-derived; a
+        // manually entered one is a wage the operator decided on.
+        if (isAutomaticVacationLine(li)) return false
         if (li.item_type === 'oresavrundning') return false
         return true
       })
@@ -680,6 +754,7 @@ export async function runSalaryCalculation(
         isVacationBasis: li.is_vacation_basis as boolean,
         isGrossDeduction: li.is_gross_deduction as boolean,
         isNetDeduction: li.is_net_deduction as boolean,
+        oneOffTaxPercent: (li.one_off_tax_percent as number | null | undefined) ?? null,
       }))
     const derivedLineItems = absenceResult.lineItems.map((li) => ({
       itemType: li.item_type as SalaryLineItemType,
@@ -760,6 +835,7 @@ export async function runSalaryCalculation(
         employmentStart: emp.employment_start,
         employmentEnd: emp.employment_end,
         roundNetToWholeKrona,
+        calculationPolicy,
       },
       config,
       taxRates.map((r) => ({ ...r })),
@@ -775,6 +851,11 @@ export async function runSalaryCalculation(
         (sum: number, li: Record<string, unknown>) => sum + ((li.quantity as number) || 0),
         0,
       )
+
+    // Keep raw engine tax/net for the calculation trace, but snapshots and
+    // run totals must use the same effective withholding as payslips/bank.
+    const effectiveTax = sre.tax_withheld_override ?? result.taxWithheld
+    const effectiveNet = roundOre(result.netSalary + result.taxWithheld - effectiveTax)
 
     // 8g. Write the per-employee row. Mirrors calendar-derived hours into the
     //     hours_worked snapshot column so downstream code (reports, storno via
@@ -809,8 +890,8 @@ export async function runSalaryCalculation(
         vacation_days_taken: vacationDays,
         calculation_breakdown: { steps: result.steps },
         ytd_gross: roundOre((ytdByEmployee.get(sre.employee_id)?.gross || 0) + result.grossSalary),
-        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + result.taxWithheld),
-        ytd_net: roundOre((ytdByEmployee.get(sre.employee_id)?.net || 0) + result.netSalary),
+        ytd_tax: roundOre((ytdByEmployee.get(sre.employee_id)?.tax || 0) + effectiveTax),
+        ytd_net: ytdByEmployee.get(sre.employee_id)?.net === null ? null : roundOre((ytdByEmployee.get(sre.employee_id)?.net ?? 0) + effectiveNet),
       })
       .eq('id', sre.id)
 
@@ -818,13 +899,17 @@ export async function runSalaryCalculation(
       return { ok: false, code: 'DATABASE_ERROR', details: empUpdateError }
     }
 
-    // 8h. Replace any existing 'semesterersattning' line item (the engine
-    //     derives it on every calculate).
+    // 8h. Replace the engine's own 'semesterersattning' line item (derived on
+    //     every calculate). Matched by provenance, not by item_type: a
+    //     semesterersättning line the operator entered by hand (final
+    //     settlement, engångsskatt) survives and was fed to the engine above.
     const { error: delSemErr } = await supabase
       .from('salary_line_items')
       .delete()
       .eq('salary_run_employee_id', sre.id)
+      .eq('company_id', companyId)
       .eq('item_type', 'semesterersattning')
+      .eq('calculation_source', VACATION_COMPENSATION_SOURCE)
     if (delSemErr) {
       return { ok: false, code: 'DATABASE_ERROR', details: delSemErr }
     }
@@ -833,6 +918,7 @@ export async function runSalaryCalculation(
         salary_run_employee_id: sre.id,
         company_id: companyId,
         item_type: 'semesterersattning',
+        calculation_source: VACATION_COMPENSATION_SOURCE,
         description: 'Semesterersättning',
         quantity: 1,
         amount: Math.round(result.vacationCompensation * 100) / 100,
@@ -852,8 +938,9 @@ export async function runSalaryCalculation(
     // 8i. Replace the derived 'oresavrundning' line item. All flags false: the
     //     rounding is not pay, not tax base, not avgift basis; it exists so
     //     the payslip shows the whole-krona step and the booking gets its 3740
-    //     debit. Deleted unconditionally so toggling the setting off (or a net
-    //     that lands on a whole krona) leaves no stale row behind.
+    //     debit (credit when net_rounding = nearest rounded down). Deleted
+    //     unconditionally so toggling the setting off (or a net that lands on
+    //     a whole krona) leaves no stale row behind.
     const { error: delRoundErr } = await supabase
       .from('salary_line_items')
       .delete()
@@ -862,7 +949,7 @@ export async function runSalaryCalculation(
     if (delRoundErr) {
       return { ok: false, code: 'DATABASE_ERROR', details: delRoundErr }
     }
-    if (result.netRounding > 0) {
+    if (result.netRounding !== 0) {
       const { error: insRoundErr } = await supabase.from('salary_line_items').insert({
         salary_run_employee_id: sre.id,
         company_id: companyId,
@@ -884,14 +971,17 @@ export async function runSalaryCalculation(
     }
 
     totalGross += result.grossSalary
-    totalTax += result.taxWithheld
-    totalNet += result.netSalary
+    totalTax += effectiveTax
+    totalNet += effectiveNet
     totalAvgifter += result.avgifterAmount
     totalVacationAccrual += result.vacationAccrual
     totalEmployerCost += result.totalEmployerCost
   }
 
-  // 9. Update run totals + freeze the calculation_params snapshot.
+  // 9. Update run totals + freeze the calculation_params snapshot. The
+  //    company's calculation conventions ride along under
+  //    salary_calculation_policy so the run keeps the conventions it was
+  //    calculated with when the company changes them later.
   const { data: updatedRun, error: updateError } = await supabase
     .from('salary_runs')
     .update({
@@ -901,7 +991,7 @@ export async function runSalaryCalculation(
       total_avgifter: Math.round(totalAvgifter * 100) / 100,
       total_vacation_accrual: Math.round(totalVacationAccrual * 100) / 100,
       total_employer_cost: Math.round(totalEmployerCost * 100) / 100,
-      calculation_params: serializePayrollConfig(config),
+      calculation_params: { ...serializePayrollConfig(config), salary_calculation_policy: calculationPolicy },
     })
     .eq('id', id)
     // Defense-in-depth: scope the write to the company explicitly. The

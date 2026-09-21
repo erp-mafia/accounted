@@ -29,7 +29,8 @@
 0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/invoices/recurring/cron
 30 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/settings/booking-templates/sync/cron
 0 0 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
-0 5 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
+0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
+30 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/health-probe/cron
 30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron
 45 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/woocommerce/orders/cron
 15 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/shopify/orders/cron
@@ -50,6 +51,7 @@
 15 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/whatsapp-inbox/retention/cron
 */2 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/sweep/cron
 45 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/invoice-inbox/underlag-reconcile/cron
+* * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/worker/cron
 20 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/complete-invoice-lines/cron
 */5 * * * *         curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/arcim-migration/cleanup/cron
 15 5 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bookkeeping/accruals/post-due/cron

@@ -61,7 +61,7 @@ const mRelink = relinkRegistrationVouchers as Mock
 const mRefresh = refreshMigratedSupplierPaymentState as Mock
 const mGetConsent = getConsent as Mock
 
-const PAYMENT_RESULT = { scanned: 3, autoLinked: 2, ambiguous: 0, unmatched: 1, items: [] }
+const PAYMENT_RESULT = { scanned: 3, autoLinked: 2, ambiguous: 0, unmatched: 1, links: [], review: [] }
 const LINK_RESULT = {
   scanned: 2, linked: 1, noRef: 0, refNotFetched: 1, unresolved: 0, ambiguous: 0, amountMismatch: 0, alreadyLinked: 0,
   reports: [], providerInvoices: 2, matched: 2, unmatched: 0,
@@ -137,6 +137,34 @@ describe('POST /reconcile', () => {
     expect(mRefresh).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', consentId: 'consent-1', dryRun: true }))
   })
 
+  it('refreshes payment state before a registration link makes the row ineligible, in dry run and apply', async () => {
+    for (const dryRun of [true, false]) {
+      let registrationLinked = false
+      let paymentRefreshed = false
+      mRefresh.mockImplementation(async () => {
+        const updated = registrationLinked ? 0 : 1
+        if (!dryRun && updated) paymentRefreshed = true
+        return { ...REFRESH_RESULT, updated, dryRun }
+      })
+      mRelink.mockImplementation(async () => {
+        if (!dryRun) registrationLinked = true
+        return LINK_RESULT
+      })
+
+      const res = await handler(reconcileRequest({ consentId: 'consent-1', dryRun }), buildCtx())
+      const { body } = await parseJsonResponse<{ paymentRefresh: { updated: number } }>(res)
+      expect(body.paymentRefresh.updated).toBe(1)
+      expect(paymentRefreshed).toBe(!dryRun)
+      expect(registrationLinked).toBe(!dryRun)
+    }
+  })
+
+  it('does not also refresh an invoice whose payment voucher the dry run already plans to link', async () => {
+    mReconcile.mockResolvedValue({ ...PAYMENT_RESULT, links: [{ supplier_invoice_id: 'si-paid' }] })
+    await handler(reconcileRequest({ consentId: 'consent-1', dryRun: true }), buildCtx())
+    expect(mRefresh).toHaveBeenCalledWith(expect.objectContaining({ excludeInvoiceIds: ['si-paid'] }))
+  })
+
   it('answers 404 PROVIDER_CONSENT_NOT_FOUND for a foreign or unknown consent, before any write', async () => {
     mGetConsent.mockRejectedValue(new ConsentNotFoundError())
 
@@ -177,7 +205,7 @@ describe('POST /reconcile', () => {
     expect(JSON.stringify(body)).not.toContain('10.0.0.1')
   })
 
-  it('keeps the relink result when the payment refresh fails, and names that failure separately', async () => {
+  it('leaves registration unlinked when payment refresh fails so the refresh can be retried', async () => {
     mRefresh.mockRejectedValue(new Error('socket hang up at 10.0.0.1'))
 
     const res = await handler(reconcileRequest({ consentId: 'consent-1' }), buildCtx())
@@ -188,10 +216,12 @@ describe('POST /reconcile', () => {
       success: true,
       dryRun: false,
       result: PAYMENT_RESULT,
-      registrationLinks: LINK_RESULT,
+      registrationLinks: null,
+      registrationLinksError: { code: 'PROVIDER_MIGRATE_FAILED' },
       paymentRefresh: null,
       paymentRefreshError: { code: 'PROVIDER_MIGRATE_FAILED' },
     })
+    expect(mRelink).not.toHaveBeenCalled()
     expect(JSON.stringify(body)).not.toContain('10.0.0.1')
   })
 })

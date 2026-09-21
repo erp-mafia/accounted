@@ -52,8 +52,8 @@ function makeDeclaration(overrides?: Partial<INK2Declaration>): INK2Declaration 
       '7653': 0,
       '7754': 0,
       '7763': 0,
-      '8020': 302000,
-      '8021': 0,
+      '7670': 302000,
+      '7770': 0,
     },
     breakdown: {} as INK2Declaration['breakdown'],
     totals: {
@@ -245,10 +245,10 @@ describe('INK2 SRU Generator', () => {
 
       const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
       expect(ink2sBlock).toContain('#UPPGIFT 7650 302000')
-      expect(ink2sBlock).toContain('#UPPGIFT 8020 302000')
-      // 7750 and 8021 are 0, should not appear
+      expect(ink2sBlock).toContain('#UPPGIFT 7670 302000')
+      // 7750 and 7770 are 0, should not appear
       expect(ink2sBlock).not.toContain('#UPPGIFT 7750')
-      expect(ink2sBlock).not.toContain('#UPPGIFT 8021')
+      expect(ink2sBlock).not.toContain('#UPPGIFT 7770')
     })
 
     it('includes saved non-deductible and non-taxable adjustments in INK2S', () => {
@@ -273,13 +273,13 @@ describe('INK2 SRU Generator', () => {
 
       const submission = generateSRUSubmission(makeDeclaration({
         ink2: { ...base.ink2, '7104': 202000 },
-        ink2s: { ...base.ink2s, '7763': 100000, '8020': 202000 },
+        ink2s: { ...base.ink2s, '7763': 100000, '7670': 202000 },
       }))
       const ink2sBlock = extractBlock(submission.blanketterSru, 'INK2S')
       expect(ink2sBlock).toContain('#UPPGIFT 7763 100000')
-      expect(ink2sBlock).toContain('#UPPGIFT 8020 202000')
+      expect(ink2sBlock).toContain('#UPPGIFT 7670 202000')
       // Field order follows the form: 4.14 a before 4.15.
-      expect(ink2sBlock.indexOf('#UPPGIFT 7763')).toBeLessThan(ink2sBlock.indexOf('#UPPGIFT 8020'))
+      expect(ink2sBlock.indexOf('#UPPGIFT 7763')).toBeLessThan(ink2sBlock.indexOf('#UPPGIFT 7670'))
     })
 
     it('INK2 block includes överskott', () => {

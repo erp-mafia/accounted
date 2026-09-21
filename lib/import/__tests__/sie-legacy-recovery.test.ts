@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { assessLegacySIEImport } from '../sie-legacy-recovery'
+import { assessLegacySIEImport, legacySIENextStep } from '../sie-legacy-recovery'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 const db = createQueuedMockSupabase()
@@ -120,5 +120,28 @@ describe('legacy SIE recovery assessment', () => {
   it('does not turn an unavailable count into zero', async () => {
     db.enqueueMany([{ data: legacy }, { data: period }, { data: settings }, { count: null }, { count: 0 }, { count: 0 }])
     await expect(assess()).rejects.toThrow('count is unavailable')
+  })
+})
+
+describe('legacySIENextStep (#2566)', () => {
+  const open = { period, companyLock: { known: true, through: null } }
+
+  it('points an open, unlocked, unheld year at the year reset', () => {
+    expect(legacySIENextStep(open)).toBe('reset_year')
+  })
+
+  it('allows a company lock that ends before the year starts', () => {
+    expect(legacySIENextStep({ ...open, companyLock: { known: true, through: '2025-12-31' } })).toBe('reset_year')
+  })
+
+  it.each([
+    ['no resolved year', { ...open, period: null }],
+    ['a closed year', { ...open, period: { ...period, is_closed: true } }],
+    ['a locked year', { ...open, period: { ...period, locked_at: '2026-09-01T00:00:00Z' } }],
+    ['a year held by an unfinished import', { ...open, period: { ...period, import_hold: 'job-1' } }],
+    ['a company lock reaching into the year', { ...open, companyLock: { known: true, through: '2026-01-01' } }],
+    ['an unknown company lock', { ...open, companyLock: { known: false, through: null } }],
+  ])('keeps %s with support: the reset would be refused there', (_label, assessment) => {
+    expect(legacySIENextStep(assessment)).toBe('support')
   })
 })

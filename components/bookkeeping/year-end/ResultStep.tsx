@@ -17,6 +17,12 @@ import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
 import { formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import {
+  isEntityType,
+  preparesArsredovisning,
+  resultClosingAccounts,
+} from '@/lib/company/entity-type'
 
 interface ResultStepProps {
   result: YearEndResult
@@ -29,6 +35,21 @@ export function ResultStep({ result }: ResultStepProps) {
 
   const continuity = result.continuity
   const discrepancies = continuity?.discrepancies ?? []
+
+  // The closing and carry accounts are the form's (AB 2099/2098, förening
+  // 2069/2068, EF closes straight into equity): the labels name them from
+  // the profile. Without a known form the copy stays account-neutral and
+  // no årsredovisning is offered, since that flow is shaped for the forms
+  // whose profile prepares one.
+  const entityType = useCompanyOptional()?.company?.entity_type
+  const form = isEntityType(entityType) ? entityType : null
+  const closing = form ? resultClosingAccounts(form) : null
+  const carryLabel =
+    closing?.priorYearCarry
+      ? `(${closing.closing} → ${closing.priorYearCarry})`
+      : null
+  const offersArsredovisning = form !== null && preparesArsredovisning(form)
+  const disabledLink = !acknowledged ? 'pointer-events-none opacity-50' : ''
 
   // If the wizard reached ResultStep, executeYearEndClosing already enforced
   // that no per-account diff exceeded ORE_TOLERANCE: but surface a panel
@@ -70,7 +91,11 @@ export function ResultStep({ result }: ResultStepProps) {
           />
           {result.resultAppropriationEntry && (
             <ResultRow
-              label="Omföring av föregående års resultat (2099 → 2098)"
+              label={
+                carryLabel
+                  ? `Omföring av föregående års resultat ${carryLabel}`
+                  : 'Omföring av föregående års resultat'
+              }
               value={formatVoucher(result.resultAppropriationEntry)}
               href={`/bookkeeping/${result.resultAppropriationEntry.id}`}
             />
@@ -84,12 +109,23 @@ export function ResultStep({ result }: ResultStepProps) {
             <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
             <p className="text-sm">
               <span className="font-medium">
-                Omföringen av föregående års resultat (2099 → 2098) kunde inte bokföras.
+                Omföringen av föregående års resultat{carryLabel ? ` ${carryLabel}` : ''} kunde
+                inte bokföras.
               </span>{' '}
-              Bokslutet och de ingående balanserna är klara, men konto 2099 “Årets
-              resultat” bär fortfarande föregående års resultat in i den nya perioden.
-              Det måste flyttas till 2098 innan balansräkningen stämmer. Kör om bokslutet
-              eller kontakta support: felet är loggat.
+              {closing && closing.priorYearCarry ? (
+                <>
+                  Bokslutet och de ingående balanserna är klara, men konto {closing.closing}{' '}
+                  “{closing.closingName}” bär fortfarande föregående års resultat in i den nya
+                  perioden. Det måste flyttas till {closing.priorYearCarry} innan
+                  balansräkningen stämmer.
+                </>
+              ) : (
+                <>
+                  Bokslutet och de ingående balanserna är klara, men resultatkontot bär
+                  fortfarande föregående års resultat in i den nya perioden.
+                </>
+              )}{' '}
+              Kör om bokslutet eller kontakta support: felet är loggat.
             </p>
         </div>
       )}
@@ -116,37 +152,41 @@ export function ResultStep({ result }: ResultStepProps) {
             </span>
           </label>
 
+          {/* The primary action is the årsredovisning only for a form that
+              prepares one; every other form's next step is the reports. */}
           <div className="flex flex-col sm:flex-row gap-3 sm:justify-end">
             <Button variant="outline" asChild disabled={!acknowledged}>
               <Link
                 href="/bookkeeping"
                 aria-disabled={!acknowledged}
                 tabIndex={acknowledged ? undefined : -1}
-                className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
+                className={disabledLink}
               >
                 Till bokföringen
               </Link>
             </Button>
-            <Button variant="outline" asChild disabled={!acknowledged}>
+            <Button variant={offersArsredovisning ? 'outline' : 'default'} asChild disabled={!acknowledged}>
               <Link
                 href="/reports"
                 aria-disabled={!acknowledged}
                 tabIndex={acknowledged ? undefined : -1}
-                className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
+                className={disabledLink}
               >
                 Generera rapporter
               </Link>
             </Button>
-            <Button asChild disabled={!acknowledged}>
-              <Link
-                href={`/bookkeeping/year-end/arsredovisning?period=${result.closingEntry.fiscal_period_id}`}
-                aria-disabled={!acknowledged}
-                tabIndex={acknowledged ? undefined : -1}
-                className={!acknowledged ? 'pointer-events-none opacity-50' : ''}
-              >
-                Skapa årsredovisning
-              </Link>
-            </Button>
+            {offersArsredovisning && (
+              <Button asChild disabled={!acknowledged}>
+                <Link
+                  href={`/bookkeeping/year-end/arsredovisning?period=${result.closingEntry.fiscal_period_id}`}
+                  aria-disabled={!acknowledged}
+                  tabIndex={acknowledged ? undefined : -1}
+                  className={disabledLink}
+                >
+                  Skapa årsredovisning
+                </Link>
+              </Button>
+            )}
           </div>
       </section>
     </div>

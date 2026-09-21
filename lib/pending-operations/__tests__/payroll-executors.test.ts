@@ -374,11 +374,22 @@ describe('commitPendingOperation: update_salary_run', () => {
   })
 })
 
+/** March 2026 pay month, calculated, legacy NULL window: locks 2026-03-01..31. */
+const REVIEW_RUN_MARCH = {
+  id: 'run-mar',
+  status: 'review',
+  period_year: 2026,
+  period_month: 3,
+  deviation_period_start: null,
+  deviation_period_end: null,
+}
+
 describe('commitPendingOperation: register_absence', () => {
   it('upserts the expanded range through the shared service (happy path)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({
       data: [
         { id: 'a1', absence_date: '2026-03-02', absence_type: 'sick', hours: 8, notes: null, salary_run_employee_id: null, created_at: '', updated_at: '' },
@@ -413,6 +424,7 @@ describe('commitPendingOperation: register_absence', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ data: null, error: { code: '23514', message: 'Total tid över 24h' } }) // upsert trips trigger
     enqueue({ data: null, error: null }) // finalize (failed)
 
@@ -434,6 +446,7 @@ describe('commitPendingOperation: register_absence', () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
       enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
       enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({ data: [] }) // register lock lookup: no locking runs
       enqueue({
         data: null,
         error: {
@@ -466,6 +479,38 @@ describe('commitPendingOperation: register_absence', () => {
       const logged = consoleError.mock.calls.map((c) => c.join(' ')).join('\n')
       expect(logged).toContain('register_absence commit failed')
       expect(logged).toContain('row-level security')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('rejects with 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN, naming the run, when a calculated run already read the dates', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({ data: [REVIEW_RUN_MARCH] }) // register lock lookup: March is calculated
+      enqueue({ data: null, error: null }) // finalize (rejected)
+
+      const op = makePendingOp({
+        operation_type: 'register_absence',
+        params: { employee_id: 'emp-1', from: '2026-03-02', to: '2026-03-03', absence_type: 'sick' },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      // A client-state conflict like the 24h cap: the op is rejected, not
+      // transiently failed. The message names the run and the dates so the
+      // agent can revert it to draft or make a correction run.
+      expect(result.status).toBe('rejected')
+      expect(result.http_status).toBe(409)
+      expect(result.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+      expect(result.error).toContain('avvikelseperioden')
+      expect(result.error).toContain('run-mar')
+      expect(result.error).toContain('2026-03')
+      expect(result.error).toContain('2026-03-02 till 2026-03-03')
+      // Nothing was written to the register.
+      expect(findCalls('salary_absence_days', 'upsert')).toHaveLength(0)
     } finally {
       consoleError.mockRestore()
     }
@@ -533,6 +578,7 @@ describe('commitPendingOperation: delete_absence', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
     enqueue({ data: { id: 'emp-1' } }) // service assertEmployee
+    enqueue({ data: [] }) // register lock lookup: no locking runs
     enqueue({ data: null, count: 3 }) // delete with count
     enqueue({ data: null, error: null }) // finalize
 
@@ -572,6 +618,7 @@ describe('commitPendingOperation: delete_absence', () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
       enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
       enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({ data: [] }) // register lock lookup: no locking runs
       enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }) // delete fails
       enqueue({ data: null, error: null }) // finalize (failed)
 
@@ -589,6 +636,32 @@ describe('commitPendingOperation: delete_absence', () => {
       const logged = consoleError.mock.calls.map((c) => c.join(' ')).join('\n')
       expect(logged).toContain('delete_absence commit failed')
       expect(logged).toContain('statement timeout')
+    } finally {
+      consoleError.mockRestore()
+    }
+  })
+
+  it('rejects with 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN when the range overlaps a calculated run, deleting nothing', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: { id: 'emp-1' } }) // assertEmployee
+      enqueue({ data: [REVIEW_RUN_MARCH] }) // register lock lookup: March is calculated
+      enqueue({ data: null, error: null }) // finalize (rejected)
+
+      const op = makePendingOp({
+        operation_type: 'delete_absence',
+        params: { employee_id: 'emp-1', from: '2026-03-30', to: '2026-04-02' },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).toBe('rejected')
+      expect(result.http_status).toBe(409)
+      expect(result.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+      expect(result.error).toContain('run-mar')
+      expect(result.error).toContain('2026-03-30 till 2026-03-31')
+      expect(findCalls('salary_absence_days', 'delete')).toHaveLength(0)
     } finally {
       consoleError.mockRestore()
     }

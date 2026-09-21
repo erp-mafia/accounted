@@ -40,10 +40,11 @@ export const STRIPE_ACTION_TIMEOUT_MS = 15_000
 /**
  * Deadline for "Synka nu".
  *
- * Deliberately far longer than the writes. A first sync backfills 90 days and up
- * to 10 000 balance transactions (BACKFILL_DAYS / MAX_TXNS_PER_RUN in
- * transaction-sync.ts), which legitimately takes minutes, and aborting early
- * would be worse than the missing catch this replaces: the server keeps working
+ * Deliberately far longer than the writes. A backfill ("Hämta äldre
+ * transaktioner") can list up to 10 000 balance transactions
+ * (MAX_TXNS_PER_RUN in transaction-sync.ts), which legitimately takes minutes,
+ * and aborting early would be worse than the missing catch this replaces: the
+ * server keeps working
  * and advances `last_balance_txn_synced_at`, so the user would be told the sync
  * failed and then find nothing on the retry. The only honest bound is the
  * route's own ceiling (`export const maxDuration = 300` in

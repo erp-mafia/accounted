@@ -104,6 +104,48 @@ function makeBasicInput(overrides = {}) {
 }
 
 describe('calculateSalary', () => {
+  it('deducts a derived absence row once even though it carries is_gross_deduction (Frey, 2026-09-18)', () => {
+    // 31 500 kr monthly, one VAB day at daily rate 1 500: gross must be 30 000,
+    // not 28 500. The derived rows carry is_gross_deduction for the booking
+    // split, and Step 4 must not consume them a second time.
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 31500,
+        lineItems: [
+          {
+            itemType: 'vab',
+            amount: -1500,
+            isTaxable: true,
+            isAvgiftBasis: true,
+            isVacationBasis: true,
+            isGrossDeduction: true,
+            isNetDeduction: false,
+          },
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.grossSalary).toBe(30000)
+    expect(result.grossDeductions).toBe(0)
+  })
+
+  it('still applies a genuine bruttolöneavdrag next to absence rows', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 31500,
+        lineItems: [
+          { itemType: 'sick_karens', amount: -1163.08, isTaxable: true, isAvgiftBasis: true, isVacationBasis: false, isGrossDeduction: true, isNetDeduction: false },
+          { itemType: 'deduction', amount: -1000, isTaxable: true, isAvgiftBasis: true, isVacationBasis: false, isGrossDeduction: true, isNetDeduction: false },
+        ],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.grossSalary).toBe(29336.92)
+    expect(result.grossDeductions).toBe(1000)
+  })
+
   it('calculates basic monthly salary correctly', () => {
     const result = calculateSalary(makeBasicInput(), config2026, emptyTaxRates)
 
@@ -1734,5 +1776,194 @@ describe('kostnadsersättning: tax-free reimbursements', () => {
       emptyTaxRates,
     )
     expect(r.netSalary + r.taxWithheld + r.netDeductions - r.taxFreeReimbursements).toBeCloseTo(r.grossSalary, 2)
+  })
+})
+
+// ============================================================
+// Company calculation conventions (lib/salary/calculation-policy.ts)
+// ============================================================
+
+import { DEFAULT_SALARY_CALCULATION_POLICY, SalaryCalculationPolicySchema } from '../calculation-policy'
+
+const zeroIncomeTaxRates: TaxTableRate[] = [
+  { tableYear: 2026, tableNumber: 33, columnNumber: 1, incomeFrom: 0, incomeTo: 2000, kind: 'amount', taxAmount: 0 },
+]
+
+const oneOff = (over: Record<string, unknown> = {}) => ({
+  itemType: 'bonus' as const,
+  amount: 2500,
+  oneOffTaxPercent: 20,
+  isTaxable: true,
+  isAvgiftBasis: true,
+  isVacationBasis: false,
+  isGrossDeduction: false,
+  isNetDeduction: false,
+  ...over,
+})
+
+describe('calculation policy: defaults are a no-op', () => {
+  it('produces the identical result with the default policy on a mixed payslip', () => {
+    const input = makeBasicInput({
+      taxTableNumber: 33,
+      roundNetToWholeKrona: true,
+      monthlySalary: 40000.49,
+      employmentStart: '2026-04-15',
+      periodStart: '2026-04-01',
+      periodEnd: '2026-04-30',
+      lineItems: [
+        oneOff({ oneOffTaxPercent: null, amount: 1500 }),
+        { itemType: 'vab', amount: -1500, isTaxable: true, isAvgiftBasis: true, isVacationBasis: true, isGrossDeduction: true, isNetDeduction: false },
+      ],
+    })
+    const plain = calculateSalary(input, config2026, zeroIncomeTaxRates)
+    const withDefaults = calculateSalary({ ...input, calculationPolicy: DEFAULT_SALARY_CALCULATION_POLICY }, config2026, zeroIncomeTaxRates)
+    expect(withDefaults).toEqual(plain)
+  })
+})
+
+describe('calculation policy: engångsskatt (one_off_tax_percent)', () => {
+  it('keeps a one-off amount outside the monthly table and taxes it at its flat rate', () => {
+    const result = calculateSalary(makeBasicInput({ monthlySalary: 0, taxTableNumber: 33, lineItems: [oneOff()] }), config2026, zeroIncomeTaxRates)
+    expect(result.grossSalary).toBe(2500)
+    expect(result.taxWithheld).toBe(500)
+    expect(result.netSalary).toBe(2000)
+    expect(result.steps.find(s => s.label === 'Engångsskatt (20 %)')).toMatchObject({ input: { basis: 2500, percent: 20 }, output: 500 })
+    // The table step saw the regular part only.
+    expect(result.steps.find(s => s.label.startsWith('Skatteavdrag (tabell'))!.input.taxable_income).toBe(0)
+  })
+
+  it('drops the öre by statute and rounds to nearest only under one_off_tax_rounding = nearest', () => {
+    const input = makeBasicInput({
+      monthlySalary: 0,
+      taxTableNumber: 33,
+      lineItems: [oneOff({ itemType: 'semesterersattning', amount: 1001.99, oneOffTaxPercent: 32 })],
+    })
+    expect(calculateSalary(input, config2026, zeroIncomeTaxRates).taxWithheld).toBe(320)
+    expect(
+      calculateSalary(
+        { ...input, calculationPolicy: SalaryCalculationPolicySchema.parse({ one_off_tax_rounding: 'nearest' }) },
+        config2026,
+        zeroIncomeTaxRates,
+      ).taxWithheld,
+    ).toBe(321)
+  })
+
+  it('groups equal percentages before dropping the öre, so a split payment withholds the same', () => {
+    const line = oneOff({ amount: 2, oneOffTaxPercent: 34 })
+    const result = calculateSalary(makeBasicInput({ monthlySalary: 0, taxTableNumber: 33, lineItems: [line, line] }), config2026, zeroIncomeTaxRates)
+    expect(result.taxWithheld).toBe(1)
+    expect(result.steps.filter(s => s.label.startsWith('Engångsskatt'))).toHaveLength(1)
+  })
+
+  it('lets a valid jämkning decision govern the one-off amount too', () => {
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: 0,
+        taxTableNumber: 33,
+        jamkningPercentage: 15,
+        jamkningValidFrom: '2026-01-01',
+        jamkningValidTo: '2026-12-31',
+        lineItems: [oneOff()],
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.taxWithheld).toBe(375)
+    expect(result.steps.some(s => s.label.startsWith('Engångsskatt'))).toBe(false)
+  })
+
+  it('refuses a percentage on a benefit, a deduction or a non-taxable row', () => {
+    expect(() =>
+      calculateSalary(makeBasicInput({ lineItems: [oneOff({ itemType: 'benefit_car' })] }), config2026, emptyTaxRates),
+    ).toThrow('Engångsskatt')
+    expect(() =>
+      calculateSalary(makeBasicInput({ lineItems: [oneOff({ isNetDeduction: true })] }), config2026, emptyTaxRates),
+    ).toThrow('Engångsskatt')
+    expect(() =>
+      calculateSalary(makeBasicInput({ lineItems: [oneOff({ isTaxable: false })] }), config2026, emptyTaxRates),
+    ).toThrow('Engångsskatt')
+  })
+})
+
+describe('calculation policy: signed taxable additions', () => {
+  it.each(['other', 'correction', 'semesterersattning'] as const)('pays a signed taxable %s row into gross', (itemType) => {
+    const line = oneOff({ itemType, amount: 1500, oneOffTaxPercent: null })
+    const result = calculateSalary(makeBasicInput({ lineItems: [line, { ...line, amount: -300 }] }), config2026, emptyTaxRates)
+    expect(result.grossSalary).toBe(41200)
+    expect(result.netSalary).toBe(28840)
+  })
+
+  it('does not turn a gross deduction or a non-taxable row into an addition', () => {
+    const deduction = oneOff({ itemType: 'other', amount: -1500, oneOffTaxPercent: null, isGrossDeduction: true })
+    const informational = oneOff({ itemType: 'other', amount: 9999, oneOffTaxPercent: null, isTaxable: false })
+    const result = calculateSalary(makeBasicInput({ lineItems: [deduction, informational] }), config2026, emptyTaxRates)
+    expect(result.grossSalary).toBe(38500)
+    expect(result.grossDeductions).toBe(1500)
+  })
+
+  it('never earns semesterersättning or vacation accrual on a manual semesterersättning payment', () => {
+    const manual = oneOff({ itemType: 'semesterersattning', amount: 2500, oneOffTaxPercent: null, isVacationBasis: true })
+    const paidOut = calculateSalary(makeBasicInput({ vacationRule: 'semesterersattning', lineItems: [manual] }), config2026, emptyTaxRates)
+    expect(paidOut.vacationCompensation).toBe(4800)
+    expect(paidOut.grossSalary).toBe(47300)
+    const accrued = calculateSalary(makeBasicInput({ lineItems: [manual] }), config2026, emptyTaxRates)
+    expect(accrued.vacationAccrual).toBe(4800)
+    expect(accrued.grossSalary).toBe(42500)
+  })
+})
+
+describe('calculation policy: net_rounding = nearest', () => {
+  it.each([
+    [40000.49, 40000, -0.49],
+    [40000.5, 40001, 0.5],
+  ])('rounds %s to the nearest krona and reports the signed difference', (salary, expectedNet, rounding) => {
+    const result = calculateSalary(
+      makeBasicInput({
+        monthlySalary: salary,
+        fSkattStatus: 'f_skatt',
+        roundNetToWholeKrona: true,
+        calculationPolicy: SalaryCalculationPolicySchema.parse({ net_rounding: 'nearest' }),
+      }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(expectedNet)
+    expect(result.netRounding).toBe(rounding)
+    expect(result.grossSalary).toBe(salary)
+    expect(result.steps.some(s => s.label === 'Öresavrundning (närmaste hela krona)')).toBe(true)
+  })
+
+  it('still rounds up under the default', () => {
+    const result = calculateSalary(
+      makeBasicInput({ monthlySalary: 40000.49, fSkattStatus: 'f_skatt', roundNetToWholeKrona: true }),
+      config2026,
+      emptyTaxRates,
+    )
+    expect(result.netSalary).toBe(40001)
+    expect(result.netRounding).toBe(0.51)
+  })
+})
+
+describe('calculation policy: partial_month = annual_calendar_days', () => {
+  it('prorates a mid-month start by rounded calendar-day rate only when selected', () => {
+    const input = makeBasicInput({
+      monthlySalary: 42000,
+      fSkattStatus: 'f_skatt',
+      employmentStart: '2037-08-10',
+      periodStart: '2037-08-01',
+      periodEnd: '2037-08-31',
+    })
+    expect(calculateSalary(input, config2026, emptyTaxRates).grossSalary).toBe(32000)
+    const calendar = calculateSalary(
+      { ...input, calculationPolicy: SalaryCalculationPolicySchema.parse({ partial_month: 'annual_calendar_days' }) },
+      config2026,
+      emptyTaxRates,
+    )
+    expect(calendar.grossSalary).toBe(30378.04)
+    expect(calendar.steps[0]).toMatchObject({
+      label: 'Grundlön (proportionerad anställningsperiod)',
+      input: { calendar_days: 22, overlap_start: '2037-08-10', overlap_end: '2037-08-31' },
+      output: 30378.04,
+    })
   })
 })

@@ -1,9 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getLineItemAccount } from './account-mapping'
+import {
+  assertNoDeviationOverlap,
+  resolveDeviationWindowForNewRun,
+  type DateWindow,
+} from './deviation-period'
 
 export interface CreateSalaryRunResult {
   run: Record<string, unknown>
   employeeCount: number
+  /** The avvikelseperiod snapshotted on the run (absence + worked days are read from it). */
+  deviationWindow: DateWindow
 }
 
 /**
@@ -14,6 +21,11 @@ export interface CreateSalaryRunResult {
  * we compensating-delete the parent run on any error: FK cascade
  * (salary_run_employees → salary_runs, salary_line_items → salary_run_employees,
  * both ON DELETE CASCADE) cleans up any children already inserted.
+ *
+ * The avvikelseperiod is resolved here too (explicit dates win, else the
+ * company setting) and refused when it overlaps another live run, so every
+ * creation path (dashboard, MCP, correction) gets the same guard. Throws
+ * SalaryDeviationPeriodError for an invalid or overlapping window.
  *
  * Extracted so the MCP tool and any future route share one implementation.
  */
@@ -27,8 +39,19 @@ export async function createSalaryRunWithEmployees(
     paymentDate: string
     voucherSeries?: string
     notes?: string
+    /** Explicit avvikelseperiod (both or neither). Omit to use the company setting. */
+    deviationPeriodStart?: string | null
+    deviationPeriodEnd?: string | null
   },
 ): Promise<CreateSalaryRunResult> {
+  const { window: deviationWindow } = await resolveDeviationWindowForNewRun(supabase, companyId, {
+    periodYear: params.periodYear,
+    periodMonth: params.periodMonth,
+    explicitStart: params.deviationPeriodStart,
+    explicitEnd: params.deviationPeriodEnd,
+  })
+  await assertNoDeviationOverlap(supabase, companyId, deviationWindow)
+
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
     .insert({
@@ -37,6 +60,8 @@ export async function createSalaryRunWithEmployees(
       period_year: params.periodYear,
       period_month: params.periodMonth,
       payment_date: params.paymentDate,
+      deviation_period_start: deviationWindow.start,
+      deviation_period_end: deviationWindow.end,
       // Omitted → DB defaults ('A' / NULL) so the MCP commit path is unchanged.
       ...(params.voucherSeries ? { voucher_series: params.voucherSeries } : {}),
       ...(params.notes ? { notes: params.notes } : {}),
@@ -114,7 +139,11 @@ export async function createSalaryRunWithEmployees(
       }
     }
 
-    return { run: run as Record<string, unknown>, employeeCount: eligibleEmployees.length }
+    return {
+      run: run as Record<string, unknown>,
+      employeeCount: eligibleEmployees.length,
+      deviationWindow,
+    }
   } catch (err) {
     // Compensating delete: never leave a half-populated run. Cascade removes
     // any salary_run_employees / salary_line_items already inserted.

@@ -64,20 +64,43 @@ function defaultWindow(today: string): { from: string; to: string } {
   return { from: `${today.slice(0, 4)}-01-01`, to: today }
 }
 
+/**
+ * When the account last had contact with the bank: the later of the newest
+ * transaction and the connection's `last_synced_at`. The transaction alone
+ * reads a quiet account as stale while its connection syncs every hour.
+ * `connectionSyncedAt` is the pre-read value for the list path; `undefined`
+ * means look it up (the single-account path).
+ */
 async function latestBankSyncAt(
   supabase: SupabaseClient,
   companyId: string,
-  cashAccountId: string,
+  account: Pick<CashAccountRow, 'id' | 'bank_connection_id'>,
+  connectionSyncedAt?: string | null,
 ): Promise<string | null> {
   const { data } = await supabase
     .from('transactions')
     .select('created_at')
     .eq('company_id', companyId)
-    .eq('cash_account_id', cashAccountId)
+    .eq('cash_account_id', account.id)
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
-  return (data?.created_at as string | undefined) ?? null
+  const lastTransactionAt = (data?.created_at as string | undefined) ?? null
+
+  let lastSyncedAt = connectionSyncedAt ?? null
+  if (connectionSyncedAt === undefined && account.bank_connection_id) {
+    const { data: connection } = await supabase
+      .from('bank_connections')
+      .select('last_synced_at')
+      .eq('id', account.bank_connection_id)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    lastSyncedAt = (connection?.last_synced_at as string | undefined) ?? null
+  }
+
+  if (!lastSyncedAt) return lastTransactionAt
+  if (!lastTransactionAt) return lastSyncedAt
+  return lastSyncedAt > lastTransactionAt ? lastSyncedAt : lastTransactionAt
 }
 
 /** Bridge lines for the bank kind, mirroring the #1737 status card. */
@@ -137,6 +160,7 @@ async function bankStatus(
   account: CashAccountRow,
   window: { from: string; to: string },
   today: string,
+  connectionSyncedAt?: string | null,
 ): Promise<ReconciliationStatus> {
   const currency = account.currency ?? 'SEK'
   const raw = await getBankReconciliationStatus(
@@ -149,7 +173,7 @@ async function bankStatus(
     account.id,
     Boolean(account.is_primary),
   )
-  const syncedAt = await latestBankSyncAt(supabase, companyId, account.id)
+  const syncedAt = await latestBankSyncAt(supabase, companyId, account, connectionSyncedAt)
   const stale = !syncedAt || daysBetweenIso(syncedAt.slice(0, 10), today) > STALE_AFTER_DAYS
   // The bank-reported (booked) balance, mirrored from the last PSD2 balance
   // refresh. Point-in-time and dated by balance_updated_at, NOT by any
@@ -275,20 +299,23 @@ export async function listReconciliationAccounts(
     log.warn('sign-off read failed', { companyId, error: err instanceof Error ? err.message : String(err) })
   }
 
-  // Bank logos resolve from the connection's bank_name (the same name the
-  // connect flow shows). A failed read only costs the logos.
+  // One read per company for the connections: bank_name resolves the logo,
+  // last_synced_at dates the account. A failed read costs the logos and the
+  // connection timestamp, never the list.
   const bankNameByConnection = new Map<string, string>()
+  const syncedAtByConnection = new Map<string, string | null>()
   const connectionIds = [...new Set(cashAccounts.map((a) => a.bank_connection_id).filter((x): x is string => !!x))]
   if (connectionIds.length > 0) {
     const { data: connRows, error: connError } = await supabase
       .from('bank_connections')
-      .select('id, bank_name')
+      .select('id, bank_name, last_synced_at')
       .in('id', connectionIds)
     if (connError) {
-      log.warn('bank_name read failed; monograms instead of logos', { companyId, error: connError.message })
+      log.warn('bank_connections read failed; monograms instead of logos', { companyId, error: connError.message })
     }
-    for (const r of (connRows ?? []) as Array<{ id: string; bank_name: string | null }>) {
+    for (const r of (connRows ?? []) as Array<{ id: string; bank_name: string | null; last_synced_at: string | null }>) {
       if (r.bank_name) bankNameByConnection.set(r.id, r.bank_name)
+      syncedAtByConnection.set(r.id, r.last_synced_at)
     }
   }
 
@@ -296,9 +323,10 @@ export async function listReconciliationAccounts(
     cashAccounts.map(async (a): Promise<ReconciliationAccount> => {
       let status: ReconciliationStatus | null = null
       let syncedAt: string | null = null
+      const connectionSyncedAt = a.bank_connection_id ? (syncedAtByConnection.get(a.bank_connection_id) ?? null) : null
       if (withStatus) {
         try {
-          status = await bankStatus(supabase, companyId, a, window, today)
+          status = await bankStatus(supabase, companyId, a, window, today, connectionSyncedAt)
         } catch (err) {
           log.warn('bank status failed for account', {
             companyId,
@@ -308,7 +336,7 @@ export async function listReconciliationAccounts(
         }
       }
       try {
-        syncedAt = await latestBankSyncAt(supabase, companyId, a.id)
+        syncedAt = await latestBankSyncAt(supabase, companyId, a, connectionSyncedAt)
       } catch {
         syncedAt = null
       }

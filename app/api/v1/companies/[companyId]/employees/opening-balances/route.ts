@@ -44,13 +44,30 @@ registerEndpoint({
     'Single-employee corrections after go-live: PUT /employees/{id}/opening-balances. Ledger opening balances (SIE import).',
   pitfalls: [
     'Atomic: one bad item fails everything. The error details carry item_errors[{index, employee_id, code, message}]: fix and resubmit the full set.',
-    'Full replace per employee: resubmitting with fewer fields resets the omitted ones to 0.',
+    'Full replace per employee: resubmitting with fewer fields resets the omitted ones to 0 (vacation_as_of_date to null).',
     'Duplicate employee_id within items is rejected outright.',
+    'Vacation pools map one to one onto Fortnox/Azets: vacation_paid_days_remaining = Betalda, vacation_saved_days_by_year = Sparade per år, vacation_unpaid_days_remaining = Obetalda, vacation_advance_days_remaining = Förskott, vacation_extra_paid_days_remaining = Extra betalda; opening_advance_vacation_debt is the förskottsskuld in SEK.',
+    'vacation_as_of_date is the day the pools are struck per (default: the day before cutover_date). Under salary_deviation_period = previous_month the first run deducts the month before cutover, so send the last day before that month or its leave is treated as already deducted.',
+    'ytd_net: null when the previous system cannot export historical net pay (payslip prints "Underlag saknas"); never gross minus tax.',
   ],
   example: {
     request: {
       items: [
-        { employee_id: 'emp_77b2…', cutover_date: '2026-07-01', ytd_gross: 210000, ytd_tax: 48000, ytd_net: 162000 },
+        {
+          employee_id: 'emp_77b2…',
+          cutover_date: '2026-09-01',
+          ytd_gross: 280000,
+          ytd_tax: 64000,
+          ytd_net: null,
+          vacation_as_of_date: '2026-07-31',
+          vacation_paid_days_remaining: 12.5,
+          vacation_days_taken_this_year: 10,
+          vacation_saved_days_by_year: { '2025': 5 },
+          vacation_unpaid_days_remaining: 0,
+          vacation_advance_days_remaining: 3,
+          vacation_extra_paid_days_remaining: 2,
+          opening_advance_vacation_debt: 4500,
+        },
       ],
     },
     response: {

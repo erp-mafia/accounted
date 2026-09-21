@@ -5,6 +5,8 @@ import {
   calculateVabDeduction,
   calculateParentalLeaveDeduction,
 } from './absence-calculator'
+import type { SalaryCalculationPolicy } from './calculation-policy'
+import { calendarLeaveDeduction } from './calendar-leave'
 
 /**
  * Derive payroll line items from per-day absence records.
@@ -18,15 +20,34 @@ import {
  *
  * Swedish payroll rules implemented:
  *   - **Sjuklöneperiod** (Sjuklönelagen) = first sick day → calendar-day 14.
- *     Day 1 is karensavdrag (one per period). Days 2-14 are sjuklön at 80%.
- *     Day 15+ is Försäkringskassan; employer pays nothing but must report.
+ *     Days 1-14 are sjuklön at 80 % of the lost pay (SjLL 6 §), less ONE
+ *     karensavdrag per period of 20 % of an average week's sjuklön (SjLL
+ *     6 § since 2019, replacing the old karensdag). The karensavdrag can
+ *     never exceed the sjuklön the period actually yields, so a short first
+ *     day carries the rest of it into the next sick day, also across a
+ *     month boundary. Day 15+ is Försäkringskassan; employer pays nothing
+ *     but must report.
+ *   - **Partial days**: a row's hours against the scheduled hours per day
+ *     weight the deduction (4 h of an 8 h day = half a day); the reported
+ *     day counts stay whole days because AGI reports dates, not hours.
  *   - **Återinsjuknande**: if the next sick day is within 5 calendar days of
  *     the previous sjuklöneperiod's last day, both merge: no new karens.
  *   - **Allmänt högriskskydd**: max 10 karensavdrag per rolling 12-month
  *     window (inclusive of the new one). The 11th is suppressed.
  *
  * For VAB and parental leave, days are aggregated within the pay period and
- * forwarded to the existing calculators with YTD context.
+ * forwarded to the existing calculators with YTD context. The 120-date
+ * semestergrundande cap (SemL 17 § for VAB, 17 a § for parental leave) is
+ * applied per date: when the 120th date falls inside the period, the dates
+ * up to and including it form one row that is semestergrundande and the
+ * dates after it a second row that is not.
+ *
+ * Company conventions (lib/salary/calculation-policy.ts) change HOW a day is
+ * priced, never WHICH days are sjuklön, karens or Försäkringskassan:
+ * sick_rate = annual_hourly prices sick days 1-14 per hour at månadslön × 12
+ * / (52 × veckoarbetstid); long_leave = calendar_after_five_workdays prices
+ * parental leave, unpaid leave and sick day 15+ per calendar day once an
+ * episode exceeds five working days (lib/salary/calendar-leave.ts).
  */
 
 export type AbsenceType =
@@ -83,6 +104,35 @@ interface SjukloneperiodSegment {
 }
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000
+
+/** SemL 17 § (VAB) and 17 a § (parental leave): calendar dates per
+ *  intjänandeår, respectively per pregnancy, that stay semesterlönegrundande. */
+const VACATION_BASIS_CAP_DATES = 120
+
+interface VacationBasisPart {
+  rows: AbsenceDay[]
+  qualifies: boolean
+}
+
+/**
+ * Split a period's VAB or parental rows at the 120-date cap. The cap counts
+ * whole dates, not weighted hours, and the YTD figure is a date count too:
+ * walking the rows in date order, the ones whose position (YTD + index) is
+ * at most 120 are semestergrundande, the rest are not. Returns only the
+ * non-empty parts, qualifying first, so a period that lies entirely on one
+ * side of the cap still yields a single row.
+ */
+function splitAtVacationBasisCap(rows: AbsenceDay[], daysYtd: number): VacationBasisPart[] {
+  const sorted = [...rows].sort((a, b) =>
+    a.absence_date < b.absence_date ? -1 : a.absence_date > b.absence_date ? 1 : 0,
+  )
+  const room = Math.max(0, VACATION_BASIS_CAP_DATES - daysYtd)
+  const parts: VacationBasisPart[] = [
+    { rows: sorted.slice(0, room), qualifies: true },
+    { rows: sorted.slice(room), qualifies: false },
+  ]
+  return parts.filter(p => p.rows.length > 0)
+}
 
 function dateOnly(s: string): Date {
   return new Date(`${s}T00:00:00Z`)
@@ -155,6 +205,15 @@ export interface DeriveInput {
    *  previous month already consumed some of the 14-day window) and to
    *  count karensavdrag for högriskskydd. */
   lookbackSickDates: string[]
+  /** The same lookback rows with their hours, when known. A karensavdrag
+   *  that a short first day could not absorb continues on the next sick
+   *  day, so a period straddling a month boundary needs the prior hours to
+   *  know how much is left. Absent (older callers): every lookback day is
+   *  taken as a full scheduled day. */
+  lookbackSickDays?: AbsenceDay[]
+  /** Scheduled hours per working day (hours_per_week / workdays_per_week).
+   *  Defaults to 8. Absence hours above it count as one full day. */
+  hoursPerDay?: number
   /** Year-to-date VAB days for this employee, excluding the current period. */
   vabDaysYtd: number
   /** Parental leave days in the current pregnancy window (best-effort:
@@ -170,19 +229,93 @@ export interface DeriveInput {
    *  legacy 21 (5-day week); part-time schedules pass
    *  dailyDivisor(workdays_per_week) from lib/salary/work-schedule. */
   dailyDivisor?: number
+  /** Scheduled hours per week (employment-degree adjusted). Only read under
+   *  sick_rate = annual_hourly; defaults to hoursPerDay × 5. */
+  hoursPerWeek?: number
+  /** Working days per week. long_leave = calendar_after_five_workdays is a
+   *  five-day-week rule and refuses any other schedule. */
+  workdaysPerWeek?: number
+  /** Company calculation conventions (lib/salary/calculation-policy.ts).
+   *  Omitted = every default = the historical derivation. */
+  calculationPolicy?: SalaryCalculationPolicy
+  /** Deviation window the periodDays were read from. Required under
+   *  long_leave = calendar_after_five_workdays (the calendar rate covers the
+   *  in-window part of an episode only). */
+  periodStart?: string
+  periodEnd?: string
+  /** Registered absence rows OUTSIDE the window (the surrounding month on
+   *  each side). They decide whether an episode is longer than five working
+   *  days; they are never deducted here. Only read under the calendar
+   *  convention; leave_context = through_deviation_end drops the rows after
+   *  periodEnd. */
+  contextDays?: AbsenceDay[]
 }
 
 export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   const { monthlySalary, payrollConfig, periodDays } = input
   const lineItems: DerivedLineItem[] = []
   const r = (x: number) => Math.round(x * 100) / 100
+  const hoursPerDay =
+    typeof input.hoursPerDay === 'number' && Number.isFinite(input.hoursPerDay) && input.hoursPerDay > 0
+      ? input.hoursPerDay
+      : 8
+  /** Fraction of a scheduled day one absence row represents, capped at a full day. */
+  const dayShare = (d: AbsenceDay) =>
+    Number.isFinite(d.hours) && d.hours > 0 ? Math.min(1, d.hours / hoursPerDay) : 1
+  // Full precision here; money is rounded where it is computed and
+  // quantities where they are written, so 1/8 of a day does not become 0.13
+  // before it is priced.
+  const sumDays = (rows: AbsenceDay[]) => rows.reduce((sum, d) => sum + dayShare(d), 0)
 
-  const periodSickDates = periodDays
-    .filter(d => d.absence_type === 'sick')
-    .map(d => d.absence_date)
+  const periodSickRows = periodDays.filter(d => d.absence_type === 'sick')
+  const periodSickDates = periodSickRows.map(d => d.absence_date)
   const vabDays = periodDays.filter(d => d.absence_type === 'vab')
   const parentalDays = periodDays.filter(d => d.absence_type === 'parental')
   const unpaidLeaveDays = periodDays.filter(d => d.absence_type === 'unpaid_leave')
+
+  // Company conventions (lib/salary/calculation-policy.ts). Every default
+  // keeps the historical derivation; the branches below are pure opt-ins.
+  const policy = input.calculationPolicy
+  const annualHourly = policy?.sick_rate === 'annual_hourly'
+  const calendarLongLeave = policy?.long_leave === 'calendar_after_five_workdays'
+  if (calendarLongLeave && ((input.workdaysPerWeek ?? 5) !== 5 || !input.periodStart || !input.periodEnd)) {
+    throw new Error('Kalenderdagsavdrag kräver femdagarsvecka och en fullständig avvikelseperiod')
+  }
+  const hoursPerWeek =
+    typeof input.hoursPerWeek === 'number' && Number.isFinite(input.hoursPerWeek) && input.hoursPerWeek > 0
+      ? input.hoursPerWeek
+      : hoursPerDay * 5
+  /** Calendar-day deduction for one leave type over the in-window rows,
+   *  with the surrounding context deciding episode length. */
+  const calendarDeductionFor = (type: AbsenceType, calendarFromStart = false) => {
+    const context = (input.contextDays ?? []).filter(
+      d => d.absence_type === type &&
+        (policy?.leave_context !== 'through_deviation_end' || d.absence_date <= input.periodEnd!),
+    )
+    return calendarLeaveDeduction({
+      monthlySalary,
+      hoursPerDay,
+      dailyDivisor: input.dailyDivisor ?? 21,
+      periodStart: input.periodStart!,
+      periodEnd: input.periodEnd!,
+      days: [...context, ...periodDays.filter(d => d.absence_type === type)],
+      calendarFromStart,
+    })
+  }
+  /** Split one calendar-rate total over the 120-date parts in proportion to
+   *  their weighted days; the last part takes the öre remainder so the parts
+   *  add up to the total exactly. */
+  const allocateAcrossParts = (total: number, parts: VacationBasisPart[]): number[] => {
+    const weights = parts.map(p => sumDays(p.rows))
+    const weightSum = weights.reduce((sum, w) => sum + w, 0)
+    let allocated = 0
+    return parts.map((_, idx) => {
+      if (idx === parts.length - 1) return r(total - allocated)
+      const share = weightSum > 0 ? r((total * weights[idx]) / weightSum) : 0
+      allocated = r(allocated + share)
+      return share
+    })
+  }
 
   let flagFkReporting = false
   let flagLakarintyg = false
@@ -210,7 +343,12 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // repeatedly: softer error than the opposite.
     //
     // TODO: persist per-period karens deduction state if the period-count
-    // reading produces complaints in the field.
+    // reading produces complaints in the field. The same state would carry
+    // the karens amount already consumed by a period that continues from
+    // the previous pay period; today that is reconstructed from the prior
+    // sick hours at the CURRENT daily rate, so a salary or schedule change
+    // inside one sjuklöneperiod straddling a month boundary can shift the
+    // combined karens by the rate difference.
     const cap = payrollConfig.maxKarensavdragPerYear ?? 10
     const cutoff = addDays(periodMin, -365)
     const lookbackOnlySegments = buildSjukloneperioder(
@@ -226,6 +364,23 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
     const weeklyRate = r(monthlySalary * 12 / 52 * payrollConfig.sjuklonRate)
     const karensAmount = r(weeklyRate * payrollConfig.karensavdragFactor)
+    // sick_rate = annual_hourly (Fortnox): timlön = månadslön × 12 / (52 ×
+    // veckoarbetstid), priced per absent hour; sjuklön per timme is the
+    // 80 % of that, rounded to öre before it is multiplied.
+    const hourlyRate = r((monthlySalary * 12) / (52 * hoursPerWeek))
+    const sickHourlyRate = r(hourlyRate * payrollConfig.sjuklonRate)
+    /** Pay lost for a number of scheduled days (dagavdrag or timavdrag). */
+    const lostPayFor = (dayCount: number) =>
+      annualHourly ? r(hourlyRate * dayCount * hoursPerDay) : r(dailyRate * dayCount)
+    /** Sjuklön (80 %) for a number of scheduled days. */
+    const sickPayFor = (dayCount: number) =>
+      annualHourly
+        ? r(sickHourlyRate * dayCount * hoursPerDay)
+        : r(dailyRate * payrollConfig.sjuklonRate * dayCount)
+    // Lookback rows with hours, or every lookback date as a full day.
+    const lookbackSickRows: AbsenceDay[] =
+      input.lookbackSickDays ??
+      input.lookbackSickDates.map(absence_date => ({ absence_date, absence_type: 'sick' as const, hours: hoursPerDay }))
 
     let day2_14CountTotal = 0
     let day15PlusCountTotal = 0
@@ -238,58 +393,76 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
 
       const segmentStartsInPeriod = seg.startDate >= periodMin
 
-      // Karens for the segment? Day 1 of segment, only if it starts in this
-      // period and the högriskskydd cap isn't hit. (If the segment started
-      // in a prior pay period, the karens was already booked there; nothing
-      // to emit here.)
-      if (segmentStartsInPeriod) {
-        if (karensInWindow < cap) {
-          lineItems.push({
-            item_type: 'sick_karens',
-            description: `Karensavdrag (${seg.startDate})`,
-            quantity: 1,
-            amount: -karensAmount,
-            is_taxable: true,
-            is_avgift_basis: true,
-            is_vacation_basis: false,
-            is_gross_deduction: true,
-          })
-          karensInWindow += 1
-        } else {
-          // Suppressed by allmänt högriskskydd. The employee keeps day-1 pay
-          // (no karens deduction). Day 1 still consumed from the 14-day
-          // window but treated as paid normal: emit nothing for it.
-        }
+      // Karensavdrag for the segment (SjLL 6 §): one per sjuklöneperiod,
+      // never larger than the sjuklön the period yields. The part a short
+      // first day cannot absorb continues on the following sick days, also
+      // when they fall in the next pay period: the prior period's sjuklön
+      // (from the lookback rows) is what has already been consumed.
+      const periodDaysInSjuklon = sumDays(
+        periodSickRows.filter(
+          d => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate &&
+            daysBetweenIso(seg.startDate, d.absence_date) < 14,
+        ),
+      )
+      const priorDaysInSjuklon = sumDays(
+        lookbackSickRows.filter(
+          d => d.absence_date >= seg.startDate && d.absence_date < periodMin &&
+            daysBetweenIso(seg.startDate, d.absence_date) < 14,
+        ),
+      )
+      const karensEligible = segmentStartsInPeriod
+        ? karensInWindow < cap
+        // Continuing a period that started in the lookback: the karens was
+        // eligible then iff the count of periods before it was under the cap.
+        : (() => {
+            const priorIndex = lookbackOnlySegments.findIndex(s => s.startDate === seg.startDate)
+            return priorIndex >= 0 && priorIndex + (input.karensPeriodsAdjustment ?? 0) < cap
+          })()
+      const karensRemaining = r(Math.max(0, karensAmount - sickPayFor(priorDaysInSjuklon)))
+      const karensNow = r(Math.min(karensRemaining, sickPayFor(periodDaysInSjuklon)))
+      if (karensEligible && karensNow > 0) {
+        lineItems.push({
+          item_type: 'sick_karens',
+          description: `Karensavdrag (${seg.startDate})`,
+          quantity: 1,
+          amount: -karensNow,
+          is_taxable: true,
+          is_avgift_basis: true,
+          is_vacation_basis: false,
+          is_gross_deduction: true,
+        })
       }
+      // Suppressed by allmänt högriskskydd: the period still counts toward
+      // the window, the employee just keeps the full sjuklön.
+      if (segmentStartsInPeriod) karensInWindow += 1
 
-      // Classify each *period* sick day in this segment by its segment day
-      // index (calendar days from segment start, 1-based).
-      for (const d of periodSickDates) {
+      // Classify each *period* sick row in this segment by its segment day
+      // index (calendar days from segment start, 1-based), weighted by hours.
+      for (const row of periodSickRows) {
+        const d = row.absence_date
         if (d < seg.startDate || d > seg.endDate) continue
         const segDayIndex = daysBetweenIso(seg.startDate, d) + 1
-        if (segDayIndex === 1 && segmentStartsInPeriod) {
-          // already accounted for as karens (or suppressed); skip
-          continue
-        }
-        if (segDayIndex >= 2 && segDayIndex <= 14) {
-          day2_14CountTotal += 1
+        if (segDayIndex <= 14) {
+          day2_14CountTotal += dayShare(row)
           if (segDayIndex >= 8) flagLakarintyg = true
-        } else if (segDayIndex >= 15) {
-          day15PlusCountTotal += 1
+        } else {
+          day15PlusCountTotal += dayShare(row)
           flagFkReporting = true
         }
       }
     }
 
     if (day2_14CountTotal > 0) {
-      const lostPay = r(dailyRate * day2_14CountTotal)
-      const sjuklon = r(dailyRate * payrollConfig.sjuklonRate * day2_14CountTotal)
+      const lostPay = lostPayFor(day2_14CountTotal)
+      const sjuklon = sickPayFor(day2_14CountTotal)
       lineItems.push({
+        // item_type kept for schema and report compatibility; the row covers
+        // days 1-14 since day one also receives sjuklön.
         item_type: 'sick_day2_14',
-        description: `Sjuklön dag 2-14 (${day2_14CountTotal} dagar)`,
-        quantity: day2_14CountTotal,
+        description: `Sjuklön dag 1-14 (${r(day2_14CountTotal)} dagar)`,
+        quantity: r(day2_14CountTotal),
         // Net deduction vs full pay = lostPay - sjuklon (employer pays 80%).
-        amount: -(lostPay - sjuklon),
+        amount: -r(lostPay - sjuklon),
         is_taxable: true,
         is_avgift_basis: true,
         is_vacation_basis: true,
@@ -298,11 +471,32 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     }
 
     if (day15PlusCountTotal > 0) {
-      const lostPay = r(dailyRate * day15PlusCountTotal)
+      // long_leave = calendar_after_five_workdays prices the Försäkringskassan
+      // phase per calendar day from its first day: the rows on segment day
+      // 15+ (lookback and period) form the episodes, the in-window days are
+      // deducted. Rows after the window cannot change an in-window
+      // deduction that is already at the calendar rate, so no context is
+      // needed here.
+      const lostPay = calendarLongLeave
+        ? calendarLeaveDeduction({
+            monthlySalary,
+            hoursPerDay,
+            dailyDivisor: input.dailyDivisor ?? 21,
+            periodStart: input.periodStart!,
+            periodEnd: input.periodEnd!,
+            days: [...lookbackSickRows, ...periodSickRows].filter(d =>
+              segments.some(
+                seg => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate &&
+                  daysBetweenIso(seg.startDate, d.absence_date) >= 14,
+              ),
+            ),
+            calendarFromStart: true,
+          })
+        : r(dailyRate * day15PlusCountTotal)
       lineItems.push({
         item_type: 'sick_day15_plus',
-        description: `Sjukfrånvaro dag 15+ (FK) (${day15PlusCountTotal} dagar)`,
-        quantity: day15PlusCountTotal,
+        description: `Sjukfrånvaro dag 15+ (FK) (${r(day15PlusCountTotal)} dagar)`,
+        quantity: r(day15PlusCountTotal),
         // Employer pays nothing: full daily rate deducted.
         amount: -lostPay,
         is_taxable: true,
@@ -313,41 +507,63 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     }
   }
 
+  // The calculators' own semesterGrundande verdict is ignored: it judges the
+  // period as a whole, while the part a row belongs to decides its flag.
+  // A row past the cap says so in its description, so the payslip explains
+  // why the vacation basis is lower that month.
+  const vacationBasisSuffix = (qualifies: boolean) => (qualifies ? '' : ', ej semestergrundande')
+
   // ── VAB ────────────────────────────────────────────────────────────────
+  // SemL 17 §: 120 calendar dates per intjänandeår are semestergrundande;
+  // the split is by date, the deduction by weighted hours.
   const vabCount = vabDays.length
   if (vabCount > 0) {
-    const vab = calculateVabDeduction(monthlySalary, vabCount, input.vabDaysYtd, input.dailyDivisor)
-    lineItems.push({
-      item_type: 'vab',
-      description: `VAB (${vabCount} dagar)`,
-      quantity: vabCount,
-      amount: -vab.deduction,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: vab.semesterGrundande,
-      is_gross_deduction: true,
-    })
+    for (const part of splitAtVacationBasisCap(vabDays, input.vabDaysYtd)) {
+      const vabEquivalentDays = sumDays(part.rows)
+      const vab = calculateVabDeduction(monthlySalary, vabEquivalentDays, input.vabDaysYtd, input.dailyDivisor)
+      lineItems.push({
+        item_type: 'vab',
+        description: `VAB (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
+        quantity: r(vabEquivalentDays),
+        amount: -vab.deduction,
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: part.qualifies,
+        is_gross_deduction: true,
+      })
+    }
   }
 
   // ── Parental leave ─────────────────────────────────────────────────────
+  // SemL 17 a §: 120 calendar dates per pregnancy, split as above. Under the
+  // calendar convention the episode is priced as a whole (the split is about
+  // semesterunderlag, not about how long the leave is) and the total is
+  // shared over the parts by their weighted days.
   const parentalCount = parentalDays.length
   if (parentalCount > 0) {
-    const parental = calculateParentalLeaveDeduction(
-      monthlySalary,
-      parentalCount,
-      input.parentalDaysPregnancyYtd,
-      input.dailyDivisor,
-    )
-    lineItems.push({
-      item_type: 'parental_leave',
-      description: `Föräldraledighet (${parentalCount} dagar)`,
-      quantity: parentalCount,
-      amount: -parental.deduction,
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: parental.semesterGrundande,
-      is_gross_deduction: true,
-    })
+    const parentalParts = splitAtVacationBasisCap(parentalDays, input.parentalDaysPregnancyYtd)
+    const calendarParental = calendarLongLeave
+      ? allocateAcrossParts(calendarDeductionFor('parental'), parentalParts)
+      : null
+    for (const [idx, part] of parentalParts.entries()) {
+      const parentalEquivalentDays = sumDays(part.rows)
+      const parental = calculateParentalLeaveDeduction(
+        monthlySalary,
+        parentalEquivalentDays,
+        input.parentalDaysPregnancyYtd,
+        input.dailyDivisor,
+      )
+      lineItems.push({
+        item_type: 'parental_leave',
+        description: `Föräldraledighet (${part.rows.length} dagar${vacationBasisSuffix(part.qualifies)})`,
+        quantity: r(parentalEquivalentDays),
+        amount: -(calendarParental ? calendarParental[idx] : parental.deduction),
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: part.qualifies,
+        is_gross_deduction: true,
+      })
+    }
   }
 
   // ── Unpaid leave (tjänstledighet utan lön) ─────────────────────────────
@@ -361,11 +577,14 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
   const unpaidLeaveCount = unpaidLeaveDays.length
   if (unpaidLeaveCount > 0) {
     const dailyRate = r(monthlySalary / (input.dailyDivisor ?? 21))
-    const deduction = r(dailyRate * unpaidLeaveCount)
+    const unpaidEquivalentDays = sumDays(unpaidLeaveDays)
+    const deduction = calendarLongLeave
+      ? calendarDeductionFor('unpaid_leave')
+      : r(dailyRate * unpaidEquivalentDays)
     lineItems.push({
       item_type: 'unpaid_leave',
       description: `Tjänstledighet utan lön (${unpaidLeaveCount} dagar)`,
-      quantity: unpaidLeaveCount,
+      quantity: r(unpaidEquivalentDays),
       amount: -deduction,
       is_taxable: true,
       is_avgift_basis: true,
@@ -403,6 +622,14 @@ export async function loadAndDeriveAbsence(params: {
   karensPeriodsAdjustment?: number
   /** See DeriveInput.dailyDivisor. */
   dailyDivisor?: number
+  /** See DeriveInput.hoursPerDay. */
+  hoursPerDay?: number
+  /** See DeriveInput.hoursPerWeek. */
+  hoursPerWeek?: number
+  /** See DeriveInput.workdaysPerWeek. */
+  workdaysPerWeek?: number
+  /** See DeriveInput.calculationPolicy. */
+  calculationPolicy?: SalaryCalculationPolicy
 }): Promise<DeriveResult> {
   const { supabase, companyId, employeeId, periodStart, periodEnd } = params
 
@@ -417,17 +644,36 @@ export async function loadAndDeriveAbsence(params: {
   if (periodErr) throw new Error(`Failed to load absence days: ${periodErr.message}`)
   const periodDays = (periodRows ?? []) as AbsenceDay[]
 
+  // Surrounding month on each side, only under the calendar convention: it
+  // decides whether an episode that touches the window edge is longer than
+  // five working days. Rows inside the window are already in periodDays.
+  let contextDays: AbsenceDay[] = []
+  if (params.calculationPolicy?.long_leave === 'calendar_after_five_workdays') {
+    const { data: contextRows, error: contextErr } = await supabase
+      .from('salary_absence_days')
+      .select('absence_date, absence_type, hours')
+      .eq('company_id', companyId)
+      .eq('employee_id', employeeId)
+      .gte('absence_date', addDays(periodStart, -31))
+      .lte('absence_date', addDays(periodEnd, 31))
+    if (contextErr) throw new Error(`Failed to load absence context: ${contextErr.message}`)
+    contextDays = ((contextRows ?? []) as AbsenceDay[]).filter(
+      d => d.absence_date < periodStart || d.absence_date > periodEnd,
+    )
+  }
+
   const lookbackStart = addDays(periodStart, -365)
   const { data: lookbackRows, error: lookbackErr } = await supabase
     .from('salary_absence_days')
-    .select('absence_date')
+    .select('absence_date, absence_type, hours')
     .eq('company_id', companyId)
     .eq('employee_id', employeeId)
     .eq('absence_type', 'sick')
     .gte('absence_date', lookbackStart)
     .lt('absence_date', periodStart)
   if (lookbackErr) throw new Error(`Failed to load absence lookback: ${lookbackErr.message}`)
-  const lookbackSickDates = (lookbackRows ?? []).map(r => r.absence_date as string)
+  const lookbackSickDays = (lookbackRows ?? []) as AbsenceDay[]
+  const lookbackSickDates = lookbackSickDays.map(r => r.absence_date)
 
   const yearStart = `${periodStart.slice(0, 4)}-01-01`
   const { data: vabYtd } = await supabase
@@ -455,9 +701,17 @@ export async function loadAndDeriveAbsence(params: {
     payrollConfig: params.payrollConfig,
     periodDays,
     lookbackSickDates,
+    lookbackSickDays,
     vabDaysYtd,
     parentalDaysPregnancyYtd,
     karensPeriodsAdjustment: params.karensPeriodsAdjustment,
     dailyDivisor: params.dailyDivisor,
+    hoursPerDay: params.hoursPerDay,
+    hoursPerWeek: params.hoursPerWeek,
+    workdaysPerWeek: params.workdaysPerWeek,
+    calculationPolicy: params.calculationPolicy,
+    periodStart,
+    periodEnd,
+    contextDays,
   })
 }

@@ -906,3 +906,45 @@ describe('applySettlementAccount (bank-leg routing)', () => {
     expect(routed.credit_account).toBe('8310')
   })
 })
+
+// ============================================================
+// VAT registration: a non-registered company books no moms line
+// (lib/bookkeeping/vat-registration.ts)
+// ============================================================
+
+describe('buildMappingResultFromTemplate: VAT registration', () => {
+  it('a registered company (true, null or undefined) books the 25 % template exactly as before', () => {
+    const template = getTemplateById('it_saas_subscription')!
+    const tx = makeTransaction({ amount: -1250 })
+    const baseline = buildMappingResultFromTemplate(template, tx, 'enskild_firma')
+    for (const flag of [true, null, undefined]) {
+      expect(buildMappingResultFromTemplate(template, tx, 'enskild_firma', flag)).toEqual(baseline)
+    }
+    expect(baseline.vat_lines).toEqual([
+      expect.objectContaining({ account_number: '2641', debit_amount: 250 }),
+    ])
+  })
+
+  it('a non-registered company books the 25 % template gross with no ingående moms', () => {
+    const template = getTemplateById('it_saas_subscription')!
+    const result = buildMappingResultFromTemplate(
+      template, makeTransaction({ amount: -1250 }), 'ideell_forening', false,
+    )
+    expect(result.template_id).toBe('it_saas_subscription')
+    expect(result.debit_account).toBe('5420')
+    expect(result.credit_account).toBe('1930')
+    expect(result.vat_lines).toEqual([])
+  })
+
+  it('keeps every reverse-charge leg for a non-registered company', () => {
+    const template = BOOKING_TEMPLATES.find(
+      (t) => t.vat_treatment === 'reverse_charge' && t.deductibility !== 'non_deductible' && !t.default_private,
+    )!
+    expect(template).toBeDefined()
+    const tx = makeTransaction({ amount: -1000 })
+    const registered = buildMappingResultFromTemplate(template, tx, 'aktiebolag')
+    const notRegistered = buildMappingResultFromTemplate(template, tx, 'aktiebolag', false)
+    expect(notRegistered.vat_lines).toEqual(registered.vat_lines)
+    expect(notRegistered.vat_lines.length).toBeGreaterThan(0)
+  })
+})

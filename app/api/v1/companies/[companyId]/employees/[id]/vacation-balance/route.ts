@@ -14,6 +14,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import { roundOre } from '@/lib/money'
 import { dayValueSek, type DayValueEmployee } from '@/lib/salary/semesterberedning'
+import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
 
 const VacationBalanceResponse = z.object({
   employee_vacation_balance_id: z.string().uuid(),
@@ -25,6 +26,9 @@ const VacationBalanceResponse = z.object({
   remaining_days: z.number(),
   saved_days: z.record(z.string(), z.number()),
   saved_days_total: z.number(),
+  saved_days_taken: z.record(z.string(), z.number()),
+  unpaid_days: z.number(),
+  advance_days: z.number(),
   forced_payout_days: z.number(),
   estimated_liability_sek: z.number(),
 })
@@ -35,7 +39,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/employees/:id/vacation-balance',
   summary: 'Get an employee\'s current vacation balance.',
   description:
-    'Returns the open vacation-ledger row (recomputed on every booking): entitled/taken/remaining days, sparade dagar keyed by origin year (Semesterlagen 5-year rule), forced-payout days from expired savings, and a computed SEK estimate of the individual semesterlöneskuld.',
+    'Returns the open vacation-ledger row (recomputed on every booking): entitled/taken/remaining paid days, sparade dagar still held per origin year (Semesterlagen 5-year rule; saved_days_taken shows what saved vacation lines consumed this year), the unpaid (Obetalda) and advance (Förskott) pools from the cutover import, forced-payout days from expired savings, and a computed SEK estimate of the individual semesterlöneskuld.',
   useWhen:
     'Answering "how many vacation days does Anna have left", pre-payroll review, or preparing the year-close.',
   doNotUseFor:
@@ -44,6 +48,7 @@ registerEndpoint({
     '404 VACATION_BALANCE_NOT_FOUND until the first booking (or year-close) touches the employee: the ledger seeds lazily.',
     'remaining_days can go negative if more days were taken than entitled: surface it, do not clamp.',
     'The SEK estimate uses the year-close day valuation (simplified BFNAR 2016:10); the booked 2920 is reconciled only at year-close.',
+    'unpaid_days and advance_days are the cutover pools minus unpaid/advance vacation lines in booked runs; both read 0 for companies that never loaded categorized balances and outside the cutover year (unpaid days lapse at close, förskott is a one-time grant).',
   ],
   example: {
     response: {
@@ -95,7 +100,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
 
     const { data: balance, error: balErr } = await ctx.supabase
       .from('employee_vacation_balances')
-      .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days')
+      .select('id, employee_id, vacation_year_start, entitled_days, accrued_days, taken_days, saved_days, forced_payout_days, unpaid_days, advance_days, saved_days_taken')
       .eq('company_id', ctx.companyId!)
       .eq('employee_id', idParse.data)
       .eq('status', 'open')
@@ -121,9 +126,16 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       taken_days: number
       saved_days: Record<string, number> | null
       forced_payout_days: number
+      unpaid_days?: number | null
+      advance_days?: number | null
+      saved_days_taken?: Record<string, number> | null
     }
-    const savedDays = row.saved_days ?? {}
-    const savedTotal = Object.values(savedDays).reduce((s, d) => s + (Number(d) || 0), 0)
+    // Sparade dagar still held: the seeded years minus what 'saved' vacation
+    // lines consumed this year (a company without categorized lines sees the
+    // seed unchanged).
+    const savedTaken = row.saved_days_taken ?? {}
+    const savedDays = remainingSavedDays(row.saved_days ?? {}, savedTaken)
+    const savedTotal = sumDays(savedDays)
     const remaining = roundOre(row.entitled_days - row.taken_days)
 
     // The same simplified BFNAR 2016:10 day valuation the year-close and the
@@ -143,6 +155,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
         remaining_days: remaining,
         saved_days: savedDays,
         saved_days_total: savedTotal,
+        saved_days_taken: savedTaken,
+        unpaid_days: row.unpaid_days ?? 0,
+        advance_days: row.advance_days ?? 0,
         forced_payout_days: row.forced_payout_days,
         estimated_liability_sek: estimatedLiability,
       },

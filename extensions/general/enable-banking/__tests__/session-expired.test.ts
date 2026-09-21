@@ -14,6 +14,16 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
+// The shared sync lease has its own tests (lib/__tests__/sync-lease.test.ts).
+vi.mock('../lib/sync-lease', async () => {
+  const actual = await vi.importActual<typeof import('../lib/sync-lease')>('../lib/sync-lease')
+  return {
+    ...actual,
+    holdSyncLease: vi.fn().mockResolvedValue(undefined),
+    applyRateLimitCooldown: vi.fn().mockResolvedValue(null),
+  }
+})
+
 vi.mock('@/lib/entitlements/has-capability', () => ({
   requireCapability: vi.fn().mockResolvedValue(null),
 }))

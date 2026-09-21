@@ -76,6 +76,7 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
+import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import {
   InvoiceDeliveryHistory,
   type InvoiceDeliveryView,
@@ -97,6 +98,7 @@ import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
+import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 /** Minimized Peppol delivery projection from GET /api/invoices/[id]/peppol/deliveries. */
@@ -325,12 +327,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       settings.reminder_days_level_2 ?? 30,
       settings.reminder_days_level_3 ?? 45,
     ])
-    setAutoRemindersEnabled(settings.send_invoice_reminders ?? true)
+    setAutoRemindersEnabled(remindersActiveFor(settings.send_invoice_reminders))
   }, [companySettings])
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
   const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
   // null = settings row not loaded; don't promise a reminder schedule then.
+  // Otherwise the product-wide kill switch AND the company toggle (crm#95):
+  // the toggle alone defaults to on and would claim a schedule nothing runs.
   const [autoRemindersEnabled, setAutoRemindersEnabled] = useState<boolean | null>(null)
 
   const statusLabel = (status: InvoiceStatus): string => t(`status_${status}`)
@@ -2085,6 +2089,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
         </div>
       </div>
+
+      {/* Why the VAT treatment is what it is (#2749, #2558): the page's one
+          ochre sentence, with the VIES check inline. Drafts only: an issued
+          invoice is what it is. A non-momsregistrerad seller charges nothing
+          and has nothing to explain. After a successful check the invoice is
+          refetched so the sentence flips to what the lines still carry. */}
+      {isEditableDraft && vatRegistered !== false && (
+        <VatTreatmentNotice
+          customer={customer}
+          lineVatRates={invoice.items
+            .filter((item) => item.line_type !== 'text')
+            .map((item) => item.vat_rate ?? 0)}
+          onValidated={() => void fetchInvoice()}
+          editHref={`/invoices/${invoice.id}/edit`}
+        />
+      )}
 
       {/* Kund and Detaljer side by side like an invoice head: who it is for
           on the left, the facts on the right. */}

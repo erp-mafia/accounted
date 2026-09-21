@@ -7,6 +7,7 @@ import { COMPANY_PICKED_COOKIE } from '@/lib/company/context'
 import { isCockpitLandingRole } from '@/lib/company/home-domain'
 import { OAUTH_MCP_KEY_NAME } from '@/lib/auth/api-keys'
 import { claudeStepDone } from '@/lib/onboarding/checklist'
+import { decideHemGate } from '@/lib/onboarding/hem-gate'
 import { loadConnectedAiClients } from '@/lib/onboarding/ai-clients.server'
 import { createServiceClient } from '@/lib/supabase/server'
 import {
@@ -136,23 +137,22 @@ export default async function DashboardPage() {
     throw new Error(`api_keys count failed: ${oauthKeyError.message}`)
   }
 
-  // If onboarding is not complete, redirect to onboarding. Exception: a byrå
-  // member who did NOT explicitly pick this company this session goes to the
-  // cockpit instead. The auto-resolved company can be onboarding-incomplete
-  // through no action of theirs (a client mid migration-reset repoints every
-  // member's active_company_id), and the first-run wizard is a dead end for
-  // role 'member': WL-15 refuses client creation and the shell has no nav.
-  // Before the owner/admin landing gate the /byra bounce above shielded every
-  // byrå member from this path; this keeps that shield without the gate.
-  if (!settings?.onboarding_complete) {
-    if (
-      !cookieStore.has(COMPANY_PICKED_COOKIE) &&
-      teamMemberships.some((m) => m.teams?.kind === 'byra')
-    ) {
-      redirect('/byra')
-    }
-    redirect('/onboarding')
-  }
+  // The decision lives in lib/onboarding/hem-gate.ts (pure, unit-tested): a
+  // company that never finished onboarding goes to the journey, except a byrå
+  // member who did not explicitly pick it this session, who goes to the
+  // cockpit. Before the owner/admin landing gate the /byra bounce above
+  // shielded every byrå member from this path; this keeps that shield without
+  // the gate. A migration-reset replacement is an onboarded company and
+  // renders (20260920190800).
+  const hemGate = decideHemGate({
+    onboardingComplete: settings?.onboarding_complete,
+    companyPicked: cookieStore.has(COMPANY_PICKED_COOKIE),
+    isByraMember: teamMemberships.some((m) => m.teams?.kind === 'byra'),
+  })
+  if (hemGate === 'byra') redirect('/byra')
+  // `!settings` cannot be true once the gate says 'render' (a missing row
+  // reads as not onboarded); it is here to narrow the type for the code below.
+  if (hemGate === 'onboarding' || !settings) redirect('/onboarding')
 
   const agentBuilt = Boolean(agentProfile?.verified_at)
   const hasMcpKey = claudeStepDone({ oauthKeyCount })

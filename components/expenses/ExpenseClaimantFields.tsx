@@ -6,7 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { OWNER_FALLBACK_NAME, type ExpensePayer } from '@/lib/expenses/payer'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { ownerFallbackName, type ExpensePayer } from '@/lib/expenses/payer'
 
 interface EmployeeOption {
   id: string
@@ -46,6 +47,9 @@ export function ExpenseClaimantFields({
   inputClassName?: string
 }) {
   const t = useTranslations('inbox_workspace')
+  // The placeholder is the label the claim gets when the field stays empty,
+  // so it must be the form's word for the person (Ägare, Medlem).
+  const ownerPlaceholder = ownerFallbackName(useCompanyOptional()?.company?.entity_type)
   const [employees, setEmployees] = useState<EmployeeOption[]>([])
   const [employeesLoaded, setEmployeesLoaded] = useState(false)
 
@@ -78,7 +82,7 @@ export function ExpenseClaimantFields({
           id={`${idPrefix}-owner`}
           value={ownerName}
           onChange={(e) => onOwnerNameChange(e.target.value)}
-          placeholder={OWNER_FALLBACK_NAME}
+          placeholder={ownerPlaceholder}
           disabled={disabled}
           className={inputClassName}
         />

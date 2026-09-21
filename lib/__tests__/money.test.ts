@@ -3,10 +3,12 @@ import {
   roundOre,
   truncateToWholeKronor,
   ORE_TOLERANCE,
+  ORE_ROUNDING_ACCOUNT,
   equalOre,
   isZeroOre,
   sumOre,
 } from '@/lib/money'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
 describe('roundOre', () => {
   it('rounds exact-half öre values up where naive Math.round fails', () => {
@@ -167,5 +169,17 @@ describe('lib/bokslut/rounding back-compat re-export', () => {
     expect(legacy.roundOre(1.005)).toBe(1.01)
     expect(legacy.roundOre(10.075)).toBe(10.08)
     expect(legacy.ORE_TOLERANCE).toBe(ORE_TOLERANCE)
+  })
+})
+
+describe('ORE_ROUNDING_ACCOUNT', () => {
+  it('is a real BAS 2026 account named Öres- och kronutjämning (#2687)', () => {
+    // Every flow that books a sub-krona residual imports this constant, so it
+    // must point at the catalogue's rounding account, not a near-miss like
+    // 3741 (which BAS does not have).
+    const reference = getBASReference(ORE_ROUNDING_ACCOUNT)
+    expect(ORE_ROUNDING_ACCOUNT).toBe('3740')
+    expect(reference?.account_name).toBe('Öres- och kronutjämning')
+    expect(reference?.account_class).toBe(3)
   })
 })

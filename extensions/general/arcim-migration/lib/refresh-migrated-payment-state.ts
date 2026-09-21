@@ -55,6 +55,8 @@ export interface RefreshMigratedSupplierPaymentStateOptions {
   companyId: string
   consentId: string
   dryRun?: boolean
+  /** Payment vouchers already linked (or planned in a dry run) by reconciliation. */
+  excludeInvoiceIds?: string[]
 }
 
 export interface RefreshMigratedSupplierPaymentStateResult {
@@ -106,7 +108,9 @@ export async function refreshMigratedSupplierPaymentState(
       .range(from, to),
   )
 
-  const openByKey = uniqueByKey(openRows, (row) => joinKey(row.supplier_invoice_number, row.invoice_date))
+  const excluded = new Set(options.excludeInvoiceIds)
+  const openByKey = uniqueByKey(openRows.filter(row => !excluded.has(row.id)),
+    (row) => joinKey(row.supplier_invoice_number, row.invoice_date))
   const providerByKey = uniqueByKey(providerInvoices, (dto) => joinKey(dto.invoiceNumber, dto.issueDate))
 
   let matched = 0
@@ -127,14 +131,14 @@ export async function refreshMigratedSupplierPaymentState(
       continue
     }
 
-    const settlement = resolveSupplierSettlement(dto.paymentStatus, total, row.invoice_date)
+    const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
     if (settlement.status !== 'paid' && settlement.status !== 'partially_paid') {
       unchanged++
       continue
     }
 
     if (!dryRun) {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('supplier_invoices')
         .update({
           status: settlement.status,
@@ -144,12 +148,29 @@ export async function refreshMigratedSupplierPaymentState(
         })
         .eq('id', row.id)
         .eq('company_id', companyId)
+        // Recheck eligibility and identity: a user may have booked, paid or
+        // edited the invoice while the provider was being read.
+        .is('registration_journal_entry_id', null)
+        .is('payment_journal_entry_id', null)
+        .eq('paid_amount', 0)
+        .eq('is_credit_note', false)
+        .in('status', [...OPEN_STATUSES])
+        .eq('total', total)
+        .eq('supplier_invoice_number', row.supplier_invoice_number)
+        .eq('invoice_date', row.invoice_date)
+        .select('id')
+        .maybeSingle()
 
       if (error) {
         log.error('supplier invoice payment-state update failed', new Error(error.message), {
           companyId,
           invoiceId: row.id,
         })
+        // Reconciliation must leave registration unlinked after a failed
+        // refresh, otherwise its next attempt excludes the failed rows.
+        throw new Error(error.message)
+      }
+      if (!data) {
         unchanged++
         continue
       }

@@ -1380,6 +1380,11 @@ const TOOL_BADGE_LABELS: Record<string, string> = {
   gnubok_preview_arsredovisning: 'Förhandsgranskar årsredovisning…',
   gnubok_preview_ef_declaration: 'Förbereder NE-bilaga…',
   gnubok_post_annual_depreciation: 'Bokar avskrivningar…',
+  gnubok_list_assets: 'Hämtar anläggningsregistret…',
+  gnubok_get_asset: 'Hämtar tillgång…',
+  gnubok_create_asset: 'Registrerar tillgång…',
+  gnubok_update_asset: 'Uppdaterar tillgång…',
+  gnubok_dispose_asset: 'Bokar avyttring…',
   // Memory
   gnubok_remember_fact: 'Sparar i minnet…',
   gnubok_forget_fact: 'Tar bort från minnet…',

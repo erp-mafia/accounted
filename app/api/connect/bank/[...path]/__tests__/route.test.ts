@@ -190,6 +190,18 @@ describe('bank proxy', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('https://api.enablebanking.com/accounts/acc-1/transactions?date_from=2026-01-01')
   })
 
+  it("forwards the bank's Retry-After on a 429 so the installation can honour it", async () => {
+    ledger.findByAccountUid.mockResolvedValueOnce({ id: 'l2' })
+    fetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({ code: 429, error: 'ASPSP_RATE_LIMIT_EXCEEDED' }),
+      { status: 429, headers: { 'content-type': 'application/json', 'retry-after': '1800' } },
+    ))
+    const res = await GET(req('GET', '/accounts/acc-1/transactions'))
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('1800')
+    expect(await res.json()).toMatchObject({ error: 'ASPSP_RATE_LIMIT_EXCEEDED' })
+  })
+
   it('DELETE /sessions/{id} revokes the ledger row after the upstream delete', async () => {
     ledger.findByHandle.mockResolvedValueOnce({ id: 'l3' })
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))

@@ -565,7 +565,7 @@ export default function ImportReviewStep({
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
           <div className="space-y-1.5 min-w-0">
             <p className="font-medium text-destructive">{t('execute_rejected_title')}</p>
-            <p className="text-sm text-muted-foreground">{error}</p>
+            <p className="whitespace-pre-line text-sm text-muted-foreground">{error}</p>
           </div>
         </div>
       )}

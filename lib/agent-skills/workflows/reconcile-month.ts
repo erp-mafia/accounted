@@ -58,6 +58,8 @@ Per account: outside vs ledger, what was linked, what the user still has to book
 - \`gnubok_ignore_transaction\` (bank rows that are not business events; no verifikat)
 - \`gnubok_approve_pending_operation\` (when the user approves in chat)
 - Resource: \`Accounted://reconciliation/summary\`
+
+A staged write your client does not list in tools/list (gnubok_search_tools shows callable_via \"stage_tool\") is staged through \`gnubok_stage_tool({ tool, arguments })\` and approved as usual; an unlisted read goes through \`gnubok_call_tool\`.
 `
 
 export const reconcileMonthSkill: Skill = {

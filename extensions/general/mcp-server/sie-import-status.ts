@@ -46,6 +46,64 @@ export const SIE_IMPORT_STATUS_SCHEMA = {
   ],
 }
 
+export const SIE_IMPORT_LIST_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    kind: { type: 'string', const: 'list' },
+    imports: {
+      type: 'array',
+      items: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          import_id: { type: 'string' }, filename: { type: ['string', 'null'] }, status: { type: ['string', 'null'] },
+          job_state: { type: ['string', 'null'] }, created_at: { type: 'string' }, replaced_at: { type: ['string', 'null'] },
+        },
+        required: ['import_id', 'filename', 'status', 'job_state', 'created_at', 'replaced_at'],
+      },
+    },
+    count: { type: 'integer' },
+    hint: { type: 'string' },
+  },
+  required: ['kind', 'imports', 'count', 'hint'],
+}
+
+/** The tool answers with progress for one import, or with the company's recent imports when none is named. */
+export const SIE_IMPORT_STATUS_TOOL_SCHEMA = { type: 'object', oneOf: [SIE_IMPORT_STATUS_SCHEMA, SIE_IMPORT_LIST_SCHEMA] }
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isImportId(value: unknown): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value)
+}
+
+/**
+ * An omitted import_id used to reach Postgres as the literal string
+ * "undefined" and come back as "invalid input syntax for type uuid". The
+ * agent that omits it is asking "which imports exist?", so answer that.
+ */
+export async function listRecentSIEImports(supabase: SupabaseClient, companyId: string, limit = 10) {
+  const { data, error } = await supabase
+    .from('sie_imports')
+    .select('id, filename, status, job_state, created_at, replaced_at')
+    .eq('company_id', companyId)
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) throw new Error(`Kunde inte läsa SIE-importer: ${error.message}`)
+  const rows = (data ?? []) as Array<{
+    id: string; filename: string | null; status: string | null; job_state: string | null; created_at: string; replaced_at: string | null
+  }>
+  const imports = rows.map((row) => ({
+    import_id: row.id, filename: row.filename, status: row.status, job_state: row.job_state,
+    created_at: row.created_at, replaced_at: row.replaced_at,
+  }))
+  return {
+    kind: 'list', imports, count: imports.length,
+    hint: imports.length === 0
+      ? 'No SIE imports for this company yet.'
+      : 'Pass import_id for durable progress or a legacy recovery assessment.',
+  }
+}
+
 /** Keep the durable progress contract, and label legacy observations without inventing job progress. */
 export async function readSIEImportStatus(supabase: SupabaseClient, companyId: string, importId: string) {
   const job = await getSIEJob(supabase, companyId, importId)

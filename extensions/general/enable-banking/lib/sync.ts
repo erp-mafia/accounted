@@ -5,6 +5,7 @@ import {
   getAccountBalance,
   SessionExpiredError,
   ConnectorSyncError,
+  bankRateLimited,
 } from './api-client'
 import { historyWindowDays } from './history-window'
 import { bankSyncResponseSchema, connectorErrorSchema } from '@accounted/connect-contract'
@@ -164,6 +165,13 @@ async function fetchBookedViaConnector(
     const code = envelope.success ? envelope.data.code : `HTTP_${response.status}`
     if (response.status === 410 || code === 'CONNECTOR_BANK_SESSION_EXPIRED') {
       throw new SessionExpiredError(response.status, text)
+    }
+    // The BANK's rate limit relayed by the service: the same typed error as
+    // the direct path, with the bank's Retry-After when the service forwarded
+    // it. The service's own budget (CONNECTOR_RATE_LIMITED) stays a connector
+    // failure.
+    if (code === 'CONNECTOR_BANK_RATE_LIMITED') {
+      throw bankRateLimited(response, text, args.fromDate)
     }
     throw new ConnectorSyncError(response.status, code, text.slice(0, 500))
   }

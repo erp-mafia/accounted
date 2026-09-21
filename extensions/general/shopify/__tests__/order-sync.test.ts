@@ -31,6 +31,7 @@ import {
   shopifyRefundExternalId,
   shopifyShopScope,
   syncShopifyOrders,
+  resolveWindowStartIso,
 } from '../lib/order-sync'
 import type {
   ShopifyConnection,
@@ -722,5 +723,41 @@ describe('syncShopifyOrders', () => {
     // The fetched page was fully processed and cursored; page two never ran.
     expect(listOrdersPage).toHaveBeenCalledTimes(1)
     expect(cursorUpdates(updates)).toHaveLength(1)
+  })
+})
+
+describe('shopify sync window', () => {
+  const CONNECTED_AT = '2026-09-09T10:00:00.000Z'
+  const seeded = (overrides: Partial<ShopifyConnection> = {}) =>
+    makeConnection({
+      connected_at: CONNECTED_AT,
+      created_at: '2026-09-09T09:59:00.000Z',
+      last_order_synced_at: CONNECTED_AT,
+      ...overrides,
+    })
+
+  it('starts the first sync at the connection moment, not a day earlier', () => {
+    // POST /connect seeds the cursor with connected_at; the 24 h overlap must
+    // not drag the window back into orders the user booked from the bank.
+    expect(resolveWindowStartIso(seeded())).toBe(CONNECTED_AT)
+  })
+
+  it('keeps the 24 h overlap once the cursor has moved past the connection', () => {
+    expect(
+      resolveWindowStartIso(seeded({ last_order_synced_at: '2026-09-20T10:00:00.000Z' })),
+    ).toBe('2026-09-19T10:00:00.000Z')
+  })
+
+  it("falls back to the connection's own start when the cursor is null", () => {
+    expect(resolveWindowStartIso(seeded({ last_order_synced_at: null }))).toBe(CONNECTED_AT)
+    expect(
+      resolveWindowStartIso(seeded({ last_order_synced_at: null, connected_at: null })),
+    ).toBe('2026-09-09T09:59:00.000Z')
+  })
+
+  it('honours an explicit backfill cursor exactly, without reaching a day further back', () => {
+    expect(
+      resolveWindowStartIso(seeded({ last_order_synced_at: '2026-01-01T00:00:00.000Z' })),
+    ).toBe('2026-01-01T00:00:00.000Z')
   })
 })

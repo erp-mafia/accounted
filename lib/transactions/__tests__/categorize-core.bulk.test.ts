@@ -257,6 +257,8 @@ describe('bulkBookMatchedInboxItems: booking', () => {
       'aktiebolag',
       'reverse_charge',
       undefined,
+      // company_settings.vat_registered as loaded: this settings row has none.
+      null,
     )
   })
 

@@ -35,14 +35,22 @@ function nextDayIso(closingDate: string): string {
  *      Swedish bookkeeping error. Hence `reverses_on` is empty for this
  *      proposal; the wizard / UI suppresses the reversal badge accordingly.
  *
- * Returns null when delta is zero (no entry to propose).
+ *   3. No employees in Accounted is not the same as no vacation liability.
+ *      A company whose payroll runs in another system carries 2920 from
+ *      that system, and the vacation report (zero rows) knows nothing
+ *      about it. Proposing "target 0" there would reverse the whole
+ *      liability in one approvable card, so the detector declines and
+ *      says why in `notice` instead.
+ *
+ * `proposal` is null when there is no entry to propose; `notice` carries
+ * the reason when the detector declined for rule 3.
  */
-export async function proposeVacationLiabilityChange(
+export async function assessVacationLiability(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
   options: { closingDate: string },
-): Promise<AccrualProposal | null> {
+): Promise<{ proposal: AccrualProposal | null; notice: string | null }> {
   const closingYear = parseInt(options.closingDate.slice(0, 4), 10)
   if (Number.isNaN(closingYear)) {
     throw new Error(`Invalid closing date: ${options.closingDate}`)
@@ -63,9 +71,21 @@ export async function proposeVacationLiabilityChange(
     ? Math.round((row2920.closing_credit - row2920.closing_debit) * 100) / 100
     : 0
 
+  // Rule 3: a liability with nobody behind it in Accounted came from
+  // somewhere else. Never propose zeroing it.
+  if (report.rows.length === 0 && Math.abs(currentLiability) >= 1) {
+    const kr = Math.round(Math.abs(currentLiability)).toLocaleString('sv-SE')
+    return {
+      proposal: null,
+      notice:
+        `Semesterlöneskuld ${kr} kr på 2920 men inga anställda finns i Accounted; ` +
+        'lön körs troligen i ett annat system. Ingen justering föreslås; stäm av skulden mot lönesystemet.',
+    }
+  }
+
   const deltaLiability = targetLiability - currentLiability
   if (Math.abs(deltaLiability) < 1) {
-    return null
+    return { proposal: null, notice: null }
   }
 
   // Round each side to whole krona so the entry stays balanced after
@@ -105,7 +125,7 @@ export async function proposeVacationLiabilityChange(
 
   const totalAmount = Math.abs(deltaInt) + Math.abs(avgifterDelta)
 
-  return {
+  const proposal: AccrualProposal = {
     kind: 'vacation_liability_change',
     label: isIncrease
       ? `Ökning av semesterlöneskuld (${Math.abs(deltaInt)} kr + avgifter)`
@@ -128,6 +148,22 @@ export async function proposeVacationLiabilityChange(
       employee_rows: report.rows.length,
     },
   }
+  return { proposal, notice: null }
+}
+
+/**
+ * The proposal alone, for callers that post one accepted kind (the accruals
+ * POST route). A declined assessment is null here too, so posting
+ * `vacation_liability_change` for a company without employees books nothing.
+ */
+export async function proposeVacationLiabilityChange(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options: { closingDate: string },
+): Promise<AccrualProposal | null> {
+  const { proposal } = await assessVacationLiability(supabase, companyId, fiscalPeriodId, options)
+  return proposal
 }
 
 export interface AuditFeeInput {
@@ -419,14 +455,17 @@ export async function buildAccrualsProposal(
   if (error || !period) throw new Error('Fiscal period not found')
 
   const proposals: AccrualProposal[] = []
+  const notices: string[] = []
 
-  const vacation = await proposeVacationLiabilityChange(supabase, companyId, fiscalPeriodId, {
+  const vacation = await assessVacationLiability(supabase, companyId, fiscalPeriodId, {
     closingDate: period.period_end,
   })
-  if (vacation) proposals.push(vacation)
+  if (vacation.proposal) proposals.push(vacation.proposal)
+  if (vacation.notice) notices.push(vacation.notice)
 
   return {
     fiscalPeriod: period,
     proposals,
+    notices,
   }
 }

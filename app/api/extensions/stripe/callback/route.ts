@@ -135,6 +135,12 @@ export async function GET(request: Request) {
     const { stripeAccountId, livemode } = await exchangeCodeForAccount(code)
     const displayName = await fetchAccountDisplayName(stripeAccountId)
 
+    // Seed the balance-transaction cursor with the connection moment. Money
+    // that moved before the merchant connected is already in the books from
+    // the bank side, so a first sync that reached further back would only
+    // manufacture duplicates (#2631). Reaching further back is an explicit
+    // choice: POST /api/extensions/ext/stripe/backfill with a start date.
+    const connectedAt = new Date().toISOString()
     const { data: updatedConnection, error: updateError } = await supabase
       .from('stripe_connections')
       .update({
@@ -142,7 +148,8 @@ export async function GET(request: Request) {
         livemode,
         display_name: displayName,
         status: 'active',
-        connected_at: new Date().toISOString(),
+        connected_at: connectedAt,
+        last_balance_txn_synced_at: connectedAt,
         error_message: null,
         oauth_state: null, // Clear to prevent replay
         // Feed-only product: connecting Stripe means fetching its

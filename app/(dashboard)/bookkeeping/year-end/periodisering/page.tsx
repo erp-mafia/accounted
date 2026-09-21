@@ -197,6 +197,7 @@ export default function PeriodiseringWizardPage() {
     () => proposal?.proposals.find((p) => p.kind === 'vacation_liability_change') ?? null,
     [proposal],
   )
+  const notices = useMemo(() => proposal?.notices ?? [], [proposal])
 
   const currentStepIndex = STEP_ORDER.indexOf(step)
   const labels = stepLabels(isEF)
@@ -449,6 +450,7 @@ export default function PeriodiseringWizardPage() {
           {step === 'vacation' && (
             <VacationStep
               proposal={vacationProposal}
+              notices={notices}
               accepted={vacationAccepted}
               onChange={setVacationAccepted}
               onNext={() => setStep('audit')}
@@ -513,11 +515,13 @@ export default function PeriodiseringWizardPage() {
 
 function VacationStep({
   proposal,
+  notices,
   accepted,
   onChange,
   onNext,
 }: {
   proposal: AccrualsProposal['proposals'][number] | null
+  notices: string[]
   accepted: boolean
   onChange: (v: boolean) => void
   onNext: () => void
@@ -552,6 +556,14 @@ function VacationStep({
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(proposal.amount)}
               </p>
+            </div>
+          ) : notices.length > 0 ? (
+            <div className="space-y-2">
+              {notices.map((notice) => (
+                <p key={notice} className="text-sm text-muted-foreground">
+                  {notice}
+                </p>
+              ))}
             </div>
           ) : (
             <p className="text-sm text-muted-foreground italic">

@@ -101,6 +101,11 @@ describe('GET /api/extensions/stripe/callback', () => {
       oauth_state: null,
       transaction_sync_enabled: true,
     })
+    // The balance-transaction cursor starts at the connection moment: without
+    // this the first sync would backfill history the merchant already booked
+    // from the bank side (issue #2631).
+    expect(activatePayload.last_balance_txn_synced_at).toBe(activatePayload.connected_at)
+    expect(typeof activatePayload.last_balance_txn_synced_at).toBe('string')
   })
 
   it('redirects with an error and never activates when the state is unknown', async () => {

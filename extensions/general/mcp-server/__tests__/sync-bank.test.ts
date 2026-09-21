@@ -127,6 +127,31 @@ describe('gnubok_sync_bank', () => {
     expect(result.instructions).toContain('last_synced_at')
   })
 
+  it('answers a bank rate limit in-band with the time, and never suggests a renewal', async () => {
+    mocks.triggerConnectionSync.mockResolvedValue({
+      ok: false,
+      code: 'BANK_RATE_LIMITED',
+      connection_id: CONNECTION_ID,
+      status: 'active',
+      next_allowed_at: '2026-09-20T16:00:00.000Z',
+      retry_after_seconds: 21600,
+    })
+    const result = (await tool.execute(
+      { connection_id: CONNECTION_ID },
+      COMPANY_ID,
+      'user-1',
+      {} as never,
+    )) as Record<string, unknown>
+    expect(result).toMatchObject({
+      synced: false,
+      connection_id: CONNECTION_ID,
+      next_allowed_at: '2026-09-20T16:00:00.000Z',
+    })
+    // Our cooldown must not be presented as the bank's reset time.
+    expect(result.instructions).toContain('not a reset time confirmed by the bank')
+    expect(result.instructions).toContain('do not ask the user to renew')
+  })
+
   it.each([
     'NOT_FOUND',
     'BANK_SYNC_NOT_ACTIVE',

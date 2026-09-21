@@ -32,6 +32,19 @@ import { POST } from '../route'
 
 const params = { params: Promise.resolve({ id: 'emp-1' }) } as never
 
+/** The register-lock lookup every write makes right after the employee check. */
+const enqueueNoLockingRuns = () => enqueue({ data: [] })
+
+/** July 2026 pay month, calculated, legacy NULL window: locks 2026-07-01..31. */
+const REVIEW_RUN_JULY = {
+  id: 'run-jul',
+  status: 'review',
+  period_year: 2026,
+  period_month: 7,
+  deviation_period_start: null,
+  deviation_period_end: null,
+}
+
 function post(body: unknown) {
   return createMockRequest('/api/salary/employees/emp-1/absence', { method: 'POST', body })
 }
@@ -67,6 +80,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
   it('upserts an absence day (happy path)', async () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueueNoLockingRuns()
     enqueue({ data: { id: 'abs-1', absence_date: '2026-07-01', absence_type: 'sick', hours: 8 } }) // upsert
 
     const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }), params)
@@ -85,6 +99,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
   it('does not leak raw PG text for DB failures (42501)', async () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueueNoLockingRuns()
     enqueue({
       data: null,
       error: {
@@ -106,6 +121,7 @@ describe('POST /api/salary/employees/[id]/absence', () => {
 
   it('still passes the 24h-cap trigger detail through (Swedish, user-facing)', async () => {
     enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueueNoLockingRuns()
     enqueue({
       data: null,
       error: {
@@ -120,5 +136,25 @@ describe('POST /api/salary/employees/[id]/absence', () => {
     expect(status).toBe(409)
     expect(body.code).toBe('ABSENCE_HOURS_CONFLICT')
     expect(body.error).toContain('Total tid')
+  })
+
+  it('returns 409 with the Swedish message and the run when a calculated run already read the date', async () => {
+    enqueue({ data: { id: 'emp-1' } }) // loadEmployee
+    enqueue({ data: [REVIEW_RUN_JULY] }) // register lock lookup
+
+    const response = await POST(post({ absence_date: '2026-07-01', absence_type: 'sick', hours: 8 }), params)
+    const { status, body } = await parseJsonResponse<{
+      error: string
+      code: string
+      details: { salary_run_id: string; locked_dates: string[] }
+    }>(response)
+
+    expect(status).toBe(409)
+    expect(body.code).toBe('SALARY_REGISTER_DATES_LOCKED_BY_RUN')
+    expect(body.error).toContain('avvikelseperioden')
+    expect(body.details).toMatchObject({ salary_run_id: 'run-jul', locked_dates: ['2026-07-01'] })
+    // Nothing was written.
+    const fromCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[0])
+    expect(fromCalls).toEqual(['employees', 'salary_runs'])
   })
 })

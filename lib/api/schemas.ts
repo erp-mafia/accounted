@@ -8,6 +8,7 @@ import {
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
 import { ACCOUNT_VAT_TREATMENTS } from '@/lib/vat/account-vat-treatment'
+import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -20,6 +21,7 @@ import { countCalendarMonths } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { validateEmployeeBankAccount } from '@/lib/salary/payment/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
+import { SalaryCalculationPolicySchema } from '@/lib/salary/calculation-policy'
 import { MAX_INVOICE_EMAIL_COPY_RECIPIENTS } from '@/lib/invoices/email-recipients'
 import { INVOICE_POSTING_ACCOUNT_REGEX } from '@/lib/invoices/posting-account'
 import { computeLineNet } from '@/lib/invoices/line-amounts'
@@ -2536,6 +2538,10 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
   voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
   name: z.string().trim().min(1).max(100).nullable().optional(),
   invoice_payee: z.boolean().optional(),
+  // Accounts no bank connection holds only: a connection-held account's
+  // enabled state is owned by the AccountPickerDialog (enabled_uids), and
+  // setEnabled() refuses it (409), so the shape alone cannot say which.
+  enabled: z.boolean().optional(),
 }).strict().refine((body) => Object.keys(body).length > 0, {
   message: 'Inget att uppdatera',
 })
@@ -2781,6 +2787,15 @@ export const UpdateSettingsSchema = z.object({
   // Öresavrundning: round each net payout up to whole kronor (banks that
   // reject öre in salary payment files). Diff books on 3740.
   salary_net_rounding: z.boolean().optional(),
+  // Calculation conventions (migration 20260919120100): partial-month
+  // proration, sick-pay rate, long-leave measure, leave context, net and
+  // one-off tax rounding. The full object is stored (every key present,
+  // defaults filled) and replaced as a whole by this route; the v1 salary
+  // settings route merges a partial patch into the stored policy first.
+  salary_calculation_policy: SalaryCalculationPolicySchema.optional(),
+  // Avvikelseperiod (migration 20260918120000): which month's absence and
+  // worked days a new run reads. Snapshotted onto each run at creation.
+  salary_deviation_period: z.enum(['same_month', 'previous_month']).optional(),
   // Vacation year basis (payroll gap-closure 3.1): sammanfallande calendar
   // year (default) or the statutory Apr 1 - Mar 31 split. The settings route
   // blocks changing this while open vacation-ledger rows exist.
@@ -2845,6 +2860,47 @@ export const CreateDeadlineSchema = z.object({
 })
 
 // ============================================================
+// VAT filing record (issue #2746)
+// ============================================================
+
+/**
+ * A calendar VAT period: the two cadences whose deadline rows carry the
+ * filing record (lib/vat/filing-record.ts). Helårsmoms is deliberately not
+ * accepted: its deadline is labelled per räkenskapsår and is completed from
+ * the calendar instead.
+ */
+const vatFilingPeriodShape = {
+  period_type: z.enum(['monthly', 'quarterly']),
+  year: z.coerce.number().int().min(2000).max(2100),
+  period: z.coerce.number().int().min(1).max(12),
+}
+
+function refineVatFilingPeriod(
+  data: { period_type: 'monthly' | 'quarterly'; period: number },
+  ctx: z.RefinementCtx,
+) {
+  if (data.period_type === 'quarterly' && data.period > 4) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['period'],
+      message: 'For quarterly period_type, period must be 1-4.',
+    })
+  }
+}
+
+export const VatFilingPeriodSchema = z.object(vatFilingPeriodShape).superRefine(refineVatFilingPeriod)
+
+export const MarkVatFilingSchema = z
+  .object({
+    ...vatFilingPeriodShape,
+    /** Swedish calendar date the declaration was filed. */
+    filed_on: saneIsoDate,
+    /** Skatteverket's reference (kvittensnummer); null clears a stored one. */
+    reference: z.string().trim().max(200).nullable().optional(),
+  })
+  .superRefine(refineVatFilingPeriod)
+
+// ============================================================
 // Account schemas
 // ============================================================
 
@@ -2861,6 +2917,11 @@ export const AccountVatTreatmentSchema = z.enum(ACCOUNT_VAT_TREATMENTS)
 
 const defaultVatTreatment = AccountVatTreatmentSchema.nullable().optional()
 
+// Momsruta override for 26xx VAT accounts; lib/vat/account-vat-box.ts is the
+// source of truth and the DB CHECK on chart_of_accounts.vat_box mirrors it.
+export const AccountVatBoxSchema = z.enum(ACCOUNT_VAT_BOXES)
+const vatBox = AccountVatBoxSchema.nullable().optional()
+
 export const CreateAccountSchema = z.object({
   account_number: accountNumber,
   account_name: z.string().min(1, 'Account name is required'),
@@ -2871,6 +2932,7 @@ export const CreateAccountSchema = z.object({
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
+  vat_box: vatBox,
   sru_code: z.string().nullable().optional(),
 })
 
@@ -2881,6 +2943,7 @@ export const UpdateAccountSchema = z.object({
   default_vat_code: z.string().nullable().optional(),
   default_vat_rate: defaultVatRate,
   default_vat_treatment: defaultVatTreatment,
+  vat_box: vatBox,
   sru_code: z.string().nullable().optional(),
 })
 
@@ -3275,6 +3338,9 @@ export const EmploymentTypeSchema = z.enum(['employee', 'company_owner', 'board_
 export const SalaryTypeSchema = z.enum(['monthly', 'hourly'])
 export const FSkattStatusSchema = z.enum(['a_skatt', 'f_skatt', 'fa_skatt', 'not_verified'])
 export const VacationRuleSchema = z.enum(['procentregeln', 'sammaloneregeln', 'none', 'semesterersattning'])
+
+/** Vacation pools on a 'vacation' payslip line (migration 20260919130100). */
+export const VacationCategorySchema = z.enum(['paid', 'extra_paid', 'saved', 'unpaid', 'advance'])
 
 export const SalaryLineItemTypeSchema = z.enum([
   'monthly_salary', 'hourly_salary',
@@ -3704,6 +3770,13 @@ export const CreateSalaryRunSchema = z.object({
   payment_date: isoDate,
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').default('A'),
   notes: z.string().max(2000).optional(),
+  // Avvikelseperiod: the calendar window absence + worked days are read
+  // from. Both or neither; omitted = company_settings.salary_deviation_period
+  // (same_month | previous_month). Pairing, ordering and the two-month cap
+  // are enforced in lib/salary/deviation-period.ts so every creation path
+  // (dashboard, v1, MCP) gets identical errors.
+  deviation_period_start: isoDate.optional(),
+  deviation_period_end: isoDate.optional(),
 })
 
 // One-click variant for the dashboard route: all fields optional — the route
@@ -3718,6 +3791,8 @@ export const CreateSalaryRunWithDefaultsSchema = z.object({
   payment_date: isoDate.optional(),
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A–Z').optional(),
   notes: z.string().max(2000).optional(),
+  deviation_period_start: isoDate.optional(),
+  deviation_period_end: isoDate.optional(),
 })
 
 export const AddEmployeeToRunSchema = z.object({
@@ -3745,6 +3820,21 @@ export const CreateSalaryLineItemSchema = z.object({
   is_net_deduction: z.boolean().default(false),
   account_number: accountNumber.optional(),
   sort_order: z.number().int().default(0),
+  // Engångsskatt (lib/salary/one-off-tax.ts): the verified Skatteverket
+  // percentage for a one-off amount (bonus, provision, semesterersättning at
+  // final settlement). null/omitted = taxed by the monthly table. Only valid
+  // on a positive taxable addition of an eligible type: the shared command
+  // module answers 400 and the DB CHECK refuses anything else.
+  one_off_tax_percent: z.number().min(0).max(100).nullable().optional(),
+  // Which vacation pool a 'vacation' line draws from (lib/salary/vacation-
+  // category.ts), in Fortnox/Azets terms: paid = Betalda (the default when
+  // omitted), extra_paid = Extra betalda, saved = Sparade, unpaid = Obetalda,
+  // advance = Förskott. Only valid on item_type 'vacation'; the shared command
+  // module answers 400 and the DB CHECK refuses anything else.
+  vacation_category: VacationCategorySchema.nullable().optional(),
+  // Origin year of the sparade dagar a 'saved' line consumes. Omitted = the
+  // oldest saved year first (the one that expires first).
+  vacation_saved_year: fiscalYearSchema.nullable().optional(),
 })
 
 export const UpdateSalaryLineItemSchema = CreateSalaryLineItemSchema.partial().omit({ salary_run_employee_id: true })
@@ -3796,7 +3886,10 @@ const openingBalancesShape = {
   cutover_date: isoDate,
   ytd_gross: z.number().min(0).default(0),
   ytd_tax: z.number().min(0).default(0),
-  ytd_net: z.number().min(0).default(0),
+  // Explicit null = the previous system could not export historical net pay;
+  // the payslip then prints "Underlag saknas" for the accumulator instead of
+  // a false 0. Omitted still means 0 (the full-replace default).
+  ytd_net: z.number().min(0).nullable().default(0),
   vacation_paid_days_remaining: z.number().min(0).max(40).default(0),
   // Paid days already taken in the CURRENT vacation year under the previous
   // system. The ledger's cutover-year row derives entitled = remaining +
@@ -3809,6 +3902,26 @@ const openingBalancesShape = {
   opening_semester_liability: z.number().min(0).default(0),
   opening_semester_liability_avgifter: z.number().min(0).default(0),
   karens_periods_adjustment: z.number().int().min(0).max(10).default(0),
+  // Categorized vacation pools (migration 20260919130000), in Fortnox/Azets
+  // terms. vacation_paid_days_remaining above is Betalda and
+  // vacation_saved_days_by_year is Sparade per år; these complete the set.
+  //
+  // The day the vacation pools are struck per. Omitted/null = the day before
+  // cutover_date. Booked runs whose avvikelseperiod ends on or before this day
+  // are already inside the balance and are not deducted again by the ledger,
+  // so under salary_deviation_period = previous_month a balance the old system
+  // struck BEFORE the month the first Accounted run deducts must say so here.
+  vacation_as_of_date: isoDate.nullable().optional(),
+  // Obetalda: unpaid days left this vacation year (lapse at year close).
+  vacation_unpaid_days_remaining: z.number().min(0).max(40).default(0),
+  // Förskott: förskottssemester days granted but not yet taken.
+  vacation_advance_days_remaining: z.number().min(0).max(40).default(0),
+  // Extra betalda: paid days above the statutory entitlement left this year;
+  // counted into the paid pool with vacation_paid_days_remaining.
+  vacation_extra_paid_days_remaining: z.number().min(0).max(40).default(0),
+  // Förskottsskuld in SEK (Semesterlagen 29 a §). Report only: its own row on
+  // the vacation-liability report, subtracted from the net liability.
+  opening_advance_vacation_debt: z.number().min(0).default(0),
 }
 
 const openingBalancesRefine = (
@@ -3817,9 +3930,17 @@ const openingBalancesRefine = (
     ytd_gross: number
     ytd_tax: number
     vacation_saved_days_by_year: Record<string, number>
+    vacation_as_of_date?: string | null
   },
   ctx: z.RefinementCtx,
 ) => {
+    if (data.vacation_as_of_date && data.vacation_as_of_date > data.cutover_date) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'vacation_as_of_date kan inte ligga efter cutover_date',
+        path: ['vacation_as_of_date'],
+      })
+    }
     if (!data.cutover_date.endsWith('-01')) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect, vi } from 'vitest'
-import { mapEntityType, mapSetupEntityType } from '../entity-type-map'
+import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType } from '../entity-type-map'
 
 describe('mapEntityType', () => {
   it('maps the exact AB codes and labels to aktiebolag', () => {
@@ -56,6 +56,30 @@ describe('mapSetupEntityType: only creatable forms are prefilled', () => {
     expect(mapSetupEntityType('Aktiebolag')).toBe('aktiebolag')
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     expect(mapSetupEntityType('Ideell förening')).toBe('ideell_forening')
+  })
+})
+
+describe('mapPlannedLegalForm: the scoped-but-not-creatable forms', () => {
+  it('maps the registry spellings to the planned form and its label', () => {
+    expect(mapPlannedLegalForm('Ekonomisk förening')).toMatchObject({
+      code: 'ekonomisk_forening',
+      label: 'Ekonomisk förening',
+    })
+    expect(mapPlannedLegalForm('Bostadsrättsförening')?.code).toBe('bostadsrattsforening')
+    expect(mapPlannedLegalForm('BRF')?.code).toBe('bostadsrattsforening')
+    expect(mapPlannedLegalForm('Samfällighetsförening')?.code).toBe('samfallighetsforening')
+    expect(mapPlannedLegalForm('Stiftelse')?.code).toBe('stiftelse')
+    expect(mapPlannedLegalForm('Annan stiftelse')?.code).toBe('stiftelse')
+  })
+
+  it('never maps a creatable form, an unrelated form or a loose substring', () => {
+    expect(mapPlannedLegalForm('Aktiebolag')).toBeNull()
+    expect(mapPlannedLegalForm('Ideell förening')).toBeNull()
+    expect(mapPlannedLegalForm('Handelsbolag')).toBeNull()
+    expect(mapPlannedLegalForm('Registrerat trossamfund')).toBeNull()
+    expect(mapPlannedLegalForm('Enskild stiftelse')).toBeNull()
+    expect(mapPlannedLegalForm('')).toBeNull()
+    expect(mapPlannedLegalForm(null)).toBeNull()
   })
 })
 

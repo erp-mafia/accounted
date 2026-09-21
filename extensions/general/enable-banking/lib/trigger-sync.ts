@@ -33,6 +33,8 @@ import {
 } from './api-client'
 import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
+import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
+import { retryAfterSeconds } from './rate-limit-message'
 import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -74,7 +76,7 @@ export async function triggerConnectionSync(
   const { data: connection, error: connectionError } = await supabase
     .from('bank_connections')
     .select(
-      'id, company_id, bank_name, status, accounts_data, last_synced_at, error_message, sync_lease_until',
+      'id, company_id, bank_name, session_id, status, accounts_data, last_synced_at, error_message, sync_lease_until',
     )
     .eq('id', connectionId)
     .eq('company_id', companyId)
@@ -115,6 +117,24 @@ export async function triggerConnectionSync(
   }
   const isViewer = (membership as { role?: string }).role === 'viewer'
 
+  // A lease held for hours is a bank rate-limit cooldown (set here, by the
+  // web button, the cron, or a sibling company on the same consent). Say so
+  // instead of BANK_SYNC_COOLDOWN, whose "the data is fresh" is untrue here.
+  const rateLimitedUntil = rateLimitHoldUntil(
+    connection as { sync_lease_until?: string | null },
+    now,
+  )
+  if (rateLimitedUntil !== null) {
+    return {
+      ok: false,
+      code: 'BANK_RATE_LIMITED',
+      connection_id: connectionId,
+      status: connection.status as string,
+      next_allowed_at: new Date(rateLimitedUntil).toISOString(),
+      retry_after_seconds: retryAfterSeconds(rateLimitedUntil, now),
+    }
+  }
+
   // A successful sync (ours, the web button's or the cron's) within the
   // window: the data is fresh, say so without touching the bank.
   const lastSynced = connection.last_synced_at
@@ -140,24 +160,14 @@ export async function triggerConnectionSync(
     return { ok: false, code: 'BANK_SYNC_NO_ACCOUNTS', connection_id: connectionId }
   }
 
-  // Durable, atomic cooldown claim. One conditional UPDATE: the lease is
-  // taken only if the current one has expired (the column defaults to epoch,
-  // so "never claimed" needs no NULL branch), and Postgres row locking
-  // serialises concurrent claimers, so two agent calls landing on different
-  // serverless instances (or retries of a failing connection after a cold
-  // start) can never both reach the bank. The lease stays for the full
-  // window whether the sync succeeds or fails: that IS the throttle.
-  const nowIso = new Date(now).toISOString()
+  // Durable, atomic cooldown claim (sync-lease.ts, shared with the cron):
+  // two agent calls landing on different serverless instances (or retries of
+  // a failing connection after a cold start) can never both reach the bank.
+  // The lease stays for the full window whether the sync succeeds or fails:
+  // that IS the throttle.
   const leaseUntil = now + SYNC_COOLDOWN_MS
-  const { data: claimed, error: claimError } = await supabase
-    .from('bank_connections')
-    .update({ sync_lease_until: new Date(leaseUntil).toISOString() })
-    .eq('id', connectionId)
-    .eq('company_id', companyId)
-    .lte('sync_lease_until', nowIso)
-    .select('id')
-  if (claimError) throw claimError
-  if (!claimed || claimed.length === 0) {
+  const claimed = await claimSyncLease(supabase, connectionId, now)
+  if (!claimed) {
     // Lost the race: another caller claimed between our read and this write.
     // Its lease started at most a moment ago, so ours is the honest estimate.
     log.info('agent-triggered bank sync: lease held by a concurrent caller', { connectionId })
@@ -275,6 +285,25 @@ export async function triggerConnectionSync(
       trigger: 'agent',
       error,
     })
+    // A bank 429 keeps every path away for hours, not minutes. The row keeps
+    // its status, error_message and last_synced_at: the consent is fine.
+    const cooldownMs = await applyRateLimitCooldown(
+      supabase,
+      { id: connection.id as string, session_id: connection.session_id as string | null },
+      error,
+      now,
+    )
+    if (cooldownMs !== null) {
+      log.warn('agent-triggered bank sync: bank rate limit', { connectionId, cooldownMs })
+      return {
+        ok: false,
+        code: 'BANK_RATE_LIMITED',
+        connection_id: connectionId,
+        status: connection.status as string,
+        next_allowed_at: new Date(now + cooldownMs).toISOString(),
+        retry_after_seconds: retryAfterSeconds(now + cooldownMs, now),
+      }
+    }
 
     if (error instanceof SessionExpiredError) {
       log.warn('agent-triggered bank sync: session expired', { connectionId })

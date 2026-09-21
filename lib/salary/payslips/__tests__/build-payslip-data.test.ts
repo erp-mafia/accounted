@@ -126,3 +126,20 @@ describe('payslipFileName', () => {
     expect(payslipFileName(run, employee)).toBe('lonespec_Exempelsson_Anna_2026-06.pdf')
   })
 })
+
+describe('buildPayslipData: engångsskatt', () => {
+  it('marks a line taxed at a flat one-off percentage in its description', () => {
+    const data = buildPayslipData({
+      run,
+      sre: sre({
+        line_items: [
+          { description: 'Grundlön', amount: 35000, sort_order: 0, one_off_tax_percent: null },
+          { description: 'Bonus', amount: 5000, sort_order: 10, one_off_tax_percent: 30 },
+        ],
+      }),
+      employee,
+      company: { name: 'Bolaget AB', org_number: null },
+    })
+    expect(data.lineItems.map(li => li.description)).toEqual(['Grundlön', 'Bonus (engångsskatt 30 %)'])
+  })
+})

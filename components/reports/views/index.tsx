@@ -21,6 +21,12 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { FyPicker } from '@/components/common/FyPicker'
 import { mostRecentEndedVatPeriod } from '@/lib/vat/period-defaults'
 import { resolveInitialVatPeriodSelection } from '@/lib/vat/period-selection'
+import {
+  indexVatFilings,
+  vatFilingKey,
+  type VatFilingRecord,
+} from '@/lib/vat/filing-record'
+import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { cn, formatAmount, formatDate } from '@/lib/utils'
 import { formatDateISO } from '@/lib/calendar/utils'
@@ -47,10 +53,9 @@ import { SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
-import {
-  vatDeadlineTaxPeriod,
-  type VatSettlementExistingEntry,
-  type VatSettlementProposal,
+import type {
+  VatSettlementExistingEntry,
+  VatSettlementProposal,
 } from '@/lib/reports/vat-settlement'
 import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
 import { useVatSettlementProposal } from '@/components/reports/use-vat-settlement-proposal'
@@ -1296,6 +1301,7 @@ function VatStepper({
   warningCount,
   ruta49,
   bookingStatus,
+  filed,
 }: {
   active: number
   onSelect: (step: number) => void
@@ -1303,6 +1309,8 @@ function VatStepper({
   warningCount: number
   ruta49: number
   bookingStatus: 'booked' | 'draft' | 'none' | null
+  /** The period has a filing record (Skatteverket kvittens or marked by hand). */
+  filed: boolean
 }) {
   const steps = [
     {
@@ -1341,7 +1349,13 @@ function VatStepper({
       done: bookingStatus === 'booked',
       warn: false,
     },
-    { n: 4, label: 'Lämna in', sub: 'till Skatteverket', done: false, warn: false },
+    {
+      n: 4,
+      label: 'Lämna in',
+      sub: filed ? 'inlämnad' : 'till Skatteverket',
+      done: filed,
+      warn: false,
+    },
   ]
 
   return (
@@ -1510,7 +1524,15 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // to automatic so stale step choices never survive a context change.
   const [chosenStep, setChosenStep] = useState<number | null>(null)
   const [settlementRefreshKey, setSettlementRefreshKey] = useState(0)
-  const [deadlineResult, setDeadlineResult] = useState<{ key: string; completed: boolean } | null>(null)
+  // Filing records (issue #2746): which calendar periods are on record as
+  // filed, through the Skatteverket connection or marked by hand. Tagged with
+  // the company they were fetched for, because the initial period seed below
+  // must read them: a filed period is skipped in favour of the next one.
+  const [filings, setFilings] = useState<{
+    key: string
+    byPeriod: Map<string, VatFilingRecord>
+  } | null>(null)
+  const [filingsRefreshKey, setFilingsRefreshKey] = useState(0)
   // Per-verifikat RC-basis scan, fetched here (not only inside VatChecksCard)
   // because the filing gate lives here and the worklist unmounts as soon as
   // the user leaves steg 1. Tagged with the PERIOD it was requested for (see
@@ -1533,11 +1555,39 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const { settings, isLoading: settingsLoading, refetch: refetchSettings } = useCompanySettings()
   const [appliedCompany, setAppliedCompany] = useState<string | null>(null)
   const companyKey = settingsLoading ? null : (settings?.company_id ?? 'none')
-  if (companyKey !== null && appliedCompany !== companyKey) {
+
+  // The filing records load per company and again after a mark/undo. A
+  // failed fetch settles as an empty set rather than blocking the seed: the
+  // page must still open on a missing list, it just cannot skip ahead.
+  useEffect(() => {
+    if (companyKey === null) return
+    let cancelled = false
+    fetch('/api/reports/vat-declaration/filings')
+      .then(async (res) => {
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        const rows: VatFilingRecord[] = res.ok && Array.isArray(json?.data) ? json.data : []
+        setFilings({ key: companyKey, byPeriod: indexVatFilings(rows) })
+      })
+      .catch(() => {
+        if (!cancelled) setFilings({ key: companyKey, byPeriod: new Map() })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companyKey, filingsRefreshKey])
+  const filingsReady = filings !== null && filings.key === companyKey
+  const filedByPeriod = filingsReady ? filings.byPeriod : null
+
+  // Seeded once settings AND the filing records for the company have
+  // settled, so the seed can step past an already-filed period (#2746)
+  // instead of reopening it on every visit until the next period ends.
+  if (companyKey !== null && filingsReady && appliedCompany !== companyKey) {
     setAppliedCompany(companyKey)
     const initial = resolveInitialVatPeriodSelection({
       momsPeriod: settings?.moms_period ?? null,
       over40m: settings?.vat_taxable_base_over_40m === true,
+      isFiled: (cadence, y, p) => filings.byPeriod.has(vatFilingKey(cadence, y, p)),
     })
     setPeriodType(initial.periodType)
     setYear(initial.year)
@@ -1593,8 +1643,13 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   // step. fetchKey is null while a prerequisite is missing (settings pending,
   // gated, or no redovisningsperiod configured); any change to it triggers a
   // refetch and stale responses are discarded.
+  // seedPending: the seed above now waits for the filing records, so on a
+  // company switch the previous company's cadence is still selected for one
+  // round trip. Nothing is fetched at that stale cadence.
+  const seedPending = appliedCompany !== companyKey
   const fetchKey =
     periodType === null ||
+    seedPending ||
     notVatRegistered ||
     settingsRowMissing ||
     momsPeriodMissing ||
@@ -1628,42 +1683,19 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
     refreshKey: settlementRefreshKey,
   })
   const bookingStatus = settlement.upToDate ? settlement.bookingStatus : null
-  const taxPeriodKey = periodType ? vatDeadlineTaxPeriod(periodType, year, period) : null
-  const deadlineCompleted =
-    !!settlement.booked &&
-    taxPeriodKey != null &&
-    deadlineResult?.key === taxPeriodKey &&
-    deadlineResult.completed
+  const { canWrite } = useCanWrite()
+  // The selected period's filing record, if any. Helårsmoms has no calendar
+  // key and never resolves one, as before: its deadline is labelled per
+  // räkenskapsår and is completed from the calendar.
+  const filingRecord =
+    filedByPeriod && (periodType === 'monthly' || periodType === 'quarterly')
+      ? (filedByPeriod.get(vatFilingKey(periodType, year, period)) ?? null)
+      : null
+  const deadlineCompleted = !!settlement.booked && filingRecord !== null
 
   useEffect(() => {
     setChosenStep(null)
   }, [periodType, year, period, fiscalPeriodId])
-
-  useEffect(() => {
-    if (!settlement.booked || !taxPeriodKey) return
-    const key = taxPeriodKey
-    let cancelled = false
-    fetch('/api/deadlines?status=completed')
-      .then(async (res) => {
-        const json = await res.json().catch(() => null)
-        if (cancelled) return
-        const rows = Array.isArray(json?.data) ? json.data : []
-        const match = rows.some(
-          (d: { tax_period?: string | null; tax_deadline_type?: string | null }) =>
-            d.tax_period === key &&
-            (d.tax_deadline_type === 'moms_monthly' ||
-              d.tax_deadline_type === 'moms_quarterly' ||
-              d.tax_deadline_type === 'moms_yearly'),
-        )
-        setDeadlineResult({ key, completed: match })
-      })
-      .catch(() => {
-        if (!cancelled) setDeadlineResult({ key, completed: false })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [settlement.booked, taxPeriodKey])
 
   useEffect(() => {
     if (!fetchKey || periodType === null) return
@@ -1896,17 +1928,25 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
   const fusedPeriodItems: { id: string; label: string; annotation?: string }[] = []
   if (!isYearly) {
     for (let y = currentYear; y > currentYear - 5; y--) {
+      // Filed periods carry an "inlämnad" note so the picker shows at a
+      // glance which declarations are done (#2746).
       if (periodType === 'quarterly') {
         for (let q = 4; q >= 1; q--) {
+          const filed = filedByPeriod?.has(vatFilingKey('quarterly', y, q)) === true
           fusedPeriodItems.push({
             id: `${y}:${q}`,
             label: `Kvartal ${q} ${y}`,
-            annotation: QUARTER_SPANS[q - 1],
+            annotation: filed ? `${QUARTER_SPANS[q - 1]} · inlämnad` : QUARTER_SPANS[q - 1],
           })
         }
       } else {
         for (let m = 12; m >= 1; m--) {
-          fusedPeriodItems.push({ id: `${y}:${m}`, label: `${MONTH_NAMES[m - 1]} ${y}` })
+          const filed = filedByPeriod?.has(vatFilingKey('monthly', y, m)) === true
+          fusedPeriodItems.push({
+            id: `${y}:${m}`,
+            label: `${MONTH_NAMES[m - 1]} ${y}`,
+            annotation: filed ? 'inlämnad' : undefined,
+          })
         }
       }
     }
@@ -2024,6 +2064,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
             warningCount={warningCount}
             ruta49={data.rutor.ruta49}
             bookingStatus={bookingStatus}
+            filed={filingRecord !== null}
           />
 
           {activeStep === 1 && (
@@ -2338,6 +2379,20 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
               xmlHref={`/api/reports/vat-declaration/eskd?${vatQueryString()}`}
               pdfHref={`/api/reports/vat-declaration/pdf?${vatQueryString()}`}
             />
+              {/* Filing record (#2746): what makes the page open the next
+                  period once this one is done. Calendar periods only; the
+                  helårsmoms deadline is completed from the calendar. */}
+              {(periodType === 'monthly' || periodType === 'quarterly') && (
+                <VatFilingStatusCard
+                  periodType={periodType}
+                  year={year}
+                  period={period}
+                  periodLabel={fusedLabel}
+                  record={filingRecord}
+                  canWrite={canWrite}
+                  onChanged={() => setFilingsRefreshKey((k) => k + 1)}
+                />
+              )}
             </section>
           )}
         </div>

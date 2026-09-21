@@ -5,6 +5,11 @@ import { getStripe } from '@/lib/stripe/client'
 import { ingestTransactions } from '@/lib/transactions/ingest'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
 import { syncMappedAccounts } from '@/lib/import/account-sync'
+import {
+  isBeforeFirstAdvance,
+  resolveWindowStartMs,
+  type CursorWindowConnection,
+} from '@/lib/feed-sync/cursor-window'
 import { createLogger, type Logger } from '@/lib/logger'
 import type { RawTransaction, TransactionMethod } from '@/types'
 import { connectedAccountOptions, isRevokedConnectionError } from './connect'
@@ -42,9 +47,13 @@ const defaultLog = createLogger('stripe/transaction-sync')
  * Cursor: stripe_connections.last_balance_txn_synced_at (max `created`
  * processed), re-polled with a 24h overlap. Safe because balance transactions
  * are immutable and carry stable txn_... ids: a re-seen transaction collides
- * on (company_id, external_id) and is skipped. First run backfills 90 days,
- * floored at the day after the company lock date: rows behind the lock can
- * never be booked and would only be permanent inbox noise.
+ * on (company_id, external_id) and is skipped. The OAuth callback seeds the
+ * cursor with the connection moment, so the first run starts there (money
+ * that moved before the connection is already booked from the bank side);
+ * older history is an explicit choice (POST /backfill moves the cursor
+ * back). Every window is floored at the day after the company lock date:
+ * rows behind the lock can never be booked and would only be permanent
+ * inbox noise.
  */
 
 /** BAS ledger account for the Stripe balance cash account. */
@@ -53,8 +62,6 @@ export const STRIPE_LEDGER_ACCOUNT = '1686'
 const STRIPE_LEDGER_ACCOUNT_NAME = 'Fordringar för kontokort och kuponger'
 /** transactions.import_source for Stripe feed rows. */
 export const STRIPE_IMPORT_SOURCE = 'stripe'
-/** First-run backfill window (matches the Enable Banking convention). */
-export const BACKFILL_DAYS = 90
 /** Cursor re-poll overlap; external_id dedup makes duplicates no-ops. */
 const CURSOR_OVERLAP_SECONDS = 24 * 60 * 60
 /** Balance transactions per ingest chunk (each maps to at most 2 rows). */
@@ -272,22 +279,35 @@ export async function linkPayoutFeedRows(
   return data?.length ?? 0
 }
 
+/** The cursor-window view of a connection (see lib/feed-sync/cursor-window). */
+function cursorWindowOf(connection: StripeConnection): CursorWindowConnection {
+  return {
+    cursor: connection.last_balance_txn_synced_at,
+    connectedAt: connection.connected_at,
+    createdAt: connection.created_at,
+  }
+}
+
 /**
- * Window start (epoch seconds) for the balance-transaction list call. With a
- * cursor: cursor minus the 24h overlap. First run: BACKFILL_DAYS back,
- * floored at the day AFTER the company lock date (rows on/before it are
- * unbookable by the enforce_company_lock_date trigger).
+ * Window start (epoch seconds) for the balance-transaction list call. The
+ * cursor is the start date: cursor minus the 24h overlap, clamped so the
+ * overlap never reaches behind the point this connection is responsible for
+ * (the connection moment, or an explicit backfill cursor when that is
+ * earlier); a null cursor falls back to the connection's own start, never to
+ * a fixed number of days.
+ *
+ * Every window is then floored at the day AFTER the company lock date (rows
+ * on/before it are unbookable by the enforce_company_lock_date trigger). The
+ * floor used to apply to the first run only; now that the first run starts
+ * at the connection moment like every other run starts at its cursor, an
+ * explicit backfill is the one way to reach into locked history, and the
+ * floor has to sit on the resolved window to catch it.
  */
-async function resolveWindowStartSeconds(
+export async function resolveWindowStartSeconds(
   supabase: SupabaseClient,
   connection: StripeConnection,
 ): Promise<number> {
-  if (connection.last_balance_txn_synced_at) {
-    const cursorSec = Math.floor(Date.parse(connection.last_balance_txn_synced_at) / 1000)
-    return Math.max(0, cursorSec - CURSOR_OVERLAP_SECONDS)
-  }
-
-  let startMs = Date.now() - BACKFILL_DAYS * 86_400_000
+  let startMs = resolveWindowStartMs(cursorWindowOf(connection), CURSOR_OVERLAP_SECONDS * 1000)
   const { data: settings } = await supabase
     .from('company_settings')
     .select('bookkeeping_locked_through')
@@ -501,7 +521,10 @@ export async function syncStripeBalanceTransactions(
 
   const stripe = getStripe()
   const requestOptions = connectedAccountOptions(connection.stripe_account_id)
-  const firstRun = !connection.last_balance_txn_synced_at
+  // One-time chart setup (1686) runs until the cursor has moved past the
+  // connection moment: a freshly activated connection carries a seeded
+  // cursor, so "no cursor" no longer identifies the first run.
+  const firstRun = isBeforeFirstAdvance(cursorWindowOf(connection))
   const gte = await resolveWindowStartSeconds(supabase, connection)
 
   let txns: BalanceTxnLike[]

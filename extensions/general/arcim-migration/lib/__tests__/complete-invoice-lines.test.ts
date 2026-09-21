@@ -9,11 +9,11 @@ import type { SalesInvoiceDto } from '@/lib/providers/dto'
  * row-less invoices, join strictly, hydrate only that subset, write rows only
  * when the provider's total agrees with the stored one, and leave anything it
  * could not reach for the next run rather than guessing. Every write goes
- * through the complete_invoice_rows RPC, one call per invoice, which is what
+ * through the atomic completion RPC, one call per invoice, which is what
  * keeps two writers from doubling an invoice's rows, and every write that
  * landed leaves one InvoiceRowsCompleted row in processing_history (#2312).
- * The history append runs for real against the fake client, so the payload
- * below is what the PII guard and the row shape actually accept.
+ * Event preparation runs for real before the fake RPC, so the payload below
+ * is what the PII guard and the row shape actually accept.
  */
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -113,18 +113,19 @@ function hydratedAll(invoices: SalesInvoiceDto[], unhydratedIds: string[] = []) 
 
 interface Call { table: string; method: string; args: unknown[] }
 
-/** The complete_invoice_rows payload, as the pass sends it. */
+/** The atomic completion payload, as the pass sends it. */
 interface RpcArgs {
   p_company_id: string
   p_invoice_id: string
   p_rows: Record<string, unknown>[]
   p_header: Record<string, unknown> | null
+  p_event: Record<string, unknown>
 }
 
 /** What the real RPC answers a caller that wrote: N rows, header iff one was sent. */
 function rpcWrote(args: RpcArgs) {
   return {
-    data: { ok: true, wrote: true, rows: args.p_rows.length, header_updated: args.p_header !== null },
+    data: { ok: true, wrote: true, rows: args.p_rows.length, header_updated: args.p_header !== null, event_id: args.p_event.event_id },
     error: null,
   }
 }
@@ -160,7 +161,9 @@ function makeSupabase(
   })
   const rpc = vi.fn((fn: string, args: RpcArgs) => {
     calls.push({ table: `rpc:${fn}`, method: 'rpc', args: [fn, args] })
-    return Promise.resolve(respondRpc(fn, args))
+    const response = respondRpc(fn, args) as { data?: { wrote?: boolean } }
+    if (response.data?.wrote) calls.push({ table: 'processing_history', method: 'insert', args: [args.p_event] })
+    return Promise.resolve(response)
   })
   return { supabase: { from, rpc } as unknown as SupabaseClient, calls }
 }
@@ -169,7 +172,7 @@ const ok = { data: [], error: null }
 
 function writes(calls: Call[]): RpcArgs[] {
   return calls
-    .filter((c) => c.method === 'rpc' && c.args[0] === 'complete_invoice_rows')
+    .filter((c) => c.method === 'rpc' && c.args[0] === 'complete_invoice_rows_with_history')
     .map((c) => c.args[1] as RpcArgs)
 }
 
@@ -494,21 +497,18 @@ describe('completeMigratedInvoiceLines', () => {
     expect(trail.every((r) => (r.actor as { id: string }).id === 'user-9')).toBe(true)
   })
 
-  it('counts a write whose trail append failed as completed, not appended', async () => {
-    // The rows are committed by then; a missing change-log row is a logged
-    // gap, never a failed invoice the next run would find full.
+  it('keeps an invoice pending when its atomic history write fails', async () => {
     mFetchAll.mockResolvedValue([storedRow()])
     const dto = providerInvoice()
     mList.mockResolvedValue([dto])
     mHydrate.mockResolvedValue(hydratedAll([dto]))
-    const { supabase, calls } = makeSupabase((table) =>
-      table === 'processing_history' ? { data: null, error: { message: 'connection reset' } } : ok,
-    )
+    const { supabase, calls } = makeSupabase(() => ok,
+      () => ({ data: null, error: { message: 'processing_history constraint failed' } }))
 
     const result = await completeMigratedInvoiceLines({ supabase, companyId: 'co-1', consentId: 'c-1' })
 
-    expect(result).toMatchObject({ completed: 1, failed: 0, historyAppended: 0 })
-    expect(historyRows(calls)).toHaveLength(1)
+    expect(result).toMatchObject({ completed: 0, failed: 1, historyAppended: 0, remaining: 1 })
+    expect(historyRows(calls)).toHaveLength(0)
   })
 
   it('dry run: reports the plan and writes nothing', async () => {

@@ -247,6 +247,206 @@ export function getVatRules(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Why the treatment is what it is
+// ---------------------------------------------------------------------------
+
+export type InvoiceVatWarningCode =
+  /** eu_business without any VAT number: nothing to validate, Swedish VAT applies. */
+  | 'EU_BUSINESS_VAT_NUMBER_MISSING'
+  /** eu_business whose VAT number has not passed a VIES check: Swedish VAT applies. */
+  | 'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED'
+  /** eu_business with a validated number but country SE: Swedish VAT applies (#2025). */
+  | 'EU_BUSINESS_COUNTRY_IS_SE'
+  /** A Swedish rate on a line to a reverse-charge customer (lawful only taxed-where-performed). */
+  | 'SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER'
+  /** A Swedish rate on a line to a non-EU business (lawful only taxed-where-performed). */
+  | 'SWEDISH_VAT_TO_EXPORT_CUSTOMER'
+
+/**
+ * One structured, non-blocking warning about an invoice's VAT treatment.
+ * Carries both languages so every surface (dashboard, MCP preview, v1 meta)
+ * renders the same sentence without a lookup; `code` is stable forever once
+ * shipped, agents dispatch on it.
+ */
+export interface InvoiceVatWarning {
+  code: InvoiceVatWarningCode
+  message_sv: string
+  message_en: string
+  /** What fixes it, for an agent. Same shape as StructuredErrorRemediation. */
+  remediation?: {
+    description: string
+    tool?: string
+    args?: Record<string, unknown>
+  }
+}
+
+/** The customer fields the explanation reads. `id` only feeds remediation args. */
+export interface VatTreatmentCustomer {
+  id?: string | null
+  customer_type: CustomerType
+  vat_number?: string | null
+  vat_number_validated?: boolean | null
+  country?: string | null
+}
+
+const REVERSE_CHARGE_BLOCKED_CODES: ReadonlySet<InvoiceVatWarningCode> = new Set([
+  'EU_BUSINESS_VAT_NUMBER_MISSING',
+  'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED',
+  'EU_BUSINESS_COUNTRY_IS_SE',
+])
+
+const TAXED_WHERE_PERFORMED_SV =
+  'tjänster som beskattas där de utförs (ML 6 kap.), till exempel hotell, restaurang, persontransport, fastighetstjänst eller entré till kultur- och sportevenemang'
+const TAXED_WHERE_PERFORMED_EN =
+  'supplies taxed where they are performed (ML 6 kap.), for example hotel, restaurant, passenger transport, property services or admission to cultural and sports events'
+
+function formatRateList(rates: number[], conjunction: string): string {
+  const unique = Array.from(new Set(rates)).sort((a, b) => a - b).map((r) => `${r} %`)
+  if (unique.length <= 1) return unique[0] ?? ''
+  return `${unique.slice(0, -1).join(', ')} ${conjunction} ${unique[unique.length - 1]}`
+}
+
+/**
+ * Explain why an invoice to this customer gets the VAT treatment it gets,
+ * when that treatment is not the one the customer type suggests.
+ *
+ * isReverseChargeCustomer() needs three things (eu_business, a VIES-validated
+ * number, a country other than SE) and is silent about which one failed:
+ * an EU customer whose number was never validated got 25 % with no
+ * explanation, and the invoice went out wrong until someone noticed (#2749).
+ * This is the single place that names the failed condition; every write
+ * surface (dashboard draft, MCP staged preview, v1 meta) renders its output
+ * instead of composing its own sentence.
+ *
+ * `lineVatRates` are the effective rates of the priced lines (text rows
+ * excluded, absent rates already resolved to the customer default). A
+ * Swedish rate to a reverse-charge or export customer is lawful only for the
+ * ML 6 kap. supplies taxed where they are performed, so it earns a warning
+ * too (#2558); 0 % on such a customer is the rule and stays silent.
+ *
+ * Returns an empty array when the treatment needs no commentary. Never
+ * blocks: the permitted-rate gate (getPermittedVatRates) is the only refusal.
+ * The seller-side VAT registration gate is the caller's: a non-momsregistrerad
+ * company charges no VAT, so it does not ask.
+ */
+export function explainVatTreatment(
+  customer: VatTreatmentCustomer,
+  lineVatRates: number[],
+): InvoiceVatWarning[] {
+  const swedishRates = lineVatRates.filter((rate) => rate > 0)
+  const customerArgs = customer.id ? { customer_id: customer.id } : {}
+
+  if (customer.customer_type === 'eu_business') {
+    const validated = customer.vat_number_validated ?? false
+    const hasVatNumber = !!customer.vat_number?.trim()
+
+    if (!countryPermitsReverseCharge(customer.country)) {
+      return [
+        {
+          code: 'EU_BUSINESS_COUNTRY_IS_SE',
+          message_sv:
+            'Omvänd skattskyldighet tillämpas inte: kundens land är Sverige. En köpare etablerad i Sverige ska ha svensk moms oavsett utländskt momsnummer. Ändra land eller kundtyp på kundkortet om det är fel.',
+          message_en:
+            "Reverse charge is not applied: the customer's country is Sweden. A buyer established in Sweden owes Swedish VAT whatever foreign VAT number it holds. Change the country or the customer type on the customer card if that is wrong.",
+          remediation: {
+            description:
+              'Set the customer country to where the buyer is established, or change customer_type to swedish_business.',
+            tool: 'gnubok_update_customer',
+            args: customerArgs,
+          },
+        },
+      ]
+    }
+
+    // Everything below "reverse charge is not applied" must agree with
+    // isReverseChargeCustomer(), which never reads vat_number: a validated
+    // row IS reverse-charged even when the caller's projection left the
+    // number out. So the missing-number case only exists under !validated,
+    // where it picks the more useful of two sentences for the same outcome.
+    if (!validated && !hasVatNumber) {
+      return [
+        {
+          code: 'EU_BUSINESS_VAT_NUMBER_MISSING',
+          message_sv:
+            'Omvänd skattskyldighet tillämpas inte: kunden saknar momsnummer. Fakturan får svensk moms tills ett momsnummer har lagts till på kundkortet och validerats mot VIES (ML 6 kap. 34 §).',
+          message_en:
+            'Reverse charge is not applied: the customer has no VAT number. The invoice carries Swedish VAT until a VAT number is added on the customer card and validated against VIES (ML 6 kap. 34 §).',
+          remediation: {
+            description:
+              'Add the customer EU VAT number (vat_number); it is validated against VIES when the customer is saved.',
+            tool: 'gnubok_update_customer',
+            args: customerArgs,
+          },
+        },
+      ]
+    }
+
+    if (!validated) {
+      return [
+        {
+          code: 'EU_BUSINESS_VAT_NUMBER_NOT_VALIDATED',
+          message_sv:
+            'Omvänd skattskyldighet tillämpas inte: momsnumret är inte validerat. Fakturan får svensk moms tills momsnumret har kontrollerats mot VIES (ML 6 kap. 34 §).',
+          message_en:
+            'Reverse charge is not applied: the VAT number is not validated. The invoice carries Swedish VAT until the number has been checked against VIES (ML 6 kap. 34 §).',
+          remediation: {
+            description:
+              'Validate the VAT number against VIES: "Validera momsnummer" on the customer card or the draft, or save the customer with its vat_number again (re-validates on commit).',
+            tool: 'gnubok_update_customer',
+            args: { ...customerArgs, vat_number: customer.vat_number },
+          },
+        },
+      ]
+    }
+
+    if (swedishRates.length > 0) {
+      return [
+        {
+          code: 'SWEDISH_VAT_TO_REVERSE_CHARGE_CUSTOMER',
+          message_sv: `Svensk moms (${formatRateList(swedishRates, 'och')}) till ett EU-företag med validerat momsnummer gäller bara ${TAXED_WHERE_PERFORMED_SV}. Annars ska raden ha 0 % (omvänd skattskyldighet).`,
+          message_en: `Swedish VAT (${formatRateList(swedishRates, 'and')}) to an EU business with a validated VAT number applies only to ${TAXED_WHERE_PERFORMED_EN}. Otherwise the line should carry 0 % (reverse charge).`,
+          remediation: {
+            description: 'Set vat_rate 0 on every line that is not a taxed-where-performed supply.',
+          },
+        },
+      ]
+    }
+    return []
+  }
+
+  if (customer.customer_type === 'non_eu_business' && swedishRates.length > 0) {
+    return [
+      {
+        code: 'SWEDISH_VAT_TO_EXPORT_CUSTOMER',
+        message_sv: `Svensk moms (${formatRateList(swedishRates, 'och')}) till ett företag utanför EU gäller bara ${TAXED_WHERE_PERFORMED_SV}. Annars ska raden ha 0 % (export).`,
+        message_en: `Swedish VAT (${formatRateList(swedishRates, 'and')}) to a business outside the EU applies only to ${TAXED_WHERE_PERFORMED_EN}. Otherwise the line should carry 0 % (export).`,
+        remediation: {
+          description: 'Set vat_rate 0 on every line that is not a taxed-where-performed supply.',
+        },
+      },
+    ]
+  }
+
+  return []
+}
+
+/**
+ * True when the dashboard must ask for an explicit acknowledgement before the
+ * invoice is created or sent: reverse charge is blocked for an eu_business
+ * customer AND Swedish VAT is actually charged on a line. Nothing is charged
+ * on an all-0 % invoice, so the warning alone is enough there.
+ */
+export function requiresSwedishVatAcknowledgement(
+  warnings: InvoiceVatWarning[],
+  lineVatRates: number[],
+): boolean {
+  return (
+    warnings.some((warning) => REVERSE_CHARGE_BLOCKED_CODES.has(warning.code)) &&
+    lineVatRates.some((rate) => rate > 0)
+  )
+}
+
 /**
  * Calculate VAT amount
  */

@@ -15,9 +15,15 @@
  * Upserts use a native ON CONFLICT upsert on the natural key (employee,
  * date, type): atomic and truly idempotent, so PUT retries are safe and a
  * rejected write (e.g. the 24h cap) never drops existing rows.
+ *
+ * Every write first checks the register lock (lib/salary/register-locks.ts):
+ * dates a run in review, approved, paid or booked has already read through
+ * its deviation window are refused with SALARY_REGISTER_DATES_LOCKED_BY_RUN,
+ * dry runs included. Draft runs and corrected originals never lock.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { assertRegisterDatesUnlocked, assertRegisterRangeUnlocked } from './register-locks'
 
 export type AbsenceResult<T> =
   | { ok: true; data: T }
@@ -38,8 +44,9 @@ export interface AbsenceDayRow {
  * makes the range the pagination (no cursor needed on the GET). */
 export const ABSENCE_RANGE_MAX_DAYS = 92
 
-const ABSENCE_COLUMNS =
-  'id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at'
+// Select projections are literal strings at each call site on purpose:
+// tests/schema/no-phantom-columns.test.ts can only check column names it can
+// read statically.
 
 async function assertEmployee(
   supabase: SupabaseClient,
@@ -126,7 +133,7 @@ export async function listAbsenceDays(
 
   let query = supabase
     .from('salary_absence_days')
-    .select(ABSENCE_COLUMNS)
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
     .eq('company_id', args.companyId)
     .eq('employee_id', args.employeeId)
     .gte('absence_date', args.from)
@@ -161,6 +168,9 @@ export async function upsertAbsenceDay(
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
+  const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, [args.day.absence_date])
+  if (locked) return locked
+
   // Atomic upsert on the natural-key unique index: a rejected write (24h
   // cap, constraint) leaves any existing row untouched.
   const { data, error } = await supabase
@@ -177,7 +187,7 @@ export async function upsertAbsenceDay(
       },
       { onConflict: 'employee_id,absence_date,absence_type' },
     )
-    .select(ABSENCE_COLUMNS)
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
     .single()
 
   if (error) {
@@ -213,6 +223,11 @@ export async function upsertAbsenceRange(
       details: { from: args.from, to: args.to, max_days: ABSENCE_RANGE_MAX_DAYS },
     }
   }
+
+  // Checked before the dry-run branch on purpose: a preview must report the
+  // lock, that is what the preview is for.
+  const locked = await assertRegisterDatesUnlocked(supabase, args.companyId, dates)
+  if (locked) return locked
 
   const hours = args.hoursPerDay ?? 8
   const rows = dates.map((absence_date) => ({
@@ -250,7 +265,7 @@ export async function upsertAbsenceRange(
   const { data, error } = await supabase
     .from('salary_absence_days')
     .upsert(rows, { onConflict: 'employee_id,absence_date,absence_type' })
-    .select(ABSENCE_COLUMNS)
+    .select('id, absence_date, absence_type, hours, notes, salary_run_employee_id, created_at, updated_at')
 
   if (error) {
     const mapped = mapInsertError(error)
@@ -275,6 +290,11 @@ export async function deleteAbsenceRange(
 ): Promise<AbsenceResult<{ deleted_count: number }>> {
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
+
+  // Computed from the range, not from the rows it would delete: one query,
+  // and the dry run reports the lock too.
+  const locked = await assertRegisterRangeUnlocked(supabase, args.companyId, args.from, args.to)
+  if (locked) return locked
 
   if (args.dryRun) {
     // Count what WOULD be deleted so the preview is informative.

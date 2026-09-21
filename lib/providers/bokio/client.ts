@@ -1,3 +1,4 @@
+import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
 import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { BOKIO_BASE_URL, BOKIO_RATE_LIMIT } from './config';
@@ -106,7 +107,7 @@ export class BokioClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: bokioAuthorizationHeader(accessToken),
             Accept: 'application/json',
@@ -241,7 +242,7 @@ export class BokioClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}/companies/${companyId}${relativePath}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: { Authorization: bokioAuthorizationHeader(accessToken) },
           signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
         });

@@ -1,6 +1,14 @@
 import type { ComposerInputs } from './inputs'
 import type { AtomSelection } from './schemas'
-import { ENTITY_TYPE_LABELS_SV, isEntityType } from '@/lib/company/entity-type'
+import {
+  ENTITY_TYPE_LABELS_SV,
+  filesIncomeReturn,
+  hasOwners,
+  isEntityType,
+  preparesArsredovisning,
+  supportsCorporateTaxDispositions,
+  usesPersonnummerAsOrgNumber,
+} from '@/lib/company/entity-type'
 
 // Deterministic atom selection used when the Opus call times out or fails.
 //
@@ -17,8 +25,18 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
   const knownIds = new Set(inputs.atomIndex.map((a) => a.id))
   const has = (id: string) => knownIds.has(id)
 
-  const isAB = inputs.entityType === 'aktiebolag'
-  const isEF = inputs.entityType === 'enskild_firma'
+  // Capabilities, never form names: the reporting and tax atoms follow what
+  // the form files, the owner modifiers follow who owns it. An unknown form
+  // gets the universal set only.
+  const form = isEntityType(inputs.entityType) ? inputs.entityType : null
+  const preparesAnnualReport = form !== null && preparesArsredovisning(form)
+  const filesInk2 = form !== null && filesIncomeReturn(form) === 'INK2'
+  const hasTaxDispositions = form !== null && supportsCorporateTaxDispositions(form)
+  // The owner IS the company: an enskild firma.
+  const ownerIsTheCompany = form !== null && usesPersonnummerAsOrgNumber(form)
+  // Owned by someone other than itself: shareholders (an aktiebolag), not
+  // members (a förening) and not the person behind an enskild firma.
+  const hasShareholders = form !== null && hasOwners(form) && !usesPersonnummerAsOrgNumber(form)
 
   const tic = inputs.ticSnapshot as
     | {
@@ -35,13 +53,17 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
   pushIfKnown(horizontal, 'horizontal/swedish-invoice-compliance', has)
   pushIfKnown(horizontal, 'horizontal/swedish-year-end-closing', has)
   pushIfKnown(horizontal, 'horizontal/swedish-accounting-compliance', has)
-  // SIE and assets are common needs across both entity types.
+  // SIE and assets are common needs across every form.
   pushIfKnown(horizontal, 'horizontal/swedish-sie-import-export', has)
   pushIfKnown(horizontal, 'horizontal/swedish-asset-accounting', has)
 
-  if (isAB) {
+  if (preparesAnnualReport) {
     pushIfKnown(horizontal, 'horizontal/swedish-financial-reporting', has)
+  }
+  if (filesInk2) {
     pushIfKnown(horizontal, 'horizontal/swedish-sru-filing', has)
+  }
+  if (hasTaxDispositions) {
     pushIfKnown(horizontal, 'horizontal/swedish-tax-planning', has)
   }
 
@@ -63,12 +85,12 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
     }
   }
 
-  // Modifier fallback: pick what we can derive from entity_type + employer flag.
+  // Modifier fallback: pick what we can derive from the form + employer flag.
   const modifiers: string[] = []
-  if (isAB) {
+  if (hasShareholders) {
     pushIfKnown(modifiers, 'modifier/single-shareholder-ab-fmb', has)
   }
-  if (isEF) {
+  if (ownerIsTheCompany) {
     pushIfKnown(modifiers, 'modifier/enskild-firma', has)
   }
   if (isEmployer) {
@@ -80,7 +102,7 @@ export function fallbackAtomSelection(inputs: ComposerInputs): AtomSelection {
     vertical_atoms: verticals,
     modifier_atoms: modifiers,
     is_multi_vertical: verticals.length > 1,
-    verification_questions: buildFallbackQuestions(inputs),
+    verification_questions: buildFallbackQuestions(inputs, hasShareholders),
     uncertainty_notes: ['Selection produced by deterministic fallback: Opus call failed or was skipped.'],
   }
 }
@@ -89,14 +111,14 @@ function pushIfKnown(arr: string[], id: string, has: (id: string) => boolean) {
   if (has(id)) arr.push(id)
 }
 
-function buildFallbackQuestions(inputs: ComposerInputs): string[] {
+function buildFallbackQuestions(inputs: ComposerInputs, hasShareholders: boolean): string[] {
   const qs: string[] = []
   if (!inputs.ticSnapshot) {
     qs.push('Vad är din huvudsakliga verksamhet? (några ord räcker)')
   }
-  if (inputs.entityType === 'aktiebolag') {
-    qs.push('Är du ensamägare till bolaget?')
-    qs.push('Har bolaget anställda förutom dig?')
+  if (hasShareholders) {
+    qs.push('Är du ensamägare till företaget?')
+    qs.push('Har företaget anställda förutom dig?')
   }
   qs.push('Vilken momsperiod använder ni: månad, kvartal eller år?')
   return qs
@@ -105,21 +127,23 @@ function buildFallbackQuestions(inputs: ComposerInputs): string[] {
 // Build a minimal Swedish narrative for the fallback path so Phase B has
 // something to render even when the Sonnet call also failed. Mirrors the
 // Sonnet prompt's voice-branching: second-person only when the user is a
-// confirmed director, neutral otherwise.
+// confirmed director, neutral otherwise. The form is named by its statutory
+// label without an article ("Företagsform: Ideell förening."): Swedish
+// gender agreement makes a substituted noun inside a sentence wrong.
 export function fallbackNarrative(inputs: ComposerInputs): string {
   const parts: string[] = []
   const name = inputs.companyName || 'företaget'
-  const form = isEntityType(inputs.entityType) ? ENTITY_TYPE_LABELS_SV[inputs.entityType].toLowerCase() : null
+  const label = isEntityType(inputs.entityType) ? ENTITY_TYPE_LABELS_SV[inputs.entityType] : null
 
   if (inputs.userIsConfirmedDirector) {
-    if (form) {
-      parts.push(`Du driver ${name} som ${form}.`)
+    if (label) {
+      parts.push(`Du driver ${name} som ${label.toLowerCase()}.`)
     } else {
       parts.push(`Du driver ${name}.`)
     }
   } else {
-    if (form) {
-      parts.push(`${name} är ${form === 'enskild firma' ? 'en enskild firma' : 'ett aktiebolag'}.`)
+    if (label) {
+      parts.push(`${name}. Företagsform: ${label}.`)
     } else {
       parts.push(`${name} är ett företag i gnubok.`)
     }

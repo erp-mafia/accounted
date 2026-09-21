@@ -1030,6 +1030,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     via: { parent: 'invoices', fk: 'invoice_id' },
     denormalize: { prefix: 'invoice_', columns: ['currency', 'exchange_rate'] },
   },
+  { name: 'migration_source_records', file: 'migration_source_records.json' },
   { name: 'invoice_payments', file: 'invoice_payments.json', orderBy: 'payment_date' },
   { name: 'invoice_reminders', file: 'invoice_reminders.json' },
   // Delivery metadata proves which recipient received the archived PDF and
@@ -1152,6 +1153,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'vacation_year_closures', file: 'vacation_year_closures.json' },
   { name: 'salary_worked_days', file: 'salary_worked_days.json' },
   { name: 'salary_payslip_links', file: 'salary_payslip_links.json' },
+  // Archived bank payment files (pain.001 / Bankgirot LB) exactly as handed
+  // to the bank: underlag for the salary payments, BFL 7 kap. 1 §.
+  { name: 'salary_payment_files', file: 'salary_payment_files.json', orderBy: 'generated_at' },
   { name: 'shift_premium_rules', file: 'shift_premium_rules.json' },
   { name: 'agi_declarations', file: 'agi_declarations.json', orderBy: 'created_at' },
   // Körjournal: trip log underlag for milersättning verifikat (BFL 7-year
@@ -1233,6 +1237,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',
+  invoice_completion_entries: 're-fetchable matching evidence and retry receipts; completed invoices and processing history are exported separately',
   sie_period_read_leases: 'short-lived coordination leases; no accounting content',
   // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
   peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',
@@ -1286,6 +1292,8 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   inbox_rate_counters: 'infrastructure',
   mail_connections:
     'mailbox OAuth grants (live refresh tokens), not portable. The receipts they find are archived as documents.',
+  migration_jobs: 'provider worker leases and cursors tied to nonportable provider consents',
+  migration_job_chunks: 'encrypted provider replay snapshots and worker receipts; imported documents are archived in their registers',
   mcp_tasks: 'MCP task handles: transient tool-call state with a 1-hour TTL',
   metered_events: 'billing telemetry',
   notice_dismissals: 'per-user UI notice dismissal state, not räkenskapsinformation',

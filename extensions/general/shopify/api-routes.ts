@@ -5,9 +5,11 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { backfillDateErrorMessage, parseBackfillFrom } from '@/lib/feed-sync/cursor-window'
 import { isShopifyConfigured, encryptCredential } from './lib/credentials'
 import { normalizeShopDomain, testConnectionAndFetchShopInfo } from './lib/api-client'
 import { syncShopifyOrders } from './lib/order-sync'
+import { MAX_BACKFILL_YEARS } from './types'
 import type { ShopifyConnection, ShopifyStatusResponse } from './types'
 
 // Per-user limits: connect probes the merchant's store, sync pages its
@@ -15,6 +17,15 @@ import type { ShopifyConnection, ShopifyStatusResponse } from './types'
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
+
+/**
+ * Wall clock a single manual run may spend before it stops and resumes later.
+ * Without a deadline a huge sync would be killed at the dispatcher's
+ * maxDuration with no cursor persisted; with one it stops cleanly, reports a
+ * partial sync and resumes where it stopped on the next press.
+ */
+const MANUAL_SYNC_BUDGET_MS = 240_000
 
 const NOT_CONFIGURED_MESSAGE =
   'Shopify-integrationen är inte konfigurerad på den här installationen.'
@@ -167,6 +178,12 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         )
       }
 
+      // Seed the order cursor with the connection moment. Orders placed before
+      // the merchant connected are already in the books from the bank side, so
+      // a first sync that reached further back would only manufacture
+      // duplicates (#2631). Reaching further back is an explicit choice: POST
+      // /api/extensions/ext/shopify/backfill with a start date.
+      const connectedAt = new Date().toISOString()
       const { data: created, error: insertError } = await auth.supabase
         .from('shopify_connections')
         .insert({
@@ -178,7 +195,8 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
           client_id_encrypted: encryptCredential(clientId),
           client_secret_encrypted: encryptCredential(clientSecret),
           status: 'active',
-          connected_at: new Date().toISOString(),
+          connected_at: connectedAt,
+          last_order_synced_at: connectedAt,
           transaction_sync_enabled: true,
         })
         .select('id, shop_domain')
@@ -262,19 +280,106 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
 
       try {
         const serviceClient = createServiceClientNoCookies()
-        // Bounded like the cron: without a deadline a huge first sync would be
-        // killed at the dispatcher's maxDuration with no cursor persisted;
-        // with one it stops cleanly, reports a partial sync and resumes where
-        // it stopped on the next press.
+        // Bounded like the cron (see MANUAL_SYNC_BUDGET_MS).
         const summary = await syncShopifyOrders(
           serviceClient,
           connection as ShopifyConnection,
           undefined,
-          Date.now() + 240_000,
+          Date.now() + MANUAL_SYNC_BUDGET_MS,
         )
         return NextResponse.json({ success: true, transactions: summary })
       } catch (error) {
         log.error('[shopify] Manual sync failed', {
+          message: error instanceof Error ? error.message : String(error),
+          connection_id: connection.id,
+        })
+        return NextResponse.json(
+          { error: 'Synkroniseringen misslyckades. Försök igen.' },
+          { status: 502 },
+        )
+      }
+    },
+  },
+  {
+    method: 'POST',
+    path: '/backfill',
+    handler: async (request: Request, ctx?: ExtensionContext) => {
+      const log = ctx?.log ?? console
+      const auth = await requireUserAndCompany(ctx)
+      if (auth instanceof NextResponse) return auth
+
+      const capabilityBlocked = await requireCapability(
+        auth.supabase,
+        auth.companyId,
+        CAPABILITY.shopify_sync,
+      )
+      if (capabilityBlocked) return capabilityBlocked
+
+      const rl = await checkRateLimit({
+        prefix: 'shopify:backfill',
+        identifier: auth.userId,
+        ...RATE_LIMIT_BACKFILL,
+      })
+      if (!rl.ok) return rl.response!
+
+      const body = (await request.json().catch(() => ({}))) as { from?: unknown }
+      const parsed = parseBackfillFrom(body.from, MAX_BACKFILL_YEARS)
+      if ('error' in parsed) {
+        return NextResponse.json(
+          { error: backfillDateErrorMessage(parsed.error, MAX_BACKFILL_YEARS) },
+          { status: 400 },
+        )
+      }
+
+      const { data: connection } = await auth.supabase
+        .from('shopify_connections')
+        .select('*')
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+        .maybeSingle()
+
+      if (!connection) {
+        return NextResponse.json(
+          { error: 'Ingen ansluten Shopify-butik.' },
+          { status: 404 },
+        )
+      }
+
+      // The cursor is the start date, so a backfill is just the cursor moved
+      // back: no second column that could disagree with it. The run pushes it
+      // forward to now again once the window is exhausted, and the ingest
+      // upserts by external_id, so re-reading an already imported range
+      // changes nothing.
+      const { error: cursorError } = await auth.supabase
+        .from('shopify_connections')
+        .update({ last_order_synced_at: parsed.iso, error_message: null })
+        .eq('id', connection.id)
+        .eq('company_id', auth.companyId)
+        .eq('status', 'active')
+      if (cursorError) {
+        log.error('[shopify] Failed to move order cursor for backfill', {
+          message: cursorError.message,
+          connection_id: connection.id,
+        })
+        return NextResponse.json(
+          { error: 'Kunde inte spara startdatumet. Försök igen.' },
+          { status: 500 },
+        )
+      }
+
+      try {
+        const serviceClient = createServiceClientNoCookies()
+        const summary = await syncShopifyOrders(
+          serviceClient,
+          { ...(connection as ShopifyConnection), last_order_synced_at: parsed.iso },
+          undefined,
+          Date.now() + MANUAL_SYNC_BUDGET_MS,
+        )
+        return NextResponse.json({ success: true, from: parsed.iso, transactions: summary })
+      } catch (error) {
+        // The cursor stays at the chosen date on purpose: the next run
+        // resumes the backfill from where this one failed.
+        log.error('[shopify] Backfill sync failed', {
           message: error instanceof Error ? error.message : String(error),
           connection_id: connection.id,
         })

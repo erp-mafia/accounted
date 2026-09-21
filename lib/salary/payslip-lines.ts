@@ -23,6 +23,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import type { CreateSalaryLineItemSchema, UpdateSalaryLineItemSchema } from '@/lib/api/schemas'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
+import { validateOneOffTaxLine } from '@/lib/salary/one-off-tax'
+import { validateVacationCategoryLine } from '@/lib/salary/vacation-category'
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
 
@@ -46,6 +48,12 @@ export interface SalaryLineItemRow {
   is_net_deduction: boolean
   account_number: string | null
   sort_order: number
+  /** Engångsskatt percentage (lib/salary/one-off-tax.ts); null = taxed by the table. */
+  one_off_tax_percent?: number | null
+  /** Vacation pool a 'vacation' line draws from (lib/salary/vacation-category.ts); null = paid. */
+  vacation_category?: string | null
+  /** Origin year of the sparade dagar a 'saved' line consumes; null = oldest first. */
+  vacation_saved_year?: string | null
   created_at: string
   updated_at: string
 }
@@ -63,7 +71,8 @@ export type PayslipLineTarget = { salaryRunEmployeeId: string } | { employeeId: 
 const LINE_COLUMNS =
   'id, salary_run_employee_id, company_id, item_type, description, quantity, unit_price, amount, ' +
   'is_taxable, is_avgift_basis, is_vacation_basis, is_gross_deduction, is_net_deduction, ' +
-  'account_number, sort_order, created_at, updated_at'
+  'account_number, sort_order, one_off_tax_percent, vacation_category, vacation_saved_year, ' +
+  'created_at, updated_at'
 
 /**
  * Verify the run exists in this company and is still a draft.
@@ -169,6 +178,19 @@ export async function createPayslipLine(
   if (!sre.ok) return sre
 
   const input = args.input
+  // Engångsskatt only on a positive taxable addition of an eligible type;
+  // the same rule the DB CHECK enforces, answered here as a 400 with a
+  // Swedish reason instead of a 23514.
+  const oneOffError = validateOneOffTaxLine(input)
+  if (oneOffError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'one_off_tax_percent', message: oneOffError } }
+  }
+  // A vacation category only on a vacation line, a saved year only with
+  // category 'saved' (the same rule the two DB CHECKs enforce as 23514).
+  const categoryError = validateVacationCategoryLine(input)
+  if (categoryError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
+  }
   const accountNumber =
     input.account_number || getLineItemAccount(input.item_type as SalaryLineItemType)
 
@@ -187,6 +209,9 @@ export async function createPayslipLine(
     is_net_deduction: input.is_net_deduction,
     account_number: accountNumber,
     sort_order: input.sort_order,
+    one_off_tax_percent: input.one_off_tax_percent ?? null,
+    vacation_category: input.vacation_category ?? null,
+    vacation_saved_year: input.vacation_saved_year ?? null,
   }
 
   if (args.dryRun) {
@@ -225,6 +250,26 @@ export async function updatePayslipLine(
   const updates: Record<string, unknown> = { ...args.patch }
   if (typeof updates.amount === 'number') {
     updates.amount = roundOre(updates.amount)
+  }
+  // Moving the category off 'saved' (null returns the line to paid days)
+  // retires the origin year with it unless the caller sets the year itself.
+  if (
+    'vacation_category' in updates &&
+    updates.vacation_category !== 'saved' &&
+    !('vacation_saved_year' in updates)
+  ) {
+    updates.vacation_saved_year = null
+  }
+  // Validate the row as it will read after the patch: a sparse update that
+  // flips a flag or the sign can invalidate a percentage set earlier.
+  const merged = { ...existing.data, ...updates } as SalaryLineItemRow
+  const oneOffError = validateOneOffTaxLine(merged)
+  if (oneOffError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'one_off_tax_percent', message: oneOffError } }
+  }
+  const categoryError = validateVacationCategoryLine(merged)
+  if (categoryError) {
+    return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'vacation_category', message: categoryError } }
   }
 
   if (args.dryRun) {

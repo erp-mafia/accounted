@@ -1,6 +1,7 @@
 'use client'
 
-import { uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -237,9 +238,10 @@ import type {
 import {
   buildMigrateRequests,
   mergeMigrationResults,
-  migrationProvedGrant,
 } from '@/extensions/general/arcim-migration/lib/migrate-plan'
 import AccountMappingStep from '@/components/import/AccountMappingStep'
+import ProviderMigrationProgress from './ProviderMigrationProgress'
+import { MIGRATION_RESOURCES, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 import ArcimMigrationTheater from '@/components/extensions/general/ArcimMigrationTheater'
 import TheaterCanvas from '@/components/import/TheaterCanvas'
 import {
@@ -2193,16 +2195,20 @@ function ResultStep({
         failed: false,
       })
     }
-    if (results.salesInvoices?.creditNotesUnlinked) {
-      // Credit notes land as ordinary invoice rows with reversed amounts. The
-      // pairing to the invoice they credit cannot be resolved at import time:
-      // no provider DTO carries a reference to it. Say so rather than leaving
-      // the user to notice a kreditfaktura that points at nothing.
-      const count = results.salesInvoices.creditNotesUnlinked
+    if (results.salesInvoices?.creditNotesUnlinked || results.salesInvoices?.creditNotesLinked) {
+      // Credit notes land as ordinary invoice rows with reversed amounts and,
+      // when the provider named the invoice they credit (Bokio does), a
+      // credited_invoice_id. Say which ones could not be paired rather than
+      // leaving the user to notice a kreditfaktura that points at nothing.
+      const unlinked = results.salesInvoices.creditNotesUnlinked ?? 0
+      const linked = results.salesInvoices.creditNotesLinked ?? 0
       entityLines.push({
         label: t('ext_arcim_credit_notes_label'),
-        value: `${count} importerade`,
-        detail: t('ext_arcim_credit_notes_unlinked_detail', { count }),
+        value: `${unlinked + linked} importerade`,
+        detail: [
+          linked > 0 ? t('ext_arcim_credit_notes_linked_detail', { count: linked }) : null,
+          unlinked > 0 ? t('ext_arcim_credit_notes_unlinked_detail', { count: unlinked }) : null,
+        ].filter(Boolean).join(' '),
         failed: false,
       })
     }
@@ -2215,6 +2221,13 @@ function ResultStep({
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
       })
+    }
+    for (const [key, count] of [
+      ['vat', (results.salesInvoices?.vatUnresolved ?? 0) + (results.supplierInvoices?.vatUnresolved ?? 0)],
+      ['fx', (results.salesInvoices?.fxUnresolved ?? 0) + (results.supplierInvoices?.fxUnresolved ?? 0)],
+    ] as const) {
+      if (count > 0) entityLines.push({ label: t(`ext_arcim_job_warning_${key}`),
+        value: t('ext_arcim_job_warning_count', { count }), failed: false })
     }
     if (results.registrationLinks && results.registrationLinks.scanned > 0) {
       const links = results.registrationLinks
@@ -2515,6 +2528,7 @@ export default function ArcimMigrationWorkspace({
   initialProvider?: string
 }) {
   const { toast } = useToast()
+  const t = useTranslations('extensions')
 
   const [step, setStep] = useState<WizardStep>('provider')
   const [isLoading, setIsLoading] = useState(false)
@@ -2570,6 +2584,9 @@ export default function ArcimMigrationWorkspace({
   const [migrationOptions, setMigrationOptions] = useState<MigrationOptions>(DEFAULT_OPTIONS)
 
   // Migration state
+  const reconnectJobRef = useRef<string | null>(null)
+  const [latestJobId, setLatestJobId] = useState<string | null>(null)
+  const [providerJobId, setProviderJobId] = useState<string | null>(null)
   const [migrationStep, setMigrationStep] = useState('')
   const [migrationProgress, setMigrationProgress] = useState(0)
   const [migrationResults, setMigrationResults] = useState<MigrationResults | null>(null)
@@ -2619,6 +2636,24 @@ export default function ArcimMigrationWorkspace({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Jobs belong to the company, so a refresh, new tab or another consultant
+  // can recover progress without browser storage or a surviving response stream.
+  useEffect(() => {
+    const controller = new AbortController()
+    void fetch('/api/extensions/ext/arcim-migration/migration-jobs', { signal: controller.signal, cache: 'no-store' })
+      .then(async response => {
+        if (!response.ok) return
+        const { data } = await response.json() as { data: ProviderMigrationStatus | null }
+        if (!controller.signal.aborted && data) setLatestJobId(data.job.id)
+        if (!controller.signal.aborted && data && data.job.state !== 'completed') {
+          setProviderJobId(data.job.id)
+          setConsentId(data.job.consent_id)
+          setSelectedProvider(data.job.provider as ArcimProvider)
+        }
+      }).catch(() => {})
+    return () => controller.abort()
+  }, [])
+
   // ── Step handlers ──────────────────────────────────────────────
 
   const loadPreview = useCallback(async (cId: string) => {
@@ -2630,6 +2665,16 @@ export default function ArcimMigrationWorkspace({
     setConsentId(cId)
 
     try {
+      if (reconnectJobRef.current) {
+        const jobId = reconnectJobRef.current
+        const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs/retry', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId, consentId: cId }),
+        })
+        if (!response.ok) throw apiError(await response.json(), 'Kunde inte återuppta importen')
+        reconnectJobRef.current = null
+        setProviderJobId(jobId)
+        return
+      }
       const res = await fetch(`/api/extensions/ext/arcim-migration/preview?consentId=${cId}`)
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -3336,17 +3381,26 @@ export default function ArcimMigrationWorkspace({
           })
 
           if (!res.ok) {
+            // The envelope's sentence, the details the route attached (the
+            // voucher that failed validation, the accounts without a target)
+            // and the reference for support: never the fallback text alone.
             const data = await res.json().catch(() => ({}))
-            const err = apiError(data, `SIE import HTTP ${res.status}`)
-            throw err instanceof UserFacingError
-              ? new UserFacingError(`${yearLabel}${err.message}`)
-              : err
+            const failure = describeImportResponseFailure({ status: res.status, body: data })
+            throw new UserFacingError(`${yearLabel}${formatImportFailure(failure)}`)
           }
 
           const submitted = await res.json() as {importId:string}
-          const result = await waitForSIEJob(submitted.importId,job => {
-            setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
-          })
+          let result: ImportResult
+          try {
+            result = await waitForSIEJob(submitted.importId,job => {
+              setMigrationStep(yearLabel+'SIE: '+job.chunks_done+'/'+job.chunks_total)
+            })
+          } catch (err) {
+            // The job's own reason is already user-facing; displayError must
+            // not route it through the Swedish-pattern heuristic.
+            if (err instanceof SIEJobFailedError) throw new UserFacingError(`${yearLabel}${err.message}`)
+            throw err
+          }
           setSieImportResults(prev => [...prev, result])
           // The import creates accounts and a räkenskapsår: every cached
           // picker must see them.
@@ -3384,60 +3438,41 @@ export default function ArcimMigrationWorkspace({
         setMigrationStep('Importerar kunder, leverantörer och fakturor...')
         setMigrationProgress(55)
 
-        // One request per step: /migrate runs in a function with a 300 s
-        // ceiling, and a register of a few thousand invoices spent all of it
-        // on the earlier steps and the invoice list before writing a single
-        // invoice (#2469). Each step now has the whole budget to itself; a
-        // rerun after a failed step skips the rows the earlier ones wrote.
+        // Company metadata and the optional asset register retain their existing
+        // paths. The growing customer/supplier/invoice registers belong to the
+        // durable worker. Contact suggestions have their own nightly resolver.
         const requests = buildMigrateRequests(consentId, {
           importCompanyInfo: migrationOptions.importCompanyInfo,
-          importCustomers: migrationOptions.importCustomers,
-          importSuppliers: migrationOptions.importSuppliers,
-          importSalesInvoices: migrationOptions.importSalesInvoices,
-          importSupplierInvoices: migrationOptions.importSupplierInvoices,
           importAssets: effectiveImportAssets,
         })
         let merged: MigrationResults = {}
-
-        for (const [index, request] of requests.entries()) {
+        for (const request of requests) {
           setMigrationStep(request.label)
-          // The wizard bar reserves 55-100 for the entity phase (SIE holds
-          // 10-50); each request owns an equal slice of it.
-          const sliceStart = 55 + Math.round((index / requests.length) * 45)
-          const sliceSize = 45 / requests.length
-          setMigrationProgress(sliceStart)
-
           const res = await fetch('/api/extensions/ext/arcim-migration/migrate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-            // Rows from an earlier request prove the grant for this one, so
-            // a bare 403 on one register stays a step error, not a reconnect.
-            body: JSON.stringify({ ...request.body, grantProven: migrationProvedGrant(merged) }),
+            method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+            body: JSON.stringify({ ...request.body, reconcileVouchers: false, suggestParties: false }),
           })
-
-          if (!res.ok) {
-            const data = await res.json().catch(() => ({}))
-            throw apiError(data, `HTTP ${res.status}`)
-          }
-
-          const contentType = res.headers.get('content-type') ?? ''
-          let results: MigrationResults | undefined
-          if (contentType.includes('application/x-ndjson') && res.body) {
-            results = await consumeMigrationStream(res.body, (currentStep, progress) => {
-              if (currentStep) setMigrationStep(currentStep)
-              // The orchestrator reports 0-100 on its own scale.
-              setMigrationProgress(sliceStart + Math.round((progress / 100) * sliceSize))
-            })
-          } else {
-            // Pre-stream server (or a proxy that stripped the stream): the
-            // original single-JSON contract.
-            const data = await res.json()
-            results = data.results as MigrationResults | undefined
-          }
+          if (!res.ok) throw apiError(await res.json().catch(() => ({})), `HTTP ${res.status}`)
+          const results = res.headers.get('content-type')?.includes('application/x-ndjson') && res.body
+            ? await consumeMigrationStream(res.body, label => { if (label) setMigrationStep(label) })
+            : (await res.json()).results as MigrationResults
           merged = mergeMigrationResults(merged, results)
-          // Show what has landed so far: a later request that fails still
-          // leaves the earlier steps' counts on the result card.
           setMigrationResults(merged)
+        }
+        const selected = {
+          customers: migrationOptions.importCustomers, suppliers: migrationOptions.importSuppliers,
+          salesInvoices: migrationOptions.importSalesInvoices, supplierInvoices: migrationOptions.importSupplierInvoices,
+        }
+        const resources = MIGRATION_RESOURCES.filter(resource => selected[resource])
+        if (resources.length) {
+          const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ consentId, resources }),
+          })
+          const body = await response.json()
+          if (!response.ok) throw apiError(body, `HTTP ${response.status}`)
+          setProviderJobId(body.data.jobId)
+          return
         }
         hadStepErrors = (merged.stepErrors?.length ?? 0) > 0
       }
@@ -3507,8 +3542,38 @@ export default function ArcimMigrationWorkspace({
 
   // ── Render ─────────────────────────────────────────────────────
 
+  if (providerJobId) {
+    return <ProviderMigrationProgress jobId={providerJobId} onReconnect={status => {
+      reconnectJobRef.current = status.job.id
+      setStep('preview')
+      setProviderJobId(null)
+      void handleReconnect(status.job.provider as ArcimProvider, status.job.consent_id ?? '')
+    }} onResult={status => {
+      const results: MigrationResults = {}
+      for (const count of status.counts) {
+        results[count.resource] = {
+          total: count.total, imported: count.imported, skipped: count.skipped,
+          skipReasons: { failed: count.needs_attention },
+          ...(['salesInvoices', 'supplierInvoices'].includes(count.resource) ? {
+            fxUnresolved: count.fx_unresolved, vatUnresolved: count.vat_unresolved, creditNotesUnlinked: count.credit_notes_unlinked,
+            creditNotesLinked: count.credit_notes_linked ?? 0,
+          } : {}),
+        }
+      }
+      setMigrationResults(previous => mergeMigrationResults(previous ?? {}, results))
+      setLatestJobId(status.job.id)
+      setProviderJobId(null)
+      setMigrationProgress(100)
+      setStep('result')
+      void fetchStatus()
+      const provider = resolveArcimDocumentFollowUpProvider(preview?.consent.provider, selectedProvider)
+      if (provider && status.job.consent_id) void runDocumentDiscovery(status.job.consent_id, provider, true)
+    }} />
+  }
+
   return (
     <div className="space-y-8">
+      {step === 'provider' && latestJobId && <Button variant="outline" onClick={() => setProviderJobId(latestJobId)}>{t('ext_arcim_job_latest')}</Button>}
       {/* Step indicator: only during interactive steps */}
       {step !== 'provider' && isInteractiveStep && (
         <StepRail steps={userSteps} currentIndex={currentUserStepIndex} />

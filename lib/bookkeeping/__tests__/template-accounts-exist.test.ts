@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { BOOKING_TEMPLATES } from '@/lib/bookkeeping/booking-templates'
+import { BOOKING_TEMPLATES, getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { DEFAULT_ACCOUNTS_BY_CATEGORY } from '@/lib/bokslut/assets/asset-service'
 
 /**
  * Every account a booking template names must exist in BAS 2026.
@@ -54,7 +55,7 @@ describe('BOOKING_TEMPLATES reference only real BAS accounts', () => {
 
   it('a VAT-bearing purchase never debits equity or revenue', () => {
     // Catches a transposed account number that happens to exist. Deliberately
-    // narrow: class 1 is legitimate here (equipment_capital debits 1250
+    // narrow: class 1 is legitimate here (equipment_capital debits 1220
     // Inventarier and reclaims VAT, which is how capex is booked), and classes
     // 4-7 are ordinary costs. What a purchase can never debit is class 2
     // (equity and liabilities) or class 3 (revenue): those would be a sign
@@ -70,5 +71,47 @@ describe('BOOKING_TEMPLATES reference only real BAS accounts', () => {
           `a purchase cannot debit equity/liabilities or revenue`,
       ).toBe(false)
     }
+  })
+
+  // Regression guard for #2632, the template-side twin of the asset-default
+  // guard in lib/bokslut/__tests__/asset-service.test.ts (#2618). The BAS 2026
+  // catalogue update (#2413) turned 1230/1240/1249/1250/1259/1260/1269 into
+  // "(Fritt konto ...)" entries: accounts that exist, so the existence check
+  // above passes, but that carry no prescribed meaning. equipment_capital kept
+  // capitalizing to 1250 for two catalogue releases because nothing tied the
+  // template literal to the catalogue's naming. A booking on a free account is
+  // unreadable to the SIE reader, the INK2R mapping and the next accountant.
+  it('never targets a free BAS account', () => {
+    const free: string[] = []
+
+    for (const t of BOOKING_TEMPLATES) {
+      for (const field of accountFields) {
+        const account = (t as unknown as Record<string, string | undefined>)[field]
+        if (!account) continue
+        if (/[Ff]ritt konto/.test(getBASReference(account)?.account_name ?? '')) {
+          free.push(`${t.id}.${field} = ${account}`)
+        }
+      }
+    }
+
+    expect(
+      free,
+      `These templates book onto BAS 2026 free accounts ("(Fritt konto ...)"), which have ` +
+        `no prescribed meaning:\n  ${free.join('\n  ')}`,
+    ).toEqual([])
+  })
+
+  // The capitalizing template and the fixed-asset module must agree on where
+  // an inventarie lives, or the autobooked purchase and the asset register it
+  // later feeds sit on different accounts. The template holds a literal (it is
+  // client-bundled and cannot import the server-side asset service), so the
+  // agreement is pinned here instead.
+  it('equipment_capital capitalizes to the asset module default for equipment', () => {
+    const template = getTemplateById('equipment_capital')
+    expect(template).toBeDefined()
+    expect(template?.debit_account).toBe(DEFAULT_ACCOUNTS_BY_CATEGORY.equipment.asset)
+    expect(getBASReference(template!.debit_account)?.account_name).toBe(
+      'Inventarier, verktyg och installationer',
+    )
   })
 })

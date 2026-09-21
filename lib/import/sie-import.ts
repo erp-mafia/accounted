@@ -20,9 +20,10 @@ import type {
   MigrationDocumentation,
   SIETransactionLine,
 } from './types'
-import type { CreateJournalEntryInput, CreateJournalEntryLineInput } from '@/types'
+import type { CreateJournalEntryInput, CreateJournalEntryLineInput, EntityType } from '@/types'
 import type { SIEPreparedEntry } from './sie-job-contract'
-import { roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { mappingsToMap, getMappingStats } from './account-mapper'
 import { syncMappedAccounts } from './account-sync'
 import { defaultOpeningBalanceSeries } from './opening-balance-defaults'
@@ -849,7 +850,7 @@ function shiftIsoDate(isoDate: string, days: number): string {
  * - File-level imbalance: the raw SIE #IB data doesn't balance (source file error)
  * - Mapping-level imbalance: caused by excluded accounts (system accounts like Fortnox 0099)
  *   that carry IB balances but are correctly filtered from mapping. This is expected and
- *   should be booked to 2099 with clear documentation.
+ *   should be booked to the form's result-closing account with clear documentation.
  */
 export function validateIBBalance(
   parsed: ParsedSIEFile,
@@ -911,14 +912,20 @@ export function validateIBBalance(
 /**
  * Create opening balance journal entry from IB amounts.
  * The caller must validate the IB balance first via validateIBBalance().
- * If roundingAdjustment is non-zero, it is booked explicitly to 2099 with clear text.
+ * If roundingAdjustment is non-zero, it is booked explicitly to
+ * `differenceAccount` with clear text. That account is the legal form's
+ * result-closing account (resultClosingAccounts: 2099 for an aktiebolag,
+ * 2010 for an enskild firma, 2069 for an ideell förening): the imbalance is
+ * almost always the prior year's result the source system never carried, so
+ * it must land where that form's year-end would have put it.
  */
 export function buildSIEOpeningBalanceEntry(
   fiscalPeriodId: string,
   parsed: ParsedSIEFile,
   accountMap: Map<string, string>,
   roundingAdjustment: number,
-  voucherSeries: string
+  voucherSeries: string,
+  differenceAccount: string
 ): CreateJournalEntryInput | null {
   // Effective set: explicit #IB 0, or IB derived from #UB -1 (issue #675).
   const { balances: currentYearBalances, derivedFromPriorYearUB } =
@@ -960,14 +967,14 @@ export function buildSIEOpeningBalanceEntry(
   if (Math.abs(roundingAdjustment) > 0.01) {
     if (roundingAdjustment > 0) {
       lines.push({
-        account_number: '2099',
+        account_number: differenceAccount,
         debit_amount: 0,
         credit_amount: roundingAdjustment,
         line_description: `Avrundningsdifferens vid SIE-import, ${roundingAdjustment} SEK`,
       })
     } else {
       lines.push({
-        account_number: '2099',
+        account_number: differenceAccount,
         debit_amount: Math.abs(roundingAdjustment),
         credit_amount: 0,
         line_description: `Avrundningsdifferens vid SIE-import, ${roundingAdjustment} SEK`,
@@ -998,9 +1005,11 @@ export function buildSIEOpeningBalanceEntry(
 async function createOpeningBalanceEntry(
   supabase: SupabaseClient, companyId: string, userId: string,
   fiscalPeriodId: string, parsed: ParsedSIEFile, accountMap: Map<string, string>,
-  roundingAdjustment: number, voucherSeries: string,
+  roundingAdjustment: number, voucherSeries: string, differenceAccount: string,
 ): Promise<string | null> {
-  const input = buildSIEOpeningBalanceEntry(fiscalPeriodId, parsed, accountMap, roundingAdjustment, voucherSeries)
+  const input = buildSIEOpeningBalanceEntry(
+    fiscalPeriodId, parsed, accountMap, roundingAdjustment, voucherSeries, differenceAccount,
+  )
   return input ? (await createJournalEntry(supabase, companyId, userId, input)).id : null
 }
 
@@ -1090,7 +1099,9 @@ export async function resyncNextPeriodOpeningBalance(
   userId: string,
   justImportedPeriodEnd: string,
   parsed: ParsedSIEFile,
-  accountMap: Map<string, string>
+  accountMap: Map<string, string>,
+  /** The form's result-closing account (see buildSIEOpeningBalanceEntry). */
+  differenceAccount: string
 ): Promise<
   | {
       resynced: true
@@ -1198,21 +1209,22 @@ export async function resyncNextPeriodOpeningBalance(
   }
 
   // Balance check: if the new IB doesn't balance (excluded accounts, etc.),
-  // book the difference to 2099 the same way createOpeningBalanceEntry does.
+  // book the difference to the form's result-closing account the same way
+  // createOpeningBalanceEntry does.
   const totalDebit = newLines.reduce((s, l) => s + l.debit_amount, 0)
   const totalCredit = newLines.reduce((s, l) => s + l.credit_amount, 0)
   const diff = Math.round((totalDebit - totalCredit) * 100) / 100
   if (Math.abs(diff) > 0.01) {
     if (diff > 0) {
       newLines.push({
-        account_number: '2099',
+        account_number: differenceAccount,
         debit_amount: 0,
         credit_amount: diff,
         line_description: 'Avrundningsdifferens vid IB-resynk',
       })
     } else {
       newLines.push({
-        account_number: '2099',
+        account_number: differenceAccount,
         debit_amount: Math.abs(diff),
         credit_amount: 0,
         line_description: 'Avrundningsdifferens vid IB-resynk',
@@ -1531,7 +1543,7 @@ export async function importVouchers(
       continue
     }
 
-    // Validate balance, Fix 2: Tiered rounding with öresutjämning (3741)
+    // Validate balance, Fix 2: Tiered rounding with öresutjämning (ORE_ROUNDING_ACCOUNT, BAS 3740)
     const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
     const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
     const balanceDiff = Math.round(Math.abs(totalDebit - totalCredit) * 100) / 100
@@ -1556,14 +1568,14 @@ export async function importVouchers(
       const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
       if (roundedDiff > 0) {
         lines.push({
-          account_number: '3741',
+          account_number: ORE_ROUNDING_ACCOUNT,
           debit_amount: 0,
           credit_amount: Math.abs(roundedDiff),
           line_description: 'Öresutjämning',
         })
       } else {
         lines.push({
-          account_number: '3741',
+          account_number: ORE_ROUNDING_ACCOUNT,
           debit_amount: Math.abs(roundedDiff),
           credit_amount: 0,
           line_description: 'Öresutjämning',
@@ -1918,14 +1930,14 @@ export function buildSIEMigrationAdjustmentEntry(
     const roundedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
     if (roundedDiff > 0) {
       lines.push({
-        account_number: '3741',
+        account_number: ORE_ROUNDING_ACCOUNT,
         debit_amount: 0,
         credit_amount: Math.abs(roundedDiff),
         line_description: 'Öresutjämning omföringsverifikation',
       })
     } else {
       lines.push({
-        account_number: '3741',
+        account_number: ORE_ROUNDING_ACCOUNT,
         debit_amount: Math.abs(roundedDiff),
         credit_amount: 0,
         line_description: 'Öresutjämning omföringsverifikation',
@@ -2675,9 +2687,22 @@ export async function executeSIEImport(
       result.fiscalPeriodId = existing.id
     }
 
+    // The legal form decides where an IB difference lands: the form's
+    // result-closing account (2099 for an aktiebolag, 2010 for an enskild
+    // firma, 2069 for an ideell förening; lib/company/forms). Resolved once,
+    // on first use, so an import that never reaches the IB or resync steps
+    // makes no extra read. Never defaulted: the wrong account here is a
+    // prior-year result the förening's year-end would never carry to 2068.
+    let resolvedForm: Promise<EntityType> | null = null
+    const differenceAccounts = () => {
+      resolvedForm ??= resolveCompanyEntityType(supabase, companyId)
+      return resolvedForm.then(resultClosingAccounts)
+    }
+
     // Track documentation data across import phases
     let ibRoundingAdjustment = 0
     let ibExplanation: 'unallocated_result' | 'excluded_accounts' | 'rounding' | null = null
+    let ibDifferenceAccount: string | null = null
     // Set when the file's #IB is deliberately not booked because the company
     // already has posted entries (see the continuation guard below).
     let openingBalanceSkipped: 'prior_activity' | null = null
@@ -2750,11 +2775,13 @@ export async function executeSIEImport(
     // IB imbalance is NORMAL in Swedish SIE files for two common reasons:
     // 1. Excluded system accounts (Fortnox 0099 etc.) carry IB balances
     // 2. Previous year's result (årets resultat) hasn't been allocated to equity
-    //    yet: the profit/loss is implicit, not an explicit IB on 2099
+    //    yet: the profit/loss is implicit, not an explicit IB on the form's
+    //    result-closing account
     //
-    // In both cases, the correct treatment is to book the diff to 2099 with
-    // explicit documentation. We never reject based on IB imbalance: the
-    // original goal was to stop SILENT equity alteration, not prevent it.
+    // In both cases, the correct treatment is to book the diff to the form's
+    // result-closing account (differenceAccounts above) with explicit
+    // documentation. We never reject based on IB imbalance: the original goal
+    // was to stop SILENT equity alteration, not prevent it.
     //
     // Gate on the EFFECTIVE set: for files without #IB 0, the IB derived
     // from #UB -1 (issue #675) must still open this block: gating on raw
@@ -2848,10 +2875,12 @@ export async function executeSIEImport(
                 )
               }
               if (Math.abs(expected.roundingAdjustment) > 0.01) {
-                // createOpeningBalanceEntry books the adjustment on 2099
-                // with the opposite sign of the mapped diff.
-                const prev = expectedNet.get('2099') ?? 0
-                expectedNet.set('2099', roundOre(prev - expected.roundingAdjustment))
+                // createOpeningBalanceEntry books the adjustment on the
+                // form's result-closing account with the opposite sign of
+                // the mapped diff.
+                const { closing } = await differenceAccounts()
+                const prev = expectedNet.get(closing) ?? 0
+                expectedNet.set(closing, roundOre(prev - expected.roundingAdjustment))
               }
 
               const { data: orphanLines, error: orphanLinesError } = await supabase
@@ -2927,9 +2956,11 @@ export async function executeSIEImport(
           }
 
           const absAdj = Math.abs(ibValidation.roundingAdjustment)
+          const { closing: differenceAccount, closingName } = await differenceAccounts()
 
           if (absAdj > 0.01) {
             ibRoundingAdjustment = ibValidation.roundingAdjustment
+            ibDifferenceAccount = differenceAccount
 
             // Produce a descriptive warning explaining the source of the imbalance
             if (Math.abs(ibValidation.excludedAccountsTotal) > 0.01 && ibValidation.fileImbalance <= 1.00) {
@@ -2937,10 +2968,11 @@ export async function executeSIEImport(
               ibExplanation = 'excluded_accounts'
               warn(
                 `Exkluderade systemkonton har IB-saldon på totalt ${ibValidation.excludedAccountsTotal} SEK. ` +
-                `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto 2099.`,
+                `Differensen (${ibValidation.roundingAdjustment} SEK) bokförs på konto ${differenceAccount}.`,
                 makeNotice('sie_ib_excluded_accounts', 'action', {
                   total: sek(ibValidation.excludedAccountsTotal),
                   diff: sek(ibValidation.roundingAdjustment),
+                  account: differenceAccount,
                 })
               )
             } else if (ibValidation.fileImbalance > 1.00) {
@@ -2949,15 +2981,21 @@ export async function executeSIEImport(
               warn(
                 `Ingående balanser obalanserade med ${ibValidation.roundingAdjustment} SEK ` +
                 `(troligen ej allokerat årets resultat från föregående räkenskapsår). ` +
-                `Differensen bokförs på konto 2099 (Årets resultat).`,
-                makeNotice('sie_ib_unbalanced', 'action', { diff: sek(ibValidation.roundingAdjustment) })
+                `Differensen bokförs på konto ${differenceAccount} (${closingName}).`,
+                makeNotice('sie_ib_unbalanced', 'action', {
+                  diff: sek(ibValidation.roundingAdjustment),
+                  account: differenceAccount,
+                })
               )
             } else {
               // Small rounding
               ibExplanation = 'rounding'
               warn(
-                `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto 2099`,
-                makeNotice('sie_ib_rounding', 'info', { diff: sek(ibValidation.roundingAdjustment) })
+                `Avrundningsdifferens vid SIE-import: ${ibValidation.roundingAdjustment} SEK bokförd på konto ${differenceAccount}`,
+                makeNotice('sie_ib_rounding', 'info', {
+                  diff: sek(ibValidation.roundingAdjustment),
+                  account: differenceAccount,
+                })
               )
             }
           }
@@ -2970,7 +3008,8 @@ export async function executeSIEImport(
             parsed,
             accountMap,
             ibRoundingAdjustment,
-            openingBalanceSeries
+            openingBalanceSeries,
+            differenceAccount
           )
 
           if (result.openingBalanceEntryId) {
@@ -3068,8 +3107,10 @@ export async function executeSIEImport(
         }
       }
 
-      // Ensure öresutjämning account 3741 exists in the user's chart
-      await ensureAccountExists(supabase, companyId, userId, '3741', 'Öresutjämning vid import')
+      // Ensure the öresutjämning account (BAS 3740) exists in the user's chart.
+      // It is a catalogue account, so ensureAccountExists inserts the BAS row;
+      // the name here is only the non-BAS fallback and never applies.
+      await ensureAccountExists(supabase, companyId, userId, ORE_ROUNDING_ACCOUNT, 'Öres- och kronutjämning')
 
       const voucherResults = await importVouchers(
         supabase,
@@ -3221,6 +3262,7 @@ export async function executeSIEImport(
           fiscalYearEnd,
           parsed,
           accountMap,
+          (await differenceAccounts()).closing,
         )
         if (resync.resynced) {
           result.nextPeriodIBResync = {
@@ -3306,7 +3348,7 @@ export async function executeSIEImport(
       openingBalance: ibRoundingAdjustment !== 0 ? {
         imbalance: ibRoundingAdjustment,
         explanation: ibExplanation,
-        bookedToAccount: '2099',
+        bookedToAccount: ibDifferenceAccount,
       } : undefined,
       migrationAdjustment: migrationAdjustmentInfo.created ? {
         created: true,

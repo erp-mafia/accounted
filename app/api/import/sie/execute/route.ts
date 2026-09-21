@@ -6,6 +6,7 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -55,10 +56,11 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
       {status:202,headers:{Location:`/api/import/sie/${job.id}`,'Retry-After':'2'}})
   } catch (error) {
     if (error instanceof SyntaxError) return errorResponseFromCode('VALIDATION_ERROR',log,{requestId})
-    // The job's own details (the accounts behind SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS)
+    // The validator's own sentence and details (the voucher outside the
+    // fiscal year, the accounts behind SIE_IMPORT_UNSUPPORTED_ACCOUNT_CLASS)
     // travel with the structured code so the client can name them instead of
     // the registry's generic sentence.
-    if (error instanceof SIEJobValidationError && error.details) return errorResponse(error,log,{requestId,details:error.details})
+    if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error,log,requestId)
     return errorResponse(error,log,{requestId})
   }
 },{requireWrite:true})
