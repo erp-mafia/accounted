@@ -1351,6 +1351,31 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description: 'Välj ett av företagets bankkonton som är markerat "Visas på fakturor" och har betaluppgifter för fakturans valuta.',
     },
   },
+  CASH_ACCOUNT_DISABLE_PRIMARY: {
+    httpStatus: 400,
+    message_sv: 'Det här är företagets primära bankkonto och kan inte stängas av. Välj "Gör primärt" på ett annat bankkonto först.',
+    message_en: 'This is the company’s primary bank account and cannot be disabled. Choose "Make primary" on another bank account first.',
+  },
+  CASH_ACCOUNT_DISABLED_PAYEE: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot är avstängt och visas på fakturor. En ägare eller administratör behöver aktivera det under Inställningar innan transaktioner kan läggas på det.',
+    message_en: 'This bank account is turned off and is printed on invoices. An owner or admin needs to turn it on in Settings before transactions can be put on it.',
+  },
+  CASH_ACCOUNT_PRIMARY_INELIGIBLE: {
+    httpStatus: 400,
+    message_sv: 'Kontot kan inte vara primärt. Det primära kontot måste vara ett aktivt bankkonto i SEK (konto 1920-1999).',
+    message_en: 'This account cannot be the primary. The primary account must be an active bank account in SEK (account 1920-1999).',
+  },
+  CASH_ACCOUNT_DISABLE_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: 'Kontot har obokförda transaktioner och kan inte stängas av förrän de är bokförda eller ignorerade.',
+    message_en: 'The account has unbooked transactions and cannot be disabled until they are booked or ignored.',
+  },
+  CASH_ACCOUNT_ENABLED_BANK_MANAGED: {
+    httpStatus: 409,
+    message_sv: 'Kontot hör till en bankkoppling. Slå på eller av det under bankkopplingen i stället.',
+    message_en: 'This account belongs to a bank connection. Turn it on or off from the bank connection instead.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces

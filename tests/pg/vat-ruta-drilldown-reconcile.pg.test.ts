@@ -4,7 +4,8 @@
  * `get_vat_declaration_totals` drops four classes of entry before summing:
  * posted closing entries, source_type 'vat_settlement', the two kontantmetod
  * year-end reversals, and any entry shaped like a momsredovisning (a line on a
- * ruta account AND a line on 2650/1650). `get_vat_ruta_source_lines` filtered
+ * ruta account AND a line on 2650/1650, or since 20260920182259 a pure 26xx
+ * movement against the skattekonto 1630). `get_vat_ruta_source_lines` filtered
  * on company, status and date only, so expanding a ruta listed verifikat that
  * were not in the number it claims to explain. 322 posted/reversed entries
  * across 214 companies sat in those classes on production (2026-08-28).
@@ -253,6 +254,19 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
         { account: BALANCING_ACCOUNT, debit: 0, credit: 30 },
       ],
     })
+
+    // 9. The second settlement shape (20260920182259, #2805): output VAT moved
+    //    straight against the skattekonto, no 2650/1650 line, nothing else on
+    //    the verifikat. Excluded by BOTH functions; if only one of them learned
+    //    the shape, 2611 would stop reconciling in the headline test below.
+    await insertEntry({
+      userId, companyId, fiscalPeriodId, voucherNumber: 9,
+      sourceType: 'manual', description: 'Moms direkt mot skattekontot',
+      lines: [
+        { account: '2611', debit: 60, credit: 0 },
+        { account: '1630', debit: 0, credit: 60 },
+      ],
+    })
   }, 60_000)
 
   it('sums identically to the figure, for every account', async () => {
@@ -291,6 +305,7 @@ describe('VAT ruta drill-down reconciles with the declaration figure', () => {
     const descriptions = (await drillDown(companyId, ALL_ACCOUNTS)).map((l) => l.description)
     expect(descriptions).not.toContain('Momsredovisning')
     expect(descriptions).not.toContain('Otaggad momsredovisning')
+    expect(descriptions).not.toContain('Moms direkt mot skattekontot')
     expect(descriptions).not.toContain('Vändning leverantörsskulder bokslut (kontantmetoden)')
     // Marked, but worded in a way no text filter would catch.
     expect(descriptions).not.toContain('Omformulerad vändning 2027')

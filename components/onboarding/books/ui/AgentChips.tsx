@@ -13,7 +13,7 @@ import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
  * link that prefills everything. ChatGPT and Grok have none: the click
  * offers a selectable server address and an explicit connector link. Same
  * URLs as Settings and the Hem checklist. A client that has completed the
- * OAuth sign-in (findings.ai.connected, polled by the Done step) turns its
+ * OAuth sign-in (the Done step polls /api/onboarding/ai-status) turns its
  * chip into a green Ansluten mark. Founder direction 2026-09-14: no card,
  * all three visible, the connect action a pill like everything else.
  */

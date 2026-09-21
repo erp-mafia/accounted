@@ -16,7 +16,14 @@ vi.mock('@/lib/events/bus', () => ({
   eventBus: { emit: (...args: unknown[]) => mocks.emit(...args) },
 }))
 
-import { SessionExpiredError, REAUTH_REQUIRED_MESSAGE, SYNC_FAILED_MESSAGE, ConnectorSyncError } from '../api-client'
+import {
+  SessionExpiredError,
+  AspspUnavailableError,
+  REAUTH_REQUIRED_MESSAGE,
+  SYNC_FAILED_MESSAGE,
+  ConnectorSyncError,
+} from '../api-client'
+import { DAILY_QUOTA_COOLDOWN_MS } from '../sync-lease'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -51,11 +58,21 @@ function makeClient(state: State) {
         lteFilter = { column, value }
         return chain
       })
+      let ltFilter: { column: string; value: string } | null = null
+      chain.lt = vi.fn((column: string, value: string) => {
+        ltFilter = { column, value }
+        return chain
+      })
       chain.update = vi.fn((payload: Record<string, unknown>) => {
         updatePayload = payload
         return chain
       })
       const resolve = () => {
+        if (updatePayload && 'sync_lease_until' in updatePayload && ltFilter) {
+          // Extend-only hold (rate-limit cooldown): `.lt('sync_lease_until', <until>)`.
+          if (state.leaseUntil < ltFilter.value) state.leaseUntil = updatePayload.sync_lease_until as string
+          return { data: null, error: null }
+        }
         if (updatePayload && 'sync_lease_until' in updatePayload) {
           // Atomic claim: `.lte('sync_lease_until', <now>)`.
           if (lteFilter?.column !== 'sync_lease_until') {
@@ -317,6 +334,19 @@ describe('triggerConnectionSync: bank_connection.sync_failed (feedback seq 34010
       diagnostic: 'Error: boom: ECONNRESET',
     })
     expect(events[0].payload.diagnostic).not.toBe(SYNC_FAILED_MESSAGE)
+  })
+
+  it('holds the lease for hours, not minutes, when the bank answers 429', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new AspspUnavailableError(429, '{"message":"Consent daily limit 4 is exceeded"}', 'rate-limited', undefined, {
+        dailyQuota: true,
+      }),
+    )
+    const result = await run()
+    // Retryable, the row is left alone, and no renewal advice is written.
+    expect(result).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'active' })
+    expect(state.updates).toEqual([{ sync_lease_until: new Date(NOW + SYNC_COOLDOWN_MS).toISOString() }])
+    expect(state.leaseUntil).toBe(new Date(NOW + DAILY_QUOTA_COOLDOWN_MS).toISOString())
   })
 
   it('emits session_expired with the HTTP status, the envelope code and the post-handling status', async () => {
