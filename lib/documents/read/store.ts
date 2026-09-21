@@ -74,8 +74,8 @@ export async function readAndStoreDocument(
     company_id: doc.company_id,
     document_id: doc.id,
     page_no: p.pageNo,
-    text: p.text,
-    words: p.words ?? null,
+    text: storableText(p.text),
+    words: p.words ? p.words.map((w) => ({ ...w, t: storableText(w.t) })) : null,
     page_width: p.pageWidth ?? null,
     page_height: p.pageHeight ?? null,
     reader: p.reader,
@@ -91,6 +91,18 @@ export async function readAndStoreDocument(
     { status: 'read', pages: rows.length, reader: outcome.reader, ...(outcome.partial ? { partial: `partial:${outcome.partial}` } : {}) },
     outcome.pageCount,
   )
+}
+
+/**
+ * What a reader found, made storable. Postgres holds no NUL in text and
+ * rejects it (and an unpaired surrogate) inside jsonb with "unsupported
+ * Unicode escape sequence"; some PDFs carry both in their text layer. Other
+ * control characters go too: they are never content. Tabs and newlines stay.
+ */
+export function storableText(s: string): string {
+  return s
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD')
 }
 
 async function stamp(supabase: SupabaseClient, documentId: string, outcome: StoreOutcome, pageCount: number | null): Promise<StoreOutcome> {

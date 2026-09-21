@@ -4,7 +4,7 @@ vi.mock('../router', () => ({ readDocumentBytes: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => ({ downloadDocumentObject: vi.fn() }))
 vi.mock('@/lib/ai', () => ({ getAiStatus: vi.fn(() => ({ configured: true })) }))
 
-import { readAndStoreDocument, readUnreadDocuments } from '../store'
+import { readAndStoreDocument, readUnreadDocuments, storableText } from '../store'
 import { readDocumentBytes } from '../router'
 import { ReaderUnavailableError } from '../types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
@@ -116,6 +116,25 @@ describe('readAndStoreDocument', () => {
     const { supabase, calls } = makeSupabase()
     expect(await readAndStoreDocument(supabase, doc)).toEqual({ status: 'error', reason: 'read_failed: invalid PDF structure' })
     expect(calls[0].payload).toMatchObject({ read_error: 'read_failed: invalid PDF structure' })
+  })
+})
+
+describe('storableText', () => {
+  it('drops what Postgres cannot hold and keeps the text, tabs and newlines', () => {
+    expect(storableText('Hyra\u0000 19\u00a0300 kr\n\tper månad\u0007')).toBe('Hyra 19\u00a0300 kr\n\tper månad')
+    // An unpaired surrogate becomes the replacement character; a real pair (an emoji) is left alone.
+    expect(storableText('a\uD83Db')).toBe('a\uFFFDb')
+    expect(storableText('ok \uD83D\uDE00')).toBe('ok \uD83D\uDE00')
+  })
+
+  it('is applied to the page text and to every position box before the insert', async () => {
+    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
+    asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'pdf_text', pageCount: 1, pages: [{ pageNo: 1, text: 'Sum\u0000ma', reader: 'pdf_text', hasTextLayer: true, words: [{ t: 'Sum\u0000ma', x0: 1, y0: 1, x1: 2, y1: 2 }] }] })
+    const { supabase, calls } = makeSupabase()
+    await readAndStoreDocument(supabase, doc)
+    const inserted = calls.find((c) => c.op === 'insert')!.payload as Array<{ text: string; words: Array<{ t: string }> }>
+    expect(inserted[0].text).toBe('Summa')
+    expect(inserted[0].words[0].t).toBe('Summa')
   })
 })
 
