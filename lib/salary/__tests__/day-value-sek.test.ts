@@ -13,6 +13,7 @@ const MONTHLY_PROCENT: DayValueEmployee = {
   vacation_pay_rate: null,
   salary_type: 'monthly',
   monthly_salary: 30000,
+  employment_degree: 100,
   hourly_rate: null,
   hours_per_week: 40,
   workdays_per_week: 5,

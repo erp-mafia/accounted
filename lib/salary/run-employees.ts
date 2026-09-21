@@ -13,6 +13,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getLineItemAccount } from '@/lib/salary/account-mapping'
 import { roundOre } from '@/lib/money'
+import { degreeAdjustedMonthlySalary } from '@/lib/salary/work-schedule'
 import { SALARY_OVERRIDE_MAX } from '@/lib/api/schemas'
 import type { SalaryLineItemType } from '@/types'
 
@@ -160,7 +161,7 @@ export async function addEmployeeToRun(
     emp.salary_type === 'monthly' ? 'monthly_salary' : 'hourly_salary'
   const baseAmount =
     emp.salary_type === 'monthly'
-      ? roundOre((emp.monthly_salary || 0) * (emp.employment_degree / 100))
+      ? degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
       : roundOre((emp.hourly_rate || 0) * (args.hoursWorked || 0))
 
   const { error: lineError } = await supabase.from('salary_line_items').insert({

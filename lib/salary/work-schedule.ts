@@ -62,6 +62,27 @@ export function scheduledHoursPerDay(
   return hours / days
 }
 
+/**
+ * The monthly pay an employee actually earns. employees.monthly_salary is the
+ * FULL-TIME salary ("Under 100 % räknas grundlönen som månadslön ×
+ * sysselsättningsgrad", form_employment_degree_hint), so every consumer that
+ * turns it into money (base salary, day and hour rates for absence, the
+ * premium hourly rate, the vacation day value) goes through this and never
+ * reads the column raw. A missing degree is 100.
+ *
+ * The schedule (hours_per_week / workdays_per_week) already reflects the
+ * degree, so a rate is this amount over the schedule's divisor: 50 000 at
+ * 10 % on 4 h / 1 d is 5 000 / 4.33 per day and 5 000 x 12 / (52 x 4) per
+ * hour, the same pay per hour a full-timer on 50 000 gets.
+ */
+export function degreeAdjustedMonthlySalary(
+  monthlySalary: number | null | undefined,
+  employmentDegree: number | null | undefined,
+): number {
+  const degree = employmentDegree ?? 100
+  return roundOre((monthlySalary || 0) * (degree / 100))
+}
+
 /** Upper bound of salary_absence_days.hours / salary_worked_days.hours. */
 const MAX_HOURS_PER_DATE = 24
 

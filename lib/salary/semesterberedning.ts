@@ -36,7 +36,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
-import { dailyDivisor } from './work-schedule'
+import { dailyDivisor, degreeAdjustedMonthlySalary } from './work-schedule'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
@@ -113,7 +113,9 @@ interface EmployeeRosterRow {
   vacation_pay_rate: number | null
   semestertillagg_rate: number | null
   salary_type: string
+  /** Full-time salary; the pay earned is this x employment_degree / 100. */
   monthly_salary: number | null
+  employment_degree: number | null
   hourly_rate: number | null
   hours_per_week: number | null
   workdays_per_week: number | null
@@ -130,7 +132,15 @@ function lastDayBefore(dateIso: string): string {
 /** The employee master fields the day valuation reads. */
 export type DayValueEmployee = Pick<
   EmployeeRosterRow,
-  'vacation_rule' | 'vacation_days_per_year' | 'vacation_pay_rate' | 'salary_type' | 'monthly_salary' | 'hourly_rate' | 'hours_per_week' | 'workdays_per_week'
+  | 'vacation_rule'
+  | 'vacation_days_per_year'
+  | 'vacation_pay_rate'
+  | 'salary_type'
+  | 'monthly_salary'
+  | 'employment_degree'
+  | 'hourly_rate'
+  | 'hours_per_week'
+  | 'workdays_per_week'
 > & {
   /** Sammalöneregeln tillägg per day; absent or null = statutory 0.43 %. */
   semestertillagg_rate?: number | null
@@ -149,7 +159,9 @@ export function dayValueSek(emp: DayValueEmployee): number {
     const annualBasis = (emp.hourly_rate || 0) * (emp.hours_per_week ?? 40) * 52
     return roundOre((annualBasis * rate) / Math.max(emp.vacation_days_per_year, 1))
   }
-  const monthly = emp.monthly_salary || 0
+  // monthly_salary is the full-time salary; a part-timer's vacation day is
+  // worth a day of the pay they actually earn.
+  const monthly = degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
   if (emp.vacation_rule === 'sammaloneregeln') {
     // Dagslön + semestertillägg per day at the employee's configured rate
     // (many CBAs use 0.8 %); the statutory floor 0.43 % when absent.
@@ -207,7 +219,7 @@ async function loadRoster(
   const { data, error } = await supabase
     .from('employees')
     .select(
-      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
+      'id, first_name, last_name, personnummer, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end',
     )
     .eq('company_id', companyId)
     .eq('is_active', true)

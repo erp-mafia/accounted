@@ -7,6 +7,7 @@ import { resolveVacationPayRate } from './vacation-pay-rate'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
 import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
+import { degreeAdjustedMonthlySalary } from './work-schedule'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -308,7 +309,7 @@ interface MonthlyBaseResult {
  *                            full base.
  */
 function prorateMonthlyBase(input: MonthlyBaseInput): MonthlyBaseResult {
-  const full = r(input.monthlySalary * (input.employmentDegree / 100))
+  const full = degreeAdjustedMonthlySalary(input.monthlySalary, input.employmentDegree)
   const { periodStart, periodEnd, employmentStart, employmentEnd } = input
   if (input.calculationPolicy?.partial_month !== 'annual_calendar_days') {
     const ratio = prorateBaseSalaryForPeriod(employmentStart, employmentEnd, periodStart, periodEnd)
@@ -369,7 +370,7 @@ export function calculateSalary(
   // ─── Step 1: Base salary ───
   let baseSalary: number
   if (input.salaryType === 'monthly') {
-    const degreeAdjusted = r(input.monthlySalary * (input.employmentDegree / 100))
+    const degreeAdjusted = degreeAdjustedMonthlySalary(input.monthlySalary, input.employmentDegree)
     const proration = prorateMonthlyBase(input)
     if (proration.prorated && input.periodStart && input.periodEnd) {
       baseSalary = proration.baseSalary

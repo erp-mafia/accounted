@@ -46,7 +46,7 @@ import { recurringLineFlags, type RecurringLineItemType } from './recurring-line
 import { computePremiumLines } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
-import { dailyDivisor, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
+import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
@@ -78,19 +78,23 @@ const DERIVED_PREMIUM_TYPES: ShiftPremiumItemType[] = [
 /**
  * Effective hourly rate used as the base for shift-premium computation.
  *   - Hourly employees: their stored hourly_rate.
- *   - Monthly employees: monthly_salary / hourlyDivisor(hours_per_week):
- *     173 at the 40h default (common Swedish derivation for full-time
- *     monthly → hourly, matches the timlön conventions used in CBAs), the
- *     exact 52w formula for other schedules (arbetsschema-lite).
+ *   - Monthly employees: degree-adjusted monthly salary /
+ *     hourlyDivisor(hours_per_week): 173 at the 40h default (common Swedish
+ *     derivation for full-time monthly → hourly, matches the timlön
+ *     conventions used in CBAs), the exact 52w formula for other schedules
+ *     (arbetsschema-lite). monthly_salary is the full-time salary and
+ *     hours_per_week the part-time schedule, so the raw column over the
+ *     part-time divisor would price a 10 % employee's hour ten times too high.
  */
 function effectiveHourlyRate(emp: {
   salary_type: 'monthly' | 'hourly'
   hourly_rate: number | null
   monthly_salary: number | null
+  employment_degree: number | null
   hours_per_week?: number | null
 }): number {
   if (emp.salary_type === 'hourly') return emp.hourly_rate || 0
-  const monthly = emp.monthly_salary || 0
+  const monthly = degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
   return monthly > 0 ? Math.round((monthly / hourlyDivisor(emp.hours_per_week)) * 100) / 100 : 0
 }
 
@@ -416,7 +420,10 @@ export async function runSalaryCalculation(
       supabase,
       companyId,
       employeeId: emp.id,
-      monthlySalary: sre.monthly_salary || 0,
+      // The pay the deductions are taken from. sre.monthly_salary is the
+      // full-time salary; a 10 % employee's karensavdrag comes off 10 % of it,
+      // the same base the engine's Step 1 pays (issue #2879).
+      monthlySalary: degreeAdjustedMonthlySalary(sre.monthly_salary, emp.employment_degree),
       payrollConfig: config,
       periodStart: deviation.start,
       periodEnd: deviation.end,
@@ -700,6 +707,7 @@ export async function runSalaryCalculation(
         salary_type: emp.salary_type,
         hourly_rate: emp.hourly_rate,
         monthly_salary: sre.monthly_salary,
+        employment_degree: emp.employment_degree,
         hours_per_week: emp.hours_per_week,
       })
       const shifts: WorkedDayShift[] = workedDayRows.map((row) => ({

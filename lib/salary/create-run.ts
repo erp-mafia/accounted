@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getLineItemAccount } from './account-mapping'
+import { degreeAdjustedMonthlySalary } from './work-schedule'
 import {
   assertNoDeviationOverlap,
   resolveDeviationWindowForNewRun,
@@ -100,7 +101,7 @@ export async function createSalaryRunWithEmployees(
     for (const emp of eligibleEmployees) {
       const baseAmount =
         emp.salary_type === 'monthly'
-          ? Math.round((emp.monthly_salary || 0) * (emp.employment_degree / 100) * 100) / 100
+          ? degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
           : 0
 
       const { data: sre, error: sreErr } = await supabase
