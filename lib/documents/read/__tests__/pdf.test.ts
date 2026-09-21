@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { PDFDocument, StandardFonts } from 'pdf-lib'
 import { readPdfTextLayer, extractSinglePagePdf } from '../pdf'
 
-// Real pdf-inspector on a PDF generated in the test: no fixtures, no network.
+// The real reader (pdf.js through unpdf) on a PDF generated in the test: no fixtures, no network.
 async function makePdf(lines: string[][]): Promise<Buffer> {
   const doc = await PDFDocument.create()
   const font = await doc.embedFont(StandardFonts.Helvetica)
@@ -22,7 +22,7 @@ describe('readPdfTextLayer', () => {
     expect(out.pages.map((p) => p.pageNo)).toEqual([1, 2])
     expect(out.pages[0].text).toContain('19 300')
     expect(out.pages[1].text).toContain('Uppsagningstid')
-    // pdf-inspector positions text runs (a printed line), not single words.
+    // pdf.js positions text runs (a printed line), not single words.
     const words = out.pages[0].words ?? []
     expect(words.length).toBeGreaterThanOrEqual(2)
     const w = words.find((x) => x.t.includes('Hyresavtal'))!
@@ -32,8 +32,28 @@ describe('readPdfTextLayer', () => {
     expect(out.pages[0].pageHeight).toBe(842)
   })
 
+  it('sends a page without a text layer to the model and keeps the text pages', async () => {
+    const doc = await PDFDocument.create()
+    const font = await doc.embedFont(StandardFonts.Helvetica)
+    doc.addPage([595, 842]).drawText('Bilaga 1: inskannad sida följer', { x: 72, y: 780, size: 12, font })
+    doc.addPage([595, 842]) // a scan: nothing but (in real life) an image
+    doc.addPage([595, 842]).drawText('3', { x: 290, y: 30, size: 10, font }) // a scan with a stamped page number
+    const out = await readPdfTextLayer(Buffer.from(await doc.save()))
+    expect(out.pageCount).toBe(3)
+    expect(out.pages.map((p) => p.pageNo)).toEqual([1])
+    expect(out.pagesNeedingVision).toEqual([2, 3])
+  })
+
+  it('leaves the caller its bytes (pdf.js takes ownership of what it is given)', async () => {
+    const pdf = await makePdf([['Avtal']])
+    const before = pdf.length
+    await readPdfTextLayer(pdf)
+    expect(pdf.length).toBe(before)
+    expect(pdf.subarray(0, 5).toString()).toBe('%PDF-')
+  })
+
   it('cuts one page out as its own PDF', async () => {
-    const pdf = await makePdf([['forsta'], ['andra'], ['tredje']])
+    const pdf = await makePdf([['forsta sidan i avtalet'], ['andra sidan i avtalet'], ['tredje sidan i avtalet']])
     const single = await extractSinglePagePdf(pdf, 2)
     const out = await readPdfTextLayer(single)
     expect(out.pageCount).toBe(1)

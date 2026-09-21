@@ -11,16 +11,16 @@ describe('native reader loaders', () => {
     vi.resetModules()
   })
 
-  it('pdf: a binding that cannot be loaded is ReaderUnavailableError, and the next call tries again', async () => {
-    vi.doMock('@firecrawl/pdf-inspector', () => {
-      throw new Error('Cannot find native binding')
+  it('pdf: a reader that cannot be loaded is ReaderUnavailableError, and the next call tries again', async () => {
+    vi.doMock('unpdf', () => {
+      throw new Error('Cannot load module')
     })
     const { readPdfTextLayer } = await import('../pdf')
     const { ReaderUnavailableError } = await import('../types')
     await expect(readPdfTextLayer(Buffer.from('%PDF-1.4'))).rejects.toBeInstanceOf(ReaderUnavailableError)
     // The failed load is not cached: a later call loads again (and names the reader that was missing).
     await expect(readPdfTextLayer(Buffer.from('%PDF-1.4'))).rejects.toThrow(/^pdf_text: /)
-    vi.doUnmock('@firecrawl/pdf-inspector')
+    vi.doUnmock('unpdf')
   })
 
   it('office: the same for AnyDoc', async () => {
