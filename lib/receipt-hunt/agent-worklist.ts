@@ -131,32 +131,44 @@ function shiftDate(isoDate: string, days: number): string {
 }
 
 /**
- * What to tell the person when the agent cannot fetch this one.
+ * Which errand a missing underlag actually needs, from its descriptor alone.
  *
- * One sentence, one place, one action, ordered by how the receipt actually
- * reaches a Swedish company: a vendor that withholds its invoice behind a
- * login, a chain that sends to Kivra, a counter purchase that only exists on
- * paper, and otherwise the mailbox. Never mentions searching, agents or what
- * failed: by the time this is read, the reader only wants the errand.
+ * Ordered by how a receipt reaches a Swedish company: a vendor that withholds
+ * its invoice behind a login, a chain that sends to Kivra, a counter purchase
+ * that only exists on paper, and otherwise the mailbox.
+ *
+ * Exported because this is derived, never stored: the app can classify the
+ * rows it already has without an agent having run, and the agent's sentence
+ * and the app's summary then say the same thing by construction.
  */
-function nextStep(
-  descriptor: string | null,
-  portal: AgentWorklistItem['portal'],
-  mailSearchable: boolean,
-): string {
-  if (!mailSearchable) {
-    return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
+export type NextStepKind = 'not_mail' | 'portal' | 'kivra' | 'paper' | 'mail'
+
+export function nextStepKind(descriptor: string | null): NextStepKind {
+  if (!canHaveEmailReceipt(descriptor)) return 'not_mail'
+  if (lookupPortal(descriptor)) return 'portal'
+  if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) return 'kivra'
+  if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) return 'paper'
+  return 'mail'
+}
+
+/**
+ * What to tell the person when the agent cannot fetch this one: one sentence,
+ * one place, one action. Never mentions searching, agents or what failed. By
+ * the time this is read, the reader only wants the errand.
+ */
+function nextStep(descriptor: string | null, portal: AgentWorklistItem['portal']): string {
+  switch (nextStepKind(descriptor)) {
+    case 'not_mail':
+      return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
+    case 'portal':
+      return `Logga in på ${portal?.vendor ?? 'leverantören'} och ladda ner fakturan: ${portal?.url ?? ''}`.trim()
+    case 'kivra':
+      return 'Kvittot ligger troligen i Kivra: öppna det, tryck Dela och välj Accounted.'
+    case 'paper':
+      return 'Papperskvitto: fota det med mobilen och skicka det till kvittoadressen.'
+    case 'mail':
+      return 'Leta i mejlen och vidarebefordra kvittot till kvittoadressen.'
   }
-  if (portal) {
-    return `Logga in på ${portal.vendor} och ladda ner fakturan: ${portal.url}`
-  }
-  if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) {
-    return 'Kvittot ligger troligen i Kivra: öppna det, tryck Dela och välj Accounted.'
-  }
-  if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) {
-    return 'Papperskvitto: fota det med mobilen och skicka det till kvittoadressen.'
-  }
-  return 'Leta i mejlen och vidarebefordra kvittot till kvittoadressen.'
 }
 
 function withSearchHints(
@@ -183,7 +195,7 @@ function withSearchHints(
     mail_searchable: mailSearchable,
     portal: portalHint,
     tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
-    next_step: nextStep(descriptor, portalHint, mailSearchable),
+    next_step: nextStep(descriptor, portalHint),
   }
 }
 
