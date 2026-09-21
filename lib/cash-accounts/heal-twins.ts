@@ -28,6 +28,8 @@ const log = createLogger('cash-accounts-heal')
  *      re-auth goes through resolvePsd2LedgerAccount, which ranks the same way).
  *      Also SKIPPED when accounts_data routes that uid onto a ledger outside
  *      the group.
+ *      A group whose plan changes nothing is reported as already-merged and
+ *      left alone: a finished merge keeps manual rows that share the IBAN.
  *   3. accounts_data is re-pointed at the keeper's ledger FIRST: sync routes by
  *      that ledger (enable-banking sync, settlementAccount), so from this write
  *      on new transactions land on the keeper whatever happens next.
@@ -62,6 +64,8 @@ export type TwinSkipReason =
   | 'no-live-row'
   | 'several-live-rows'
   | 'routing-outside-group'
+  /** Nothing would change: what a finished merge leaves behind. Not an error. */
+  | 'already-merged'
 
 export interface TwinRowReport {
   id: string
@@ -232,6 +236,22 @@ export async function healTwinCashAccounts(
                 : 'deleted',
       })
     }
+    // A finished merge legitimately leaves manual rows sharing the IBAN (a
+    // retired twin with booked transactions, a row that was manual all along),
+    // so "rows share a physical key" is not the same as "there is work to do".
+    // When the plan changes nothing, the group is done: counting it would make
+    // a re-run look unfinished, and executing it would write an immutable
+    // behandlingshistorik event for a change that never happened.
+    const changesNothing =
+      live.id === keeper.id &&
+      liveEntry?.ledger_account === keeper.ledger_account &&
+      !rows.some((r) => r.id !== keeper.id && r.is_primary) &&
+      report.retired.every((r) => r.outcome === 'kept-manual' && r.movable === 0)
+    if (changesNothing) {
+      report.skipped = 'already-merged'
+      continue
+    }
+
     executions.push(async () => {
       // The behandlingshistorik record is written BEFORE the first mutation.
       // An event whose merge then fails half-way is recoverable: the re-run

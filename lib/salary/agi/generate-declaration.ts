@@ -32,6 +32,12 @@ import {
 import type { AGIEmployeeData, AGICompanyData, AGITotals } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
 import { runDeviationWindow } from '../deviation-period'
+import {
+  resolveTaxableBenefits,
+  staleBenefitTotalRefusal,
+  type BenefitItemType,
+  type TaxableBenefits,
+} from '../benefit-payments'
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -75,6 +81,9 @@ const SalaryRunEmployeeRowSchema = z
     // sjuklönekostnad daily-rate below.
     monthly_salary: z.number().nullable().optional(),
     gross_salary: z.number(),
+    // The taxable förmånsvärde the calculation stored. Optional for parsing
+    // only: the roster query selects every column, so real rows carry it.
+    benefit_values: z.number().nullable().optional(),
     tax_withheld: z.number(),
     tax_withheld_override: z.number().nullable().optional(),
     avgifter_basis: z.number(),
@@ -301,24 +310,70 @@ export async function generateAgiDeclaration(
   // 2023/24:80, RAML revisionshistorik 1.19).
   const VAXA_STOD_FK063_CUTOFF = '2024-05-01'
 
-  const employeeData: AGIEmployeeData[] = parsedRows.map((sre) => {
+  // The förmånsvärde Skatteverket gets is the value AFTER what the employee
+  // paid for the benefit, the same value the engine taxed
+  // (lib/salary/benefit-payments.ts). Resolved per payslip up front and
+  // refused with a structured result: a throw from the row mapping below is
+  // outside the try around generateAGIXml and would surface as a 500. This is
+  // NOT benefits_adjusted/FK048: that is Skatteverket's own justering
+  // decision, a different thing.
+  const rowBenefits: TaxableBenefits[] = []
+  for (const sre of parsedRows) {
+    const who = `Anställd ${sre.employee?.specification_number ?? '?'}`
+    const resolution = resolveTaxableBenefits(
+      (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0 })),
+    )
+    if (!resolution.ok) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: { missing_fields: ['line_items'], message: `${who}: ${resolution.error}` },
+      }
+    }
+    // A payslip calculated before the reduction existed would declare a
+    // benefit that disagrees with its own stored tax and underlag. Same rule
+    // as the KU route, one helper (staleBenefitTotalRefusal).
+    const stale = staleBenefitTotalRefusal({
+      who,
+      periodYear: run.period_year as number,
+      periodMonth: run.period_month as number,
+      document: 'arbetsgivardeklarationen',
+      storedBenefitValues: sre.benefit_values,
+      benefits: resolution.benefits,
+    })
+    if (stale) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: { missing_fields: ['benefit_values'], message: stale },
+      }
+    }
+    rowBenefits.push(resolution.benefits)
+  }
+
+  const employeeData: AGIEmployeeData[] = parsedRows.map((sre, rowIdx) => {
       const emp = sre.employee
       const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>
 
-      const benefitCar = sumLineItemAmounts(lineItems, ['benefit_car'])
+      // Without a reduction every sum below is the historical one, byte for byte.
+      const { reduction, taxableByType } = rowBenefits[rowIdx]
+      const reduced = (type: BenefitItemType, historical: number): number =>
+        reduction > 0 && taxableByType[type] !== undefined ? (taxableByType[type] as number) : historical
+
+      const benefitCar = reduced('benefit_car', sumLineItemAmounts(lineItems, ['benefit_car']))
       const benefitFuel = sumLineItemAmounts(lineItems, ['benefit_fuel'])
-      const benefitHousing = sumLineItemAmounts(lineItems, ['benefit_housing'])
+      const benefitHousing = reduced('benefit_housing', sumLineItemAmounts(lineItems, ['benefit_housing']))
       // FK015 kostförmån has its own field: never fold into FK012.
       // Skatteverket cross-checks the krona-amount against the PBB-schablon.
-      const benefitMeals = sumLineItemAmounts(lineItems, ['benefit_meals'])
+      const benefitMeals = reduced('benefit_meals', sumLineItemAmounts(lineItems, ['benefit_meals']))
       // FK012 SkatteplOvrigaFormanerUlagAG is the catch-all for taxable
       // benefits without their own FK code (bike, wellness, "other") PLUS
       // the krona-amount for housing (since FK041/FK043 carry only the flag).
-      const benefitOther = sumLineItemAmounts(lineItems, [
-        'benefit_bike',
-        'benefit_wellness',
-        'benefit_other',
-      ]) + benefitHousing
+      const FK012_TYPES = ['benefit_bike', 'benefit_wellness', 'benefit_other'] as const
+      const benefitOther =
+        (reduction > 0
+          ? FK012_TYPES.reduce((sum, type) => sum + (taxableByType[type] ?? 0), 0)
+          : sumLineItemAmounts(lineItems, [...FK012_TYPES])) + benefitHousing
 
       // Default housing type: if the employee got a housing benefit line
       // item but no housing_benefit_type is set, treat as 'ej_smahus' (the

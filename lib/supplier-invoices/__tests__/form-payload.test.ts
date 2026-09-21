@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { roundOre } from '@/lib/money'
 import {
   buildSupplierInvoicePayload,
   supplierInvoiceCreateUrl,
@@ -97,6 +98,18 @@ describe('rateToPctString', () => {
 })
 
 describe('buildSupplierInvoicePayload', () => {
+  it.each([
+    [45, -0.25, 20056],
+    [45.4, 0.25, 20057],
+  ])('includes the selected invoice rounding in the saved items (fee %s)', (fee, delta, total) => {
+    const data = makeFormData({ items: [makeItem({ amount: 16000 }), makeItem({ amount: fee })] })
+    const payload = buildSupplierInvoicePayload(data, makeOpts())
+    expect(payload.items.at(-1)).toMatchObject({ account_number: '3740', amount: delta, vat_rate: 0 })
+    const savedTotal = payload.items.reduce((sum, item) => sum + item.amount + roundOre(item.amount * item.vat_rate), 0)
+    expect(savedTotal).toBe(total)
+    expect(data.items).toHaveLength(2)
+  })
+
   it('builds the plain create payload (SEK, no extras)', () => {
     const payload = buildSupplierInvoicePayload(makeFormData(), makeOpts())
     expect(payload).toEqual({
@@ -390,6 +403,16 @@ describe('buildSupplierInvoicePayload', () => {
   it('ore_rounding passes through both ways', () => {
     expect(buildSupplierInvoicePayload(makeFormData(), makeOpts({ oreRounding: true })).ore_rounding).toBe(true)
     expect(buildSupplierInvoicePayload(makeFormData(), makeOpts({ oreRounding: false })).ore_rounding).toBe(false)
+  })
+
+  it('preserves a rounding row from the source invoice when the switch is off', () => {
+    const payload = buildSupplierInvoicePayload(makeFormData({ items: [
+      makeItem({ amount: 100.2 }),
+      makeItem({ description: 'Öresavrundning', amount: -0.25, account_number: '3740', vat_rate: 0 }),
+    ] }), makeOpts({ oreRounding: false }))
+    expect(payload.items).toHaveLength(2)
+    expect(payload.items[1]).toMatchObject({ amount: -0.25, account_number: '3740', vat_rate: 0 })
+    expect(roundOre(payload.items.reduce((sum, item) => sum + item.amount * (1 + item.vat_rate), 0))).toBe(125)
   })
 })
 

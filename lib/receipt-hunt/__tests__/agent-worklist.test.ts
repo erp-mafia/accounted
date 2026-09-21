@@ -129,7 +129,6 @@ describe('resolveAgentWorklist', () => {
       invoice_number: '4411',
       amount: 1249,
       currency: 'SEK',
-      search_from: '2026-02-28',
       search_to: '2026-03-20',
     })
     const bank = items.find((i) => i.journal_entry_id === 'je-bank')!
@@ -173,6 +172,50 @@ describe('resolveAgentWorklist', () => {
     const { items } = await resolveAgentWorklist(supabase, 'co-1')
 
     expect(items[0]).toMatchObject({ transaction_id: 'tx-tax', mail_searchable: false, portal: null })
+  })
+
+  it('opens the window 45 days back for a payment that settles an invoice', async () => {
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 3, verifikat: VERIFIKAT })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+
+    // The invoice is mailed when it is issued and paid on the due date, so a
+    // symmetric window around the payment never reaches it.
+    const invoice = items.find((i) => i.journal_entry_id === 'je-si')!
+    expect(invoice.search_from).toBe('2026-01-24')
+    expect(invoice.search_to).toBe('2026-03-20')
+    // A card purchase invoiced nothing: it keeps the tight window.
+    const card = items.find((i) => i.journal_entry_id === 'je-bank')!
+    expect(card.search_from).toBe('2026-03-02')
+  })
+
+  it('marks a restaurant charge as one that may carry a tip', async () => {
+    mockFetchCandidateTransactions.mockResolvedValue([
+      { ...UNBOOKED, id: 'tx-rest', description: 'JORA RESTAURANG AB', currency: 'SEK', amount: -4002.9, amount_sek: -4002.9 },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+
+    expect(items[0]).toMatchObject({ transaction_id: 'tx-rest', tip_possible: true })
+    expect(items[0].next_step).toMatch(/fota/i)
+  })
+
+  it('gives every item one next step naming where the receipt is', async () => {
+    mockFetchCandidateTransactions.mockResolvedValue([
+      { ...UNBOOKED, id: 'tx-kivra', description: 'ICA MAXI', currency: 'SEK', amount: -412.5, amount_sek: -412.5 },
+      { ...UNBOOKED, id: 'tx-tax', description: 'Skatteverket', currency: 'SEK', amount: -5000, amount_sek: -5000 },
+      UNBOOKED,
+      { ...UNBOOKED, id: 'tx-plain', description: 'POSTIZ', currency: 'SEK', amount: -377.87, amount_sek: -377.87 },
+    ])
+    const supabase = mockSupabase(fixture(), { ok: true, total_count: 0, verifikat: [] })
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+    const step = (id: string) => items.find((i) => i.transaction_id === id)!.next_step
+
+    expect(step('tx-kivra')).toMatch(/Kivra/)
+    expect(step('tx-tax')).toMatch(/lönespecifikationen/)
+    expect(step('tx-1')).toContain('https://admin.google.com')
+    expect(step('tx-plain')).toMatch(/kvittoadressen/)
+    // The sentence is an errand for the reader, never a report of what was tried.
+    for (const item of items) expect(item.next_step).not.toMatch(/sökte|hittade|agent/i)
   })
 
   it('honours limit and answers no inbox address when none is configured', async () => {

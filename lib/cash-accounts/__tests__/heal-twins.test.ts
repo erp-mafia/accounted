@@ -306,15 +306,19 @@ describe('healTwinCashAccounts', () => {
         cashRow({ id: 'r1940', ledger_account: '1940', bank_connection_id: null, external_uid: null }),
       ],
       connections: [activeConn([['uid-r1930', '1930']])],
-      txCount: {},
+      txCount: { r1940: 1 },
       writes: [],
     }
     mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+    // One unbooked transaction to move, so the group is real work and not an
+    // already-merged leftover.
+    mockFindMovable.mockResolvedValue(['t-unbooked'])
 
     const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
 
     expect(result.groups[0].retired[0].outcome).toBe('kept-manual')
     expect(mockRebind).toHaveBeenCalledWith(expect.anything(), COMPANY, 'r1940', 'r1930')
+    // Rebound, never deleted or demoted.
     expect(stub.writes).toEqual([])
   })
 
@@ -412,5 +416,68 @@ describe('healTwinCashAccounts', () => {
 
     expect(mockSetPrimary).toHaveBeenCalledTimes(1)
     expect(stub.writes.map((w) => w.op)).toEqual(['delete'])
+  })
+
+  describe('a group the merge already finished', () => {
+    // What a finished merge leaves behind: the kept row is live and routed to,
+    // and the retired twin survives as a manual row because booked
+    // transactions remain on it. The rows still share the IBAN.
+    const finished = (): Stub => ({
+      rows: [
+        cashRow({ id: 'r1930', ledger_account: '1930', is_primary: true }),
+        cashRow({ id: 'r1931', ledger_account: '1931', bank_connection_id: null, external_uid: null }),
+      ],
+      connections: [activeConn([['uid-r1930', '1930']])],
+      txCount: { r1931: 3 },
+      writes: [],
+    })
+
+    it('is reported as already merged: no writes, no history event', async () => {
+      const stub = finished()
+      mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+
+      const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+      expect(result.groups[0]).toMatchObject({ skipped: 'already-merged', keeper: { id: 'r1930' } })
+      expect(stub.writes).toEqual([])
+      expect(mockAppend).not.toHaveBeenCalled()
+      expect(mockRebind).not.toHaveBeenCalled()
+      expect(mockSetPrimary).not.toHaveBeenCalled()
+    })
+
+    it('is still merged when the manual twin holds a transaction to move', async () => {
+      const stub = finished()
+      mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+      mockFindMovable.mockResolvedValue(['t-unbooked'])
+
+      const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+      expect(result.groups[0].skipped).toBeNull()
+      expect(mockRebind).toHaveBeenCalledWith(expect.anything(), COMPANY, 'r1931', 'r1930')
+      expect(mockAppend).toHaveBeenCalledTimes(2)
+    })
+
+    it('is still merged when the manual twin holds the primary flag', async () => {
+      const stub = finished()
+      stub.rows[0].is_primary = false
+      stub.rows[1].is_primary = true
+      mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+
+      const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+      expect(result.groups[0].skipped).toBeNull()
+      expect(mockSetPrimary).toHaveBeenCalledWith(expect.anything(), COMPANY, 'r1930')
+    })
+
+    it('is still merged when sync routing points at the twin ledger', async () => {
+      const stub = finished()
+      stub.connections = [activeConn([['uid-r1930', '1931']])]
+      mockLedgersWithPostedLines.mockResolvedValue(new Set(['1930']))
+
+      const result = await healTwinCashAccounts(makeSupabase(stub), COMPANY, { dryRun: false })
+
+      expect(result.groups[0].skipped).toBeNull()
+      expect(stub.writes.map((w) => w.table)).toEqual(['bank_connections'])
+    })
   })
 })
