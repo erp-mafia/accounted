@@ -107,6 +107,21 @@ const TOTAL_COLUMNS = [
 
 type Totals = Record<(typeof TOTAL_COLUMNS)[number], number>
 
+// Run-level totals: the only before/after there is for an empty roster.
+const RUN_TOTAL_COLUMNS = [
+  'total_gross',
+  'total_tax',
+  'total_net',
+  'total_avgifter',
+  'total_vacation_accrual',
+  'total_employer_cost',
+] as const
+
+function printRunTotals(label: string, run: Record<string, unknown>) {
+  console.log(`  ${label}`)
+  for (const column of RUN_TOTAL_COLUMNS) console.log(`    ${column.padEnd(24)} ${String(run[column] ?? '-').padStart(12)}`)
+}
+
 interface PayslipRow extends Totals {
   id: string
   employee_id: string
@@ -162,7 +177,10 @@ async function main() {
 
   const { data: run, error: runError } = await supabase
     .from('salary_runs')
-    .select('id, company_id, status, period_year, period_month, payment_date')
+    // ONE string literal on purpose: supabase-js types the row by parsing the
+    // literal type of this argument. A template or a '+' concatenation is just
+    // `string` to the compiler and the row becomes an error type.
+    .select('id, company_id, status, period_year, period_month, payment_date, total_gross, total_tax, total_net, total_avgifter, total_vacation_accrual, total_employer_cost')
     .eq('id', RUN_ID)
     .maybeSingle()
   if (runError) {
@@ -186,9 +204,15 @@ async function main() {
 
   const before = await loadPayslips()
   if (before.length === 0) {
-    console.error('The salary run has no payslips. Nothing to recalculate.')
-    process.exit(1)
+    // Not a refusal. runSalaryCalculation treats an empty roster as valid (a
+    // registered employer still files a nolldeklaration) and writes all-zero
+    // totals plus the calculation_params snapshot, which is exactly what a
+    // draft whose employees were all removed needs.
+    console.log('\nThe salary run has no payslips: an empty roster. Recalculating writes all-zero run totals.')
   }
+
+  console.log('\nSalary run')
+  printRunTotals('Stored run totals:', run as unknown as Record<string, unknown>)
 
   let flaggedCount = 0
   for (const payslip of before) {
@@ -270,6 +294,10 @@ async function main() {
     console.error(JSON.stringify(result.details ?? null, null, 2))
     process.exit(1)
   }
+
+  console.log('\nSalary run')
+  printRunTotals('Before:', run as unknown as Record<string, unknown>)
+  printRunTotals('After:', result.run)
 
   const after = await loadPayslips()
   for (const payslip of after) {

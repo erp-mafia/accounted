@@ -13,6 +13,7 @@ import {
   SUGGESTED_MATCH_SCAN_CAP,
 } from '@/lib/worklist'
 import { listResumeItems } from '@/lib/worklist/resume'
+import { listMissingUnderlagSample } from '@/lib/worklist/missing-underlag'
 import { getCompanyNotices } from '@/lib/notices'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
 import { vatDeadlineLine } from '@/lib/onboarding/checklist'
@@ -213,11 +214,16 @@ export async function HemPanesSection({
   // And for the next uncovered skattekonto charge: Hem renders the Betala
   // row with amount, bankgiro and OCR; the worklist count is 1 or 0 from it.
   const skattekontoPaymentPromise = listSkattekontoPaymentDue(supabase, companyId)
+  // And once more for the missing underlag: Hem renders what the biggest ones
+  // need fetching from as the row's detail line, and the worklist count is the
+  // total from the same RPC call rather than a second one at p_limit 1.
+  const missingUnderlagPromise = listMissingUnderlagSample(supabase, companyId)
   const [
     worklist,
     suggestedMatches,
     expensePayouts,
     skattekontoPayment,
+    missingUnderlag,
     resumeItems,
     bankConnectionsRes,
     postedEntries,
@@ -229,10 +235,12 @@ export async function HemPanesSection({
         suggestedMatches: suggestedMatchesPromise,
         expensePayoutsDue: expensePayoutsPromise,
         skattekontoPaymentDue: skattekontoPaymentPromise,
+        missingUnderlag: missingUnderlagPromise,
       }),
       suggestedMatchesPromise,
       expensePayoutsPromise,
       skattekontoPaymentPromise,
+      missingUnderlagPromise,
       // In-progress work for the Fortsätt pane: pure draft-state derivation.
       listResumeItems(supabase, companyId, now),
       supabase.from('bank_connections').select('id, status, consent_expires, bank_name, last_sie_sweep').eq('company_id', companyId).eq('status', 'active'),
@@ -268,6 +276,7 @@ export async function HemPanesSection({
           suggestedMatches={suggestedMatches.slice(0, 5)}
           expensePayouts={expensePayouts}
           skattekontoPayment={skattekontoPayment}
+          missingUnderlag={missingUnderlag}
           expiringBankConnections={expiringBankConnections}
           emptyLedger={emptyLedger}
           hasActiveBankConnection={hasActiveBankConnection}

@@ -4,7 +4,7 @@ import { isEntityType } from '@/lib/company/entity-type'
 export interface SupplierInvoiceDefaults {
   entityType: EntityType
   accountingMethod: 'accrual' | 'cash'
-  /** Company-wide öresavrundning default; overridable per invoice. */
+  /** Supplier rounding is selected per invoice from the source document. */
   oreRounding: boolean
   /** UI gate for kostnadsställe/projekt affordances (same as JournalEntryForm). */
   dimensionsEnabled: boolean
@@ -35,7 +35,8 @@ export function deriveSupplierInvoiceDefaults(
   return {
     entityType,
     accountingMethod: settings?.accounting_method === 'cash' ? 'cash' : 'accrual',
-    oreRounding: typeof settings?.ore_rounding === 'boolean' ? settings.ore_rounding : true,
+    // A company preference does not establish the supplier's billed amount.
+    oreRounding: false,
     dimensionsEnabled: settings?.dimensions_enabled === true,
     vatRegistered: settings?.vat_registered !== false,
   }

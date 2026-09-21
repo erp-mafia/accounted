@@ -2,15 +2,15 @@
  * Pure payload builders for the supplier-invoice editor
  * (components/supplier-invoices/NewSupplierInvoiceForm.tsx).
  *
- * Extracted verbatim from the form component so the wire contract against
+ * Shared with the form component so the wire contract against
  * POST /api/supplier-invoices and the invoice-inbox convert endpoint (both
- * validating CreateSupplierInvoiceSchema) is pinned by unit tests. Behavior
- * changes here are wire-format changes: keep byte-compatible with the
- * schema in lib/api/schemas.ts.
+ * validating CreateSupplierInvoiceSchema) is pinned by unit tests. Selected
+ * invoice rounding travels as an ordinary zero-VAT adjustment item.
  */
 
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isPersonPayer, type PayerChoice } from '@/lib/expenses/payer'
+import { supplierInvoiceEditorAmounts } from './editor-amounts'
 import type { VatTreatment } from '@/types'
 
 export interface SupplierInvoiceLineItem {
@@ -93,7 +93,7 @@ export interface BuildSupplierInvoicePayloadOptions {
   inboxItemId: string | null
   /** Uploaded document to attach on the plain create path (non-inbox only). */
   uploadedDocumentId: string | undefined
-  /** Display-only öresavrundning override sent on every payload. */
+  /** Include the invoice's whole-krona rounding as a zero-VAT 3740 item. */
   oreRounding: boolean
   /** Invoice-level default dimensions bag; only sent when non-empty. */
   defaultDims: Record<string, string>
@@ -107,6 +107,8 @@ export function buildSupplierInvoicePayload(
 ) {
   const { inboxItemId, uploadedDocumentId, oreRounding, defaultDims, canUseAccrual } = opts
   const vatTreatment = inferVatTreatment(data.items, data.reverse_charge)
+  const { roundingItem } = supplierInvoiceEditorAmounts(data.items, data.currency, data.reverse_charge, oreRounding)
+  const items: SupplierInvoiceLineItem[] = roundingItem ? [...data.items, roundingItem] : data.items
   const paidByPerson = isPersonPayer(data.payer)
   // When paid privately, due_date is irrelevant: but the API still requires
   // a YYYY-MM-DD value. Default to invoice_date so the field passes validation.
@@ -139,7 +141,7 @@ export function buildSupplierInvoicePayload(
     // Invoice-level default dimensions (kostnadsställe/projekt): only sent
     // when the user actually picked something.
     ...(Object.keys(defaultDims).length > 0 ? { default_dimensions: defaultDims } : {}),
-    items: data.items.map((item) => ({
+    items: items.map((item) => ({
       description: item.description,
       amount: item.amount,
       account_number: item.account_number,
