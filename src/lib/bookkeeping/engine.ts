@@ -423,7 +423,7 @@ export async function createDraftEntry(
       pgDetails: (entryError as { details?: string } | null)?.details,
       pgHint: (entryError as { hint?: string } | null)?.hint,
     })
-    throw new BookkeepingDatabaseError('create_draft_entry', entryError?.message)
+    throw new BookkeepingDatabaseError('create_draft_entry', entryError?.message, entryError?.code)
   }
 
   // Insert journal entry lines with dimensions
@@ -458,7 +458,7 @@ export async function createDraftEntry(
         pgCode: (cancelError as { code?: string }).code,
       })
     }
-    throw new BookkeepingDatabaseError('create_entry_lines', linesError.message)
+    throw new BookkeepingDatabaseError('create_entry_lines', linesError.message, linesError.code)
   }
 
   // Fetch complete entry with lines
@@ -586,7 +586,7 @@ export async function updateDraftEntry(
     .eq('company_id', companyId)
 
   if (headerError) {
-    throw new BookkeepingDatabaseError('create_draft_entry', headerError.message)
+    throw new BookkeepingDatabaseError('create_draft_entry', headerError.message, headerError.code)
   }
 
   // Replace the lines: delete the old set, insert the new one.
@@ -596,7 +596,7 @@ export async function updateDraftEntry(
     .eq('journal_entry_id', entryId)
 
   if (deleteError) {
-    throw new BookkeepingDatabaseError('create_entry_lines', deleteError.message)
+    throw new BookkeepingDatabaseError('create_entry_lines', deleteError.message, deleteError.code)
   }
 
   const lineInserts = buildLineInserts(entryId, lines, accountIdMap)
@@ -614,7 +614,7 @@ export async function updateDraftEntry(
       lineCount: lineInserts.length,
       pgCode: (linesError as { code?: string }).code,
     })
-    throw new BookkeepingDatabaseError('create_entry_lines', linesError.message)
+    throw new BookkeepingDatabaseError('create_entry_lines', linesError.message, linesError.code)
   }
 
   const { data: completeEntry } = await supabase
@@ -850,7 +850,7 @@ export async function commitEntry(
       pgDetails: (commitError as { details?: string }).details,
       pgHint: (commitError as { hint?: string }).hint,
     })
-    throw new BookkeepingDatabaseError('commit_entry', commitError.message)
+    throw new BookkeepingDatabaseError('commit_entry', commitError.message, commitError.code)
   }
 
   // Fetch complete posted entry with lines
@@ -934,7 +934,7 @@ export async function commitAssetDisposal(
       journalEntryId: entryId,
       pgCode: (error as { code?: string }).code,
     })
-    throw new BookkeepingDatabaseError('commit_asset_disposal', error.message)
+    throw new BookkeepingDatabaseError('commit_asset_disposal', error.message, error.code)
   }
 
   if (!entryId) return null
@@ -1061,7 +1061,7 @@ export async function createAssetDepreciationEntry(
       journalEntryId: draft.id,
       pgCode,
     })
-    throw new BookkeepingDatabaseError('commit_asset_depreciation', error.message)
+    throw new BookkeepingDatabaseError('commit_asset_depreciation', error.message, error.code)
   }
 
   const row = (Array.isArray(data) ? data[0] : data) as
@@ -1260,7 +1260,7 @@ export async function replaceOpeningBalanceEntry(
       pgDetails: (error as { details?: string }).details,
       pgHint: (error as { hint?: string }).hint,
     })
-    throw new BookkeepingDatabaseError('replace_opening_balance', error.message)
+    throw new BookkeepingDatabaseError('replace_opening_balance', error.message, error.code)
   }
 
   type RpcRow = {
@@ -1494,7 +1494,7 @@ export async function reverseEntry(
     // PostgreSQL rejected the insert, so the allocated number is confirmed
     // unused and can be explained without guessing from the original entry.
     throw withUnusedVoucherAllocation(
-      new BookkeepingDatabaseError('create_reversal_entry', reversalError.message),
+      new BookkeepingDatabaseError('create_reversal_entry', reversalError.message, reversalError.code),
       unusedVoucherAllocation,
     )
   }
@@ -1517,7 +1517,7 @@ export async function reverseEntry(
     // this allocation is still used and must not be labelled as a gap.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
-    throw new BookkeepingDatabaseError('create_reversal_lines', linesError.message)
+    throw new BookkeepingDatabaseError('create_reversal_lines', linesError.message, linesError.code)
   }
 
   // Post the reversal entry
@@ -1531,7 +1531,7 @@ export async function reverseEntry(
     // header. A failed or ambiguous cleanup also cannot prove it unused.
     await supabase.from('journal_entries').update({ status: 'cancelled' }).eq('id', reversalEntry.id)
     await supabase.from('journal_entry_lines').delete().eq('journal_entry_id', reversalEntry.id)
-    throw new BookkeepingDatabaseError('post_reversal_entry', postError.message)
+    throw new BookkeepingDatabaseError('post_reversal_entry', postError.message, postError.code)
   }
 
   // Mark original as reversed with reversed_by_id link (CAS guard: only if still 'posted')

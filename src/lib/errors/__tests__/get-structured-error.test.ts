@@ -1,7 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { getStructuredError } from '../get-structured-error'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
 
 describe('getStructuredError', () => {
+  it.each([
+    { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' },
+    { error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } },
+    new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'),
+  ])('requires refreshed input for a bank conflict rather than an automatic retry', error => {
+    expect(getStructuredError(error)).toMatchObject({
+      code: 'CONFLICT', retryable: false, message_sv: 'En konflikt uppstod. Ladda om sidan och försök igen.',
+    })
+  })
   it('extracts code from structured bookkeeping error', () => {
     const result = getStructuredError({
       error: {
@@ -192,4 +202,3 @@ describe('getStructuredError: throw-site remediation', () => {
     expect(result.remediation?.description).toBeTruthy()
   })
 })
-
