@@ -145,7 +145,7 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     vi.clearAllMocks()
     mockGetUser.mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null })
     mockUpsertFromPsd2.mockResolvedValue(undefined)
-    mockSupersede.mockResolvedValue({ supersededIds: [], dedupScopeByIban: new Map() })
+    mockSupersede.mockImplementation(async (_supabase, input) => ({ supersededIds: [], accounts: input.newAccounts }))
     // No sibling company claims anything by default; individual tests override.
     mockCrossCompanyContext.mockResolvedValue({
       claims: new Map(),
@@ -1395,12 +1395,30 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     expect(input.newAccounts[0].dedup_scope).toBe('SE1234')
   })
 
+  it('stops before mirroring and consent success when atomic supersession refuses', async () => {
+    mockSupersede.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    mockFrom.mockImplementation(() => mockChain({ data: {
+      id: 'conn-1', user_id: 'user-1', company_id: 'company-1', bank_name: 'TestBank', status: 'pending',
+    } }))
+    mockCreateSession.mockResolvedValue({ session_id: 'sess-1', accounts: [
+      { uid: 'acc-1', account_id: { iban: 'SE1234' }, currency: 'SEK' },
+    ], access: { valid_until: '2026-12-31T00:00:00Z' } })
+    const emit = vi.spyOn(eventBus, 'emit').mockResolvedValue(undefined)
+    try {
+      const response = await GET(makeRequest({ code: 'auth-code', state: 'valid-state' }))
+      const body = await response.text()
+      expect(body).toContain('bank_error=')
+      expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+      expect(emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.finalize_failed' }))
+    } finally { emit.mockRestore() }
+  })
+
   it('applies dedup scopes carried from superseded siblings to accounts_data', async () => {
-    mockSupersede.mockResolvedValue({
+    mockSupersede.mockImplementation(async (_supabase, input) => ({
       supersededIds: ['old-1'],
-      // The sibling's account was first ingested under its old provider uid.
-      dedupScopeByIban: new Map([['SE1234', 'legacy-uid']]),
-    })
+      accounts: input.newAccounts.map((account: { uid: string }) => ({ ...account, dedup_scope: 'legacy-uid' })),
+    }))
 
     const capturedUpdates: Record<string, unknown>[] = []
     let callIndex = 0
@@ -1756,9 +1774,9 @@ describe('GET /api/extensions/enable-banking/callback', () => {
     // scope. The survivor's own row already pinned an explicit scope for this
     // account: that is what its external_ids were minted under, so the
     // sibling's scope must NOT clobber it.
-    mockSupersede.mockResolvedValue({
-      supersededIds: ['old-1'],
-      dedupScopeByIban: new Map([['SE1234', 'sibling-scope']]),
+    mockSupersede.mockImplementation(async (_supabase, input) => {
+      expect(input.preserveDedupScopeUids).toEqual(['uid-new'])
+      return { supersededIds: ['old-1'], accounts: input.newAccounts }
     })
 
     const capturedUpdates: Record<string, unknown>[] = []

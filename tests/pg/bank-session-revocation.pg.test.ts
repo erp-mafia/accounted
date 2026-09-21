@@ -13,9 +13,9 @@ beforeEach(async () => {
   owner = await seedCompany(); client = await getClient(); await client.query('BEGIN'); sessionId = randomUUID()
 })
 afterEach(async () => { await client.query('ROLLBACK'); client.release() })
-async function connection(status = 'active', db = client, company = owner) {
+async function connection(status = 'active', db = client, company = owner, bankProvider = 'seb-se') {
   return (await db.query(`INSERT INTO bank_connections(company_id,user_id,provider,session_id,status)
-    VALUES($1,$2,$3,$4,$5) RETURNING id`, [company.companyId, company.userId, provider, sessionId, status])).rows[0].id
+    VALUES($1,$2,$3,$4,$5) RETURNING id`, [company.companyId, company.userId, bankProvider, sessionId, status])).rows[0].id
 }
 async function claim(db = client) {
   return (await db.query('SELECT claim_bank_session_revocation($1,$2) AS result', [provider, sessionId])).rows[0].result
@@ -41,6 +41,24 @@ describe('provider session revocation claims', () => {
     await connection('active', client, otherCompany)
     await asRole('service_role')
     expect(await claim()).toEqual({ claimed: false, reason: 'shared' })
+  })
+
+  it('counts every holder even when stored ASPSP names differ across companies', async () => {
+    const otherCompany = await seedCompany()
+    await connection('revoked', client, owner, 'nordea-se')
+    await connection('active', client, otherCompany, 'nordea-corporate-se')
+    expect(await claim()).toEqual({ claimed: false, reason: 'shared' })
+  })
+
+  it('does not let a changed bank label bypass an existing revocation marker', async () => {
+    await claim()
+    await expect(connection('active', client, owner, 'lunar-se'))
+      .rejects.toMatchObject({ code: 'PT409', message: 'BANK_SESSION_REVOCATION_STARTED' })
+  })
+
+  it('refuses an ASPSP label passed as the service namespace', async () => {
+    await expect(client.query('SELECT claim_bank_session_revocation($1,$2)', ['seb-se',sessionId]))
+      .rejects.toMatchObject({ code: '22023', message: 'BANK_SESSION_PROVIDER_INVALID' })
   })
 
   it('lets the service role claim an unused consent, finish it and refuse a duplicate', async () => {

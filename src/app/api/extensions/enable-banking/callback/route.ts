@@ -761,54 +761,22 @@ async function finalizeConnection(
     }
   }
 
-  // A successful (re)connect supersedes any older row for the same bank in
-  // this company. Without this, a renewal performed via the bank list left
-  // the old row parked in 'expired' ("Åtgärd krävs" forever, red chip) with
-  // the transaction history stranded on it, so the picker treated the renewal
-  // as a first connect and re-imported bookkept periods. Runs BEFORE the
-  // cash_accounts mirror below: the supersede demotes the old row's ledger
-  // claims to manual, and the mirror then promotes them onto this row by
-  // IBAN, exactly like a disconnect-then-reconnect. Non-fatal: this
-  // connection is already renewed and correct.
-  let carriedScopeDirty = false
-  try {
-    const supersedeResult = await supersedeSiblingConnections(supabase, {
-      companyId: updatedConnection.company_id,
-      userId: updatedConnection.user_id,
-      newConnectionId: updatedConnection.id,
-      bankName: updatedConnection.bank_name ?? null,
-      newSessionId: session_id,
-      newAccounts: accountsMetadata,
-    })
-    // Carry the superseded rows' dedup scopes onto this row's accounts so a
-    // renewal keeps minting the same transaction external_ids (see
-    // StoredAccount.dedup_scope). An account whose OWN prior row already
-    // carried an explicit dedup_scope keeps it: that scope is the one its
-    // external_ids were actually minted under, and a sibling's scope for the
-    // same IBAN must not clobber it. Only accounts whose scope was derived
-    // here (IBAN/uid fallback) take the carried one. Persisted by the
-    // accounts_data write below.
-    if (supersedeResult.dedupScopeByIban.size > 0) {
-      for (const account of accountsMetadata) {
-        const normalizedIban = normalizeIban(account.iban)
-        const carried = normalizedIban
-          ? supersedeResult.dedupScopeByIban.get(normalizedIban)
-          : undefined
-        const survivorExplicit =
-          (normalizedIban ? priorScopeByIban.get(normalizedIban)?.explicit : undefined) ??
-          priorScopeByUid.get(account.uid)?.explicit ??
-          false
-        if (carried && !survivorExplicit && account.dedup_scope !== carried) {
-          account.dedup_scope = carried
-          carriedScopeDirty = true
-        }
-      }
-    }
-  } catch (supersedeError) {
-    log.error('supersede pass failed', supersedeError as Error, {
-      connectionId: updatedConnection.id,
-    })
-  }
+  // The supersession transaction carries dedup and sync history before any
+  // old consent can be revoked. Do not continue mirroring after a refusal.
+  const supersedeResult = await supersedeSiblingConnections(supabase, {
+    companyId: updatedConnection.company_id,
+    userId: updatedConnection.user_id,
+    newConnectionId: updatedConnection.id,
+    bankName: updatedConnection.bank_name ?? null,
+    newSessionId: session_id,
+    newAccounts: accountsMetadata,
+    preserveDedupScopeUids: accountsMetadata.filter(account => {
+      const iban = normalizeIban(account.iban)
+      return (iban ? priorScopeByIban.get(iban)?.explicit : undefined) ??
+        priorScopeByUid.get(account.uid)?.explicit ?? false
+    }).map(account => account.uid),
+  })
+  accountsMetadata.splice(0, accountsMetadata.length, ...supersedeResult.accounts)
 
   // Mirror each PSD2 account into cash_accounts so routing decisions read
   // from the canonical entity table. Accounts already mirrored under the same
@@ -842,7 +810,7 @@ async function finalizeConnection(
       .filter((row) => sessionUids.has(row.external_uid))
       .map((row) => row.ledger_account),
   )
-  let accountsDataDirty = carriedScopeDirty
+  let accountsDataDirty = false
 
   for (const account of accountsMetadata) {
     // Nothing the guard disabled is mirrored here: a claimed account's row
