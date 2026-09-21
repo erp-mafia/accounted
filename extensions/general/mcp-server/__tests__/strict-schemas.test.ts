@@ -9,7 +9,7 @@
  * top-level inputSchema. Don't relax the guard.
  */
 import { describe, it, expect } from 'vitest'
-import { tools } from '../server'
+import { tools, STAGE_BRIDGE_TARGETS } from '../server'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { isTenantWriteScope } from '../company-routing'
 
@@ -29,16 +29,35 @@ describe('MCP tool inputSchema strictness', () => {
       'gnubok_audit_package',
       'gnubok_feedback',
     ])
+    // A different category from the two above, which genuinely write nothing
+    // tenant-scoped. gnubok_stage_tool is never executed under its own name:
+    // the dispatcher rewrites it to the inner tool BEFORE the scope lookup, so
+    // the role guard classifies the INNER tool's scope. It therefore needs no
+    // scope of its own, provided every tool it can carry has one, which the
+    // next test requires with no allowlist to hide behind.
+    const dispatcherRewrittenBridges = new Set(['gnubok_stage_tool'])
     const missing = tools
       .filter(
         (tool) =>
           tool.annotations.readOnlyHint !== true &&
           !isTenantWriteScope(TOOL_SCOPE_MAP[tool.name]) &&
-          !allowedNonTenantWrites.has(tool.name)
+          !allowedNonTenantWrites.has(tool.name) &&
+          !dispatcherRewrittenBridges.has(tool.name)
       )
       .map((tool) => tool.name)
 
     expect(missing).toEqual([])
+  })
+
+  it('every tool gnubok_stage_tool can carry has a tenant write scope, with no exceptions', () => {
+    // What makes the bridge exemption above safe. The viewer-role gate and the
+    // scope check both key on the inner tool's scope; an unscoped carried tool
+    // would be a write any key, and any viewer, could stage through the bridge.
+    expect(STAGE_BRIDGE_TARGETS.length).toBeGreaterThan(0)
+    const unscoped = STAGE_BRIDGE_TARGETS.filter(
+      (tool) => !isTenantWriteScope(TOOL_SCOPE_MAP[tool.name]),
+    ).map((tool) => tool.name)
+    expect(unscoped).toEqual([])
   })
 
   it('every widget-bearing tool is read-only: Claude.ai drops write-annotated interactive tools', () => {

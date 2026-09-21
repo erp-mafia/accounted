@@ -702,22 +702,35 @@ describe('recommended_tools callability (feedback seq 372962)', () => {
     })
   })
 
-  it('with every scope granted, search-only WRITES are flagged blocked_by catalog and default tools are callable', async () => {
+  it('with every scope granted, the search-only reconciliation WRITES are callable through gnubok_stage_tool (issue #2800)', async () => {
+    // These four were blocked_by "catalog" until #2800, and they are the ones
+    // customers were stuck on: an auto-applied skattekonto match could not be
+    // undone, and a reconciliation gap blocked a second SIE import.
     const reconcile = loadout(await briefing(ALL_SCOPES), 'reconcile_month')
-
-    for (const name of [
+    const SEARCH_ONLY_RECONCILE_WRITES = [
       'gnubok_reconcile_unmatch',
       'gnubok_reconcile_residual',
       'gnubok_reconcile_signoff',
       'gnubok_link_transaction_to_journal_entry',
-    ]) {
+    ]
+
+    for (const name of SEARCH_ONLY_RECONCILE_WRITES) {
       const registryTool = tools.find((t) => t.name === name)!
       expect(isDefaultCatalogTool(registryTool), name).toBe(false)
       expect(registryTool.annotations.readOnlyHint, name).not.toBe(true)
       const e = entry(reconcile, name)
-      expect(e, name).toMatchObject({ callable: false, blocked_by: 'catalog' })
+      expect(e.callable, name).toBe(true)
+      expect(e.blocked_by, name).toBeUndefined()
       expect(e.note, name).toContain('not in tools/list')
-      expect(e.note, name).toContain('gnubok_call_tool')
+      expect(e.note, name).toContain('gnubok_stage_tool')
+      expect(e.note, name).toContain('gnubok_approve_pending_operation')
+    }
+
+    // Reach never overrides scope: the bridge enforces the inner tool's scope,
+    // so the briefing must not call these callable for a key that lacks it.
+    const readOnly = loadout(await briefing(['agent:read', 'reports:read', 'reconciliation:read']), 'reconcile_month')
+    for (const name of SEARCH_ONLY_RECONCILE_WRITES) {
+      expect(entry(readOnly, name), name).toMatchObject({ callable: false, blocked_by: 'scope' })
     }
     for (const name of [
       'gnubok_get_reconciliation_status',

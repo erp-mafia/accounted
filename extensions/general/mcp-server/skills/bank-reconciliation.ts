@@ -128,6 +128,8 @@ ledger after reconciliation:
 - \`gnubok_attach_document_to_transaction\` (file a receipt against a tx)
 - \`gnubok_reverse_journal_entry\` (storno)
 - \`gnubok_run_currency_revaluation\` (FX accounts only)
+
+A staged write your client does not list in tools/list (gnubok_search_tools shows callable_via \"stage_tool\") is staged through \`gnubok_stage_tool({ tool, arguments })\` and approved as usual; an unlisted read goes through \`gnubok_call_tool\`.
 - \`gnubok_get_trial_balance\`, \`gnubok_get_ar_ledger\`, \`gnubok_get_supplier_ledger\` (verification; the two ledgers via \`gnubok_call_tool\`)
 `
 

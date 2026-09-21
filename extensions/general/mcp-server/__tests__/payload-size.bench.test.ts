@@ -410,9 +410,13 @@ describe('tools/list payload size guard', () => {
     // forced gnubok_reconcile_match back into the default catalog on
     // 2026-08-26. Demote a read to search-only before proposing a bump.
     //
-    // Only READ tools may be demoted: gnubok_call_tool refuses writes, so a
-    // search-only WRITE is uncallable on Claude.ai. That is why the three
-    // bumps above happened instead of demotions.
+    // Until 2026-09-20 only READ tools could be demoted: gnubok_call_tool
+    // refuses writes, so a search-only WRITE was uncallable on Claude.ai, and
+    // that is why the three bumps above happened instead of demotions. Since
+    // issue #2800 gnubok_stage_tool carries a search-only write that only
+    // STAGES a pending operation, so a staging write may be demoted too. A
+    // write that commits directly still may not: no bridge carries it
+    // (connector-catalog-reach.test.ts refuses one).
     //
     //   * 2026-09-02, offert (#2163): gnubok_set_quote_status (a WRITE, so it
     //     must stay in the default catalog) plus document_type / valid_until /
@@ -513,6 +517,17 @@ describe('tools/list payload size guard', () => {
     //     stays search-only as a bridged READ, and update_invoice's text
     //     names the bridge. Measured 62 082 on the accounted projection
     //     (61 975 before). Ceiling unchanged.
+    //   * 2026-09-20, the write half of the bridge (#2800): gnubok_stage_tool
+    //     joins the default catalog (+981 chars) so the 20 search-only staging
+    //     writes become reachable without listing them (about 15 K tokens).
+    //     Trimming first (gnubok_call_tool's property notes restated the
+    //     schema) left it ~115 over. Paid for by the FIRST write demotion,
+    //     which the new bridge is what makes possible: gnubok_delete_absence
+    //     to search-only. Picked from 60 days of mcp.tool_called: zero calls,
+    //     and payroll is monthly, so the window holds two full cycles and the
+    //     zero is not seasonal (unlike the bokslut tools the 2026-08-31 entry
+    //     kept). Named by no listed tool, skill or loadout; the salary
+    //     calendar is its web door. Measured 61 844. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(62_200)
   })
 

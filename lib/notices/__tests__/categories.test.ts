@@ -16,6 +16,7 @@ import {
   detectBackupFailing,
   detectBrokenBankConnections,
   detectExpiringBankConnections,
+  detectNoFiscalYear,
   detectOtherAccountHint,
   detectSkvDisconnected,
   detectSkvUnexplained,
@@ -443,6 +444,38 @@ describe('never-throws contract', () => {
     await expect(detectSkvDisconnected(throwing, USER, COMPANY, NOW)).resolves.toBeNull()
     await expect(detectBackupFailing(throwing, COMPANY)).resolves.toBeNull()
     await expect(detectOtherAccountHint(throwing, COMPANY)).resolves.toBeNull()
+    await expect(detectNoFiscalYear(throwing, COMPANY)).resolves.toBeNull()
+  })
+})
+
+describe('detectNoFiscalYear', () => {
+  // The state a migration reset leaves behind: the replacement company has a
+  // chart and its settings but no fiscal period, and its owner may book by
+  // hand instead of importing again.
+  it('points a company without any fiscal period at the fiscal year settings', async () => {
+    enqueue({ data: null, count: 0 })
+    await expect(detectNoFiscalYear(supabase, COMPANY)).resolves.toEqual({
+      id: 'no_fiscal_year:0',
+      category: 'no_fiscal_year',
+      severity: 'warning',
+      messageKey: 'no_fiscal_year',
+      actionKey: 'no_fiscal_year_action',
+      actionHref: '/settings/bookkeeping',
+    })
+    expect(findCall('fiscal_periods', 'eq')).toEqual(['company_id', COMPANY])
+  })
+
+  it('stays quiet once any fiscal period exists', async () => {
+    enqueue({ data: null, count: 1 })
+    await expect(detectNoFiscalYear(supabase, COMPANY)).resolves.toBeNull()
+  })
+
+  it('never reads a failed or missing count as "no fiscal year"', async () => {
+    enqueue({ error: { message: 'boom' } })
+    await expect(detectNoFiscalYear(supabase, COMPANY)).resolves.toBeNull()
+    reset()
+    enqueue({ data: null, count: null })
+    await expect(detectNoFiscalYear(supabase, COMPANY)).resolves.toBeNull()
   })
 })
 

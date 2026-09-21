@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { tools } from '../server'
+import { tools, isStagingTool } from '../server'
 import { isDefaultCatalogTool } from '../tool-reach'
 import { ALL_SCOPES } from '@/lib/auth/api-keys'
 
@@ -318,7 +318,7 @@ describe('gnubok_search_tools: callable_via per hit', () => {
   const find = (result: Awaited<ReturnType<typeof call>>, name: string) =>
     result.tools.find((t) => t.name === name)!
 
-  it('summary: default-catalog tool = tools_list, search-only READ = call_tool, search-only WRITE = none + note', async () => {
+  it('summary: default-catalog tool = tools_list, search-only READ = call_tool, search-only staging WRITE = stage_tool + note', async () => {
     const result = await call({ query: 'invoice', limit: 50 })
 
     const listed = find(result, 'gnubok_list_invoices')
@@ -331,24 +331,27 @@ describe('gnubok_search_tools: callable_via per hit', () => {
     expect(bridged.callable_via).toBe('call_tool')
     expect(bridged).not.toHaveProperty('note')
 
-    // gnubok_update_invoice was the dead-end example until #2748 promoted it;
-    // the kundorder invoicing write is still search-only (2026-09-02 entry).
-    const deadEnd = find(
+    // The kundorder invoicing write is still search-only (2026-09-02 entry).
+    // It was the dead-end example (callable_via "none") until issue #2800: it
+    // only stages, so gnubok_stage_tool carries it, and the note must tell the
+    // agent both halves: which bridge, and that approval is a separate step.
+    const staged = find(
       await call({ query: 'create_invoice_from_sales_order', limit: 5 }),
       'gnubok_create_invoice_from_sales_order',
     )
-    expect(isDefaultCatalogTool(tools.find((t) => t.name === deadEnd.name)!)).toBe(false)
-    expect(deadEnd.callable_via).toBe('none')
-    expect(deadEnd.note).toContain('not in tools/list')
-    expect(deadEnd.note).toContain('gnubok_call_tool')
+    expect(isDefaultCatalogTool(tools.find((t) => t.name === staged.name)!)).toBe(false)
+    expect(staged.callable_via).toBe('stage_tool')
+    expect(staged.note).toContain('not in tools/list')
+    expect(staged.note).toContain('gnubok_stage_tool')
+    expect(staged.note).toContain('gnubok_approve_pending_operation')
   })
 
   it('full: carries the same callable_via + note next to the schema', async () => {
     const result = await call({ query: 'create_invoice_from_sales_order', detail: 'full', limit: 5 })
-    const deadEnd = find(result, 'gnubok_create_invoice_from_sales_order')
-    expect(deadEnd).toHaveProperty('inputSchema')
-    expect(deadEnd.callable_via).toBe('none')
-    expect(deadEnd.note).toContain('gnubok_call_tool')
+    const staged = find(result, 'gnubok_create_invoice_from_sales_order')
+    expect(staged).toHaveProperty('inputSchema')
+    expect(staged.callable_via).toBe('stage_tool')
+    expect(staged.note).toContain('gnubok_stage_tool')
 
     const status = await call({ query: 'reconciliation status', detail: 'full', limit: 5 })
     expect(find(status, 'gnubok_get_reconciliation_status').callable_via).toBe('tools_list')
@@ -362,18 +365,22 @@ describe('gnubok_search_tools: callable_via per hit', () => {
     }
   })
 
-  it('classification mirrors the registry for every hit: none = search-only AND not read-only, and only none carries a note', async () => {
+  it('classification mirrors the registry for every hit, and a note appears exactly when the hit is not in tools/list as a write', async () => {
     const result = await call({ query: '', limit: 50 })
     expect(result.tools.length).toBe(50)
     for (const hit of result.tools) {
       const registryTool = tools.find((t) => t.name === hit.name)!
+      // Re-derived from the registry, not from toolCallableVia, so this is a
+      // check of the implementation and not a restatement of it.
       const expected = isDefaultCatalogTool(registryTool)
         ? 'tools_list'
         : registryTool.annotations.readOnlyHint === true
           ? 'call_tool'
-          : 'none'
+          : isStagingTool(registryTool)
+            ? 'stage_tool'
+            : 'none'
       expect(hit.callable_via, hit.name).toBe(expected)
-      expect('note' in hit, hit.name).toBe(expected === 'none')
+      expect('note' in hit, hit.name).toBe(expected === 'none' || expected === 'stage_tool')
     }
   })
 

@@ -307,11 +307,14 @@ describe('company migration reset RPCs (pg)', () => {
       count: 1,
     })
 
+    // A bank file import, not a legacy SIE row: since 20260920190300 a
+    // sie_imports row without a durable job cannot claim 'pending' (#2566). An
+    // unfinished durable SIE job is pinned in lib/import/__tests__/sie-job.pg.test.ts.
     const importing = await seedCompany()
     await getPool().query(
-      `INSERT INTO public.sie_imports
-         (user_id, company_id, filename, file_hash, sie_type, status)
-       VALUES ($1, $2, 'pending.se', $3, 4, 'pending')`,
+      `INSERT INTO public.bank_file_imports
+         (user_id, company_id, filename, file_hash, file_format, status)
+       VALUES ($1, $2, 'pending.csv', $3, 'seb', 'pending')`,
       [importing.userId, importing.companyId, randomUUID()],
     )
     const importingPreview = await preview(importing.userId, importing.companyId)
@@ -868,12 +871,16 @@ describe('company migration reset RPCs (pg)', () => {
     await getPool().query(
       `INSERT INTO public.company_settings
          (user_id, company_id, entity_type, company_name, org_number,
-          onboarding_complete, next_invoice_number, next_arrival_number)
-       VALUES ($1, $2, 'aktiebolag', 'Migration AB', '5590000001', true, 41, 17)`,
+          onboarding_complete, onboarding_step, next_invoice_number, next_arrival_number,
+          initial_setup_path, initial_setup_completed_at)
+       VALUES ($1, $2, 'aktiebolag', 'Migration AB', '5590000001', true, 4, 41, 17,
+               'migration', now())`,
       [userId, companyId],
     )
     // The replacement is the same legal entity. Values above 1 pin that the
     // invoice and arrival-number series continue rather than silently restart.
+    // onboarding_complete / onboarding_step 4 is what company creation writes:
+    // the source here is an onboarded company that finished its setup checklist.
     const sieImportId = randomUUID()
     await getPool().query(
       `INSERT INTO public.sie_imports
@@ -1036,6 +1043,9 @@ describe('company migration reset RPCs (pg)', () => {
         next_invoice_number: number
         next_arrival_number: number
         onboarding_complete: boolean
+        onboarding_step: number
+        initial_setup_path: string | null
+        initial_setup_completed_at: string | null
       }>(
         `SELECT
            (SELECT company_id::text FROM public.provider_consents WHERE id = $2) AS provider_company_id,
@@ -1048,7 +1058,10 @@ describe('company migration reset RPCs (pg)', () => {
            (SELECT count(*)::int FROM public.company_inboxes WHERE company_id = $1 AND status = 'active') AS replacement_active_inboxes,
            (SELECT next_invoice_number::int FROM public.company_settings WHERE company_id = $1) AS next_invoice_number,
            (SELECT next_arrival_number::int FROM public.company_settings WHERE company_id = $1) AS next_arrival_number,
-           (SELECT onboarding_complete FROM public.company_settings WHERE company_id = $1) AS onboarding_complete`,
+           (SELECT onboarding_complete FROM public.company_settings WHERE company_id = $1) AS onboarding_complete,
+           (SELECT onboarding_step::int FROM public.company_settings WHERE company_id = $1) AS onboarding_step,
+           (SELECT initial_setup_path FROM public.company_settings WHERE company_id = $1) AS initial_setup_path,
+           (SELECT initial_setup_completed_at::text FROM public.company_settings WHERE company_id = $1) AS initial_setup_completed_at`,
         [replacementId, consentId, userId, companyId, inviteId],
       )
       expect(operational.rows[0]).toEqual({
@@ -1061,7 +1074,16 @@ describe('company migration reset RPCs (pg)', () => {
         replacement_active_inboxes: 1,
         next_invoice_number: 41,
         next_arrival_number: 17,
-        onboarding_complete: false,
+        // The replacement carries a copy of every answer onboarding collects,
+        // so it inherits "onboarded". A forced false here sent the owner from
+        // Hem ("Att göra") into the create-a-new-company journey, a state
+        // nothing in the product could ever leave (20260920190800).
+        onboarding_complete: true,
+        onboarding_step: 4,
+        // The setup checklist re-opens instead: it is the guide for filling
+        // the company again, and unlike the flag above it can be completed.
+        initial_setup_path: null,
+        initial_setup_completed_at: null,
       })
 
       const replacementTrial = await client.query<{ capability_key: string; expires_at: string }>(

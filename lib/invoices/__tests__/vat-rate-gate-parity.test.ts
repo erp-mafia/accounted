@@ -54,8 +54,14 @@ describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
  * but drops vat_number would tell an unvalidated EU customer that HAS a number
  * that it has none, with a remediation that lost the number.
  *
- * The route tests use table mocks that ignore the select() string, so they
- * cannot see this. Pinned at source level, like the gate above.
+ * `country` is the same story with a worse outcome (#2783): without it the
+ * rule itself is wrong, not just the sentence. countryPermitsReverseCharge()
+ * reads a missing country as "does not block", so an eu_business established
+ * in Sweden got 0 % reverse charge on the two v1 routes that never selected it.
+ *
+ * The route tests used table mocks that ignored the select() string, so they
+ * could not see this (the v1 invoice route mocks honour it since #2783).
+ * Pinned at source level, like the gate above, and independent of tsc.
  */
 const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
   'app/api/v1/companies/[companyId]/invoices/route.ts',
@@ -64,9 +70,9 @@ const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
   'extensions/general/mcp-server/server.ts',
 ]
 
-describe('customer projections that feed explainVatTreatment carry vat_number', () => {
+describe('narrow customer projections that decide a VAT treatment carry every input', () => {
   for (const relative of EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT) {
-    it(`${relative} selects vat_number wherever it selects vat_number_validated`, () => {
+    it(`${relative} selects vat_number and country wherever it selects vat_number_validated`, () => {
       const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
       // Directly, or through the shared builder's result.
       expect(source).toMatch(/explainVatTreatment\(|build\.warnings/)
@@ -77,7 +83,55 @@ describe('customer projections that feed explainVatTreatment carry vat_number', 
       for (const columns of selects) {
         // \b...\b does not match inside vat_number_validated: "_" is a word char.
         expect(columns, columns).toMatch(/\bvat_number\b(?!_)/)
+        expect(columns, columns).toMatch(/\bcountry\b/)
       }
     })
   }
 })
+
+/**
+ * For the doors that go through buildInvoiceWriteData the pin above is the
+ * second net, not the first. The builder's customer parameter
+ * (InvoiceBuilderCustomer) makes every field it reads a required key, and
+ * supabase-js types a literal select() string into a row with those keys, so a
+ * projection that drops one does not compile. Verified when this landed:
+ * deleting `country` from either v1 select fails `npm run check:types` with
+ * TS2322 at that call site.
+ *
+ * What the compiler cannot stop is the thing that hid #2783 in the first place:
+ * a cast. The builder used to take the full `Customer`, no narrow projection
+ * could satisfy that, so both v1 routes wrote `customer as unknown as Customer`
+ * and the cast erased the check. Nobody casts their way back in.
+ */
+describe('doors into buildInvoiceWriteData cannot cast away a missing customer input', () => {
+  it('no caller of buildInvoiceWriteData double-casts its customer', () => {
+    // Code only: the builder's own doc comment quotes the old cast to explain
+    // why the parameter type changed, and prose is not an offence.
+    const codeOnly = (source: string) =>
+      source
+        .split('\n')
+        .filter((line) => !/^\s*(\/\/|\/\*|\*)/.test(line))
+        .join('\n')
+    const offenders = listSourceFiles(['app', 'lib', 'extensions'])
+      .filter((file) => {
+        const code = codeOnly(fs.readFileSync(file, 'utf8'))
+        return code.includes('buildInvoiceWriteData(') && /customer\s+as\s+unknown\s+as\b/.test(code)
+      })
+      .map((file) => path.relative(REPO_ROOT, file))
+    expect(offenders).toEqual([])
+  })
+})
+
+function listSourceFiles(roots: string[]): string[] {
+  const found: string[] = []
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === 'node_modules' || entry.name === '__tests__' || entry.name.startsWith('.')) continue
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) found.push(full)
+    }
+  }
+  for (const root of roots) walk(path.join(REPO_ROOT, root))
+  return found
+}

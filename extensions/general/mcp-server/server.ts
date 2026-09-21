@@ -192,7 +192,12 @@ import {
   assertRecommendedLoadoutsValid,
   type RecommendedToolClassification,
 } from './recommended-tools'
-import { SEARCH_ONLY_WRITE_NOTE, isDefaultCatalogTool, toolCallableVia } from './tool-reach'
+import {
+  SEARCH_ONLY_STAGED_NOTE,
+  SEARCH_ONLY_WRITE_NOTE,
+  isDefaultCatalogTool,
+  toolCallableVia,
+} from './tool-reach'
 import {
   canonicalizeToolReferencesInText,
   projectToolReferences,
@@ -1812,6 +1817,25 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
 }
 
 /**
+ * The DECLARED "stages, never commits" property of a tool: its outputSchema IS
+ * the staged-operation envelope (identity, not shape). One predicate, two
+ * consumers, so they cannot disagree: deriveToolMeta turns it into the
+ * `_meta.requires_approval` contract a client reads, and the gnubok_stage_tool
+ * bridge uses it to decide which writes it may carry (issue #2800).
+ *
+ * Deliberately NOT keyed on annotations. ANNOTATIONS_STAGED_WRITE is worn by
+ * tools that commit directly (gnubok_create_transactions inserts rows,
+ * gnubok_reject_pending_operation settles one), so the constant's name is not
+ * a staging signal, and neither is a tool's own name. A declaration is only a
+ * claim: __tests__/staging-behaviour.test.ts executes every declaring tool
+ * against a recording client and fails one that writes anywhere but
+ * pending_operations, and statically refuses a mutation call in its body.
+ */
+export function isStagingTool(t: { outputSchema?: Record<string, unknown> }): boolean {
+  return t.outputSchema === STAGED_OPERATION_SCHEMA
+}
+
+/**
  * Discovery-time metadata derived from a tool definition, surfaced under `_meta`
  * in tools/list (and gnubok_search_tools detail=full). Lets an agent tell
  * (WITHOUT reading prose) whether a write stages for approval and whether a
@@ -1822,7 +1846,7 @@ const TOOL_PREFLIGHT_MAP: Record<string, string> = {
  * don't bloat the catalog with empty objects.
  */
 export function deriveToolMeta(t: { name: string; outputSchema?: Record<string, unknown> }): Record<string, unknown> | undefined {
-  if (t.outputSchema !== STAGED_OPERATION_SCHEMA) return undefined
+  if (!isStagingTool(t)) return undefined
   const preflight = TOOL_PREFLIGHT_MAP[t.name]
   return {
     requires_approval: true,
@@ -1835,6 +1859,59 @@ export function deriveToolMeta(t: { name: string; outputSchema?: Record<string, 
 // without an import cycle); re-exported here so the bench and tests keep
 // importing it from the server module.
 export { isDefaultCatalogTool } from './tool-reach'
+
+type BridgeKind = 'call_tool' | 'stage_tool'
+
+/**
+ * The two listed bridges, keyed by canonical tool name. A Map, not an object
+ * literal: the key looked up is the caller-supplied tool name, and `in` or
+ * index access on an object would match inherited keys ("constructor",
+ * "toString") and treat an arbitrary request as a bridge call.
+ */
+const BRIDGE_TOOLS: ReadonlyMap<string, BridgeKind> = new Map([
+  ['gnubok_call_tool', 'call_tool'],
+  ['gnubok_stage_tool', 'stage_tool'],
+])
+
+/**
+ * Why a bridge will not carry this target, or null when it will.
+ *
+ * This decides only WHICH tools a bridge may name. It grants nothing: after it
+ * passes, the dispatcher runs the target exactly as a direct call, so the
+ * target's scope, argument guard, company routing, viewer-role gate,
+ * capability paywall and test-key block all still apply. An unknown target
+ * returns null on purpose so it reaches the unknown-tool handler, which lists
+ * what exists.
+ *
+ *   call_tool:  reads only, unchanged since 2026-08-27.
+ *   stage_tool: a write that declares the staged envelope AND is absent from
+ *               tools/list. gnubok_approve_pending_operation declares no staged
+ *               envelope, so stage-then-approve can never both ride a bridge.
+ */
+function bridgeRefusalReason(
+  bridge: BridgeKind,
+  requestedToolName: string,
+  target: McpTool | undefined,
+): string | null {
+  const bridgeName = bridge === 'call_tool' ? 'gnubok_call_tool' : 'gnubok_stage_tool'
+  if (!requestedToolName) return `${bridgeName} requires a "tool" argument naming the tool to invoke.`
+  if (!target) return null
+  const isRead = target.annotations.readOnlyHint === true
+  if (bridge === 'call_tool') {
+    if (isRead) return null
+    return isStagingTool(target) && !isDefaultCatalogTool(target)
+      ? `${requestedToolName} is a write, so gnubok_call_tool will not invoke it. It only stages a pending operation: use gnubok_stage_tool.`
+      : `${requestedToolName} is not a read-only tool, so gnubok_call_tool will not invoke it. Call ${requestedToolName} directly by name.`
+  }
+  if (isRead) return `${requestedToolName} is read-only: invoke it through gnubok_call_tool, not gnubok_stage_tool.`
+  if (!isStagingTool(target)) {
+    return `${requestedToolName} commits directly instead of staging a pending operation, so gnubok_stage_tool will not invoke it. Call ${requestedToolName} directly by name.`
+  }
+  if (isDefaultCatalogTool(target)) {
+    return `${requestedToolName} is in tools/list: call it directly by name so your client applies that tool's own permission.`
+  }
+  return null
+}
 
 /**
  * Inline SIE content above this length is refused: a model reproducing tens
@@ -3742,19 +3819,13 @@ export const tools: McpTool[] = [
     name: 'gnubok_call_tool',
     title: 'Call a Read Tool by Name',
     description:
-      'Invoke any read-only tool by name, including ones absent from tools/list. Find the name with gnubok_search_tools first. Writes are refused: call a write tool directly so its approval contract stays visible.',
+      'Invoke any read-only tool by name, including ones absent from tools/list. Find the name with gnubok_search_tools first. Writes are refused: use gnubok_stage_tool for an unlisted write.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        tool: {
-          type: 'string',
-          description: 'Canonical name of the read-only tool to invoke, e.g. "gnubok_get_reconciliation_status".',
-        },
-        arguments: {
-          type: 'object',
-          description: "Arguments for that tool, validated against its own inputSchema. Omit for a tool that takes none.",
-        },
+        tool: { type: 'string', description: 'Canonical name, e.g. "gnubok_get_invoice".' },
+        arguments: { type: 'object', description: "Validated against that tool's own inputSchema." },
       },
       required: ['tool'],
     },
@@ -3778,9 +3849,67 @@ export const tools: McpTool[] = [
     },
   },
   {
+    // The write half of the bridge (issue #2800). 20 search-only WRITES were
+    // unreachable from claude.ai: tools/list hid them and gnubok_call_tool
+    // refuses writes. Every one of them only STAGES a pending operation, so
+    // nothing reaches the books until gnubok_approve_pending_operation, which
+    // is a separate LISTED tool with its own scope and its own approval card.
+    //
+    // A second tool rather than a wider gnubok_call_tool, on purpose. That
+    // tool is annotated read-only and a user may have told their client to
+    // always allow it. Letting the same name start staging writes would
+    // silently reuse consent that was given to a read-only tool, and flipping
+    // its annotation instead would make every bridged READ prompt. A new name
+    // carries no prior consent, and gnubok_call_tool keeps exactly the meaning
+    // it was consented under.
+    //
+    // Carries ONLY tools that (a) declare the staged envelope (isStagingTool)
+    // and (b) are absent from tools/list. (b) matters: a listed write has its
+    // own per-tool permission in the client, and a bridge that also carried it
+    // would let an agent route around a user who blocked that one tool.
+    //
+    // Never executed, like gnubok_call_tool: the dispatcher rewrites the call
+    // before resolution so every guard applies to the real target.
+    name: 'gnubok_stage_tool',
+    title: 'Stage a Write Tool by Name',
+    description:
+      'Stage a write tool absent from tools/list (search hits with callable_via "stage_tool"). Only stages: nothing posts until gnubok_approve_pending_operation. Call a listed write directly.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        tool: { type: 'string', description: 'Canonical name, e.g. "gnubok_reconcile_unmatch".' },
+        arguments: { type: 'object', description: "Validated against that tool's own inputSchema." },
+      },
+      required: ['tool'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: true,
+      description: "The inner tool's staged-operation result, unchanged.",
+    },
+    // Worst case over everything it can carry, never the common case: one
+    // bridgeable target (gnubok_post_kontantmetod_cutoff) is annotated
+    // destructive, so the carrier is too. A hint that errs toward prompting is
+    // the safe direction; connector-catalog-reach.test.ts pins the rule.
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
+    // No _meta.requires_approval here: deriveToolMeta keys on the staged
+    // schema, which this open pass-through is not. The contract still reaches
+    // the agent twice: the description names the approve step, and every
+    // staged result carries approve: { tool, args }.
+    async execute() {
+      // Unreachable: see gnubok_call_tool. If this ever runs, the rewrite was
+      // removed and a bridged write skipped the staging-only check.
+      throw codedError(
+        'VALIDATION_ERROR',
+        'gnubok_stage_tool is resolved by the dispatcher and has no direct implementation.',
+      )
+    },
+  },
+  {
     name: 'gnubok_search_tools',
     title: 'Search MCP Tools',
-    description: 'Search tools by keyword; hits carry callable_via: tools_list, call_tool or none.',
+    description: 'Search tools by keyword; hits carry callable_via: tools_list, call_tool, stage_tool or none.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -3888,10 +4017,11 @@ export const tools: McpTool[] = [
         // WRITE on a tools/list-only host) was reported as a missing tool four
         // times (feedback seq 372962 and siblings). Response field, so it costs
         // nothing in tools/list.
-        const callableVia = toolCallableVia(t)
+        const callableVia = toolCallableVia(t, isStagingTool(t))
         const reach = {
           callable_via: callableVia,
           ...(callableVia === 'none' ? { note: SEARCH_ONLY_WRITE_NOTE } : {}),
+          ...(callableVia === 'stage_tool' ? { note: SEARCH_ONLY_STAGED_NOTE } : {}),
         }
         if (detail === 'full') {
           const meta = projectMcpPayload(
@@ -5400,7 +5530,7 @@ export const tools: McpTool[] = [
           type: 'array',
           items: { type: 'object' },
           description:
-            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists its tools as {name, callable, blocked_by?, note?}: callable=false names the missing scope or a search-only write. Batch-load the callable names in one call (ToolSearch select:a,b,c).',
+            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists its tools as {name, callable, blocked_by?, note?}: callable=false names the missing scope or a write no bridge carries; note names the bridge for an unlisted tool. Batch-load the callable names in one call (ToolSearch select:a,b,c).',
         },
         feedback_channel: {
           type: 'object',
@@ -5439,7 +5569,7 @@ export const tools: McpTool[] = [
         const target = tools.find((candidate) => candidate.name === toolName)
         return {
           required_scope: TOOL_SCOPE_MAP[toolName] ?? null,
-          callable_via: target ? toolCallableVia(target) : 'none',
+          callable_via: target ? toolCallableVia(target, isStagingTool(target)) : 'none',
         }
       }
 
@@ -16979,6 +17109,13 @@ export const tools: McpTool[] = [
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
+    // Search-only since 2026-09-20 (issue #2800): the first WRITE demoted to
+    // pay for a catalog addition, which gnubok_stage_tool makes possible (it
+    // only stages, so the bridge carries it). Chosen from 60 days of
+    // mcp.tool_called: zero calls, and payroll is monthly, so the window holds
+    // two full cycles and the zero is not a seasonal artifact. Named by no
+    // listed tool, skill or loadout; the salary calendar is the web door.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const { employee_id, from, to, absence_type } = args as {
         employee_id: string; from: string; to: string; absence_type?: string
@@ -23154,6 +23291,30 @@ export const tools: McpTool[] = [
 // shipping a briefing that recommends phantom tools.
 assertRecommendedLoadoutsValid(new Set(tools.map((t) => t.name)))
 
+/**
+ * Exactly the tools gnubok_stage_tool will carry: writes that declare the
+ * staged envelope and are absent from tools/list. Derived from the registry,
+ * never hand-listed, so it cannot drift from bridgeRefusalReason (a test pins
+ * that the two agree tool by tool). The bridges themselves are not in it: their
+ * pass-through outputSchema is not the staged envelope.
+ */
+export const STAGE_BRIDGE_TARGETS: readonly McpTool[] = tools.filter(
+  (t) => isStagingTool(t) && !isDefaultCatalogTool(t) && t.annotations.readOnlyHint !== true,
+)
+
+/**
+ * Whether tools/list shows gnubok_stage_tool to this key. It has no scope of
+ * its own (the target's scope is what the dispatcher enforces), so without
+ * this a read-only key would be shown a tool whose every call is
+ * scope-denied: listed but unusable, the smell issue #2800 is about.
+ */
+function keyCanStageThroughBridge(keyScopes: ApiKeyScope[]): boolean {
+  return STAGE_BRIDGE_TARGETS.some((t) => {
+    const required = TOOL_SCOPE_MAP[t.name]
+    return !required || hasScope(keyScopes, required)
+  })
+}
+
 // ── MCP Protocol Handler ─────────────────────────────────────
 
 // Build identifier so MCP clients can tell deploys apart in `initialize`
@@ -23790,8 +23951,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
                 ]
               : []),
             'Discovery:',
-            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, reach any READ tool through gnubok_call_tool({tool, arguments}); a WRITE outside tools/list is then out of reach (the bridge refuses writes), so check callable_via on each search hit before planning around it.',
-            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (missing scope or search-only write).',
+            '• tools/list returns common tool schemas. Call gnubok_search_tools(query="…") for specialized tools: it ranks all capabilities; pass detail="name"|"summary"|"full" to control payload size. If your client cannot invoke a tool that is not in tools/list, each search hit says how to reach it in callable_via: "call_tool" is a READ, invoke it through gnubok_call_tool({tool, arguments}); "stage_tool" is a WRITE that only stages a pending operation, stage it through gnubok_stage_tool({tool, arguments}) and then approve with gnubok_approve_pending_operation as for any staged write; "none" commits directly and is out of reach from such a client.',
+            '• gnubok_get_agent_briefing returns recommended_tools: ordered per-workflow tool loadouts (categorize_month, close_period, invoice_run, vat_declaration, payroll_month). If your harness defers tool loading, batch-load a whole workflow in one call (e.g. Claude Code ToolSearch select:a,b,c) instead of searching cluster by cluster. Each loadout tool carries callable; when false, blocked_by and note say why (a missing scope, or a write no bridge carries). A callable tool with a note is not in tools/list: the note names the bridge that reaches it.',
             `• This connection can work with every non-archived company the API-key user belongs to. Call gnubok_list_companies to discover company_id values. Omit company_id to use the API key default (${companyId ?? 'none yet: this account has no company. Create it with gnubok_create_company (preview first, then confirm=true); the "onboarding" skill walks the whole setup'}); when selecting another company, repeat company_id on every company-data call, including approval.`,
             '• MCP resources use the API key default company. For a selected non-default company, call gnubok_get_agent_briefing with company_id instead of relying on Accounted://company/current or other company-data resources.',
             '• When the user asks "how do I do X" or you\'re unsure of the correct sequence (month-end close, VAT review, year-end, invoicing, payroll), call gnubok_list_skills first: domain workflows are documented as loadable skills with tool references.',
@@ -23860,6 +24021,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // can pick the right tool; calling a protected one is what produces
         // the 401 challenge that starts the connect (and signup) flow.
         if (isAnonymous) return true
+        // Unscoped itself, so gate it on whether this key could stage anything
+        // through it (see keyCanStageThroughBridge).
+        if (t.name === 'gnubok_stage_tool') return keyCanStageThroughBridge(keyScopes)
         const required = TOOL_SCOPE_MAP[t.name]
         return !required || hasScope(keyScopes, required)
       })
@@ -23907,13 +24071,16 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         unknown
       >
 
-      // gnubok_call_tool bridge. Rewrite {tool, arguments} into a direct call
-      // on the inner tool BEFORE resolution, so the scope check, the
+      // The two bridges (gnubok_call_tool for reads, gnubok_stage_tool for
+      // staging writes). Rewrite {tool, arguments} into a direct call on the
+      // inner tool BEFORE resolution, so the scope check, the
       // unknown-argument guard, company routing, the test-key write block, the
       // staging _meta and telemetry below all apply to the real target. A
       // wrapper that called the inner tool's execute() itself would have
       // skipped every one of them.
-      const viaBridge = toCanonicalToolName(outerToolName) === 'gnubok_call_tool'
+      const outerCanonicalName = toCanonicalToolName(outerToolName)
+      const bridge: BridgeKind | null = BRIDGE_TOOLS.get(outerCanonicalName) ?? null
+      const viaBridge = bridge !== null
       const requestedToolName = viaBridge
         ? typeof outerToolArgs.tool === 'string'
           ? outerToolArgs.tool
@@ -23939,22 +24106,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // an anonymous caller never needs the bridge to name them.
       if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
 
-      // The bridge reaches reads only. A write must be named directly so the
-      // client sees its own annotations and its staging/approval contract
-      // rather than a generic wrapper's. An unknown-but-named target falls
-      // through to the unknown-tool handler below, which lists what exists.
-      if (viaBridge && (!requestedToolName || (tool && tool.annotations.readOnlyHint !== true))) {
-        const bridgeError = toToolError(
-          codedError(
-            'VALIDATION_ERROR',
-            requestedToolName
-              ? `${requestedToolName} is not a read-only tool, so gnubok_call_tool will not invoke it. Call ${requestedToolName} directly by name.`
-              : 'gnubok_call_tool requires a "tool" argument naming the read-only tool to invoke.',
-          ),
-          { toolName: 'gnubok_call_tool' },
-        )
+      // Which targets each bridge may name lives in bridgeRefusalReason:
+      // gnubok_call_tool carries reads, gnubok_stage_tool carries unlisted
+      // writes that only stage. Passing this check grants nothing: every guard
+      // below still runs against the real target. An unknown-but-named target
+      // falls through to the unknown-tool handler below, which lists what
+      // exists.
+      const refusal = bridge ? bridgeRefusalReason(bridge, requestedToolName, tool) : null
+      if (refusal) {
+        const bridgeError = toToolError(codedError('VALIDATION_ERROR', refusal), {
+          toolName: outerCanonicalName,
+        })
         emitToolCallTelemetry({
-          tool: 'gnubok_call_tool',
+          tool: outerCanonicalName,
           requiredScope: null,
           actor,
           latencyMs: 0,

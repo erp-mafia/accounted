@@ -8,6 +8,10 @@ import { seedCompany } from '@/tests/pg/fixtures'
 // to also exclude 'undone'. Without this, undo_sie_import marks a row
 // 'undone' but the slot stays held: the caller cannot re-import the
 // same file.
+//
+// The new row in each case is 'completed': since 20260920190300 a legacy row
+// (job_state NULL) cannot claim 'pending', and 'completed' holds the same slot
+// in the index predicate (job_state IS NULL AND status NOT IN replaced/failed/undone).
 
 async function insertSIEImport(params: {
   companyId: string
@@ -46,11 +50,11 @@ describe('sie_imports partial unique index: undone status releases the slot', ()
     await insertSIEImport({ companyId, userId, fileHash: hash, status: 'completed', fiscalPeriodId })
 
     await expect(
-      insertSIEImport({ companyId, userId, fileHash: hash, status: 'pending', fiscalPeriodId }),
+      insertSIEImport({ companyId, userId, fileHash: hash, status: 'completed', fiscalPeriodId }),
     ).rejects.toThrow(/sie_imports_company_id_file_hash_active_idx/)
   })
 
-  it('allows a new pending row once the prior is undone', async () => {
+  it('allows a new active row once the prior is undone', async () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     const hash = `hash-${randomUUID()}`
 
@@ -73,7 +77,7 @@ describe('sie_imports partial unique index: undone status releases the slot', ()
       companyId,
       userId,
       fileHash: hash,
-      status: 'pending',
+      status: 'completed',
       fiscalPeriodId,
     })
     expect(newId).toBeTruthy()
@@ -103,7 +107,7 @@ describe('sie_imports partial unique index: undone status releases the slot', ()
       companyId,
       userId,
       fileHash: hash,
-      status: 'pending',
+      status: 'completed',
       fiscalPeriodId,
     })
     expect(newId).toBeTruthy()

@@ -45,6 +45,43 @@ import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-pers
  * adds it once the invoice row id is known.
  */
 
+/**
+ * The customer fields the builder reads, every one a REQUIRED key.
+ *
+ * This used to be the full `Customer` row. No narrow projection can satisfy
+ * that, so a door that selected only the columns it thought were needed had to
+ * write `customer as unknown as Customer`, and the cast erased the one check
+ * that would have caught a missing column. The v1 create and update routes
+ * omitted `country` that way (#2783): `undefined` reads as "no country, the
+ * rule does not apply" (countryPermitsReverseCharge), so an eu_business
+ * established in Sweden got 0 % reverse charge on the public API and 25 %
+ * everywhere else.
+ *
+ * Declaring exactly what is read turns an omitted input into a compile error
+ * instead of a silent `undefined`: supabase-js types a literal select() string
+ * into a row with those keys, so a narrow projection that drops a column no
+ * longer type-checks against this parameter. A full `select('*')` row is still
+ * assignable, so those doors are unchanged. A door that deliberately withholds
+ * a field says so with an explicit `null`.
+ *
+ * Keep a narrow door's select() a LITERAL string, not a shared constant: the
+ * type already stops an omission, and a literal stays visible to the
+ * phantom-column scanner (tests/schema/no-phantom-columns.test.ts), which
+ * cannot resolve a select built at runtime.
+ *
+ *  - customer_type, vat_number_validated, country: decide the VAT treatment
+ *  - id, vat_number: explainVatTreatment (which condition failed, remediation)
+ *  - personal_number: ROT/RUT fallback to the customer card (individual only)
+ *
+ * `country` is `string | null` rather than Customer's `string`: legacy rows
+ * can carry null, which does not block reverse charge (see
+ * countryPermitsReverseCharge). Null is a value; a missing key is a bug.
+ */
+export type InvoiceBuilderCustomer = Pick<
+  Customer,
+  'id' | 'customer_type' | 'vat_number' | 'vat_number_validated' | 'personal_number'
+> & { country: string | null }
+
 // The validated line shape (a superset of what create/update schemas produce).
 export interface InvoiceWriteItemInput {
   line_type?: 'product' | 'text'
@@ -189,7 +226,7 @@ export type BuildInvoiceWriteResult =
 export async function buildInvoiceWriteData(params: {
   supabase: SupabaseClient
   companyId: string
-  customer: Customer
+  customer: InvoiceBuilderCustomer
   documentType: InvoiceDocumentType
   input: InvoiceWriteInput
   /**

@@ -7309,6 +7309,8 @@
     "coverage_notice": "Invoices before {date} may exist only as posted journal entries and are not shown in this list."
   },
   "notices": {
+    "no_fiscal_year": "The company has no fiscal year yet, so nothing can be booked. Import the bookkeeping again or create the fiscal year yourself.",
+    "no_fiscal_year_action": "Create fiscal year",
     "bank_broken_one": "The {bank} bank connection has stopped working and no longer fetches transactions.",
     "bank_broken_one_unnamed": "A bank connection has stopped working and no longer fetches transactions.",
     "bank_broken_many": "{count} bank connections have stopped working and no longer fetch transactions.",
@@ -8695,6 +8697,8 @@
       "archiveReferenced": "An archive reference exists. The file contents need verification before recovery.",
       "archiveMissing": "No archive file is linked to this import. The original file may be needed for review.",
       "nextStep": "Contact support if you need to undo or repeat this import. Include the filename and fiscal year. This overview changes no bookkeeping and does not authorize a year reset.",
+      "nextStepResetYear": "The fiscal year is open. The company owner or an administrator can reset it under Settings > Bookkeeping > Fiscal years (the Reset button) and then import the file again. That page first checks whether the year may be reset. Every voucher in the year is then deleted, not only those from the import, while documents are kept. If the year cannot be reset, contact support with the filename and fiscal year. This overview changes no bookkeeping.",
+      "openFiscalYears": "Open Fiscal years",
       "pagination": "Import history pages",
       "page": "Page {page}",
       "previous": "Previous",

@@ -279,6 +279,29 @@ describe('DELETE /api/v1/companies/:companyId/employees/:id/benefits/:benefitId'
     expect(body.data).toEqual({ employee_benefit_id: BENEFIT_ID, deleted: false, deactivated: true })
   })
 
+  it('keeps and deactivates when the foreign key refuses a delete the count let through (#2801)', async () => {
+    const supabaseMock = ownerMock({
+      // The count read 0, then a recalculation derived a line...
+      salary_line_items: { data: null, count: 0, error: null },
+      employee_benefits: [
+        // ...so the NO ACTION key (migration 20260920190100) refuses the delete,
+        {
+          data: null,
+          error: { code: '23503', message: 'violates foreign key constraint "salary_line_items_source_benefit_id_fkey"' },
+        },
+        // and the row is switched off instead.
+        { data: [{ id: BENEFIT_ID }], error: null },
+      ],
+    })
+    mockServiceClient.mockReturnValue(supabaseMock)
+
+    const res = await deleteBenefit(del(), params)
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toEqual({ employee_benefit_id: BENEFIT_ID, deleted: false, deactivated: true })
+  })
+
   it('returns 404 NOT_FOUND when no row matched', async () => {
     mockServiceClient.mockReturnValue(ownerMock({ employee_benefits: { data: [], error: null } }))
     const res = await deleteBenefit(del(), params)

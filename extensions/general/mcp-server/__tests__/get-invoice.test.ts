@@ -14,7 +14,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 
-import { tools } from '../server'
+import { tools, isStagingTool } from '../server'
 import { toolCallableVia } from '../tool-reach'
 
 const getInvoice = tools.find((t) => t.name === 'gnubok_get_invoice')!
@@ -136,7 +136,7 @@ describe('gnubok_get_invoice: registration', () => {
     // serves, which had to join the default catalog (issue #2748) and now
     // names the bridge so an agent that only knows tools/list gets here.
     expect(getInvoice.catalogVisibility).toBe('search')
-    expect(toolCallableVia(getInvoice)).toBe('call_tool')
+    expect(toolCallableVia(getInvoice, isStagingTool(getInvoice))).toBe('call_tool')
     const updateInvoice = tools.find((t) => t.name === 'gnubok_update_invoice')!
     const itemsNote = (updateInvoice.inputSchema as { properties: { items: { description: string } } })
       .properties.items.description

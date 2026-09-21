@@ -7309,6 +7309,8 @@
     "coverage_notice": "Fakturor före {date} kan ligga som bokförda verifikat och visas inte i den här listan."
   },
   "notices": {
+    "no_fiscal_year": "Företaget har inget räkenskapsår än, så inget kan bokföras. Importera bokföringen igen eller lägg upp räkenskapsåret själv.",
+    "no_fiscal_year_action": "Lägg upp räkenskapsår",
     "bank_broken_one": "Bankkopplingen till {bank} har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_one_unnamed": "En bankkoppling har slutat fungera och hämtar inte längre transaktioner.",
     "bank_broken_many": "{count} bankkopplingar har slutat fungera och hämtar inte längre transaktioner.",
@@ -8695,6 +8697,8 @@
       "archiveReferenced": "En arkivreferens finns. Filens innehåll behöver verifieras inför en återställning.",
       "archiveMissing": "Ingen arkivfil är kopplad till den här importen. Originalfilen kan behövas vid granskningen.",
       "nextStep": "Kontakta supporten om du behöver ångra eller göra om importen. Ange filnamn och räkenskapsår. Översikten ändrar ingen bokföring och är inte ett godkännande för att återställa året.",
+      "nextStepResetYear": "Räkenskapsåret är öppet. Företagets ägare eller administratör kan nollställa det under Inställningar > Bokföring > Räkenskapsår (knappen Nollställ) och sedan importera filen på nytt. Där kontrolleras först om året får nollställas. Alla verifikat i året raderas då, inte bara importens, medan underlag och dokument ligger kvar. Går året inte att nollställa, kontakta supporten och ange filnamn och räkenskapsår. Översikten här ändrar ingen bokföring.",
+      "openFiscalYears": "Öppna Räkenskapsår",
       "pagination": "Sidor i importhistoriken",
       "page": "Sida {page}",
       "previous": "Föregående",

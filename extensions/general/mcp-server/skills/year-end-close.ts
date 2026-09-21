@@ -110,6 +110,8 @@ These compute with \`gnubok_get_kpi_report\` for inputs but the actual tax JE is
 - \`gnubok_run_year_end\`: closing entry + lock + close + next period IB, one approval
 - \`gnubok_run_currency_revaluation\`: FX revaluation on its own, for review before the close
 - \`gnubok_list_fiscal_periods\`: confirm the closed/open state afterwards
+
+A staged write your client does not list in tools/list (gnubok_search_tools shows callable_via \"stage_tool\") is staged through \`gnubok_stage_tool({ tool, arguments })\` and approved as usual; an unlisted read goes through \`gnubok_call_tool\`.
 - \`gnubok_get_balance_sheet\`: verify post-year-end balances
 - \`gnubok_get_income_statement\`: verify result before year-end JE
 - \`gnubok_get_trial_balance\`: sanity check before the run

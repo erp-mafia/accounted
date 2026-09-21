@@ -31,6 +31,26 @@ export interface SIELegacyRecoveryAssessment {
   assessedAt: string
 }
 
+/**
+ * Where a legacy import's review sends the user next (#2566).
+ *
+ * A legacy import can be neither undone nor replaced: its verifikat carry no
+ * batch identity, so nothing may infer which ones it wrote. What an owner or
+ * administrator can do alone is reset the whole open year (Nollställ) and
+ * import again. This only decides whether that page is worth pointing at; it
+ * grants nothing. Every guard stays in reset_fiscal_year, which still refuses
+ * for reasons this overview cannot see (filed VAT, durable import history).
+ */
+export function legacySIENextStep(
+  assessment: Pick<SIELegacyRecoveryAssessment, 'period' | 'companyLock'>,
+): 'reset_year' | 'support' {
+  const { period, companyLock } = assessment
+  if (!period || period.is_closed || period.locked_at || period.import_hold) return 'support'
+  // ISO dates compare as strings. An unknown lock state is not an open year.
+  if (!companyLock.known || (companyLock.through && companyLock.through >= period.period_start)) return 'support'
+  return 'reset_year'
+}
+
 const PERIOD_FIELDS = 'id,period_start,period_end,is_closed,locked_at,import_hold'
 
 /**

@@ -19,12 +19,16 @@
  * tax-free). Every other type, bilförmån included, is stored as the schablon
  * value the caller supplies.
  *
- * Deletion is a hard delete only while nothing derives from the row. Once a
- * payslip line references the benefit (source_benefit_id, ON DELETE SET NULL
- * since migration 20260512200100), a hard delete would sever the chain from
- * a possibly booked verifikat back to its förmån (BFL 5 kap 6-7 §, #2695),
- * so the row is kept and switched off (is_active=false) instead, the same
- * outcome the recurring-lines register gets from its NO ACTION foreign key.
+ * Deletion is a hard delete only while nothing derives from the row, and the
+ * schema holds that, not this module: source_benefit_id is a NO ACTION
+ * foreign key (migration 20260920190100), so once a payslip line references
+ * the benefit Postgres refuses the delete (23503). A hard delete would sever
+ * the chain from a possibly booked verifikat back to its förmån (BFL 5 kap
+ * 6-7 §, #2695), so a referenced row is kept and switched off
+ * (is_active=false) instead, the same outcome the recurring-lines register
+ * gets from its NO ACTION key. The module still counts referencing lines
+ * first, but only as a pre-check for a database that has not run that
+ * migration yet; a line derived after the count is caught by the key (#2801).
  * Closing the window (valid_to) remains the clean way to stop a benefit that a
  * run has already consumed.
  */
@@ -427,20 +431,11 @@ export async function deleteEmployeeBenefit(
     return { ok: true, data: { committed: false, preview: data as unknown as EmployeeBenefitRow } }
   }
 
-  // A benefit that already fed a payslip line stays: the line's provenance
-  // column is ON DELETE SET NULL, so a hard delete would sever the chain
-  // from a (possibly booked) verifikat back to its förmån (BFL 5 kap 6-7 §,
-  // #2695). Switch it off instead; recurring lines get the same outcome
-  // from their NO ACTION foreign key.
-  const { count: referencing, error: refError } = await supabase
-    .from('salary_line_items')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', args.companyId)
-    .eq('source_benefit_id', args.benefitId)
-  if (refError) {
-    return { ok: false, code: 'INTERNAL_ERROR', details: dbDetails(refError) }
-  }
-  if ((referencing ?? 0) > 0) {
+  // Referenced: keep the row and switch it off, so the chain from a (possibly
+  // booked) verifikat back to its förmån stays intact (BFL 5 kap 6-7 §,
+  // #2695). The next recalculation drops the draft derived line by its
+  // back-link and never re-derives an inactive benefit.
+  const keepAndDeactivate = async (): Promise<EmployeeBenefitResult<EmployeeBenefitDeleteOutcome>> => {
     const { data: kept, error: keepError } = await supabase
       .from('employee_benefits')
       .update({ is_active: false })
@@ -455,8 +450,28 @@ export async function deleteEmployeeBenefit(
     return { ok: true, data: { committed: true, deleted: false, deactivated: found } }
   }
 
-  // Hard delete with RETURNING so the caller can tell a hit from a no-op:
-  // the dashboard reports the request as done either way, v1 answers 404.
+  // Pre-check, NOT the invariant. The invariant is the NO ACTION foreign key
+  // (migration 20260920190100) handled below. This count stays for one reason:
+  // application code and migrations do not deploy atomically, and a
+  // self-hosted image can run ahead of its migrations. On a database where
+  // the key is still ON DELETE SET NULL, a delete with no pre-check would
+  // orphan every line the benefit ever produced, deterministically. With the
+  // key in place the count only saves a refused DELETE round trip.
+  const { count: referencing, error: refError } = await supabase
+    .from('salary_line_items')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', args.companyId)
+    .eq('source_benefit_id', args.benefitId)
+  if (refError) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: dbDetails(refError) }
+  }
+  if ((referencing ?? 0) > 0) {
+    return keepAndDeactivate()
+  }
+
+  // Hard delete with RETURNING so the caller can tell a hit from a no-op: a
+  // filtered DELETE reports no error when the id is unknown or belongs to
+  // another company, and both routes answer that with 404.
   const { data, error } = await supabase
     .from('employee_benefits')
     .delete()
@@ -465,6 +480,13 @@ export async function deleteEmployeeBenefit(
     .eq('company_id', args.companyId)
     .select('id')
 
+  // 23503: a recalculation derived a line between the count above and this
+  // delete (#2801). The count could never close that gap; the foreign key
+  // does, because the derived insert holds FOR KEY SHARE on the benefit row
+  // and this delete waits for it. Same outcome as a line the count had seen.
+  if (error?.code === '23503') {
+    return keepAndDeactivate()
+  }
   if (error) {
     return { ok: false, ...mapWriteError(error) }
   }

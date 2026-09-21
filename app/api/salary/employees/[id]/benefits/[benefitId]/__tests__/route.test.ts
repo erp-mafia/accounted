@@ -96,10 +96,10 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
     expect(findCall('employee_benefits', 'update')).toBeUndefined()
   })
 
-  // #2695: salary_line_items.source_benefit_id is ON DELETE SET NULL, so a
-  // hard delete would turn the derived line into a manual-looking one that
-  // step 8d of the calculation never removes. The row is kept and switched
-  // off instead; the next recalculation drops the line by its intact link.
+  // #2695: nulling salary_line_items.source_benefit_id would turn the derived
+  // line into a manual-looking one that step 8d of the calculation never
+  // removes. The row is kept and switched off instead; the next recalculation
+  // drops the line by its intact link.
   it('keeps and deactivates a benefit that a payslip line derives from', async () => {
     enqueue({ data: null, count: 1 }) // one derived line points at the row
     enqueue({ data: [{ id: 'ben-1' }] }) // update ... returning id
@@ -121,6 +121,27 @@ describe('DELETE /api/salary/employees/[id]/benefits/[benefitId]', () => {
         ['company_id', 'company-1'],
       ]),
     )
+  })
+
+  // #2801: a recalculation derived a line after the count read 0. The NO
+  // ACTION foreign key (migration 20260920190100) refuses the delete, and the
+  // user gets the same "deactivated" answer instead of a 500 or an orphan.
+  it('keeps and deactivates when the foreign key refuses a delete the count let through', async () => {
+    enqueue({ data: null, count: 0 })
+    enqueue({
+      data: null,
+      error: { code: '23503', message: 'violates foreign key constraint "salary_line_items_source_benefit_id_fkey"' },
+    })
+    enqueue({ data: [{ id: 'ben-1' }] }) // update ... returning id
+
+    const response = await DELETE(del(), params)
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; deleted: boolean; deactivated: boolean }
+    }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ id: 'ben-1', deleted: false, deactivated: true })
+    expect(findCall('employee_benefits', 'update')).toEqual([{ is_active: false }])
   })
 
   it('returns 404 when no benefit matched on the employee', async () => {
