@@ -1,5 +1,6 @@
 import { PDFDocument } from 'pdf-lib'
 import type { ReadPage, WordBox } from './types'
+import { ReaderUnavailableError } from './types'
 
 /**
  * PDFs: pdf-inspector decides text-based versus scanned per page and reads
@@ -19,7 +20,10 @@ export interface PdfReadResult {
 type Inspector = typeof import('@firecrawl/pdf-inspector')
 let inspector: Promise<Inspector> | null = null
 function loadInspector(): Promise<Inspector> {
-  inspector ??= import('@firecrawl/pdf-inspector')
+  inspector ??= import('@firecrawl/pdf-inspector').catch((err) => {
+    inspector = null
+    throw new ReaderUnavailableError('pdf_text', err)
+  })
   return inspector
 }
 

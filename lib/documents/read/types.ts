@@ -75,3 +75,19 @@ export function readerForMime(mimeType: string | null | undefined): PageReader |
   if ((STRUCTURED_MIME_TYPES as readonly string[]).includes(mimeType)) return 'structured'
   return null
 }
+
+/**
+ * The reader itself could not be loaded (a native binding missing from the
+ * deployed function, say). That is a fact about the environment, never about
+ * the document, so nothing is stamped on the document: it stays unread and
+ * the backfill reads it once the reader is there.
+ */
+export class ReaderUnavailableError extends Error {
+  constructor(reader: string, cause: unknown) {
+    super(`${reader}: ${cause instanceof Error ? cause.message : String(cause)}`)
+    this.name = 'ReaderUnavailableError'
+  }
+}
+
+export const READER_UNAVAILABLE = 'reader_unavailable'
+

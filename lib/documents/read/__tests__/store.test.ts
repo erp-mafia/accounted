@@ -6,6 +6,7 @@ vi.mock('@/lib/ai', () => ({ getAiStatus: vi.fn(() => ({ configured: true })) })
 
 import { readAndStoreDocument, readUnreadDocuments } from '../store'
 import { readDocumentBytes } from '../router'
+import { ReaderUnavailableError } from '../types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 
 type Call = { table: string; op: string; payload?: unknown; filters: Record<string, unknown> }
@@ -98,6 +99,24 @@ describe('readAndStoreDocument', () => {
     expect(out).toEqual({ status: 'error', reason: 'download_failed: Object not found' })
     expect(calls[0].payload).toMatchObject({ read_error: 'download_failed: Object not found' })
   })
+
+  it('never stamps a document because the reader itself could not be loaded', async () => {
+    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
+    asMock(readDocumentBytes).mockRejectedValue(new ReaderUnavailableError('pdf_text', new Error('Cannot find native binding')))
+    const { supabase, calls } = makeSupabase()
+    const out = await readAndStoreDocument(supabase, doc)
+    expect(out).toEqual({ status: 'error', reason: 'reader_unavailable: pdf_text: Cannot find native binding' })
+    // No write at all: pages_read_at stays null, so the backfill reads it once the reader is there.
+    expect(calls).toEqual([])
+  })
+
+  it('still stamps a failure that is about the document', async () => {
+    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
+    asMock(readDocumentBytes).mockRejectedValue(new Error('invalid PDF structure'))
+    const { supabase, calls } = makeSupabase()
+    expect(await readAndStoreDocument(supabase, doc)).toEqual({ status: 'error', reason: 'read_failed: invalid PDF structure' })
+    expect(calls[0].payload).toMatchObject({ read_error: 'read_failed: invalid PDF structure' })
+  })
 })
 
 describe('readUnreadDocuments', () => {
@@ -117,5 +136,14 @@ describe('readUnreadDocuments', () => {
     asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'office', pageCount: 1, pages: [{ pageNo: 1, text: 't', reader: 'office', hasTextLayer: true }] })
     const { supabase } = makeSupabase([doc, { ...doc, id: 'doc-2', mime_type: 'application/xml' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 2, read: 1, skipped: 1, errors: 0 })
+  })
+
+  it('stops the batch at the first document the missing reader fails, leaving the rest unread', async () => {
+    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
+    asMock(readDocumentBytes).mockRejectedValue(new ReaderUnavailableError('pdf_text', new Error('Cannot find native binding')))
+    const { supabase, calls } = makeSupabase([doc, { ...doc, id: 'doc-2' }, { ...doc, id: 'doc-3' }])
+    expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 1, read: 0, skipped: 0, errors: 1 })
+    expect(readDocumentBytes).toHaveBeenCalledTimes(1)
+    expect(calls.filter((c) => c.op === 'update')).toEqual([])
   })
 })

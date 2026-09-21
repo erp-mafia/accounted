@@ -4,7 +4,7 @@ import { getAiStatus } from '@/lib/ai'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { readDocumentBytes } from './router'
-import { readerForMime, type ReadOutcome } from './types'
+import { READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
 
 const log = createLogger('documents/read')
 
@@ -20,13 +20,17 @@ export type StoreOutcome =
   | { status: 'skipped'; reason: string }
   | { status: 'error'; reason: string }
 
+export const isReaderUnavailable = (out: StoreOutcome) => out.status === 'error' && out.reason.startsWith(READER_UNAVAILABLE)
+
 /** Reasons the backfill retries later: the model was gated or unconfigured when the row was read. */
 const RETRY_REASONS = ['ai_gated', 'ai_unconfigured', 'partial:ai_gated', 'partial:ai_unconfigured']
 
 /**
  * Read one document and store its pages. Idempotent: pages for the document
- * are replaced, and pages_read_at is stamped on every outcome so the backfill
- * moves on (read_error names why when no or only some pages were produced).
+ * are replaced, and pages_read_at is stamped on every outcome about the
+ * document so the backfill moves on (read_error names why when no or only some
+ * pages were produced). A reader that could not be loaded is an outcome about
+ * the environment: nothing is stamped and the document stays unread.
  * Never touches the file itself. The model is called only for companies in
  * the Arkiv rollout; text layers are read for everyone.
  */
@@ -52,6 +56,11 @@ export async function readAndStoreDocument(
     outcome = await readDocumentBytes(bytes, doc.mime_type, { allowModel })
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
+    if (err instanceof ReaderUnavailableError) {
+      // Not stamped: the document is fine, the reader is missing. It stays unread for the next run.
+      log.error('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason })
+      return { status: 'error', reason: `${READER_UNAVAILABLE}: ${reason.slice(0, 300)}` }
+    }
     log.warn('read failed', { doc: doc.id, mime: doc.mime_type, reason })
     return stamp(supabase, doc.id, { status: 'error', reason: `read_failed: ${reason.slice(0, 300)}` }, null)
   }
@@ -114,7 +123,12 @@ export async function readUnreadDocuments(supabase: SupabaseClient, limit: numbe
     .order('created_at', { ascending: false })
     .limit(limit)
   if (error) throw new Error(`fetch unread documents failed: ${error.message}`)
-  for (const doc of (data ?? []) as ReadableDocumentRow[]) tally(await readAndStoreDocument(supabase, doc))
+  for (const doc of (data ?? []) as ReadableDocumentRow[]) {
+    const out = await readAndStoreDocument(supabase, doc)
+    tally(out)
+    // A missing reader fails every document the same way: stop, leave the rest unread, try again next run.
+    if (isReaderUnavailable(out)) return counts
+  }
 
   const room = limit - counts.processed
   if (room <= 0 || !getAiStatus().configured) return counts
@@ -130,7 +144,9 @@ export async function readUnreadDocuments(supabase: SupabaseClient, limit: numbe
     if (taken >= room) break
     if (!isArkivEnabled(doc.company_id)) continue
     taken++
-    tally(await readAndStoreDocument(supabase, doc, { allowModel: true }))
+    const out = await readAndStoreDocument(supabase, doc, { allowModel: true })
+    tally(out)
+    if (isReaderUnavailable(out)) return counts
   }
   return counts
 }
