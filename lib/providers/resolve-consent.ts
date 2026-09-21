@@ -246,11 +246,12 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
       // refreshed pair, which the provider still considers the latest one.
     }
 
+    const saved = updatedRows?.[0];
     return {
       consent,
       accessToken: refreshed.access_token,
       providerCompanyId: tokens.provider_company_id as string | undefined,
-      credentialRevision: updatedRows?.[0]?.credential_revision as string | undefined,
+      credentialRevision: saved && 'credential_revision' in saved ? saved.credential_revision as string : undefined,
     };
   }
 
