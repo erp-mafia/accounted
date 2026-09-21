@@ -38,7 +38,6 @@ interface ImportResultStepProps {
    *  bridge. Absent (failure, oversized file, parse miss) = plain header. */
   preview?: ImportPreview | null
   theaterModel?: TheaterModel | null
-  unresolvedVatAccountCount?: number
 }
 
 export default function ImportResultStep({
@@ -47,7 +46,6 @@ export default function ImportResultStep({
   onUndo,
   preview = null,
   theaterModel = null,
-  unresolvedVatAccountCount = 0,
 }: ImportResultStepProps) {
   const t = useTranslations('import')
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -218,23 +216,6 @@ export default function ImportResultStep({
               vill att ingående balanser ska uppdateras automatiskt.
             </CardDescription>
           </CardHeader>
-        </Card>
-      )}
-
-      {result.success && unresolvedVatAccountCount > 0 && (
-        <Card className="border-warning/40">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <AlertCircle className="h-5 w-5 text-warning" />
-              {t('vat_review_title', { count: unresolvedVatAccountCount })}
-            </CardTitle>
-            <CardDescription>{t('vat_review_description')}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild variant="outline">
-              <Link href="/chart-of-accounts">{t('vat_review_action')}</Link>
-            </Button>
-          </CardContent>
         </Card>
       )}
 

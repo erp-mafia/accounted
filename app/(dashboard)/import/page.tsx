@@ -1185,12 +1185,7 @@ function SIEImportWizard({
       )}
       {step === 'result' && importResult && (
         <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}
-          preview={preview} theaterModel={theaterModel}
-          unresolvedVatAccountCount={mappings.filter((mapping) =>
-            mapping.sourceAccount === mapping.targetAccount &&
-            ['3', '4'].includes(mapping.sourceAccount.charAt(0)) &&
-            !mapping.defaultVatTreatment
-          ).length} />
+          preview={preview} theaterModel={theaterModel} />
       )}
     </div>
   )
