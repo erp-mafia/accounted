@@ -7,6 +7,7 @@ import {
   claimSyncLease,
   holdSyncLease,
   rateLimitCooldownMs,
+  rateLimitHoldUntil,
 } from '../sync-lease'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 
@@ -121,5 +122,27 @@ describe('applyRateLimitCooldown', () => {
       applyRateLimitCooldown(client, { id: 'conn-1', session_id: 'sess-1' }, rateLimited({ dailyQuota: true }), NOW),
     ).resolves.toBe(DAILY_QUOTA_COOLDOWN_MS)
     consoleError.mockRestore()
+  })
+})
+
+describe('rateLimitHoldUntil', () => {
+  const now = Date.parse('2026-09-20T10:00:00Z')
+  const lease = (ms: number) => ({ sync_lease_until: new Date(now + ms).toISOString() })
+
+  it('reads a lease held longer than one ordinary window as a rate-limit cooldown', () => {
+    expect(rateLimitHoldUntil(lease(RATE_LIMIT_COOLDOWN_MS), now)).toBe(now + RATE_LIMIT_COOLDOWN_MS)
+    expect(rateLimitHoldUntil(lease(DAILY_QUOTA_COOLDOWN_MS), now)).toBe(now + DAILY_QUOTA_COOLDOWN_MS)
+  })
+
+  it('never reads an ordinary claim or hold as a rate limit: a person is not put on that lease', () => {
+    expect(rateLimitHoldUntil(lease(SYNC_COOLDOWN_MS), now)).toBeNull()
+    expect(rateLimitHoldUntil(lease(60_000), now)).toBeNull()
+  })
+
+  it('is null once the cooldown has expired, for the epoch default, and for a missing or bad value', () => {
+    expect(rateLimitHoldUntil(lease(-1000), now)).toBeNull()
+    expect(rateLimitHoldUntil({ sync_lease_until: '1970-01-01T00:00:00.000Z' }, now)).toBeNull()
+    expect(rateLimitHoldUntil({}, now)).toBeNull()
+    expect(rateLimitHoldUntil({ sync_lease_until: 'not a date' }, now)).toBeNull()
   })
 })

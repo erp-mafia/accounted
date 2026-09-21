@@ -19,6 +19,7 @@ import {
   getAllTransactions,
   getAllTransactionsWithRaw,
   AspspUnavailableError,
+  parseRetryAfter,
   convertTransaction,
   extractBban,
   deleteSession,
@@ -204,23 +205,110 @@ describe('api-client', () => {
       errorSpy.mockRestore()
     })
 
-    it('still retries a 429 without a daily-limit body (transient rate limit)', async () => {
+    it("types Svea's 429 ASPSP_RATE_LIMIT_EXCEEDED as a quota, after ONE call, with no body in the log", async () => {
+      // The reported failure: the transport retried twice, then the route
+      // answered 500.
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-      fetchSpy
-        .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429 }))
-        .mockResolvedValueOnce(
-          new Response(JSON.stringify({ balances: [] }), {
-            status: 200,
-            headers: { 'Content-Type': 'application/json' },
-          })
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response(
+          JSON.stringify({ code: 429, message: 'limit for SE4550000000058398257466', error: 'ASPSP_RATE_LIMIT_EXCEEDED' }),
+          { status: 429 }
         )
+      )
 
-      const result = await getAccountBalances('acc-1')
-      expect(result).toEqual([])
-      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
 
+      expect(error).toBeInstanceOf(AspspUnavailableError)
+      expect(error).toMatchObject({ status: 429, reason: 'rate-limited', rateLimit: { dailyQuota: true } })
+      expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const retryLog = warnSpy.mock.calls.filter((c) => String(c[0]).includes('429 for '))
+      expect(retryLog).toHaveLength(1)
+      expect(JSON.stringify(retryLog)).not.toContain('SE45')
       warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('does not retry a 429 without Retry-After: a blind retry only spends more quota', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429 }))
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow('Failed to get account balances (429)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('does not retry a daily quota even when the bank names a short Retry-After', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', { status: 429, headers: { 'Retry-After': '1' } })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow('(429)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('waits out a short Retry-After inside the request, then succeeds', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      try {
+        fetchSpy
+          .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '2' } }))
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify({ balances: [] }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+
+        const pending = getAccountBalances('acc-1')
+        await vi.advanceTimersByTimeAsync(1999)
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(1)
+        await expect(pending).resolves.toEqual([])
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.useRealTimers()
+        warnSpy.mockRestore()
+      }
+    })
+
+    it('does not sit out a Retry-After longer than the inline budget, and reads an HTTP-date', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const inTwoHours = new Date(Date.now() + 2 * 60 * 60_000).toUTCString()
+      fetchSpy.mockResolvedValue(
+        new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': inTwoHours } })
+      )
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(error).toMatchObject({ reason: 'rate-limited', rateLimit: { dailyQuota: false } })
+      expect(error.rateLimit.retryAfterSeconds).toBeGreaterThan(7100)
+      expect(error.rateLimit.retryAfterSeconds).toBeLessThanOrEqual(7200)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('treats a malformed Retry-After as missing', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': 'soon' } }))
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+
+      expect(error).toMatchObject({ reason: 'rate-limited' })
+      expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
     })
 
     it('does not retry on 400 errors', async () => {
@@ -1121,5 +1209,30 @@ describe('expected-condition log levels', () => {
     await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
 
     expect(errorSpy).toHaveBeenCalled()
+  })
+
+  describe('parseRetryAfter', () => {
+    const now = Date.parse('2026-09-20T10:00:00Z')
+
+    it('reads delay-seconds', () => {
+      expect(parseRetryAfter('120', now)).toBe(120_000)
+      expect(parseRetryAfter(' 0 ', now)).toBe(0)
+    })
+
+    it('reads an HTTP-date relative to now, and a past date as zero', () => {
+      expect(parseRetryAfter('Sun, 20 Sep 2026 10:30:00 GMT', now)).toBe(30 * 60_000)
+      expect(parseRetryAfter('Sun, 20 Sep 2026 09:00:00 GMT', now)).toBe(0)
+    })
+
+    it('returns null for missing, malformed and absurd values', () => {
+      expect(parseRetryAfter(null, now)).toBeNull()
+      expect(parseRetryAfter('', now)).toBeNull()
+      expect(parseRetryAfter('soon', now)).toBeNull()
+      expect(parseRetryAfter('-5', now)).toBeNull()
+      expect(parseRetryAfter('1.5', now)).toBeNull()
+      // Beyond a day is not a reset time anyone should obey verbatim.
+      expect(parseRetryAfter('999999999', now)).toBeNull()
+      expect(parseRetryAfter('Fri, 01 Jan 2100 00:00:00 GMT', now)).toBeNull()
+    })
   })
 })

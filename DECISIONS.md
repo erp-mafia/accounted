@@ -1251,3 +1251,4 @@ Entries dated before 2026-08-01 were archived on 2026-09-13 to keep this file re
 [2026-09-21] Remove the SIE result's missing-VAT warning: the wizard already requires review, and a confirmed BAS-standard/blank answer stays null. A second null-field counter contradicted that decision; no new classifier or chart review queue is needed.
 
 [2026-09-21] Resolve Bokio invoice journal UUIDs during bounded hydration using the existing voucher parser. Refresh payment state before registration relinking, and defer links on refresh failure so repair stays retryable (crm#110). No ledger writes or new UI.
+[2026-09-21] "Synka nu" is refused (429 BANK_RATE_LIMITED with a time) while a bank rate-limit cooldown is held, founder decision, amending #2813's "a person is never put on a cooldown": that still holds for the ordinary 15-minute lease. The two are told apart by lease length, so no new column.

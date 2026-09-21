@@ -4632,6 +4632,19 @@ export const tools: McpTool[] = [
               'A sync ran or was attempted on this connection within the last 15 minutes. Check last_synced_at via gnubok_connect_bank: if it is fresh, transactions and balances are already current, continue with gnubok_list_uncategorized_transactions. If it is still stale, the previous attempt failed; retry once after next_allowed_at, never before.',
           }
         }
+        // The bank's own rate limit: also in-band, because the one thing the
+        // agent must learn is WHEN, and the thrown envelope carries no time.
+        if (result.code === 'BANK_RATE_LIMITED') {
+          return {
+            synced: false,
+            connection_id: result.connection_id,
+            bank: null,
+            last_synced_at: null,
+            next_allowed_at: result.next_allowed_at ?? null,
+            instructions:
+              'The bank is rate limiting this consent (PSD2 banks allow only a few unattended fetches per day). Nothing was fetched. Do not call again before next_allowed_at; it is our cooldown, not a reset time confirmed by the bank. The connection is still valid: do not ask the user to renew it. Continue with the transactions already imported (gnubok_list_uncategorized_transactions).',
+          }
+        }
         throw Object.assign(
           new Error(`Bank sync refused for connection ${result.connection_id}: ${result.code}`),
           { code: result.code },
