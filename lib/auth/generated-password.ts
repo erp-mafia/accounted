@@ -23,7 +23,7 @@ import crypto from 'crypto'
  * is active: one character drawn from each class, the rest drawn from all
  * four, shuffled. (A self-hosted operator can hand-write an arbitrary set in
  * GOTRUE_PASSWORD_REQUIRED_CHARACTERS; only the four classes are guaranteed,
- * though 68 characters spread over all of printable ASCII make a miss on a
+ * though 60 characters spread over all of printable ASCII make a miss on a
  * narrower custom set unlikely.)
  */
 
@@ -31,12 +31,15 @@ import crypto from 'crypto'
 export const GOTRUE_MAX_PASSWORD_BYTES = 72
 
 /**
- * Every character is one byte, and the password is exactly as long as GoTrue
- * allows: 72 bytes is accepted (the check is "longer than 72"), and it is the
- * only length that meets every `password_min_length` a project can set and
- * still sign anyone up with.
+ * Every character is one byte. 64 deliberately stays clear of the 72-byte
+ * ceiling instead of sitting on it: at exactly 72 the password is accepted only
+ * while GoTrue compares "longer than 72", and an Auth version, fork or
+ * self-hosted build that compares "72 or longer", or counts differently, would
+ * then refuse EVERY generated password, with GoTrue outside this repo's test
+ * loop. The price of the margin is a project whose `password_min_length` is set
+ * to 65..72, which would refuse nearly every human password too.
  */
-export const GENERATED_PASSWORD_LENGTH = GOTRUE_MAX_PASSWORD_BYTES
+export const GENERATED_PASSWORD_LENGTH = 64
 
 /**
  * The four character sets GoTrue can require. `symbols` is GoTrue's symbol
@@ -56,9 +59,9 @@ const FULL_ALPHABET = REQUIRED_CLASSES.join('')
 /**
  * Returns a random password that every Supabase password policy accepts.
  *
- * Entropy: the 68 characters that are not class guarantees are independent and
- * uniform over 94 symbols, so no password is more likely than 94^-68, which is
- * at least 445 bits (the generator this replaces had 256). The guaranteed
+ * Entropy: the 60 characters that are not class guarantees are independent and
+ * uniform over 94 symbols, so no password is more likely than 94^-60, which is
+ * at least 393 bits (the generator this replaces had 256). The guaranteed
  * characters and the shuffle only add to that.
  *
  * `randomInt(max)` must return a uniform integer in [0, max). The default,

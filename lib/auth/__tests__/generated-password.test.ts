@@ -75,17 +75,19 @@ describe('generateAuthPassword', () => {
     for (let i = 0; i < DRAWS; i += 1) {
       const password = generateAuthPassword()
       for (const preset of Object.values(GOTRUE_PRESETS)) {
-        // Minimum length 72: the strictest length policy that can be met at all.
-        expect(gotrueAccepts(password, preset, 72)).toBe(true)
+        // 64 is far above any minimum length a project would configure.
+        expect(gotrueAccepts(password, preset, 64)).toBe(true)
       }
     }
   })
 
-  it('is exactly as long as GoTrue allows, in single-byte characters, so every minimum length is met', () => {
-    // GoTrue rejects "longer than 72" (bcrypt), so 72 passes, and a project
-    // that sets password_min_length anywhere up to 72 still gets a signup.
+  it('is 64 single-byte characters, strictly under the 72-byte limit GoTrue enforces', () => {
+    // Deliberately not ON the limit: at exactly 72 one off-by-one in any Auth
+    // version or fork would refuse every generated password, and GoTrue is not
+    // in this test loop to catch it.
     expect(GOTRUE_MAX_PASSWORD_BYTES).toBe(72)
-    expect(GENERATED_PASSWORD_LENGTH).toBe(72)
+    expect(GENERATED_PASSWORD_LENGTH).toBe(64)
+    expect(GENERATED_PASSWORD_LENGTH).toBeLessThan(GOTRUE_MAX_PASSWORD_BYTES)
     for (let i = 0; i < DRAWS; i += 1) {
       const password = generateAuthPassword()
       expect(password).toHaveLength(GENERATED_PASSWORD_LENGTH)
@@ -115,7 +117,7 @@ describe('generateAuthPassword', () => {
       const password = generateAuthPassword(source)
       expect(password).toHaveLength(GENERATED_PASSWORD_LENGTH)
       for (const preset of Object.values(GOTRUE_PRESETS)) {
-        expect(gotrueAccepts(password, preset, 72)).toBe(true)
+        expect(gotrueAccepts(password, preset, 64)).toBe(true)
       }
     }
   })
