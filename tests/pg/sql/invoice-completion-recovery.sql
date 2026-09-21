@@ -5,6 +5,7 @@ DECLARE
   consent uuid:=gen_random_uuid(); healthy_consent uuid:=gen_random_uuid(); renewed uuid:=gen_random_uuid();
   customer uuid:=gen_random_uuid(); healthy_customer uuid:=gen_random_uuid(); invoice uuid:=gen_random_uuid(); healthy_invoice uuid:=gen_random_uuid();
   worker uuid:=gen_random_uuid(); old_worker uuid; revision uuid; old_revision uuid; block uuid; scan uuid;
+  delayed_invoice uuid:=gen_random_uuid();
   w invoice_completion_work; excluded uuid[];
 BEGIN
   ASSERT NOT has_function_privilege('authenticated','block_invoice_completion_work(uuid,uuid,uuid,uuid,text)','EXECUTE');
@@ -57,9 +58,16 @@ BEGIN
   SELECT block_id INTO block FROM invoice_completion_work WHERE company_id=co;
   UPDATE provider_consent_tokens SET access_token='synthetic-rotated' WHERE consent_id=consent;
   ASSERT (invoice_completion_block_status(co)->>'reason')='PROVIDER_LICENSE_MISSING','ordinary token rotation does not restore a licence';
+  INSERT INTO invoices(id,user_id,company_id,customer_id,invoice_number,document_type,invoice_date,due_date,
+    currency,subtotal,vat_amount,total,vat_treatment,vat_rate,status)
+  VALUES(delayed_invoice,u,co,customer,'unrelated-delayed-source','invoice','2026-09-01','2026-10-01','SEK',100,25,125,'standard_25',25,'sent');
+  INSERT INTO invoice_completion_entries(company_id,invoice_id,scan_id,outcome,next_attempt_at)
+    VALUES(co,delayed_invoice,gen_random_uuid(),'failed',now()+interval '2 hours');
   ASSERT NOT retry_invoice_completion_work(healthy,consent,block),'company boundary';
   ASSERT NOT retry_invoice_completion_work(co,consent,gen_random_uuid()),'stale screen cannot clear a newer block';
   ASSERT retry_invoice_completion_work(co,consent,block),'explicit retry clears licence block';
+  ASSERT (SELECT next_attempt_at>now()+interval '1 hour' FROM invoice_completion_entries WHERE invoice_id=delayed_invoice),
+    'retrying this block preserves unrelated per-invoice retry delays';
   ASSERT NOT retry_invoice_completion_work(co,consent,block),'retry is consumed once';
   old_worker:=worker; worker:=gen_random_uuid();
   w:=claim_invoice_completion_work(worker,excluded);
