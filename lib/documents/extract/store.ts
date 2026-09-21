@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiStatus } from '@/lib/ai'
 import type { CompanyIdentity } from '@/lib/documents/classify/classify'
@@ -74,6 +75,11 @@ export async function extractDocument(supabase: SupabaseClient, documentId: stri
 
     const startedAt = new Date().toISOString()
     const run = await readFields({ def, company, fileName: doc.file_name, pages })
+    const audit = auditSample(documentId, def, run.reviewFields)
+    if (audit) {
+      run.reviewFields.push(audit)
+      run.checks.push({ check: 'audit', field: audit })
+    }
     await registerSchema(supabase, def)
     const activityId = await recordActivity(supabase, {
       companyId: doc.company_id,
@@ -220,6 +226,16 @@ async function saveExtraction(supabase: SupabaseClient, documentId: string, row:
   })
   if (error) throw new Error(`extraction save failed: ${error.message}`)
   return { status: 'extracted', extractionId: data as string, schemaType: row.schemaType, reviewFields: row.reviewFields }
+}
+
+/** Sample every twentieth settled record (5 %): its most important field goes to a person, so auto-settled fields are measured, not trusted. */
+export const AUDIT_ONE_IN = 20
+
+export function auditSample(documentId: string, def: ExtractionSchemaDef, reviewFields: string[]): string | null {
+  if (reviewFields.length > 0) return null
+  const bucket = parseInt(createHash('sha256').update(documentId).digest('hex').slice(0, 8), 16) % AUDIT_ONE_IN
+  if (bucket !== 0) return null
+  return (def.fields.find((f) => f.required) ?? def.fields[0])?.name ?? null
 }
 
 const skip = (reason: SkipReason): ExtractOutcome => ({ status: 'skipped', reason })

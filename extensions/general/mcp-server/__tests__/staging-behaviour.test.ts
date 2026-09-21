@@ -37,6 +37,8 @@ import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
 type Tool = (typeof tools)[number]
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+// Arkiv tools refuse a company outside the rollout before touching the database; the fixture company is in it.
+process.env.ARKIV_COMPANY_IDS = '11111111-1111-4111-8111-111111111111'
 const USER_ID = '22222222-2222-4222-8222-222222222222'
 const SOME_UUID = '33333333-3333-4333-8333-333333333333'
 
@@ -274,6 +276,8 @@ const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.
+  gnubok_propose_fact: { args: { subject_ref: `company:${COMPANY_ID}`, predicate: 'vat_period', value: 'kvartal', rationale: 'Enligt registreringsbeviset' } },
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
   gnubok_update_company_settings: { args: { phone: '08-123 45 67' } },

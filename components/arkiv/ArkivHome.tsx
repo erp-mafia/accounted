@@ -1,0 +1,41 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { PageHeader } from '@/components/ui/page-header'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { ArkivGraph as GraphData } from '@/app/api/arkiv/graph/route'
+import { ArkivGraph } from './ArkivGraph'
+import { ArkivDocuments } from './ArkivDocuments'
+
+/** /arkiv: the graph, then the table. */
+export function ArkivHome() {
+  const t = useTranslations('arkiv')
+  const [graph, setGraph] = useState<GraphData | null>(null)
+  const [graphFailed, setGraphFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/arkiv/graph')
+      .then(async (res) => {
+        if (!res.ok) throw new Error(String(res.status))
+        const { data } = (await res.json()) as { data: GraphData }
+        if (!cancelled) setGraph(data)
+      })
+      .catch(() => {
+        if (!cancelled) setGraphFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title={t('home_title')} help={<HelpPopover>{t('home_help')}</HelpPopover>} />
+      {graph ? <ArkivGraph graph={graph} /> : graphFailed ? null : <Skeleton className="h-64 w-full" />}
+      <ArkivDocuments />
+    </div>
+  )
+}

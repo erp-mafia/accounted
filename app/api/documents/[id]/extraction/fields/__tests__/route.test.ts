@@ -53,10 +53,10 @@ describe('POST /api/documents/[id]/extraction/fields', () => {
     expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'company-1', DOC, 'derive')
   })
 
-  it('does not queue a derivation for a record that is not an agreement', async () => {
+  it('does not queue a derivation for a record without facts or an agreement', async () => {
     enqueue({ data: { id: DOC } })
-    settle({ status: 'extracted', extractionId: 'ext-3', schemaType: 'registration.bolagsverket', reviewFields: [] })
-    expect((await parseJsonResponse(await call({ fields: { auditor: null } }))).status).toBe(200)
+    settle({ status: 'extracted', extractionId: 'ext-3', schemaType: 'generic', reviewFields: [] })
+    expect((await parseJsonResponse(await call({ fields: { key_terms: null } }))).status).toBe(200)
     expect(enqueueDocumentJob).not.toHaveBeenCalled()
   })
 

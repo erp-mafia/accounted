@@ -312,6 +312,14 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_inbox_item:                  'transactions:read',
   gnubok_list_unmatched_documents:        'transactions:read',
   gnubok_get_document_content:            'transactions:read',
+  // Arkiv: the record behind documents, agreements and facts (reads), and
+  // a staged fact proposal (write).
+  gnubok_search_records:                  'documents:read',
+  gnubok_get_record:                      'documents:read',
+  gnubok_get_record_links:                'documents:read',
+  gnubok_get_fact_history:                'documents:read',
+  gnubok_get_source:                      'documents:read',
+  gnubok_propose_fact:                    'agent:write',
   gnubok_attach_document_to_transaction:  'transactions:write',
   gnubok_link_document_to_voucher:        'bookkeeping:write',
   gnubok_link_documents_to_vouchers:      'bookkeeping:write',

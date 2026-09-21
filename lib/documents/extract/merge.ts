@@ -7,7 +7,7 @@ import { isValidOrgNumber, normalizeValue, valuesAgree, type ExtractedField, typ
  * check sends that field (never the whole document) to a person. The
  * model's own confidence is never asked for.
  */
-export type CheckCode = 'required' | 'orgnr_luhn' | 'non_negative' | 'percent_range' | 'date_order'
+export type CheckCode = 'required' | 'orgnr_luhn' | 'non_negative' | 'percent_range' | 'date_order' | 'audit'
 
 export interface CheckFailure {
   check: CheckCode

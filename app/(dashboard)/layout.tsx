@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
+import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -587,6 +588,7 @@ export default async function DashboardLayout({
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
+            arkivEnabled={isArkivEnabled(companyId)}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}

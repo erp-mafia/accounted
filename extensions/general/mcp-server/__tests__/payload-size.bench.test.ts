@@ -528,7 +528,12 @@ describe('tools/list payload size guard', () => {
     //     zero is not seasonal (unlike the bokslut tools the 2026-08-31 entry
     //     kept). Named by no listed tool, skill or loadout; the salary
     //     calendar is its web door. Measured 61 844. Ceiling unchanged.
-    expect(approxTokens).toBeLessThan(62_200)
+    //   * Arkiv phase 5 (rebased onto main 2026-09-21 after the bridge, #2800):
+    //     two default-catalog tools, gnubok_search_records and gnubok_get_record
+    //     (the record behind a document, agreement, party or verifikat). The
+    //     four other Arkiv tools are catalogVisibility: 'search', reachable
+    //     through gnubok_call_tool. Measured 62 674 on the rebased branch.
+    expect(approxTokens).toBeLessThan(62_800)
   })
 
   /**
