@@ -14,12 +14,12 @@ const INVOICE = {
 };
 const JOURNAL = { id: 'journal-1', journalEntryNumber: 'V342', date: '2025-06-01' };
 
-function stubBokio(journal: () => Response | Promise<Response> = () => Response.json(JOURNAL)) {
+function stubBokio(journal: (signal: AbortSignal) => Response | Promise<Response> = () => Response.json(JOURNAL)) {
   const requested: string[] = [];
-  vi.stubGlobal('fetch', vi.fn(async (input: string) => {
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init: RequestInit) => {
     const url = new URL(input);
     requested.push(url.pathname);
-    if (url.pathname === `${BASE}/journal-entries/journal-1`) return journal();
+    if (url.pathname === `${BASE}/journal-entries/journal-1`) return journal(init.signal!);
     if (url.pathname === `${BASE}/credit-notes`) return Response.json({ items: [], totalPages: 1 });
     if (url.pathname.endsWith('/invoice-1')) return Response.json(INVOICE);
     return Response.json({ items: [INVOICE], currentPage: 1, totalPages: 1, totalItems: 1 });
@@ -105,11 +105,16 @@ describe('Bokio invoice voucher hydration', () => {
 
   it('keeps journal resolution inside the hydration deadline', async () => {
     vi.useFakeTimers();
-    stubBokio(() => new Promise<Response>(() => {}));
+    let requestSignal: AbortSignal | undefined;
+    stubBokio(signal => new Promise<Response>((_resolve, reject) => {
+      requestSignal = signal;
+      signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    }));
     const pending = hydrateSalesInvoices('bokio', 'token', COMPANY, [mapBokioToSalesInvoice(INVOICE)], 50);
     await vi.advanceTimersByTimeAsync(51);
     const result = await pending;
     expect(result.hydration.abortedBy).toBe('budget');
+    expect(requestSignal?.aborted).toBe(true);
     expect(result.unhydratedIds.has(INVOICE.id)).toBe(true);
   });
 });

@@ -3,7 +3,7 @@ import { resolve } from 'node:path'
 import { it } from 'vitest'
 import { getClient } from './setup'
 
-it('resumes discovery, fences stale workers, preserves ambiguity and commits rows/history/receipts together', async () => {
+it('resumes discovery, fences stale workers, preserves ambiguity and commits cron/wizard rows and history atomically', async () => {
   const client = await getClient()
   try {
     await client.query('BEGIN')

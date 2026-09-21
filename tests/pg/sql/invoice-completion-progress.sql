@@ -159,4 +159,32 @@ BEGIN
   ASSERT NOT EXISTS(SELECT 1 FROM invoice_completion_entries WHERE company_id=co),'recovery entries follow their parent';
   ASSERT EXISTS(SELECT 1 FROM invoice_items WHERE invoice_id=b),'completed invoice rows survive recovery cleanup';
   ASSERT EXISTS(SELECT 1 FROM processing_history WHERE event_id=expected_event_id),'processing history survives recovery cleanup';
+
+  -- The wizard uses the same atomic write without requiring a cron lease.
+  event:=event||jsonb_build_object('aggregate_id',mapped,'payload',
+    (event->'payload')||jsonb_build_object('source','migration-wizard','unexpected_private_field','must not be stored'));
+  BEGIN
+    -- Reusing an existing event UUID forces the history INSERT to fail after
+    -- the existing invoice RPC has run. Its rows must roll back too.
+    PERFORM complete_invoice_rows_with_history(co,mapped,rows,NULL,event);
+    RAISE EXCEPTION 'duplicate history event was accepted';
+  EXCEPTION WHEN unique_violation THEN NULL;
+  END;
+  ASSERT NOT EXISTS(SELECT 1 FROM invoice_items WHERE invoice_id=mapped),'wizard history failure rolls back invoice rows';
+
+  PERFORM set_config('request.jwt.claim.role','authenticated',true);
+  PERFORM set_config('request.jwt.claim.sub',u::text,true);
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('role','authenticated','sub',u)::text,true);
+  SET LOCAL ROLE authenticated;
+  event:=event||jsonb_build_object('event_id',gen_random_uuid());
+  r:=complete_invoice_rows_with_history(co,mapped,rows,NULL,event);
+  ASSERT (r->>'wrote')::boolean AND r->>'event_id'=event->>'event_id','session wizard completes rows and history together';
+  ASSERT (SELECT actor=jsonb_build_object('type','user','id',u) AND NOT payload ? 'unexpected_private_field'
+    FROM processing_history WHERE event_id=(event->>'event_id')::uuid),'session actor and allowed payload fields are server controlled';
+  ASSERT NOT (complete_invoice_rows_with_history(co,mapped,rows,NULL,event)->>'wrote')::boolean,'wizard retry does not duplicate rows or history';
+
+  PERFORM set_config('request.jwt.claim.sub',gen_random_uuid()::text,true);
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('role','authenticated','sub',current_setting('request.jwt.claim.sub'))::text,true);
+  r:=complete_invoice_rows_with_history(co,a,rows,NULL,event);
+  ASSERT r->>'code'='FORBIDDEN','atomic history wrapper retains invoice write authorization';
 END $$;

@@ -7,11 +7,9 @@ import {
 } from '../complete-invoice-rows'
 
 /**
- * The one call site for complete_invoice_rows and the one emitter of the
- * InvoiceRowsCompleted behandlingshistorik event (#2312). The append runs for
- * real against a spy client: what lands in processing_history is the row
- * shape and the PII guard of appendProcessingHistoryWithClient, not a mock's
- * idea of it. The RPC is a spy.
+ * The shared invoice completion writer and InvoiceRowsCompleted event (#2312).
+ * Event preparation and its PII guard run for real before the RPC spy; the
+ * pg-real fixture covers atomic rows/history persistence and authorization.
  */
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -50,7 +48,10 @@ const trail: CompleteInvoiceRowsTrail = {
 }
 
 function rpcClient(reply: { data?: unknown; error?: { message: string } | null }) {
-  const rpc = vi.fn().mockResolvedValue({ data: reply.data ?? null, error: reply.error ?? null })
+  const rpc = vi.fn((_name: string, args: { p_event: { event_id: string } }) => {
+    const data = reply.data as { wrote?: boolean } | null
+    return Promise.resolve({ data: data?.wrote ? { ...data, event_id: args.p_event.event_id } : data ?? null, error: reply.error ?? null })
+  })
   return { client: { rpc } as never, rpc }
 }
 
@@ -90,16 +91,16 @@ describe('completeInvoiceRows', () => {
     })
 
     expect(rpc).toHaveBeenCalledTimes(1)
-    expect(rpc).toHaveBeenCalledWith('complete_invoice_rows', {
+    expect(rpc).toHaveBeenCalledWith('complete_invoice_rows_with_history', {
       p_company_id: COMPANY,
       p_invoice_id: INVOICE,
       p_rows: ROWS,
       p_header: HEADER,
+      p_event: expect.any(Object),
     })
 
-    expect(history.from).toHaveBeenCalledWith('processing_history')
-    expect(history.insert).toHaveBeenCalledTimes(1)
-    const row = history.insert.mock.calls[0][0] as Record<string, unknown>
+    expect(history.from).not.toHaveBeenCalled()
+    const row = rpc.mock.calls[0][1].p_event as Record<string, unknown>
     expect(row).toMatchObject({
       company_id: COMPANY,
       correlation_id: RUN,
@@ -139,7 +140,7 @@ describe('completeInvoiceRows', () => {
 
     // No header means an explicit null to the RPC, never a dropped argument.
     expect(rpc.mock.calls[0][1]).toMatchObject({ p_header: null })
-    const row = history.insert.mock.calls[0][0] as Record<string, unknown>
+    const row = rpc.mock.calls[0][1].p_event as Record<string, unknown>
     expect(row.payload).toEqual({
       source: 'migration-wizard',
       provider: 'fortnox',
@@ -187,18 +188,16 @@ describe('completeInvoiceRows', () => {
     expect(history.insert).not.toHaveBeenCalled()
   })
 
-  it('reports a write whose trail append failed as written, with no event id', async () => {
-    // The rows are committed by then. Failing the invoice would make the
-    // next run try again and find it full; the gap is logged instead.
-    const { client: supabase } = rpcClient(wrote(2, true))
-    const history = historyClient({ message: 'insert or update on table "processing_history" violates foreign key constraint' })
+  it('reports an atomic history failure as failed without attempting a separate append', async () => {
+    const { client: supabase } = rpcClient({ error: { message: 'processing_history constraint failed' } })
+    const history = historyClient()
 
     const result = await completeInvoiceRows(supabase, {
       companyId: COMPANY, invoiceId: INVOICE, rows: ROWS, header: HEADER, headerBefore: BEFORE, trail,
       historyClient: history.client,
     })
 
-    expect(history.insert).toHaveBeenCalledTimes(1)
-    expect(result).toEqual({ status: 'written', rows: 2, headerUpdated: true, eventId: null })
+    expect(history.insert).not.toHaveBeenCalled()
+    expect(result).toEqual({ status: 'failed', reason: 'processing_history constraint failed' })
   })
 })
