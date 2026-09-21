@@ -179,6 +179,20 @@ describe('runPostConnectRefresh', () => {
     expect(mockReconcile).toHaveBeenCalledTimes(2)
   })
 
+  it('stops at the first gateway refusal of the APIGW client: the user is waiting on this callback', async () => {
+    // Three stranded periods, one refused call: the gateway decides before it
+    // reads the bearer, so the fresh token changes nothing for the other two.
+    mockReconcile.mockResolvedValue({ status: 'gateway_refused' })
+    const supabase = makeSupabase({ data: [pendingDecl('decl-1'), pendingDecl('decl-2'), pendingDecl('decl-3')] })
+
+    const result = await runPostConnectRefresh(supabase, USER, COMPANY)
+
+    expect(mockReconcile).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({ synced: true, reconciled: 0 })
+    const warned = warnRecorder.mock.calls.map(c => String(c[0]))
+    expect(warned.filter(m => m.includes('gateway refuses the APIGW client'))).toHaveLength(1)
+  })
+
   it('never throws when the capability check itself fails', async () => {
     mockHasCapability.mockRejectedValueOnce(new Error('db down'))
     const supabase = makeSupabase({ data: [] })

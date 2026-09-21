@@ -34,7 +34,7 @@ import {
   type OAuthFlow,
 } from '@/lib/auth/oauth-flows'
 import { storeTokens, getTokens, deleteTokens, getTokenHealth } from './lib/token-store'
-import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment } from './lib/api-client'
+import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, getSkatteverketEnvironment, isApigwClientRefusal } from './lib/api-client'
 import { writeSkatteverketAudit } from './lib/audit'
 import { skvAuthCodeToStructured } from './lib/error-map'
 import {
@@ -78,6 +78,7 @@ import {
 import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
+import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
 import { readAgiSubmissionStatus } from './lib/agi-submission-status'
 import {
   attachBookingSuggestions,
@@ -209,6 +210,22 @@ const SkattekontoBokforBatchSchema = z.object({
  */
 
 const AGI_WRITE_ROLES = new Set(['owner', 'admin', 'member'])
+
+/** agi_declarations statuses that do not yet carry a filing receipt. */
+const AGI_UNFILED_STATUSES: readonly string[] = ['pending_signature', 'generated', 'exported']
+
+/**
+ * What the person filing an AGI is told when Skatteverket's gateway refuses
+ * the kvittens read for the whole installation (#2226). The filing itself is
+ * unaffected (it is made and signed at Skatteverket), so the message says
+ * where the receipt can be verified instead of how to fix an API subscription
+ * they have no access to. The panel renders its own copy from the code; this
+ * string is for API/MCP callers of the same route.
+ */
+const AGI_KVITTENS_UNAVAILABLE_MESSAGE =
+  'Accounted kan just nu inte hämta kvittensen från Skatteverket. Inlämningen ' +
+  'påverkas inte: kontrollera i Skatteverkets e-tjänst Arbetsgivardeklaration ' +
+  'att perioden är signerad och inlämnad. Kvittensen kan hämtas hit senare.'
 
 /**
  * Paywall gate for routes that talk to Skatteverket's API. The declaration
@@ -1971,86 +1988,136 @@ export const skatteverketExtension: Extension = {
           if (kvittens?.uuidKvittens) {
             const periodYear = parseInt(period.slice(0, 4))
             const periodMonth = parseInt(period.slice(4, 6))
-            await ctx.settings.set(
-              `agi_submission_${period}`,
-              JSON.stringify({
-                status: 'signed',
-                arbetsgivare,
-                period,
-                kvittensnummer: kvittens.uuidKvittens,
-                signeradAv: kvittens.signeradAv,
-                signeradTid: kvittens.signeradTid,
-                updatedAt: new Date().toISOString(),
-              }),
-            )
 
             // Pin the receipt to the most recent declaration for this period
-            // (id desc) so a correction chain doesn't get its kvittens written
-            // onto a superseded row. Also stamp salary_runs.agi_submitted_at
-            // here, mirroring SKV's signeradTid: this is the only place we
-            // know the AGI was actually filed (the orchestrator deliberately
-            // doesn't stamp on underlag-ingest, see route.ts comment).
-            //
-            // The presence of `uuidKvittens` confirms SKV signed and accepted
-            // the AGI. signeradTid is the precise signing moment; if SKV
-            // omits it we fall back to reconciliation time + warn so the
-            // discrepancy is investigable. Leaving NULL would hide that the
-            // filing occurred at all, which itself misstates the behandlings-
-            // historik (BFNAR 2013:2 kap 8 / BFL 5 kap 6§). The fallback
-            // applies only on this code path because we're inside the
-            // `if (kvittens?.uuidKvittens)` branch: if no kvittens, no stamp.
-            const submittedAt = kvittens.signeradTid || new Date().toISOString()
-            if (!kvittens.signeradTid) {
-              console.warn('[skatteverket] kvittens missing signeradTid; using reconciliation time', {
-                companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
-              })
-            }
+            // so a correction chain doesn't get its kvittens written onto a
+            // superseded row.
             const { data: latest } = await ctx.supabase
               .from('agi_declarations')
-              .select('id, salary_run_id')
+              .select('id, salary_run_id, status')
               .eq('company_id', ctx.companyId)
               .eq('period_year', periodYear)
               .eq('period_month', periodMonth)
               .order('created_at', { ascending: false })
               .limit(1)
               .maybeSingle()
-            if (latest?.id) {
-              // submitted_by is the auth.users UUID we have on hand (the
-              // operator who polled the kvittens endpoint). The actual
-              // BankID signer is identified by kvittens.signeradAv (a
-              // personnummer string), which we preserve in response_data
-              // alongside the rest of the receipt: that's the legally
-              // load-bearing audit record per BFL 5 kap 6§.
-              await ctx.supabase
-                .from('agi_declarations')
-                .update({
-                  status: 'submitted',
-                  kvittensnummer: kvittens.uuidKvittens,
-                  submitted_at: submittedAt,
-                  submitted_by: ctx.userId,
-                  response_data: {
-                    signeradAv: kvittens.signeradAv ?? null,
-                    signeradTid: kvittens.signeradTid ?? null,
-                    uuidKvittens: kvittens.uuidKvittens,
-                    arbetsgivare: kvittens.arbetsgivare ?? null,
-                    period: kvittens.period ?? null,
-                    underlag: kvittens.underlag ?? null,
-                  },
-                })
-                .eq('id', latest.id)
 
-              if (latest.salary_run_id) {
+            if (latest?.id && AGI_UNFILED_STATUSES.includes(latest.status as string)) {
+              // First receipt for this declaration. This check is what fires
+              // when the user comes back from signing, so it is usually the
+              // FIRST observer of the kvittens, and it used to promote the row
+              // with its own inline update: no compare-and-set, no deadline
+              // confirmation. The background runs only revisit
+              // pending_signature rows, so a filing recorded here kept its AGI
+              // deadline open forever. It now goes through the same promotion
+              // as the cron and the post-connect refresh: one claim, and the
+              // side effects (salary_runs.agi_submitted_at from signeradTid,
+              // cache cleanup, deadline confirmation) run exactly once, by
+              // whichever path wins. submitted_by is the operator who ran the
+              // check; the BankID signer is kvittens.signeradAv, preserved in
+              // response_data (BFL 5 kap 6§). No email: the user is looking at
+              // the panel, which shows the receipt (served from the declaration
+              // once the in-flight cache is gone, #1597).
+              const outcome = await promoteAgiDeclaration(
+                ctx.supabase,
+                {
+                  id: latest.id as string,
+                  company_id: ctx.companyId,
+                  salary_run_id: (latest.salary_run_id as string | null) ?? null,
+                  period_year: periodYear,
+                  period_month: periodMonth,
+                },
+                kvittens,
+                {
+                  reconciledBy: 'interactive',
+                  submittedBy: ctx.userId,
+                  notifyUserId: null,
+                  fromStatuses: AGI_UNFILED_STATUSES,
+                },
+              )
+              if (outcome.status === 'error') {
+                console.warn('[skatteverket] kvittens observed but the declaration was not updated', {
+                  companyId: ctx.companyId, period, message: outcome.error,
+                })
+              }
+            } else {
+              // No declaration row, or one that already carries a receipt (a
+              // correction filed on a submitted period): unchanged behaviour.
+              await ctx.settings.set(
+                `agi_submission_${period}`,
+                JSON.stringify({
+                  status: 'signed',
+                  arbetsgivare,
+                  period,
+                  kvittensnummer: kvittens.uuidKvittens,
+                  signeradAv: kvittens.signeradAv,
+                  signeradTid: kvittens.signeradTid,
+                  updatedAt: new Date().toISOString(),
+                }),
+              )
+
+              // The presence of `uuidKvittens` confirms SKV signed and accepted
+              // the AGI. signeradTid is the precise signing moment; if SKV
+              // omits it we fall back to reconciliation time + warn so the
+              // discrepancy is investigable. Leaving NULL would hide that the
+              // filing occurred at all, which itself misstates the behandlings-
+              // historik (BFNAR 2013:2 kap 8 / BFL 5 kap 6§).
+              const submittedAt = kvittens.signeradTid || new Date().toISOString()
+              if (!kvittens.signeradTid) {
+                console.warn('[skatteverket] kvittens missing signeradTid; using reconciliation time', {
+                  companyId: ctx.companyId, period, uuidKvittens: kvittens.uuidKvittens,
+                })
+              }
+              if (latest?.id) {
+                // submitted_by is the auth.users UUID we have on hand (the
+                // operator who polled the kvittens endpoint). The actual
+                // BankID signer is identified by kvittens.signeradAv (a
+                // personnummer string), which we preserve in response_data
+                // alongside the rest of the receipt: that's the legally
+                // load-bearing audit record per BFL 5 kap 6§.
                 await ctx.supabase
-                  .from('salary_runs')
-                  .update({ agi_submitted_at: submittedAt })
-                  .eq('id', latest.salary_run_id)
-                  .eq('company_id', ctx.companyId)
+                  .from('agi_declarations')
+                  .update({
+                    status: 'submitted',
+                    kvittensnummer: kvittens.uuidKvittens,
+                    submitted_at: submittedAt,
+                    submitted_by: ctx.userId,
+                    response_data: {
+                      signeradAv: kvittens.signeradAv ?? null,
+                      signeradTid: kvittens.signeradTid ?? null,
+                      uuidKvittens: kvittens.uuidKvittens,
+                      arbetsgivare: kvittens.arbetsgivare ?? null,
+                      period: kvittens.period ?? null,
+                      underlag: kvittens.underlag ?? null,
+                    },
+                  })
+                  .eq('id', latest.id)
+
+                if (latest.salary_run_id) {
+                  await ctx.supabase
+                    .from('salary_runs')
+                    .update({ agi_submitted_at: submittedAt })
+                    .eq('id', latest.salary_run_id)
+                    .eq('company_id', ctx.companyId)
+                }
               }
             }
           }
 
           return NextResponse.json({ data: result.data })
         } catch (err) {
+          if (isApigwClientRefusal(err)) {
+            // Skatteverket's gateway refuses the APIGW client for the hantera
+            // API (#2226). The thrown message is operator guidance (env var,
+            // Utvecklarportalen): nothing the person filing an AGI can act on.
+            // Same 403 as before, now with a code the panel maps to its own
+            // copy, so the UI can stop claiming it is waiting for a signature
+            // it has no way to see.
+            return NextResponse.json(
+              { error: AGI_KVITTENS_UNAVAILABLE_MESSAGE, code: 'KVITTENS_UNAVAILABLE' },
+              { status: 403 },
+            )
+          }
           return handleSkvError(err)
         }
       },

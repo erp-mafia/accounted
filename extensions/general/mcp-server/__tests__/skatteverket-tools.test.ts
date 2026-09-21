@@ -324,6 +324,52 @@ describe('gnubok_agi_status: run-scoped filing state', () => {
     expect(result.kvittensnummer).toBeNull()
     expect(result.local_state).toBeNull()
   })
+
+  // Production since July (#973, #2226): Skatteverket's gateway refuses the
+  // APIGW client for the hantera API. The submit tool tells the agent to poll
+  // this tool after signing; failing it with SKATTEVERKET_ACCESS_DENIED sent
+  // the user off to fix a behörighet that was never the problem.
+  it('survives the gateway refusing the APIGW client: local state plus kvittens_read unavailable', async () => {
+    mockKvittenser.mockRejectedValue(
+      new SkatteverketAuthError('Skatteverkets API-gateway nekade anropet.', 'ACCESS_DENIED', 'APIGW_CLIENT_REFUSED'),
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueStatusReads(enqueue, {
+      id: 'sr-waiting',
+      period_year: 2026,
+      period_month: 9,
+      agi_generated_at: '2026-09-21T07:50:00Z',
+      agi_submitted_at: null,
+    }, { status: 'awaiting_signing', salaryRunId: 'sr-waiting', updatedAt: '2026-09-21T07:58:00Z' })
+
+    const result = (await agiStatus.execute(
+      { salary_run_id: 'sr-waiting' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { filing_state: string; kvittenser: unknown; kvittens_read: string }
+
+    expect(result.filing_state).toBe('awaiting_signing')
+    expect(result.kvittenser).toBeNull()
+    expect(result.kvittens_read).toBe('unavailable')
+  })
+
+  it('reports kvittens_read ok otherwise, and still throws on a dead session', async () => {
+    const live = createQueuedMockSupabase()
+    enqueueStatusReads(live.enqueue, {
+      id: 'sr-fresh', period_year: 2026, period_month: 6, agi_generated_at: null, agi_submitted_at: null,
+    }, null)
+    const ok = (await agiStatus.execute(
+      { salary_run_id: 'sr-fresh' }, 'company-1', 'user-1', live.supabase as never, { type: 'api_key' },
+    )) as { kvittens_read: string }
+    expect(ok.kvittens_read).toBe('ok')
+
+    mockKvittenser.mockRejectedValue(new SkatteverketAuthError('Sessionen har gått ut.', 'SESSION_EXPIRED'))
+    const dead = createQueuedMockSupabase()
+    enqueueStatusReads(dead.enqueue, {
+      id: 'sr-fresh', period_year: 2026, period_month: 6, agi_generated_at: null, agi_submitted_at: null,
+    }, null)
+    await expect(
+      agiStatus.execute({ salary_run_id: 'sr-fresh' }, 'company-1', 'user-1', dead.supabase as never, { type: 'api_key' }),
+    ).rejects.toBeTruthy()
+  })
 })
 
 describe('gnubok_vat_declaration_status: redovisningsperiod follows the räkenskapsår', () => {

@@ -168,6 +168,12 @@ export function AGIPanel(props: AGIPanelProps) {
   // /authorize call overwrites the stored oauth_state + PKCE verifier, so a
   // parallel flow guarantees a CSRF failure for whichever tab finishes last.
   const [connecting, setConnecting] = useState(false)
+  // True once a kvittens check came back KVITTENS_UNAVAILABLE: Skatteverket's
+  // gateway refuses the receipt read for the whole installation (#2226), so
+  // nobody, signed or not, can be shown as signed from here. While it holds
+  // the panel must not claim it is "waiting for the BankID signature": it
+  // cannot see one. Cleared by the first check that gets through.
+  const [kvittensUnavailable, setKvittensUnavailable] = useState(false)
   // Dismissal for the kvittens-scope notice, keyed by employer plus the exact
   // granted scope string. The employer keeps dismissals from leaking across
   // companies on a shared browser (tokens are per company, so each company's
@@ -397,7 +403,14 @@ export function AGIPanel(props: AGIPanelProps) {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/agi/kvittenser?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
       )
-      if (!res.ok) return false
+      if (!res.ok) {
+        // Silent on every failure but one: a refused receipt read changes what
+        // the panel may truthfully say about the signature.
+        const failure = await res.json().catch(() => null)
+        if (failure?.code === 'KVITTENS_UNAVAILABLE') setKvittensUnavailable(true)
+        return false
+      }
+      setKvittensUnavailable(false)
       const json = await res.json()
       const signed = !!json.data?.kvittenser?.[0]?.uuidKvittens
       onRefreshSubmission()
@@ -453,14 +466,20 @@ export function AGIPanel(props: AGIPanelProps) {
   // state to 'signed', hiding the signing actions. The ref makes the on-enter
   // check fire once per episode even if checkKvittens's identity churns (its
   // onChange dep is an unmemoized parent callback).
-  const signCheckedRef = useRef(false)
+  //
+  // "Once per episode" is keyed by the Skatteverket session (its expiresAt),
+  // not a plain flag: a check made on a dead session fails silently, and the
+  // reconnect that follows is exactly when it can succeed, so a new session
+  // earns one more check. Waiting for the status load keeps mount at one call.
+  const signCheckedRef = useRef<string | null>(null)
+  const sessionKey = loading ? null : status?.expiresAt ?? 'unknown'
   useEffect(() => {
     if (submission?.status !== 'awaiting_signing') {
-      signCheckedRef.current = false
+      signCheckedRef.current = null
       return
     }
-    if (!signCheckedRef.current) {
-      signCheckedRef.current = true
+    if (sessionKey && signCheckedRef.current !== sessionKey) {
+      signCheckedRef.current = sessionKey
       checkKvittens()
     }
     function onVisible() {
@@ -468,7 +487,7 @@ export function AGIPanel(props: AGIPanelProps) {
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [submission?.status, checkKvittens])
+  }, [submission?.status, sessionKey, checkKvittens])
 
   const handleDisconnect = useCallback(async () => {
     // No disconnect while an OAuth tab is in flight: the callback completing
@@ -843,10 +862,17 @@ export function AGIPanel(props: AGIPanelProps) {
         `/api/extensions/ext/skatteverket/agi/kvittenser?arbetsgivare=${encodeURIComponent(arbetsgivare)}&period=${period}`,
       )
       const json = await res.json()
+      if (json.code === 'KVITTENS_UNAVAILABLE') {
+        // Not an error the user can act on: the status row and the note under
+        // it say what is true and where the receipt can be verified.
+        setKvittensUnavailable(true)
+        return
+      }
       if (!res.ok || json.error) {
         setError(json.error || t('kvittens_fetch_failed'))
         return
       }
+      setKvittensUnavailable(false)
       const kvittens = json.data?.kvittenser?.[0]
       if (kvittens?.uuidKvittens) {
         setSuccess(t('signed_success'))
@@ -1096,9 +1122,11 @@ export function AGIPanel(props: AGIPanelProps) {
               awaitingSigning
                 ? draftIsStale
                   ? t('pending_stale_draft')
-                  : sessionExpiredStatus
-                    ? t('pending_signature_unverifiable')
-                    : t('pending_awaiting_signature')
+                  : kvittensUnavailable
+                    ? t('pending_signature_unreadable')
+                    : sessionExpiredStatus
+                      ? t('pending_signature_unverifiable')
+                      : t('pending_awaiting_signature')
                 : underlagSubmitted
                   ? t('pending_underlag_submitted')
                   : t('pending_not_submitted')
@@ -1113,8 +1141,14 @@ export function AGIPanel(props: AGIPanelProps) {
             BankID signing is even possible. */}
         {submission?.signeringslank && awaitingSigning && !draftIsStale && (
           <div className="text-sm">
-            <p className="font-medium">{t('draft_locked_title')}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{t('draft_locked_description')}</p>
+            <p className="font-medium">
+              {kvittensUnavailable ? t('kvittens_unavailable_title') : t('draft_locked_title')}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {kvittensUnavailable
+                ? t('kvittens_unavailable_description')
+                : t('draft_locked_description')}
+            </p>
             <a
               href={submission.signeringslank}
               target="_blank"

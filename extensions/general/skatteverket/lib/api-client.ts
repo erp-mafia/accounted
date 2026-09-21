@@ -345,6 +345,42 @@ function connectorHost(connectBaseUrl: string): string {
 }
 
 /**
+ * MuleSoft's Client ID Enforcement policy refusing the APIGW client itself,
+ * observed verbatim on production for the AGI hantera API (#973, #2226):
+ *
+ *   401, WWW-Authenticate: Client-ID-Enforcement
+ *   { "error": "Invalid client id or secret" }
+ *
+ * The policy runs BEFORE the bearer is looked at, so the answer is the same
+ * for every company, every user and every token (a probe with no bearer at all
+ * gets it too). That makes it an installation-level state, not a property of
+ * the connection that happened to make the call: no reconnect, refresh or
+ * credential switch changes it, only the API subscription in Utvecklarportalen
+ * does. Callers therefore need to tell it apart from the other ACCESS_DENIED
+ * causes: it must never be retried per declaration, never re-raised as a fresh
+ * error per tick, and never shown to an end customer as a to-do.
+ */
+function isApigwClientRefusalResponse(body: string, wwwAuthenticate: string): boolean {
+  return (
+    /client-id-enforcement/i.test(wwwAuthenticate) ||
+    /invalid client id or secret/i.test(body)
+  )
+}
+
+/**
+ * Operator-facing message for a gateway refusal that points at the APIGW
+ * client alone. Single-sourced so the explicit Client-ID-Enforcement branch
+ * and the keyword branch below cannot drift apart.
+ */
+function apigwClientMessage(url: string, connectBaseUrl: string | null): string {
+  return connectBaseUrl
+    ? connectorGatewayMessage(url, connectBaseUrl)
+    : `Skatteverkets API-gateway nekade anropet till "${apiHintFromUrl(url)}". ` +
+        'Kontrollera att din APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har ' +
+        'prenumeration på denna tjänst i Utvecklarportalen.'
+}
+
+/**
  * A genuine token-scope rejection: the stored access token predates a scope
  * the service now requires, and only a fresh consent can widen it.
  *
@@ -559,6 +595,10 @@ export async function skvRequestWithAuth(
       headers: skvHeaders,
     })
 
+    // The gateway refusing the APIGW client is decided before any bearer is
+    // evaluated, so it is the same verdict in both auth modes.
+    const clientRefused = isApigwClientRefusalResponse(text, wwwAuth)
+
     if (auth.mode === 'system') {
       // A rejected system token is a run-level credential problem (cert,
       // token endpoint, APIGW subscription): drop the cache so the next
@@ -567,7 +607,16 @@ export async function skvRequestWithAuth(
       throw new SkatteverketAuthError(
         'Skatteverket avvisade systemautentiseringen. Kontrollera certifikatet ' +
         'och APIGW-prenumerationerna för systemklienten.',
-        'SYSTEM_AUTH_FAILED'
+        'SYSTEM_AUTH_FAILED',
+        clientRefused ? 'APIGW_CLIENT_REFUSED' : undefined
+      )
+    }
+
+    if (clientRefused) {
+      throw new SkatteverketAuthError(
+        apigwClientMessage(url, connector ? connector.baseUrl : null),
+        'ACCESS_DENIED',
+        'APIGW_CLIENT_REFUSED'
       )
     }
 
@@ -643,11 +692,7 @@ export async function skvRequestWithAuth(
       // client alone, so the message must not muddy it with the scope story.
       // Connector mode: the gateway client is the broker's, not the instance's.
       throw new SkatteverketAuthError(
-        connector
-          ? connectorGatewayMessage(url, connector.baseUrl)
-          : `Skatteverkets API-gateway nekade anropet till "${apiHintFromUrl(url)}". ` +
-            'Kontrollera att din APIGW-klient (SKATTEVERKET_APIGW_CLIENT_ID) har ' +
-            'prenumeration på denna tjänst i Utvecklarportalen.',
+        apigwClientMessage(url, connector ? connector.baseUrl : null),
         'ACCESS_DENIED'
       )
     }
@@ -825,9 +870,22 @@ export class SkatteverketAuthError extends Error {
       | 'RATE_LIMITED'
       | 'TOKEN_CORRUPTED'
       | 'SYSTEM_AUTH_FAILED'
-      | 'OMBUD_GRANT_MISSING'
+      | 'OMBUD_GRANT_MISSING',
+    /**
+     * Narrows a code whose blast radius callers must know. APIGW_CLIENT_REFUSED:
+     * the gateway refused the APIGW client itself (see
+     * isApigwClientRefusalResponse), an installation-level state no connection
+     * can change. Kept off `code` on purpose: every existing consumer of
+     * ACCESS_DENIED / SYSTEM_AUTH_FAILED (error map, MCP, v1 API) stays correct.
+     */
+    public readonly detail?: 'APIGW_CLIENT_REFUSED'
   ) {
     super(message)
     this.name = 'SkatteverketAuthError'
   }
+}
+
+/** True when `err` is Skatteverket's gateway refusing the APIGW client itself. */
+export function isApigwClientRefusal(err: unknown): err is SkatteverketAuthError {
+  return err instanceof SkatteverketAuthError && err.detail === 'APIGW_CLIENT_REFUSED'
 }

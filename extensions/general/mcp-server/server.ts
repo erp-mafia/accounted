@@ -384,7 +384,7 @@ import { mirrorExtractionToDocument } from '@/extensions/general/invoice-inbox/l
 // pattern as invoice-inbox above: the CI guard only checks lib/, app/api/,
 // components/. The two submit tools stage ops whose commit dispatches back into
 // the skatteverket extension via the registry (lib/pending-operations/commit.ts).
-import { skvRequest, SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
+import { skvRequest, SkatteverketAuthError, isApigwClientRefusal } from '@/extensions/general/skatteverket/lib/api-client'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/agi-submission-status'
 import { buildMomsuppgift, resolveRedovisare, resolveRedovisningsperiod } from '@/extensions/general/skatteverket/lib/declaration-prep'
@@ -2172,6 +2172,11 @@ const SKV_AGI_STATUS_OUTPUT_SCHEMA = {
       description: 'Run-scoped cached submission record; null when the period record belongs to a sibling run.',
     },
     kvittenser: { type: ['array', 'null'], description: 'Signed receipts from Skatteverket, or null when unavailable' },
+    kvittens_read: {
+      type: 'string',
+      enum: ['ok', 'unavailable'],
+      description: "unavailable: Skatteverket refuses receipt reads for this installation, so filing_state cannot reach signed. Stop polling; the user verifies the filing in Skatteverket's Arbetsgivardeklaration e-service.",
+    },
   },
   required: ['salary_run_id', 'period', 'filing_state', 'kvittensnummer', 'local_state', 'kvittenser'],
 } as const
@@ -16491,12 +16496,27 @@ export const tools: McpTool[] = [
         // leaves kvittenser null rather than hard-failing the status check;
         // auth errors throw and map to SKATTEVERKET_NOT_CONNECTED.
         let kvittenser: unknown = null
-        const res = await agiGetKvittenser({ mode: 'user', supabase, userId, companyId }, arbetsgivare, period)
-        await writeSkatteverketAudit(ctx, {
-          endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
-          outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
-        })
-        if (res.ok) kvittenser = res.data.kvittenser
+        // Skatteverket's gateway refusing the APIGW client (#2226) is an
+        // installation-level state, not this caller's authorisation: failing
+        // the whole status read with SKATTEVERKET_ACCESS_DENIED told the agent
+        // to send the user off to fix a behörighet that is not the problem,
+        // and hid the local filing state it had already resolved.
+        let kvittensRead: 'ok' | 'unavailable' = 'ok'
+        try {
+          const res = await agiGetKvittenser({ mode: 'user', supabase, userId, companyId }, arbetsgivare, period)
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
+            outcome: res.ok ? 'ok' : 'skv_error', responseStatus: res.status,
+          })
+          if (res.ok) kvittenser = res.data.kvittenser
+        } catch (err) {
+          if (!isApigwClientRefusal(err)) throw err
+          kvittensRead = 'unavailable'
+          await writeSkatteverketAudit(ctx, {
+            endpoint: 'kvittenser', agRegistreradId: arbetsgivare, redovisningsperiod: period,
+            outcome: 'auth_error', responseStatus: 401,
+          })
+        }
         return {
           salary_run_id: salaryRunId,
           period,
@@ -16506,6 +16526,7 @@ export const tools: McpTool[] = [
           // (the agent must not read a sibling run's receipt as this one's).
           local_state: ownSubmission,
           kvittenser,
+          kvittens_read: kvittensRead,
         }
       } catch (err) {
         throw mapSkatteverketError(err)

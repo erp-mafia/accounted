@@ -25,7 +25,7 @@ vi.mock('../lib/oauth', () => ({
   exchangeCodeForTokens: vi.fn(),
 }))
 
-import { skvRequest, skvRequestWithAuth, SkatteverketAuthError } from '../lib/api-client'
+import { skvRequest, skvRequestWithAuth, SkatteverketAuthError, isApigwClientRefusal } from '../lib/api-client'
 import { __resetSystemTokenCacheForTests } from '../lib/system-auth/token-provider'
 
 const fakeSupabase = {} as unknown as Parameters<typeof skvRequest>[0]
@@ -199,6 +199,59 @@ describe('skvRequest: error mapping', () => {
     }
   })
 
+  // The production response for the AGI hantera API (#973, #2226): MuleSoft's
+  // Client ID Enforcement policy refusing the APIGW client before any bearer
+  // is read. Same code as before (every ACCESS_DENIED consumer stays correct),
+  // but tagged, because it is the one refusal no connection can change and
+  // callers must be able to stop asking.
+  it('tags the Client-ID-Enforcement 401 as APIGW_CLIENT_REFUSED', async () => {
+    process.env.SKATTEVERKET_API_BASE_URL =
+      'https://api.skatteverket.se/arbetsgivardeklaration/hanteraredovisningsperiod/v1'
+    mockFetchStatus(401, '{\n  "error": "Invalid client id or secret"\n}', {
+      'WWW-Authenticate': 'Client-ID-Enforcement',
+    })
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+      expect((e as SkatteverketAuthError).detail).toBe('APIGW_CLIENT_REFUSED')
+      expect(isApigwClientRefusal(e)).toBe(true)
+      expect((e as SkatteverketAuthError).message).toContain(
+        'arbetsgivardeklaration/hanteraredovisningsperiod/v1',
+      )
+    }
+  })
+
+  it('tags it from the challenge header alone (the gateway often sends no body)', async () => {
+    mockFetchStatus(401, '', { 'WWW-Authenticate': 'Client-ID-Enforcement' })
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(isApigwClientRefusal(e)).toBe(true)
+    }
+  })
+
+  it('does not tag the other ACCESS_DENIED causes', async () => {
+    for (const [status, body] of [
+      [401, ''],
+      [403, '{"error": "The required scopes are not authorized"}'],
+      [403, 'Forbidden'],
+    ] as const) {
+      mockFetchStatus(status, body)
+      try {
+        await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x')
+        expect.fail('expected throw')
+      } catch (e) {
+        expect((e as SkatteverketAuthError).code).toBe('ACCESS_DENIED')
+        expect(isApigwClientRefusal(e)).toBe(false)
+      }
+    }
+    expect(isApigwClientRefusal(new Error('boom'))).toBe(false)
+  })
+
   it('maps generic 403 → ACCESS_DENIED', async () => {
     mockFetchStatus(403, 'Forbidden')
     try {
@@ -282,6 +335,22 @@ describe('skvRequestWithAuth: system mode', () => {
     }
     // The revoked-body branch deletes the user row in user mode; system
     // mode must never reach it.
+    expect(deleteTokensMock).not.toHaveBeenCalled()
+  })
+
+  it('a Client-ID-Enforcement 401 in system mode keeps SYSTEM_AUTH_FAILED and carries the tag', async () => {
+    // The gateway never looked at the bearer, so switching credential changes
+    // nothing: the tag is what stops a caller from trying the other one.
+    mockFetchStatus(401, '{"error": "Invalid client id or secret"}', {
+      'WWW-Authenticate': 'Client-ID-Enforcement',
+    })
+    try {
+      await skvRequestWithAuth({ mode: 'system' }, 'GET', '/x')
+      expect.fail('expected throw')
+    } catch (e) {
+      expect((e as SkatteverketAuthError).code).toBe('SYSTEM_AUTH_FAILED')
+      expect(isApigwClientRefusal(e)).toBe(true)
+    }
     expect(deleteTokensMock).not.toHaveBeenCalled()
   })
 

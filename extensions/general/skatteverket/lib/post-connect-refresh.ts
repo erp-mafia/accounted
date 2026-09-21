@@ -107,6 +107,16 @@ export async function runPostConnectRefresh(
         })
         if (outcome.status === 'signed') {
           result.reconciled++
+        } else if (outcome.status === 'gateway_refused') {
+          // Skatteverket's gateway refuses the APIGW client itself (#2226):
+          // the same answer awaits every remaining period, and each one costs
+          // a rate-limited round-trip inside the OAuth callback the user is
+          // waiting on. One line, then stop.
+          log.warn('post-connect kvittens reconcile stopped: gateway refuses the APIGW client', {
+            companyId,
+            issue: '#2226',
+          })
+          break
         } else if (outcome.status === 'error') {
           // Non-throw failures (SKV HTTP errors, claim-update failures) are
           // returned as an outcome; surface them so they stay attributable.

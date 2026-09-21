@@ -44,6 +44,7 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
     constructor(
       message: string,
       public readonly code: string,
+      public readonly detail?: string,
     ) {
       super(message)
       this.name = 'SkatteverketAuthError'
@@ -51,6 +52,10 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
   }
   return {
     SkatteverketAuthError,
+    // Same predicate as the real module: the reconciler turns this one
+    // refusal into the gateway_refused outcome instead of letting it throw.
+    isApigwClientRefusal: (err: unknown) =>
+      err instanceof SkatteverketAuthError && err.detail === 'APIGW_CLIENT_REFUSED',
     // resolve-auth's currentSkvEnvironment (grant-revoked path) reads this.
     getSkatteverketEnvironment: vi.fn().mockReturnValue('test'),
   }
@@ -164,6 +169,10 @@ describe('AGI kvittenser cron', () => {
     process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://test.supabase.co'
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
     mockVerifyCronSecret.mockReturnValue(null)
+    // The fixture kvittenser are signed 2026-06-01T10:00Z: run the cron a
+    // quarter of an hour later, as production does. A kvittens first observed
+    // weeks after signing is recorded without the email (reconciler tests).
+    vi.useFakeTimers({ now: new Date('2026-06-01T10:15:00Z'), toFake: ['Date'] })
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
@@ -171,6 +180,7 @@ describe('AGI kvittenser cron', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     warnSpy.mockRestore()
     errorSpy.mockRestore()
     logSpy.mockRestore()
@@ -311,7 +321,71 @@ describe('AGI kvittenser cron', () => {
     expect(summaryLine).toContain('1 grants revoked')
   })
 
-  it('treats ACCESS_DENIED as a real error now that the APIGW subscription is expected (#2226)', async () => {
+  // Production since July (#973, #2226): the gateway refuses the APIGW client
+  // for the hantera API before it reads any bearer. 110 "Reconciliation
+  // failed" errors in two days came from asking again per declaration, per tick.
+  it('stops the run at the first gateway refusal of the APIGW client: one warn, no error, no further calls', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub({
+        agi_declarations: {
+          data: [
+            PENDING_DECLARATION,
+            { ...PENDING_DECLARATION, id: 'decl-2', company_id: 'comp-2', period_month: 6 },
+            { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3', period_month: 7 },
+          ],
+        },
+        skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+        company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+      }),
+    )
+    mockAgiGetKvittenser.mockRejectedValue(
+      new (SkatteverketAuthError as any)(
+        'Skatteverkets API-gateway nekade anropet.',
+        'ACCESS_DENIED',
+        'APIGW_CLIENT_REFUSED',
+      ),
+    )
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // Asked once, not three times: the answer cannot differ per declaration.
+    expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(1)
+    expect(body.gatewayRefused).toBe(true)
+    expect(body.processed).toBe(1)
+    expect(body.errors).toBe(0)
+    expect(body.results).toEqual([
+      { declarationId: 'decl-1', period: '202605', status: 'gateway_refused' },
+    ])
+
+    // A standing operator-side state, not a fresh error per tick.
+    expect(errorRecorder).not.toHaveBeenCalled()
+    expect(warnRecorder).toHaveBeenCalledTimes(1)
+    expect(String(warnRecorder.mock.calls[0][0])).toContain('gateway refuses the APIGW client')
+    expect(warnRecorder.mock.calls[0][1]).toMatchObject({ issue: '#2226', pending: 3 })
+    // Nothing about the connection is wrong: no reconsent flag, no grant downgrade.
+    expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
+    expect(mockMarkGrantRevoked).not.toHaveBeenCalled()
+
+    const summaryLine = logSpy.mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .find((m: string) => m.includes('Processed'))
+    expect(summaryLine).toContain('gateway refused the APIGW client')
+  })
+
+  it('reports gatewayRefused false on an ordinary run, so the first accepted call is visible', async () => {
+    mockCreateClient.mockReturnValueOnce(stubHappyTables())
+    mockAgiGetKvittenser.mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [] } } as any)
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.gatewayRefused).toBe(false)
+    expect(body.stillPending).toBe(1)
+    expect(warnRecorder).not.toHaveBeenCalled()
+  })
+
+  it('keeps every other ACCESS_DENIED (kill switch, scope contract, generic 403) in the error path', async () => {
     mockCreateClient.mockReturnValueOnce(stubHappyTables())
     mockAgiGetKvittenser.mockRejectedValueOnce(
       new SkatteverketAuthError('Skatteverkets API-gateway nekade anropet.', 'ACCESS_DENIED'),
@@ -333,9 +407,8 @@ describe('AGI kvittenser cron', () => {
     // companyId is internal log context, never response payload.
     expect(body.results[0]).not.toHaveProperty('companyId')
 
-    // A gateway refusal is a regression, not a known gap: error level with
-    // the gateway's message in context, no warn-once suppression, no
-    // reconsent flagging.
+    // Untagged access denials are real failures: error level with the
+    // message in context, no suppression, no reconsent flagging.
     expect(errorRecorder).toHaveBeenCalledTimes(1)
     expect(String(errorRecorder.mock.calls[0][0])).toContain('Reconciliation failed')
     expect(errorRecorder.mock.calls[0][1]).toMatchObject({
