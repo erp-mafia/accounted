@@ -64,6 +64,19 @@ matched exactly for both windows, with 1,000 keys each. The original timings
 use a direct diagnostic SQL connection with the longer timeout; new timings
 include HTTP overhead. These are a small sample, not latency percentiles.
 
+A later pre-merge rerun had six SQLSTATE 57014 timeouts in 16 HTTP requests,
+including five of six concurrent requests. The installed SQL still matched the
+migration. Direct comparisons found no material improvement from lateral line
+aggregation or narrower intermediate rows, and full versus minimal JWT claims
+had comparable timings. The cause of the latency variation was not established.
+
+With the same SQL, the next complete run passed all 16 requests: all-history
+serial reads took 4.034 to 4.404 s, 12-month reads took 3.106 to 3.212 s, and the
+slowest concurrent request took 4.616 s. Full old/new JSON matched again for both
+windows. The parity script now sets both JWT claim formats and asserts the
+fixture's `auth.uid()` before querying. Preserve the failed run as a reliability
+limitation; successful samples do not establish that timeouts cannot recur.
+
 ## Complete-flow validation
 
 The approved staging-only legacy fixture cleanup unblocked replay of the

@@ -59,9 +59,14 @@ async function main() {
       .split('AS $$')[2]!.split('$$;')[0]!
       .replaceAll('p_company_id', '$1::uuid').replaceAll('p_from_date', '$2::date').replaceAll('p_limit', '$3::integer')
     await db.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY')
+    await db.query("SELECT set_config('request.jwt.claims', $1, true)", [
+      JSON.stringify({ sub: fixture.user, role: 'authenticated' }),
+    ])
     await db.query("SELECT set_config('request.jwt.claim.sub', $1, true)", [fixture.user])
     await db.query('SET LOCAL ROLE authenticated')
     await db.query("SET LOCAL statement_timeout='120s'")
+    assert.equal((await db.query('SELECT auth.uid()::text AS uid')).rows[0]?.uid, fixture.user,
+      'The parity transaction must run as the synthetic fixture user')
     const parity = []
     for (const date of [null, fromDate]) {
       const args = [fixture.company, date, 5000]
