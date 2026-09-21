@@ -306,4 +306,52 @@ describe('getSkattekontoReconciliationStatus', () => {
     expect(s.counts.unmatched_external).toBe(1)
     expect(s.items.unmatched_external[0].item_id).toBe('r-open')
   })
+
+  it('counts an entry linked from before the history start inside the history, not as an opening difference', async () => {
+    // A payment booked on the bank date (01-21) that Skatteverket dates the day
+    // after (01-22), which is also the first row we hold.
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A2 = head('A2', '2026-01-21')
+    const A98 = head('A98', '2026-08-17')
+    enqueueBase(enqueue, {
+      saldo: 0,
+      rows: [
+        row('r-pay', '2026-01-22', 2075, { journal_entry_id: 'A2' }),
+        row('r-moms', '2026-08-17', -2075, { journal_entry_id: 'A98' }),
+      ],
+      heads: [A2, A98],
+    })
+    sumAccountBalanceMock.mockImplementation(
+      async (_s: unknown, _c: unknown, _a: unknown, options: { beforeDate?: string }) =>
+        options.beforeDate ? 2075 : 0,
+    )
+    // Window read [01-22, cutoff], then the read of the linked entry before it.
+    fetchEntryLinesMock.mockResolvedValueOnce([ledgerLine(A98, -2075)])
+    fetchEntryLinesMock.mockResolvedValueOnce([ledgerLine(A2, 2075)])
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(fetchEntryLinesMock).toHaveBeenCalledTimes(2)
+    expect(s.skattekonto?.opening_difference).toBe(0)
+    expect(s.unexplained_difference).toBe(0)
+    expect(s.is_reconciled).toBe(true)
+    expect(s.bridge.find((b) => b.key === 'opening_difference')).toBeUndefined()
+  })
+
+  it('keeps a real opening difference when the entry before the history start is not linked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const E = head('E5', '2026-08-01')
+    enqueueBase(enqueue, {
+      saldo: 1000,
+      rows: [row('r1', '2026-08-01', 1000, { journal_entry_id: 'E5' })],
+      heads: [E],
+    })
+    ledger([ledgerLine(E, 1000)], { cutoff: 1500, before: 500 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    if (!s) throw new Error('expected status')
+    expect(fetchEntryLinesMock).toHaveBeenCalledTimes(1)
+    expect(s.skattekonto?.opening_difference).toBe(-500)
+    expect(s.unexplained_difference).toBe(0)
+  })
 })

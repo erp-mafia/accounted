@@ -197,6 +197,33 @@ async function fetchLedgerEntries(
   return byEntry
 }
 
+/**
+ * Net 1630 movement of the given entries. Used for entries a Skatteverket row
+ * is linked to but that are dated before the comparable history (a payment is
+ * booked on the bank date, Skatteverket dates it the day after).
+ */
+async function sumLedgerAmountForEntries(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryIds: string[],
+): Promise<number> {
+  let total = 0
+  for (const part of chunk(entryIds, ENTRY_ID_CHUNK)) {
+    const lines = await fetchEntryLines<LedgerLineRow>({
+      supabase,
+      entryColumns: 'id',
+      lineColumns: 'debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).in('status', [...LEDGER_BALANCE_STATUSES]).in('id', part),
+      filterLines: (q: EntryLinesQuery) => q.eq('account_number', SKATTEKONTO_ACCOUNT),
+    })
+    for (const line of lines) {
+      total = roundOre(total + Number(line.debit_amount || 0) - Number(line.credit_amount || 0))
+    }
+  }
+  return total
+}
+
 function proposalFrom(head: EntryHead, row: SkattekontoRow): ReconciliationProposal {
   return {
     journal_entry_id: head.id,
@@ -228,6 +255,7 @@ function inWindow(date: string, from: string | null | undefined, to: string | nu
  *
  *   saldo_at_start     = saldo_skatteverket - sum(all SKV-posted rows we hold)
  *   opening_difference = saldo_at_start - ledger balance before history_start
+ *                        (less entries before history_start that a row links to)
  *   difference         = saldo_skatteverket - ledger balance at the snapshot
  *   unexplained        = difference - opening_difference
  *                        - sum(unlinked SKV rows) - sum(ignored SKV rows)
@@ -288,12 +316,40 @@ export async function getSkattekontoReconciliationStatus(
       error: err instanceof Error ? err.message : String(err),
     })
   }
-  const [ledgerBalance, ledgerBefore] = await Promise.all([
+  // A live link can reach an entry dated before historyStart. Its 1630 line
+  // is settled by a row inside the history, so it belongs to the comparable
+  // history, not to the opening balance; left in `ledgerBefore` the pair never
+  // cancels and shows up as an opening difference plus an equal residual.
+  const linkedBeforeStartIds = historyStart
+    ? Array.from(
+        new Set(
+          booked.flatMap((r) => {
+            if (r.is_ignored || !r.journal_entry_id) return []
+            const head = heads.get(r.journal_entry_id)
+            return head && head.status === 'posted' && head.entry_date < historyStart ? [head.id] : []
+          }),
+        ),
+      )
+    : []
+  const [ledgerBalance, ledgerBeforeByDate, linkedBeforeStart] = await Promise.all([
     sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { cutoffDate }),
     historyStart
       ? sumAccountBalance(supabase, companyId, SKATTEKONTO_ACCOUNT, { beforeDate: historyStart })
       : Promise.resolve<number | null>(0),
+    linkedBeforeStartIds.length > 0
+      ? sumLedgerAmountForEntries(supabase, companyId, linkedBeforeStartIds).catch((err) => {
+          log.warn('linked entries before history start read failed', {
+            companyId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return null
+        })
+      : Promise.resolve<number | null>(0),
   ])
+  const ledgerBefore =
+    ledgerBeforeByDate === null || linkedBeforeStart === null
+      ? null
+      : roundOre(ledgerBeforeByDate - linkedBeforeStart)
   if (ledgerBalance === null || ledgerBefore === null) ledgerReadFailed = true
 
   const liveLinkedEntryIds = new Set<string>()
