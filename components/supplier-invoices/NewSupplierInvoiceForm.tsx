@@ -1472,7 +1472,7 @@ export default function NewSupplierInvoiceForm({
         : watchedCurrency,
     )
   }
-  if ((watchedCurrency || 'SEK') === 'SEK' && !oreRounding) forvalChips.push(t('chip_ore_rounding_off'))
+  if ((watchedCurrency || 'SEK') === 'SEK' && oreRounding) forvalChips.push(t('ore_rounding_label'))
   if (watchedDeliveryDate) forvalChips.push(t('chip_delivery_date', { date: formatDate(watchedDeliveryDate) }))
   if ((watchedNotes || '').trim()) forvalChips.push(t('chip_notes'))
   if (dimensionsEnabled && defaultDimsSummary) forvalChips.push(defaultDimsSummary)

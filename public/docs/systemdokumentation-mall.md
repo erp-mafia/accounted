@@ -124,7 +124,7 @@ Följande delsystem matar journalen:
 
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
 
-När öresavrundning väljs vid registrering av en leverantörsfaktura sparas avrundningen som en separat fakturarad på konto 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden. Avrundningen ändrar inte momsbeloppet eller beskattningsunderlaget för omvänd skattskyldighet. Regeln införs med programversionen för PR #2849; version och första observerade driftsättning visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte.
+Öresavrundning är avstängd som standard för nya leverantörsfakturor oavsett företagsinställning. Användaren väljer avrundning när den finns på leverantörens faktura. Redan inlästa avrundningsrader behålls även när valet är avstängt. När avrundning väljs sparas den som en separat fakturarad på konto 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden. Avrundningen ändrar inte momsbeloppet eller beskattningsunderlaget för omvänd skattskyldighet. Regeln införs med programversionen för PR #2849; version och första observerade driftsättning visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte.
 
 ### 4.5 Dimensioner
 

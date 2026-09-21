@@ -246,6 +246,7 @@ describe('generateFullArchive', () => {
       expect(zip.file('revision/behandlingshistorik.json')).not.toBeNull()
       expect(zip.file('revision/systemdokumentation.json')).not.toBeNull()
       const documentation = JSON.parse(await zip.file('revision/systemdokumentation.json')!.async('text'))
+      expect(documentation.leverantorsfakturor_avrundning_regler.val).toContain('oavsett företagsinställning')
       expect(documentation.leverantorsfakturor_avrundning_regler.registrering).toContain('3740 utan moms')
       expect(documentation.leverantorsfakturor_avrundning_regler.moms).toContain('inte i beskattningsunderlaget')
       expect(documentation.leverantorsfakturor_avrundning_regler.historik).toContain('app_releases')

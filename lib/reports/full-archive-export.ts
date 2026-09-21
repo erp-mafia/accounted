@@ -1636,6 +1636,7 @@ async function buildSystemDoc(
       sie_import_regler: 'SIE-importer kan bevara oanvända kontodefinitioner i klass 0 och 9. Konton med belopp måste mappas till konton 1000-8999, eftersom klass 0 och 9 inte stöds som ekonomiska rapportkonton. Källfil och kontomappningar bevaras i importarkivet.',
     },
     leverantorsfakturor_avrundning_regler: {
+      val: 'Avstängd som standard för nya leverantörsfakturor oavsett företagsinställning. Användaren väljer avrundning när den finns på leverantörens faktura. Redan inlästa avrundningsrader behålls även när valet är avstängt.',
       registrering: 'När öresavrundning väljs i leverantörsfakturaeditorn sparas skillnaden till hel krona som en separat fakturarad på 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden.',
       moms: 'Avrundningsraden ändrar inte momsbeloppet och ingår inte i beskattningsunderlaget för omvänd skattskyldighet.',
       historik: 'Regeln infördes i PR #2849. Programversion och första observerade driftsättning registreras i app_releases och visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte av denna regel.',
