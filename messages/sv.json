@@ -8381,6 +8381,7 @@
     "add_line_hint_deduction": "Beloppet dras från lönen. Skriv det utan minustecken.",
     "add_line_hint_signed": "Minus minskar lönen, plus ökar den.",
     "add_line_invalid": "Ange ett belopp, eller antal och à-pris.",
+    "add_line_above_cap": "Skattefritt är högst {cap} per {unit} det här året. Lägg den del som överstiger som {taxable}.",
     "add_line_save": "Lägg till",
     "add_line_cancel": "Avbryt",
     "line_added": "Raden är tillagd",

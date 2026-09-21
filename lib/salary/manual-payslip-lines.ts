@@ -143,22 +143,52 @@ export interface ManualLineBody extends ManualLineFlags {
 }
 
 /**
+ * Skatteverket's tax-free schablon per unit for the year of the run
+ * (payroll_config: milersattning_egen_bil per mil, traktamente_heldag per
+ * day). A tax-free line priced above it is simply taxable pay and is
+ * refused; the excess belongs on the "skattepliktig" row. Absent = not
+ * checked (the run has not been calculated yet, so its year's config is
+ * not on the run).
+ */
+export interface ManualLineCaps {
+  mileage_taxfree?: number
+  traktamente_taxfree?: number
+}
+
+export type ManualLineBuild =
+  | { ok: true; body: ManualLineBody }
+  | { ok: false; reason: 'no_amount' }
+  | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' }
+
+/**
  * The request body for POST /api/salary/runs/{id}/lines (minus the
  * salary_run_employee_id). The magnitude comes from quantity x unit_price
  * when both are given, else from amount; deductions are stored negative,
- * additions positive, a correction keeps the sign typed. Returns null when
- * no amount can be derived or it is zero.
+ * additions positive, a correction keeps the sign typed. Refuses a zero or
+ * missing amount, and a tax-free reimbursement priced above its schablon.
  */
-export function buildManualPayslipLine(input: ManualLineInput): ManualLineBody | null {
+export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineCaps = {}): ManualLineBuild {
   const spec = MANUAL_PAYSLIP_LINE_SPECS[input.item_type]
-  if (!spec) return null
+  if (!spec) return { ok: false, reason: 'no_amount' }
   const quantity = finite(input.quantity)
   const unitPrice = finite(input.unit_price)
   const typed = finite(input.amount)
   const raw = quantity !== undefined && unitPrice !== undefined ? quantity * unitPrice : typed
-  if (raw === undefined) return null
+  if (raw === undefined) return { ok: false, reason: 'no_amount' }
   const magnitude = roundOre(Math.abs(raw))
-  if (magnitude === 0) return null
+  if (magnitude === 0) return { ok: false, reason: 'no_amount' }
+
+  const cap = capFor(input.item_type, caps)
+  if (cap !== undefined && spec.unit && (spec.unit === 'mil' || spec.unit === 'dagar')) {
+    // Price per unit: the typed à-pris, or amount over quantity when only the
+    // quantity is known. An amount alone cannot be judged and passes.
+    const perUnit =
+      unitPrice !== undefined ? unitPrice : quantity !== undefined && quantity > 0 ? magnitude / quantity : undefined
+    if (perUnit !== undefined && perUnit > cap + 1e-9) {
+      return { ok: false, reason: 'above_tax_free_cap', cap, unit: spec.unit }
+    }
+  }
+
   const amount =
     spec.sign === 'deduction' ? -magnitude : spec.sign === 'addition' ? magnitude : roundOre(raw)
   const description = (input.description ?? '').trim() || spec.label
@@ -170,7 +200,36 @@ export function buildManualPayslipLine(input: ManualLineInput): ManualLineBody |
   }
   if (quantity !== undefined) body.quantity = quantity
   if (unitPrice !== undefined) body.unit_price = unitPrice
-  return body
+  return { ok: true, body }
+}
+
+function capFor(type: ManualPayslipLineType, caps: ManualLineCaps): number | undefined {
+  const cap =
+    type === 'mileage_taxfree' ? caps.mileage_taxfree : type === 'traktamente_taxfree' ? caps.traktamente_taxfree : undefined
+  return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : undefined
+}
+
+/**
+ * The caps for a run, read from the payroll config the calculation stored
+ * on it (serializePayrollConfig writes the camelCase PayrollConfig fields;
+ * the snake_case DB row shape is accepted too). Empty when the run has not
+ * been calculated.
+ */
+export function manualLineCapsFromRunParams(params: Record<string, unknown> | null | undefined): ManualLineCaps {
+  if (!params) return {}
+  const num = (...keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = params[k]
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v
+    }
+    return undefined
+  }
+  const caps: ManualLineCaps = {}
+  const mil = num('milersattning_egen_bil', 'milersattningEgenBil')
+  const day = num('traktamente_heldag', 'traktamenteHeldag')
+  if (mil !== undefined) caps.mileage_taxfree = mil
+  if (day !== undefined) caps.traktamente_taxfree = day
+  return caps
 }
 
 function finite(n: number | null | undefined): number | undefined {

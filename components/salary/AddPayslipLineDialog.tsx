@@ -17,11 +17,13 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   MANUAL_PAYSLIP_LINE_SPECS,
   MANUAL_PAYSLIP_LINE_TYPES,
   buildManualPayslipLine,
+  type ManualLineCaps,
   type ManualPayslipLineType,
 } from '@/lib/salary/manual-payslip-lines'
 
@@ -45,12 +47,15 @@ export function AddPayslipLineDialog({
   onOpenChange,
   runId,
   salaryRunEmployeeId,
+  taxFreeCaps,
   onAdded,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   runId: string
   salaryRunEmployeeId: string
+  /** Schablon per mil / per day for the run's year; a tax-free line above it is refused. */
+  taxFreeCaps?: ManualLineCaps
   onAdded: () => void | Promise<void>
 }) {
   const t = useTranslations('salary_run_employee')
@@ -68,14 +73,20 @@ export function AddPayslipLineDialog({
   const unitPriceN = parseNumber(unitPrice)
   // Quantity x unit price wins over a typed amount, same rule as the body
   // builder, so the preview is what will be stored.
-  const computed = quantityN !== undefined && unitPriceN !== undefined
-  const preview = buildManualPayslipLine({
-    item_type: type,
-    description,
-    quantity: quantityN,
-    unit_price: unitPriceN,
-    amount: parseNumber(amount),
-  })
+  const product = quantityN !== undefined && unitPriceN !== undefined ? roundOre(quantityN * unitPriceN) : undefined
+  const computed = product !== undefined
+  const built = buildManualPayslipLine(
+    {
+      item_type: type,
+      description,
+      quantity: quantityN,
+      unit_price: unitPriceN,
+      amount: parseNumber(amount),
+    },
+    taxFreeCaps,
+  )
+  const preview = built.ok ? built.body : null
+  const aboveCap = !built.ok && built.reason === 'above_tax_free_cap' ? built : null
 
   function reset() {
     setType(DEFAULT_TYPE)
@@ -203,19 +214,25 @@ export function AddPayslipLineDialog({
                 type="number"
                 step="0.01"
                 inputMode="decimal"
-                value={computed && preview ? String(Math.abs(preview.amount)) : amount}
+                value={product !== undefined ? String(product) : amount}
                 onChange={(e) => { setAmount(e.target.value); setInvalid(false) }}
                 disabled={computed}
-                aria-invalid={invalid || undefined}
+                aria-invalid={invalid || !!aboveCap || undefined}
               />
             </div>
           </div>
-          <p className={invalid ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'} aria-live="polite">
-            {invalid
-              ? t('add_line_invalid')
-              : computed && preview
-                ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
-                : t(hintKey)}
+          <p className={invalid || aboveCap ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'} aria-live="polite">
+            {aboveCap
+              ? t('add_line_above_cap', {
+                  cap: formatCurrency(aboveCap.cap),
+                  unit: t(`add_line_unit_${aboveCap.unit}`),
+                  taxable: t(`li_${type === 'mileage_taxfree' ? 'mileage_taxable' : 'traktamente_taxable'}`),
+                })
+              : invalid
+                ? t('add_line_invalid')
+                : computed && preview
+                  ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
+                  : t(hintKey)}
           </p>
         </div>
 

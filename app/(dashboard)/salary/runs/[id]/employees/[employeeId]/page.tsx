@@ -12,7 +12,7 @@ import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-tabl
 import { SalaryCalendar } from '@/components/salary/SalaryCalendar'
 import { SalaryOverridePanel } from '@/components/salary/SalaryOverridePanel'
 import { AddPayslipLineDialog } from '@/components/salary/AddPayslipLineDialog'
-import { isManualPayslipLineType } from '@/lib/salary/manual-payslip-lines'
+import { isManualPayslipLineType, manualLineCapsFromRunParams } from '@/lib/salary/manual-payslip-lines'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { hasCustomDeviationWindow } from '@/lib/salary/deviation-period'
 import { payslipCalendarWindow } from '@/lib/salary/payslip-calendar'
@@ -431,6 +431,7 @@ export default function SalaryRunEmployeeDetailPage({
             onOpenChange={setAddingLine}
             runId={runId}
             salaryRunEmployeeId={runEmployee.id}
+            taxFreeCaps={manualLineCapsFromRunParams(run.calculation_params)}
             onAdded={load}
           />
         )}

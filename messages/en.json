@@ -8381,6 +8381,7 @@
     "add_line_hint_deduction": "The amount is deducted from the pay. Enter it without a minus sign.",
     "add_line_hint_signed": "Minus reduces the pay, plus increases it.",
     "add_line_invalid": "Enter an amount, or a quantity and a unit price.",
+    "add_line_above_cap": "Tax-free is at most {cap} per {unit} this year. Put the part above it as {taxable}.",
     "add_line_save": "Add",
     "add_line_cancel": "Cancel",
     "line_added": "Line added",
