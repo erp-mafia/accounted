@@ -4,32 +4,83 @@ import {
   SLP_RATE,
 } from '../tax-provision/sarskild-loneskatt-calculator'
 
+type LineFixture = { account_number: string; debit_amount: number; credit_amount: number }
+type EntryFixture = {
+  id: string
+  status: 'posted' | 'reversed' | 'draft' | 'cancelled'
+  company_id?: string
+  fiscal_period_id?: string
+  lines: LineFixture[]
+}
+
+function makeSupabaseWithEntries(entries: EntryFixture[]) {
+  const tables: Record<string, Record<string, unknown>[]> = {
+    journal_entries: entries.map(({ lines: _lines, ...entry }) => ({
+      company_id: 'co', fiscal_period_id: 'fp', ...entry,
+    })),
+    journal_entry_lines: entries.flatMap((entry) => entry.lines.map((line, index) => ({
+      id: `${entry.id}-${index}`, journal_entry_id: entry.id, ...line,
+    }))),
+  }
+  // Apply the real query's filters to fixtures. Returning canned line rows
+  // hid the bug by including reversed originals even when the query did not.
+  const from = vi.fn((table: string) => {
+    if (!(table in tables)) throw new Error(`Unexpected table: ${table}`)
+    let rows = [...tables[table]]
+    const builder = {
+      select: vi.fn(() => builder),
+      eq: vi.fn((column: string, value: unknown) => {
+        rows = rows.filter((row) => row[column] === value)
+        return builder
+      }),
+      in: vi.fn((column: string, values: unknown[]) => {
+        rows = rows.filter((row) => values.includes(row[column]))
+        return builder
+      }),
+      order: vi.fn((column: string) => {
+        rows.sort((a, b) => String(a[column]).localeCompare(String(b[column])))
+        return builder
+      }),
+      range: vi.fn((start: number, end: number) => {
+        rows = rows.slice(start, end + 1)
+        return builder
+      }),
+      then: (resolve: (value: { data: typeof rows; error: null }) => void) =>
+        resolve({ data: rows, error: null }),
+    }
+    return builder
+  })
+  return { from } as unknown as Parameters<
+    typeof calculateSarskildLoneskatt
+  >[0]
+}
+
 function makeSupabaseWithPensionLines(
   rows: Array<{ account_number?: string; debit_amount: number; credit_amount: number }>,
 ) {
-  // The calculator uses the two-step entry-lines fetch
-  // (lib/bookkeeping/entry-lines.ts): call 1 reads journal_entries, call 2
-  // reads journal_entry_lines for those entry ids. One line query covers both
-  // 7410-7419 (the base) and 7533 (SLP already posted); rows default to a
-  // pension account when the fixture omits account_number.
-  const withAccounts = rows.map((row) => ({ account_number: '7410', ...row }))
-  const responses: Array<{ data: unknown; error: unknown }> = [
-    { data: [{ id: 'entry-1' }], error: null },
-    { data: withAccounts, error: null },
-  ]
-  let call = 0
-  const makeBuilder = () => {
-    const result = responses[call++] ?? { data: null, error: null }
-    const b: Record<string, unknown> = {}
-    for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'order', 'range']) {
-      b[m] = vi.fn().mockReturnValue(b)
-    }
-    b.then = (resolve: (v: { data: unknown; error: unknown }) => void) => resolve(result)
-    return b
+  return makeSupabaseWithEntries([{
+    id: 'entry-1',
+    status: 'posted',
+    lines: rows.map((row) => ({ account_number: '7410', ...row })),
+  }])
+}
+
+/** Balanced vouchers, with negative amounts representing storno credits. */
+function pensionEntry(
+  id: string,
+  status: EntryFixture['status'],
+  pension: number,
+  slp = 0,
+  scope: Pick<EntryFixture, 'company_id' | 'fiscal_period_id'> = {},
+): EntryFixture {
+  return {
+    id, status, ...scope,
+    lines: ([['7412', pension], ['1930', -pension], ['7533', slp], ['2514', -slp]] as const)
+      .filter(([, amount]) => amount !== 0)
+      .map(([account_number, amount]) => ({
+        account_number, debit_amount: Math.max(amount, 0), credit_amount: Math.max(-amount, 0),
+      })),
   }
-  return { from: vi.fn().mockImplementation(() => makeBuilder()) } as unknown as Parameters<
-    typeof calculateSarskildLoneskatt
-  >[0]
 }
 
 beforeEach(() => {
@@ -128,5 +179,94 @@ describe('calculateSarskildLoneskatt', () => {
 
   it('exposes the SLP rate constant', () => {
     expect(SLP_RATE).toBe(0.2426)
+  })
+
+  it.each([
+    {
+      name: 'a reversal does not erase a separate pension expense',
+      entries: [
+        pensionEntry('valid', 'posted', 10_000),
+        pensionEntry('original', 'reversed', 20_000),
+        pensionEntry('storno', 'posted', -20_000),
+      ],
+      expected: 2_426,
+      pensionCostsBooked: 10_000,
+    },
+    {
+      name: 'a correction uses the replacement pension expense',
+      entries: [
+        pensionEntry('original', 'reversed', 10_000),
+        pensionEntry('storno', 'posted', -10_000),
+        pensionEntry('replacement', 'posted', 15_000),
+      ],
+      expected: 3_639,
+      pensionCostsBooked: 15_000,
+    },
+    {
+      name: 'reversing an SLP provision does not double the next proposal',
+      entries: [
+        pensionEntry('expense', 'posted', 10_000),
+        pensionEntry('provision', 'reversed', 0, 2_426),
+        pensionEntry('storno', 'posted', 0, -2_426),
+      ],
+      expected: 2_426,
+      pensionCostsBooked: 10_000,
+    },
+    {
+      name: 'an imported pair with both entries posted still nets to zero',
+      entries: [
+        pensionEntry('valid', 'posted', 10_000),
+        pensionEntry('original', 'posted', 20_000),
+        pensionEntry('reversal', 'posted', -20_000),
+      ],
+      expected: 2_426,
+      pensionCostsBooked: 10_000,
+    },
+    {
+      name: 'a full reversal with no remaining pension costs proposes nothing',
+      entries: [
+        pensionEntry('original', 'reversed', 10_000),
+        pensionEntry('storno', 'posted', -10_000),
+      ],
+      expected: 0,
+    },
+    {
+      name: 'a corrected and fully provisioned expense proposes nothing',
+      entries: [
+        pensionEntry('original', 'reversed', 10_000, 2_426),
+        pensionEntry('storno', 'posted', -10_000, -2_426),
+        pensionEntry('replacement', 'posted', 15_000, 3_639),
+      ],
+      expected: 0,
+    },
+    {
+      name: 'company, fiscal period, draft and cancelled exclusions remain intact',
+      entries: [
+        pensionEntry('valid', 'posted', 10_000),
+        pensionEntry('other-company', 'posted', 20_000, 0, { company_id: 'other' }),
+        pensionEntry('other-company-reversed', 'reversed', 30_000, 0, { company_id: 'other' }),
+        pensionEntry('other-period', 'posted', 40_000, 0, { fiscal_period_id: 'other' }),
+        pensionEntry('other-period-reversed', 'reversed', 50_000, 0, { fiscal_period_id: 'other' }),
+        pensionEntry('draft', 'draft', 60_000),
+        pensionEntry('cancelled', 'cancelled', 70_000),
+      ],
+      expected: 2_426,
+      pensionCostsBooked: 10_000,
+    },
+  ])('$name', async ({ entries, expected, pensionCostsBooked }) => {
+    const result = await calculateSarskildLoneskatt(makeSupabaseWithEntries(entries), 'co', 'fp')
+
+    if (expected === 0) {
+      expect(result).toBeNull()
+    } else {
+      expect(result).toMatchObject({
+        amount: expected,
+        computation: { pensionCostsBooked, slpAlreadyPosted: 0 },
+        lines: [
+          { account_number: '7533', debit_amount: expected, credit_amount: 0 },
+          { account_number: '2514', debit_amount: 0, credit_amount: expected },
+        ],
+      })
+    }
   })
 })
