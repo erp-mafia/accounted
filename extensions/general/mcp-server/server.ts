@@ -14014,7 +14014,7 @@ export const tools: McpTool[] = [
         userId,
         completed.document.id,
         fileName,
-        mimeType,
+        completed.document.mime_type ?? mimeType,
         Buffer.from(completed.buffer),
         uploadId,
       )
@@ -14070,7 +14070,7 @@ export const tools: McpTool[] = [
         userId,
         doc.id,
         fileName,
-        mimeType,
+        doc.mime_type ?? mimeType,
         buffer,
       )
     },

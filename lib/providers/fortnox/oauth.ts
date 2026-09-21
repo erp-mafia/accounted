@@ -1,6 +1,7 @@
 import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import { FORTNOX_AUTH_URL, FORTNOX_TOKEN_URL } from './config';
 import type { OAuthConfig, TokenResponse } from '../types';
+import { FortnoxOAuthError } from './oauth-error';
 import {
   fetchWithTimeout,
   OAUTH_TIMEOUT_MS,
@@ -154,8 +155,7 @@ export async function exchangeFortnoxCode(
   );
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Fortnox token exchange failed: ${response.status} ${body}`);
+    throw await FortnoxOAuthError.fromResponse(response, 'exchange');
   }
 
   return response.json() as Promise<TokenResponse>;
@@ -165,6 +165,9 @@ export async function refreshFortnoxToken(
   config: OAuthConfig,
   refreshToken: string,
 ): Promise<TokenResponse> {
+  if (!config.clientId.trim() || !config.clientSecret.trim()) {
+    throw new FortnoxOAuthError('refresh', 0, 'invalid_client');
+  }
   const response = await fetchWithTimeout(
     FORTNOX_TOKEN_URL,
     {
@@ -183,8 +186,7 @@ export async function refreshFortnoxToken(
   );
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(`Fortnox token refresh failed: ${response.status} ${body}`);
+    throw await FortnoxOAuthError.fromResponse(response, 'refresh');
   }
 
   return response.json() as Promise<TokenResponse>;

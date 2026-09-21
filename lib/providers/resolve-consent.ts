@@ -8,7 +8,8 @@ import { refreshVismaToken } from './visma/oauth';
 import { refreshBrioxToken } from './briox/oauth';
 import { refreshBjornLundenToken } from './bjornlunden/oauth';
 import { refreshWintToken } from './wint/oauth';
-import { ProviderCallError, isMissingLicenseError } from './with-provider-call';
+import { ProviderCallError, classifyProviderError, isMissingLicenseError } from './with-provider-call';
+import { FortnoxOAuthError } from './fortnox/oauth-error';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('providers/resolve-consent');
@@ -17,6 +18,7 @@ export interface ResolvedConsent {
   consent: Record<string, unknown>;
   accessToken: string;
   providerCompanyId?: string;
+  credentialRevision?: string;
 }
 
 export async function resolveConsent(companyId: string, consentId: string): Promise<ResolvedConsent> {
@@ -97,19 +99,15 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
   // Check expiry, auto-refresh if needed
   if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
     if (!tokens.refresh_token) {
+      if (consent.provider === 'fortnox') throw new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox',
+        'Fortnox access token expired without a refresh token', { providerCode: 'refresh_token_missing', credentialRevision: tokens.credential_revision as string });
       throw { status: 401, message: 'Access token expired and no refresh token available' };
     }
 
     let refreshed: TokenResponse;
 
-    // A failed refresh is categorically an expired/revoked connection: the
-    // providers rotate refresh tokens and a dead one (e.g. Fortnox `400
-    // invalid_grant`) can never be replayed. Retrying is pointless. Surface it
-    // as PROVIDER_AUTH_EXPIRED so callers (preview/sie-data/migrate) report
-    // "reconnect" (401) instead of a generic 500 that invites a useless retry.
-    // The raw helpers throw plain Errors with the status only in the message
-    // string, so classifyProviderError can't see it downstream: we map here,
-    // at the boundary that knows this is a refresh.
+    // Fortnox preserves the provider's failure evidence. Other providers keep
+    // their legacy refresh classification until their transports are updated.
     try {
       if (consent.provider === 'fortnox') {
         refreshed = await refreshWithinBudget(() => refreshFortnoxToken(getOAuthConfig('fortnox'), tokens.refresh_token as string));
@@ -128,6 +126,27 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     } catch (err) {
       if (err instanceof ExecutionBudgetExceeded || isTimeoutError(err)) throw err;
       checkExecutionBudget();
+      if (consent.provider === 'fortnox') {
+        const code = classifyProviderError(err) ?? 'PROVIDER_UPSTREAM_ERROR';
+        // A competing refresh/reconnect may have made this request obsolete.
+        // The completion block RPC also checks this atomically when recording.
+        if (code === 'PROVIDER_AUTH_EXPIRED') {
+          const { data: freshRows, error: readError } = await queryInExecutionBudget(supabase
+            .from('provider_consent_tokens').select('*').eq('consent_id', consentId).limit(1));
+          const fresh = readError ? undefined : freshRows?.[0];
+          if (fresh?.access_token && fresh.credential_revision !== tokens.credential_revision) {
+            return { consent, accessToken: fresh.access_token as string,
+              providerCompanyId: fresh.provider_company_id as string | undefined,
+              credentialRevision: fresh.credential_revision as string };
+          }
+        }
+        throw new ProviderCallError(code, 'fortnox', `Fortnox credential resolution failed (${code})`, {
+          status: err instanceof FortnoxOAuthError ? err.status : undefined,
+          providerCode: err instanceof FortnoxOAuthError ? err.providerCode : undefined,
+          retryAfterSeconds: err instanceof FortnoxOAuthError ? err.retryAfterSeconds : undefined,
+          credentialRevision: tokens.credential_revision as string,
+        });
+      }
       const reason = err instanceof Error ? err.message : String(err);
       // A missing/inactive integration license (Fortnox `error_missing_license`)
       // is NOT a revivable token: re-authorizing loops until the customer
@@ -157,24 +176,32 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     // Optimistic concurrency guard: providers like Briox and Fortnox rotate
     // BOTH tokens on refresh, so two concurrent requests refreshing the same
     // expired pair must not both persist: the second write would overwrite
-    // the pair the first request just stored with a possibly-dead one. Key
-    // the UPDATE on the token_expires_at we read above: if another request
-    // already rotated, zero rows match and we adopt the stored fresh tokens.
-    const { data: updatedRows, error: updateError } = await queryInExecutionBudget(supabase
+    // the pair the first request just stored with a possibly-dead one. Fortnox
+    // uses a credential revision; other providers retain token_expires_at. If
+    // another request rotated, zero rows match and we adopt the stored pair.
+    const refreshUpdate = supabase
       .from('provider_consent_tokens')
       .update({
         access_token: refreshed.access_token,
         refresh_token: refreshed.refresh_token,
         token_expires_at: newExpiresAt,
       })
-      .eq('consent_id', consentId)
-      .eq('token_expires_at', tokens.token_expires_at as string)
+      .eq('consent_id', consentId);
+    // During rollout the token row may still have the legacy schema. Keep its
+    // expiry guard and projection until the revision column is available, so
+    // deploying before the migration cannot lose a provider-rotated token pair.
+    const usesRevision = consent.provider === 'fortnox' && typeof tokens.credential_revision === 'string';
+    const guardedUpdate = usesRevision
+      ? refreshUpdate.eq('credential_revision', tokens.credential_revision as string)
+      : refreshUpdate.eq('token_expires_at', tokens.token_expires_at as string);
+    const { data: updatedRows, error: updateError } = await queryInExecutionBudget(usesRevision
       // consent_id is the table's PRIMARY KEY: there is no `id` column.
       // Selecting `id` here makes Postgres reject the whole statement
       // ("column provider_consent_tokens.id does not exist"), which surfaces as
       // updateError and is misreported as "rotated tokens could not be saved"
       // AFTER the provider already rotated, permanently breaking the consent.
-      .select('consent_id'));
+      ? guardedUpdate.select('consent_id, credential_revision')
+      : guardedUpdate.select('consent_id'));
 
     if (updateError) {
       // The provider has ALREADY rotated the tokens but we failed to persist
@@ -212,16 +239,19 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
           providerCompanyId: (fresh.provider_company_id ?? tokens.provider_company_id) as
             | string
             | undefined,
+          credentialRevision: fresh.credential_revision as string | undefined,
         };
       }
       // Token row vanished mid-flight (disconnect?): fall through to our own
       // refreshed pair, which the provider still considers the latest one.
     }
 
+    const saved = updatedRows?.[0];
     return {
       consent,
       accessToken: refreshed.access_token,
       providerCompanyId: tokens.provider_company_id as string | undefined,
+      credentialRevision: saved && 'credential_revision' in saved ? saved.credential_revision as string : undefined,
     };
   }
 
@@ -229,6 +259,7 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     consent,
     accessToken: tokens.access_token as string,
     providerCompanyId: tokens.provider_company_id as string | undefined,
+    credentialRevision: tokens.credential_revision as string | undefined,
   };
 }
 

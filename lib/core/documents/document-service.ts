@@ -246,22 +246,8 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
  */
 export function detectFileMagic(bytes: Uint8Array): string | null {
   if (bytes.length < 4) return null
-  // PDF: %PDF- anywhere in the first 1024 bytes. ISO 32000 readers accept a
-  // preamble before the header (Acrobat scans the first 1 KB), and real-world
-  // invoice PDFs arrive with leading newlines/junk: requiring offset 0
-  // rejected files every normal reader opens. Image types stay strict at
-  // offset 0: genuine image files always start with their signature, and the
-  // looseness is not needed there to keep the anti-placeholder defense tight.
-  const pdfScanEnd = Math.min(bytes.length - 5, 1024)
-  for (let i = 0; i <= pdfScanEnd; i++) {
-    if (
-      bytes[i] === 0x25 &&
-      bytes[i + 1] === 0x50 &&
-      bytes[i + 2] === 0x44 &&
-      bytes[i + 3] === 0x46 &&
-      bytes[i + 4] === 0x2D
-    ) return 'application/pdf'
-  }
+  // Fixed-position image signatures take precedence over a PDF marker
+  // embedded in image metadata. This is format detection, not decoding.
   // PNG: 89 50 4E 47
   if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
   // ZIP container: OOXML (docx/xlsx/pptx) and OpenDocument both live here; the
@@ -290,6 +276,18 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
     if (HEIC_BRANDS.has(brand)) return 'image/heic'
     if (HEIF_BRANDS.has(brand)) return 'image/heif'
   }
+  // Preserve PDF preamble tolerance after checking the image signatures.
+  // Invoice PDFs can arrive with leading newlines or other preamble bytes.
+  const pdfScanEnd = Math.min(bytes.length - 5, 1024)
+  for (let i = 0; i <= pdfScanEnd; i++) {
+    if (
+      bytes[i] === 0x25 &&
+      bytes[i + 1] === 0x50 &&
+      bytes[i + 2] === 0x44 &&
+      bytes[i + 3] === 0x46 &&
+      bytes[i + 4] === 0x2D
+    ) return 'application/pdf'
+  }
   return null
 }
 
@@ -301,6 +299,7 @@ export function detectFileMagic(bytes: Uint8Array): string | null {
 const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs'])
 const HEIF_BRANDS = new Set(['mif1', 'msf1'])
 const HEIC_FAMILY = new Set(['image/heic', 'image/heif'])
+const RECEIPT_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 
 const OOXML_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -387,9 +386,15 @@ function looksLikeJson(bytes: Uint8Array): boolean {
  * Returns an error string or null if valid. HEIC/HEIF are verified through
  * the ISO-BMFF ftyp brand (detectFileMagic): a declared image/heic or
  * image/heif accepts a detected member of either family, because iOS labels
- * the same capture with either type. Everything else is an exact match.
+ * the same capture with either type. Archive ingestion opts into accepting
+ * mislabeled JPEG/PNG/WebP uploads and then persists the detected type.
+ * Other callers (integrity checks, support attachments) stay strict.
  */
-export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType: string): string | null {
+export function validateDocumentMagicBytes(
+  buffer: ArrayBuffer,
+  declaredMimeType: string,
+  options: { allowImageTypeMismatch?: boolean } = {},
+): string | null {
   if (declaredMimeType === 'application/xhtml+xml') {
     if (looksLikeXhtml(new Uint8Array(buffer))) return null
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
@@ -432,11 +437,7 @@ export function validateDocumentMagicBytes(buffer: ArrayBuffer, declaredMimeType
   if (!detected) {
     return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
   }
-  if (detected !== declaredMimeType) {
-    // iOS labels the HEIC/HEIF container inconsistently: a file declared as
-    // one family member routinely detects as the other. Same ISO-BMFF image
-    // container either way, so the pair is interchangeable here.
-    if (HEIC_FAMILY.has(declaredMimeType) && HEIC_FAMILY.has(detected)) return null
+  if (!sameStoredMimeType(detected, declaredMimeType, options.allowImageTypeMismatch)) {
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ${detected}).`
   }
   return null
@@ -480,12 +481,18 @@ export function resolveStoredMimeType(
 
 /**
  * True when a stored type and a declared type name the same content. The
- * stored type is the validated one (resolveStoredMimeType), so the only
- * legitimate difference is the HEIC/HEIF family swap.
+ * stored type is the validated one (resolveStoredMimeType). Upload acceptance
+ * and completion retries share the same narrow image-metadata allowance.
  */
-function sameStoredMimeType(stored: string | null, declared: string): boolean {
+function sameStoredMimeType(
+  stored: string | null,
+  declared: string,
+  allowImageTypeMismatch = false,
+): boolean {
   if (stored === declared) return true
-  return stored !== null && HEIC_FAMILY.has(stored) && HEIC_FAMILY.has(declared)
+  if (stored === null) return false
+  return (HEIC_FAMILY.has(stored) && HEIC_FAMILY.has(declared)) ||
+    (allowImageTypeMismatch && RECEIPT_IMAGE_TYPES.has(stored) && RECEIPT_IMAGE_TYPES.has(declared))
 }
 
 let bucketVerified = false
@@ -522,7 +529,8 @@ async function ensureDocumentsBucket(): Promise<void> {
 /**
  * Remove a bounded batch of abandoned signed-upload objects. Pending objects
  * are not accounting records and have no document_attachments row. Completed
- * documents are moved out of this prefix before the immutable row is created.
+ * documents are copied to permanent keys with validated metadata; pending
+ * bytes are removed after the immutable row is created.
  */
 export async function cleanupExpiredPendingDocumentUploads(
   companyId: string,
@@ -639,7 +647,7 @@ function validateReservedDocumentMetadata(
   fileName: string,
   mimeType: string
 ): void {
-  if (document.file_name !== fileName || !sameStoredMimeType(document.mime_type, mimeType)) {
+  if (document.file_name !== fileName || !sameStoredMimeType(document.mime_type, mimeType, true)) {
     throw new Error('Upload ID was already completed with different file metadata')
   }
 }
@@ -663,7 +671,7 @@ async function validatePendingDocumentBytes(
       code: 'DOC_UPLOAD_TOO_LARGE',
     })
   }
-  const magicError = validateDocumentMagicBytes(buffer, mimeType)
+  const magicError = validateDocumentMagicBytes(buffer, mimeType, { allowImageTypeMismatch: true })
   if (magicError) {
     throw Object.assign(new Error(magicError), {
       code: 'DOC_UPLOAD_INVALID_CONTENT',
@@ -703,6 +711,7 @@ export async function completePendingDocumentUpload(
     const buffer = await data.arrayBuffer()
     const hash = await validatePendingDocumentBytes(buffer, mimeType)
     if (hash !== existing.sha256_hash) throw new Error('Completed document failed its integrity check')
+    await storage.remove([pendingPath])
     return { document: existing, buffer }
   }
 
@@ -730,13 +739,15 @@ export async function completePendingDocumentUpload(
   try {
     sha256Hash = await validatePendingDocumentBytes(buffer, mimeType)
   } catch (error) {
-    await storage.remove([sourcePath])
+    // The permanent key is shared with concurrent completion calls and may
+    // already be archived. A bad retry must never delete their document.
+    if (sourcePath === pendingPath) await storage.remove([pendingPath])
     throw error
   }
-  // Persist what the bytes are, not what the client said (see
-  // resolveStoredMimeType). The storage object itself keeps the metadata
-  // the PUT declared: nothing serving from this app trusts it.
+  // Use the validated type in both the row and the permanent object: some
+  // downloads go straight to Storage, without the app's header correction.
   const storedMimeType = resolveStoredMimeType(buffer, mimeType)
+  const contentType = storedMimeType ?? 'application/octet-stream'
 
   if (options.dedupeByContent) {
     // Same lookup as uploadDocument: oldest current-version match wins, and
@@ -752,18 +763,36 @@ export async function completePendingDocumentUpload(
     if (dedupeError) throw dbError(dedupeError, 'Content dedupe lookup failed')
     const hit = (existingByContent as DocumentAttachment[] | null)?.[0]
     if (hit) {
-      await storage.remove([sourcePath])
+      await storage.remove([pendingPath])
       return { document: { ...hit, deduplicated: true }, buffer }
     }
   }
 
+  let finalizedBlob = sourcePath === permanentPath ? blob : null
   if (sourcePath === pendingPath) {
-    const { error: moveError } = await storage.move(pendingPath, permanentPath)
-    if (moveError) {
+    // Store exactly the validated bytes, with canonical Content-Type. Moving
+    // the pending object would keep its untrusted PUT metadata. Never upsert:
+    // a concurrent completion may already have archived this permanent key.
+    const { error: uploadError } = await storage.upload(permanentPath, buffer, {
+      contentType,
+      upsert: false,
+    })
+    if (uploadError) {
       const permanentDownload = await storage.download(permanentPath)
       if (permanentDownload.error || !permanentDownload.data) {
-        throw new Error(`Failed to finalize document upload: ${moveError.message}`)
+        throw new Error(`Failed to finalize document upload: ${uploadError.message}`)
       }
+      finalizedBlob = permanentDownload.data
+    }
+  }
+  if (finalizedBlob) {
+    // Reconcile a lost upload response or another completion's object only
+    // after checking both bytes and serving metadata. Existence is not proof.
+    if (await computeSHA256(await finalizedBlob.arrayBuffer()) !== sha256Hash) {
+      throw new Error('Upload ID was finalized with different file content')
+    }
+    if (finalizedBlob.type !== contentType) {
+      throw new Error('Upload ID was finalized with a different content type')
     }
   }
 
@@ -796,9 +825,11 @@ export async function completePendingDocumentUpload(
       if (concurrent.sha256_hash !== sha256Hash) {
         throw new Error('Upload ID was completed with different file content')
       }
+      await storage.remove([pendingPath])
       return { document: concurrent, buffer }
     }
-    await storage.remove([permanentPath])
+    // Keep the shared permanent key for retry. A failed insert cannot prove
+    // that another request is not about to commit a row referencing it.
     // dbError keeps the SQLSTATE on the thrown error: a viewer-role member
     // passes the storage policy (membership only) but not the
     // document_attachments insert policy (writers only), and 42501 is what
@@ -808,6 +839,7 @@ export async function completePendingDocumentUpload(
   }
 
   const document = data as DocumentAttachment
+  await storage.remove([pendingPath])
   await eventBus.emit({
     type: 'document.uploaded',
     payload: {
@@ -881,7 +913,7 @@ export async function uploadDocument(
 
   // Reject corrupt uploads at the boundary: see validateDocumentMagicBytes.
   if (file.type) {
-    const magicError = validateDocumentMagicBytes(file.buffer, file.type)
+    const magicError = validateDocumentMagicBytes(file.buffer, file.type, { allowImageTypeMismatch: true })
     if (magicError) throw new Error(magicError)
   }
   // Stored and stamped type is the validated one, never the raw client type.
@@ -1045,7 +1077,7 @@ export async function createNewVersion(
   await ensureDocumentsBucket()
 
   if (file.type) {
-    const magicError = validateDocumentMagicBytes(file.buffer, file.type)
+    const magicError = validateDocumentMagicBytes(file.buffer, file.type, { allowImageTypeMismatch: true })
     if (magicError) throw new Error(magicError)
   }
   const storedMimeType = resolveStoredMimeType(file.buffer, file.type)

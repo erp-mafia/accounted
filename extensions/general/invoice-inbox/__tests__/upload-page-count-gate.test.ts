@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
-import { parseJsonResponse } from '@/tests/helpers'
+import { createQueuedMockSupabase, parseJsonResponse } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { receiptImage } from '@/tests/fixtures/receipt-images'
 
 // Mocks. extract-invoice-fields is the AI call we want to assert is NOT
 // invoked when the gate trips. uploadDocument is the storage write: we
@@ -62,6 +63,9 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 
 import { extractInvoiceFields, emptyResult } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { uploadDocument } from '@/lib/core/documents/document-service'
+import { processArchivedDocument, uploadAndExtract } from '../lib/upload-and-extract'
+import { appendProcessingHistory } from '@/lib/processing-history/append'
 
 function findRoute(method: string, path: string) {
   return invoiceInboxExtension.apiRoutes!.find(
@@ -165,6 +169,63 @@ async function makeUploadRequest(pageCount: number): Promise<Request> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+})
+
+describe('detected receipt MIME propagation', () => {
+  it.each([
+    { source: 'multipart', deferred: false },
+    { source: 'multipart', deferred: true },
+    { source: 'signed', deferred: false },
+    { source: 'signed', deferred: true },
+  ])('uses archived MIME for $source extraction (deferred=$deferred)', async ({ source, deferred }) => {
+    const buffer = receiptImage('jpeg')
+    const file = { name: 'receipt.png', buffer, type: 'image/png' }
+    const document = { id: 'doc-1', mime_type: 'image/jpeg' }
+    const supabase = makeSupabase({})
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(supabase as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+    if (source === 'multipart') {
+      vi.mocked(uploadDocument).mockResolvedValueOnce(document as never)
+      await uploadAndExtract(supabase as never, 'user-1', 'company-1', file, 'upload', undefined, undefined, {
+        deferExtraction: deferred,
+      })
+    } else {
+      await processArchivedDocument(supabase as never, 'user-1', 'company-1', document, file, 'upload', undefined, undefined, {
+        deferExtraction: deferred,
+      })
+    }
+    await vi.waitFor(() => expect(extractInvoiceFields).toHaveBeenCalledOnce())
+    expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      buffer: Buffer.from(buffer), mimeType: 'image/jpeg', fileName: 'receipt.png',
+    }))
+    expect(appendProcessingHistory).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'DocumentIngested', payload: expect.objectContaining({ mime_type: 'image/jpeg' }),
+    }))
+  })
+
+  it('uses archived MIME when attaching an image to an existing inbox item', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'item-1', document_id: null, created_supplier_invoice_id: null, correlation_id: 'correlation-1' }, error: null })
+    enqueue({ data: { is_sandbox: false }, error: null })
+    enqueue({ data: null, error: null }) // own-company identity
+    enqueue({ data: null, error: null }) // link the inbox item
+    vi.mocked(createServiceClientNoCookies).mockReturnValue(makeSupabase({}) as never)
+    vi.mocked(uploadDocument).mockResolvedValueOnce({ id: 'doc-1', mime_type: 'image/jpeg' } as never)
+    vi.mocked(extractInvoiceFields).mockResolvedValueOnce({ data: emptyResult(), rawText: 'ok' })
+    const buffer = receiptImage('jpeg')
+    const form = new FormData()
+    form.set('file', new File([buffer], 'receipt.png', { type: 'image/png' }))
+    const response = await findRoute('POST', '/items/:id/attach-document').handler(new Request(
+      'http://localhost/items/item-1/attach-document?_id=item-1', { method: 'POST', body: form },
+    ), buildCtx(supabase))
+    expect(response.status).toBe(200)
+    expect(extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      buffer: Buffer.from(buffer), mimeType: 'image/jpeg', fileName: 'receipt.png',
+    }))
+    expect(appendProcessingHistory).toHaveBeenCalledWith(expect.objectContaining({
+      eventType: 'DocumentIngested', payload: expect.objectContaining({ mime_type: 'image/jpeg' }),
+    }))
+  })
 })
 
 describe('POST /upload: staged extraction + page-count gate (issue #553)', () => {

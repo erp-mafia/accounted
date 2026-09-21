@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   deriveAbsenceLineItems,
   buildSjukloneperioder,
+  sjukloneperiodGapTolerance,
   type AbsenceDay,
   type DeriveInput,
 } from '../derive-absence-line-items'
@@ -86,6 +87,36 @@ describe('buildSjukloneperioder', () => {
     const segs = buildSjukloneperioder(['2026-04-06', '2026-04-13'])
     // gap = 7 → new period
     expect(segs).toHaveLength(2)
+  })
+
+  it('widens the gap to the schedule for sparse schedules (#2876)', () => {
+    // One working day a week: consecutive scheduled days are 7 apart.
+    expect(sjukloneperiodGapTolerance(1)).toBe(7)
+    expect(sjukloneperiodGapTolerance(2)).toBe(6)
+    // Three or more days a week never need more than the law's 5.
+    expect(sjukloneperiodGapTolerance(3)).toBe(5)
+    expect(sjukloneperiodGapTolerance(4)).toBe(5)
+    expect(sjukloneperiodGapTolerance(5)).toBe(5)
+    expect(sjukloneperiodGapTolerance(7)).toBe(5)
+    // Missing or nonsense schedule = the five-day week.
+    expect(sjukloneperiodGapTolerance(undefined)).toBe(5)
+    expect(sjukloneperiodGapTolerance(null)).toBe(5)
+    expect(sjukloneperiodGapTolerance(0)).toBe(5)
+    expect(sjukloneperiodGapTolerance(-1)).toBe(5)
+    expect(sjukloneperiodGapTolerance(Number.NaN)).toBe(5)
+
+    // Sick on five consecutive Wednesdays, one day a week: one period.
+    const weekly = ['2026-09-02', '2026-09-09', '2026-09-16', '2026-09-23', '2026-09-30']
+    expect(buildSjukloneperioder(weekly, 1)).toHaveLength(1)
+    expect(buildSjukloneperioder(weekly, 1)[0].sickDayCount).toBe(5)
+    // The same dates on a five-day week are five separate periods (unchanged).
+    expect(buildSjukloneperioder(weekly, 5)).toHaveLength(5)
+    expect(buildSjukloneperioder(weekly)).toHaveLength(5)
+    // A 14-day gap on a one-day week means she worked in between: new period.
+    expect(buildSjukloneperioder(['2026-09-02', '2026-09-16'], 1)).toHaveLength(2)
+    // Two days a week (Tuesday and Wednesday): Wednesday to Tuesday is 6.
+    expect(buildSjukloneperioder(['2026-09-02', '2026-09-08', '2026-09-09'], 2)).toHaveLength(1)
+    expect(buildSjukloneperioder(['2026-09-02', '2026-09-09'], 2)).toHaveLength(2)
   })
 
   it('returns empty for empty input', () => {
@@ -790,5 +821,76 @@ describe('deriveAbsenceLineItems: long_leave = calendar_after_five_workdays', ()
     expect(result.lineItems.find(li => li.item_type === 'sick_day15_plus')!.amount).toBe(-5917.8)
     expect(result.lineItems.find(li => li.item_type === 'sick_day2_14')!.amount).toBe(-830.7)
     expect(result.lineItems.find(li => li.item_type === 'sick_karens')!.amount).toBe(-1772.31)
+  })
+})
+
+describe('deriveAbsenceLineItems: one working day a week, continuously sick (#2876)', () => {
+  // 4 h on one day a week, 10 000 a month (degree 100 with the actual pay).
+  // Sick on five consecutive Wednesdays: one illness, one sjuklöneperiod.
+  const wednesdays = ['2026-09-02', '2026-09-09', '2026-09-16', '2026-09-23', '2026-09-30']
+  const oneDayAWeek = (over: Partial<DeriveInput> = {}): DeriveInput =>
+    baseInput({
+      monthlySalary: 10000,
+      periodDays: wednesdays.map(d => ({ absence_date: d, absence_type: 'sick' as const, hours: 4 })),
+      hoursPerDay: 4,
+      hoursPerWeek: 4,
+      workdaysPerWeek: 1,
+      dailyDivisor: 4.33,
+      ...over,
+    })
+
+  it('is one sjuklöneperiod with one karensavdrag, sjuklön to day 14 and full deduction from day 15', () => {
+    const result = deriveAbsenceLineItems(oneDayAWeek())
+    const karens = result.lineItems.filter(li => li.item_type === 'sick_karens')
+    expect(karens).toHaveLength(1)
+    expect(karens[0].description).toBe('Karensavdrag (2026-09-02)')
+    // 20 % of one week's sjuklön on 10 000: r(r(10000 x 12 / 52 x 0.8) x 0.2).
+    expect(karens[0].amount).toBe(-369.23)
+
+    // 2 and 9 September are segment days 1 and 8: sjuklön. 16, 23 and 30
+    // September are days 15, 22 and 29: the employer pays nothing.
+    const sjuklon = result.lineItems.find(li => li.item_type === 'sick_day2_14')!
+    expect(sjuklon.quantity).toBe(2)
+    const day15 = result.lineItems.find(li => li.item_type === 'sick_day15_plus')!
+    expect(day15.quantity).toBe(3)
+    // Three full days at 10000 / 4.33.
+    expect(day15.amount).toBeCloseTo(-3 * (10000 / 4.33), 0)
+    expect(result.flagLakarintyg).toBe(true)
+    expect(result.flagFkReporting).toBe(true)
+  })
+
+  it('was five periods with five karensavdrag under the fixed five-day rule (regression proof)', () => {
+    const result = deriveAbsenceLineItems(oneDayAWeek({ workdaysPerWeek: 5 }))
+    expect(result.lineItems.filter(li => li.item_type === 'sick_karens')).toHaveLength(5)
+    expect(result.lineItems.find(li => li.item_type === 'sick_day15_plus')).toBeUndefined()
+  })
+
+  it('continues a period that began in the previous month without a new karensavdrag', () => {
+    // First sick Wednesday 26 August (lookback), 2 September is day 8 of the
+    // same period: the prior day's sjuklön already absorbed the karens.
+    const result = deriveAbsenceLineItems(
+      oneDayAWeek({
+        lookbackSickDates: ['2026-08-26'],
+        lookbackSickDays: [{ absence_date: '2026-08-26', absence_type: 'sick', hours: 4 }],
+      }),
+    )
+    expect(result.lineItems.filter(li => li.item_type === 'sick_karens')).toHaveLength(0)
+    const sjuklon = result.lineItems.find(li => li.item_type === 'sick_day2_14')!
+    // 2 September only (day 8); 9 September is day 15.
+    expect(sjuklon.quantity).toBe(1)
+    expect(result.lineItems.find(li => li.item_type === 'sick_day15_plus')!.quantity).toBe(4)
+  })
+
+  it('a skipped working day (she worked) still starts a new period', () => {
+    const result = deriveAbsenceLineItems(
+      oneDayAWeek({
+        periodDays: ['2026-09-02', '2026-09-16'].map(d => ({
+          absence_date: d,
+          absence_type: 'sick' as const,
+          hours: 4,
+        })),
+      }),
+    )
+    expect(result.lineItems.filter(li => li.item_type === 'sick_karens')).toHaveLength(2)
   })
 })

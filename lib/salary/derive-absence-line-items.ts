@@ -31,7 +31,10 @@ import { calendarLeaveDeduction } from './calendar-leave'
  *     weight the deduction (4 h of an 8 h day = half a day); the reported
  *     day counts stay whole days because AGI reports dates, not hours.
  *   - **Återinsjuknande**: if the next sick day is within 5 calendar days of
- *     the previous sjuklöneperiod's last day, both merge: no new karens.
+ *     the previous sjuklöneperiod's last day, both merge: no new karens. On
+ *     a sparse schedule the window grows to the widest gap between two
+ *     scheduled days (sjukloneperiodGapTolerance), since sick rows exist
+ *     only on scheduled days.
  *   - **Allmänt högriskskydd**: max 10 karensavdrag per rolling 12-month
  *     window (inclusive of the new one). The 11th is suppressed.
  *
@@ -99,7 +102,8 @@ interface SjukloneperiodSegment {
   /** Number of *sick days* in this merged segment (not calendar days). */
   sickDayCount: number
   /** True if this segment is the continuation of a prior segment via
-   *  återinsjuknande (gap 1-5 calendar days). No new karensavdrag. */
+   *  återinsjuknande (gap within sjukloneperiodGapTolerance). No new
+   *  karensavdrag. */
   isAterinsjuknande: boolean
 }
 
@@ -144,12 +148,36 @@ function addDays(d: string, n: number): string {
 }
 
 /**
- * Walk the (sorted ascending) sick dates and merge them into sjuklöneperioder
- * using the SjLL återinsjuknande rule: gap of 1-5 calendar days = same
- * period continues; gap ≥ 6 = new period.
+ * Calendar days two sick rows may lie apart and still be one sjuklöneperiod.
+ *
+ * The law's floor is the återinsjuknande rule (SjLL 7 §: sick again within
+ * 5 calendar days continues the period). Sick rows exist only on SCHEDULED
+ * days, so for a sparse schedule the rows of one continuous illness are
+ * further apart than that: an employee who works one day a week and is
+ * sick for a month has rows 7 days apart. A gap can only mean "was well and
+ * worked in between" if it holds a scheduled day with no sick row, and with
+ * w working days spread over the week the widest gap between two consecutive
+ * scheduled days is 8 - w (1 d/w: 7, 2 d/w: 6, 3 d/w or more: 5, the floor).
+ * Issue #2876.
  */
-export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegment[] {
+export function sjukloneperiodGapTolerance(workdaysPerWeek: number | null | undefined): number {
+  const w = Number(workdaysPerWeek) > 0 ? Math.min(7, Math.floor(Number(workdaysPerWeek))) : 5
+  return Math.max(5, 8 - w)
+}
+
+/**
+ * Walk the (sorted ascending) sick dates and merge them into sjuklöneperioder
+ * using the SjLL återinsjuknande rule: a gap of 1 to `tolerance` calendar
+ * days = same period continues; a wider gap = new period. The tolerance is
+ * 5 at a five-day week and grows for sparser schedules, see
+ * sjukloneperiodGapTolerance.
+ */
+export function buildSjukloneperioder(
+  sickDates: string[],
+  workdaysPerWeek?: number | null,
+): SjukloneperiodSegment[] {
   if (sickDates.length === 0) return []
+  const tolerance = sjukloneperiodGapTolerance(workdaysPerWeek)
   const sorted = [...new Set(sickDates)].sort()
 
   const segments: SjukloneperiodSegment[] = []
@@ -173,13 +201,13 @@ export function buildSjukloneperioder(sickDates: string[]): SjukloneperiodSegmen
     const date = sorted[i]
     const gap = daysBetweenIso(endDate, date)
     if (gap === 0) continue
-    if (gap >= 1 && gap <= 5) {
-      // Within 5 calendar days: same period (contiguous OR återinsjuknande)
+    if (gap >= 1 && gap <= tolerance) {
+      // Within the tolerance: same period (contiguous OR återinsjuknande)
       endDate = date
       count += 1
       continue
     }
-    // gap > 5: close current segment, start new one
+    // gap > tolerance: close current segment, start new one
     flush(gap)
     startDate = date
     endDate = date
@@ -327,7 +355,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // boundary; we need the full picture to classify each period day's
     // index within its segment.
     const allSickDates = [...input.lookbackSickDates, ...periodSickDates]
-    const segments = buildSjukloneperioder(allSickDates)
+    const segments = buildSjukloneperioder(allSickDates, input.workdaysPerWeek)
 
     // Allmänt högriskskydd (Sjuklönelagen 11§): from the 11th sjuklöneperiod
     // within a rolling 12-month window, no karensavdrag is made.
@@ -353,6 +381,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     const cutoff = addDays(periodMin, -365)
     const lookbackOnlySegments = buildSjukloneperioder(
       input.lookbackSickDates.filter(d => d >= cutoff),
+      input.workdaysPerWeek,
     )
     // Cutover adjustment: karens periods from the previous payroll system
     // that were never imported as day rows. Over-suppression of karens is

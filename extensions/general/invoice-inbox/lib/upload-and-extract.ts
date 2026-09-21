@@ -276,7 +276,7 @@ export async function processArchivedDocument(
   supabase: import('@supabase/supabase-js').SupabaseClient,
   userId: string,
   companyId: string,
-  doc: { id: string; deduplicated?: boolean },
+  doc: { id: string; mime_type: string | null; deduplicated?: boolean },
   file: { name: string; buffer: ArrayBuffer; type: string },
   source: 'upload' | 'email' | 'whatsapp',
   emailMeta?: EmailMeta,
@@ -284,6 +284,10 @@ export async function processArchivedDocument(
   opts: ArchivedDocumentProcessingOptions = {},
 ) {
   const correlationId = crypto.randomUUID()
+  // The archive validated the bytes and resolved their type. Use that type
+  // for history and both extraction paths, including signed-upload completion.
+  // Null is retained only for legacy documents without a known MIME type.
+  file = { ...file, type: doc.mime_type ?? file.type }
 
   if (doc.deduplicated) {
     // The company already archived this exact content. If an inbox item

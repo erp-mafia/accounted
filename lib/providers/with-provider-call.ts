@@ -15,7 +15,8 @@ import { createLogger, type Logger } from '@/lib/logger'
 // reuses it instead of pattern-matching the Swedish sentence in the body, which
 // changes with the provider's locale and copy; import-documents.ts already
 // treats a Fortnox 403 the same way.
-import { isFortnoxPermissionError } from './fortnox/client'
+import { FortnoxApiError, fortnoxApiErrorCode, isFortnoxPermissionError } from './fortnox/client'
+import { FortnoxOAuthError } from './fortnox/oauth-error'
 
 export type ProviderCallErrorCode =
   | 'PROVIDER_AUTH_EXPIRED'
@@ -25,18 +26,21 @@ export type ProviderCallErrorCode =
   | 'PROVIDER_RATE_LIMITED'
   | 'PROVIDER_UNREACHABLE'
   | 'PROVIDER_UPSTREAM_ERROR'
+  | 'PROVIDER_CONFIGURATION_ERROR'
 
 export class ProviderCallError extends Error {
   readonly code: ProviderCallErrorCode
   readonly provider: string
   readonly status?: number
   readonly retryAfterSeconds?: number
+  readonly providerCode?: string
+  readonly credentialRevision?: string
 
   constructor(
     code: ProviderCallErrorCode,
     provider: string,
     message: string,
-    extras: { status?: number; retryAfterSeconds?: number } = {},
+    extras: { status?: number; retryAfterSeconds?: number; providerCode?: string; credentialRevision?: string } = {},
   ) {
     super(message)
     this.name = 'ProviderCallError'
@@ -44,6 +48,8 @@ export class ProviderCallError extends Error {
     this.provider = provider
     this.status = extras.status
     this.retryAfterSeconds = extras.retryAfterSeconds
+    this.providerCode = extras.providerCode
+    this.credentialRevision = extras.credentialRevision
   }
 }
 
@@ -215,6 +221,17 @@ export function classifyProviderError(
   error: unknown,
   options: ClassifyProviderErrorOptions = {},
 ): ProviderCallErrorCode | null {
+  if (error instanceof FortnoxOAuthError) {
+    if (error.status === 429) return 'PROVIDER_RATE_LIMITED'
+    if (error.status >= 500) return 'PROVIDER_UPSTREAM_ERROR'
+    if (['invalid_client', 'unauthorized_client', 'invalid_request', 'unsupported_grant_type', 'invalid_scope'].includes(error.providerCode ?? '')) return 'PROVIDER_CONFIGURATION_ERROR'
+    if (['error_missing_license', 'error_missing_app_license'].includes(error.providerCode ?? '')) return 'PROVIDER_LICENSE_MISSING'
+    if (error.operation === 'refresh' && error.providerCode === 'invalid_grant') return 'PROVIDER_AUTH_EXPIRED'
+    return 'PROVIDER_UPSTREAM_ERROR'
+  }
+  const fortnoxCode = error instanceof FortnoxApiError && error.statusCode < 500 && error.statusCode !== 429 ? fortnoxApiErrorCode(error) : undefined
+  if (fortnoxCode === '2001103') return 'PROVIDER_LICENSE_MISSING'
+  if (fortnoxCode === '2001101' || fortnoxCode === '2000663') return 'PROVIDER_RESOURCE_FORBIDDEN'
   if (error instanceof ProviderCallError) {
     // mapResponseError() sees one response and cannot know the run's history,
     // so a 403 it already labelled AUTH_EXPIRED is re-read here with it.

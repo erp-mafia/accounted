@@ -1072,9 +1072,10 @@ export const invoiceInboxExtension: Extension = {
           // from a slice (first pages + the last page); the skip only remains
           // for unsliceable (encrypted/malformed) PDFs. Sandbox companies
           // skip Bedrock unconditionally.
+          const mimeType = doc.mime_type ?? file.type
           const maxAutoExtractPages = maxPagesForAutoExtract()
           const pageCount =
-            file.type === 'application/pdf' ? await countPdfPages(buffer) : null
+            mimeType === 'application/pdf' ? await countPdfPages(buffer) : null
           const gatedByPageCount =
             pageCount != null && pageCount > maxAutoExtractPages
           const sandbox = await isSandboxCompany(ctx.supabase, ctx.companyId)
@@ -1100,7 +1101,7 @@ export const invoiceInboxExtension: Extension = {
             ? { data: emptyResult(), rawText: null, model: null, skipped: null }
             : await extractInvoiceFields({
                 buffer: Buffer.from(slicedBuffer ?? buffer),
-                mimeType: file.type,
+                mimeType,
                 fileName: file.name,
                 ownCompany: await fetchOwnCompanyIdentity(ctx.supabase, ctx.companyId),
               })
@@ -1140,7 +1141,7 @@ export const invoiceInboxExtension: Extension = {
                   channel: 'upload',
                   document_id: doc.id,
                   inbox_item_id: id,
-                  mime_type: file.type,
+                  mime_type: mimeType,
                   size_bytes: file.size,
                   attached_to_existing: true,
                 },

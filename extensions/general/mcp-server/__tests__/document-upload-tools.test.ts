@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { makeDocumentAttachment } from '@/tests/helpers'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
+import { receiptImage } from '@/tests/fixtures/receipt-images'
 
 const mocks = vi.hoisted(() => ({
   createPendingDocumentUpload: vi.fn(),
   completePendingDocumentUpload: vi.fn(),
+  uploadDocument: vi.fn(),
   extractInvoiceFields: vi.fn(),
 }))
 
@@ -15,6 +17,7 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
     ...actual,
     createPendingDocumentUpload: mocks.createPendingDocumentUpload,
     completePendingDocumentUpload: mocks.completePendingDocumentUpload,
+    uploadDocument: mocks.uploadDocument,
   }
 })
 
@@ -196,6 +199,25 @@ describe('MCP model-free document upload tools', () => {
     expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: uploadId })
     expect(mocks.completePendingDocumentUpload).not.toHaveBeenCalled()
     expect(mocks.extractInvoiceFields).not.toHaveBeenCalled()
+  })
+
+  it.each(['signed', 'inline'])('uses detected MIME for extraction after %s image upload', async (path) => {
+    const buffer = receiptImage('jpeg')
+    const document = makeDocumentAttachment({ id: uploadId, file_name: 'receipt.png', mime_type: 'image/jpeg' })
+    if (path === 'signed') mocks.completePendingDocumentUpload.mockResolvedValueOnce({ document, buffer })
+    else mocks.uploadDocument.mockResolvedValueOnce(document)
+    const empty = makeQueryBuilder({ data: null, error: null })
+    const insert = makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null })
+    const inboxQueries = path === 'signed' ? [empty, empty, insert] : [insert]
+    const from = vi.fn((table: string) => table === 'invoice_inbox_items' ? inboxQueries.shift() : empty)
+    const tool = findTool(path === 'signed' ? 'gnubok_complete_document_upload' : 'gnubok_upload_document')
+    await tool.execute({
+      file_name: 'receipt.png', mime_type: 'image/png',
+      ...(path === 'signed' ? { upload_id: uploadId } : { file_content_base64: Buffer.from(buffer).toString('base64') }),
+    }, companyId, userId, { from } as never)
+    expect(mocks.extractInvoiceFields).toHaveBeenCalledWith(expect.objectContaining({
+      buffer: Buffer.from(buffer), fileName: 'receipt.png', mimeType: 'image/jpeg',
+    }))
   })
 
   it('keeps scope and AI capability gates aligned across all upload paths', () => {

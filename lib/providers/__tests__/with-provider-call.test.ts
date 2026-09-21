@@ -179,6 +179,7 @@ describe('structured error registry wiring', () => {
       PROVIDER_RATE_LIMITED: true,
       PROVIDER_UNREACHABLE: true,
       PROVIDER_UPSTREAM_ERROR: true,
+      PROVIDER_CONFIGURATION_ERROR: true,
     }
     for (const code of Object.keys(codes) as ProviderCallErrorCode[]) {
       const entry = getErrorEntry(code)
