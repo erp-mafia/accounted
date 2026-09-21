@@ -25,6 +25,7 @@ import {
   rateLimitHoldUntil,
 } from './lib/sync-lease'
 import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
+import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions, countLiveSiblings } from './lib/session-sharing'
@@ -855,8 +856,9 @@ export const enableBankingExtension: Extension = {
           return bankRateLimitedResponse(connection.id, rateLimitedUntil, Date.now())
         }
 
+        const syncStartedAt = new Date().toISOString()
         try {
-          // Keep the full list for write-back; sync only the enabled subset.
+          // Clone account observations; sync only the enabled subset.
           // undefined enabled === true for back-compat with rows that predate
           // the per-account toggle.
           const allAccounts = (connection.accounts_data as StoredAccount[] || []).map(a => ({ ...a }))
@@ -887,8 +889,6 @@ export const enableBankingExtension: Extension = {
           const fromDate = new Date(Date.now() - days_back * 24 * 60 * 60 * 1000)
             .toISOString()
             .split('T')[0]
-          const syncStartedAt = new Date().toISOString()
-
           // Use ctx.services.ingestTransactions when available
           const ingestFn = ctx?.services.ingestTransactions
 
@@ -989,56 +989,14 @@ export const enableBankingExtension: Extension = {
           }
 
           const syncedAt = new Date().toISOString()
-          // Mirror refreshed balances into cash_accounts: the Bank-page source
-          // picker and the reconciliation status read that table, and without
-          // this the balance there froze at connect time.
-          {
-            const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
-            await updateBalancesFromSync(
-              supabase,
-              companyId,
-              connection.id,
-              allAccounts.map((a) => ({
-                external_uid: a.uid,
-                balance: a.balance,
-                available_balance: a.available_balance,
-                balance_updated_at: a.balance_updated_at,
-              })),
-            )
-          }
-          await supabase
-            .from('bank_connections')
-            .update({
-              accounts_data: allAccounts,
-              last_synced_at: syncedAt,
-              // A successful sync proves the session works again: recover an
-              // 'error' connection to 'active' (so the cron picks it up again)
-              // and clear any stale failure message from the settings panel.
-              ...(connection.status === 'error' ? { status: 'active' } : {}),
-              ...(connection.status === 'error' || connection.error_message
-                ? { error_message: null }
-                : {}),
-            })
-            .eq('id', connection.id)
-
-          if (totalImported > 0) {
-            const { data: syncedTransactions } = await supabase
-              .from('transactions')
-              .select('*')
-              .eq('company_id', companyId)
-              .eq('bank_connection_id', connection.id)
-              .gte('created_at', syncStartedAt)
-              .order('created_at', { ascending: false })
-              .limit(totalImported)
-
-            if (syncedTransactions && syncedTransactions.length > 0) {
-              const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
-              await emit({
-                type: 'transaction.synced',
-                payload: { transactions: syncedTransactions as Transaction[], userId: user.id, companyId },
-              })
-            }
-          }
+          await persistBankSyncResult(supabase, {
+            companyId,
+            connectionId: connection.id,
+            sessionId: connection.session_id,
+            startedAt: syncStartedAt,
+            completedAt: syncedAt,
+            accounts,
+          })
 
           // A bank that refused the requested window answered a narrower one;
           // say so instead of reporting a truncated sync as complete (#2202).
@@ -1165,11 +1123,14 @@ export const enableBankingExtension: Extension = {
           // one-click "Förnya anslutning" instead of a dead-end error. No
           // disconnect needed: /connect reconnects this same connection in place.
           if (error instanceof SessionExpiredError) {
-            await supabase
-              .from('bank_connections')
-              .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
-              .eq('id', connection.id)
-              .eq('company_id', companyId)
+            await persistBankSyncFailure(supabase, {
+              companyId,
+              connectionId: connection.id,
+              sessionId: connection.session_id,
+              startedAt: syncStartedAt,
+              status: 'expired',
+              message: REAUTH_REQUIRED_MESSAGE,
+            })
             return NextResponse.json(
               {
                 error: REAUTH_REQUIRED_MESSAGE,
@@ -1187,12 +1148,15 @@ export const enableBankingExtension: Extension = {
           // JSON envelope) is already in the server log above. Refresh the
           // stored error_message on rows already in 'error' so a failed retry
           // replaces any stale raw body persisted by older code.
-          if (connection.status === 'error') {
-            await supabase
-              .from('bank_connections')
-              .update({ error_message: SYNC_FAILED_MESSAGE })
-              .eq('id', connection.id)
-              .eq('company_id', companyId)
+          if (connection.status === 'error' && !(error instanceof BankSyncResultObsoleteError)) {
+            await persistBankSyncFailure(supabase, {
+              companyId,
+              connectionId: connection.id,
+              sessionId: connection.session_id,
+              startedAt: syncStartedAt,
+              status: 'error',
+              message: SYNC_FAILED_MESSAGE,
+            })
           }
 
           return NextResponse.json({ error: SYNC_FAILED_MESSAGE }, { status: 500 })
@@ -1327,7 +1291,7 @@ export const enableBankingExtension: Extension = {
 
         const { data: connection, error: connectionError } = await supabase
           .from('bank_connections')
-          .select('id, status, accounts_data, bank_name')
+          .select('id, status, accounts_data, bank_name, session_id')
           .eq('id', connection_id)
           .eq('company_id', companyId)
           .single()
@@ -1843,6 +1807,7 @@ export const enableBankingExtension: Extension = {
             sieOverlap: Boolean(sieOverlap),
           })
 
+          const initialSyncStartedAt = new Date().toISOString()
           let timeoutHandle: ReturnType<typeof setTimeout> | undefined
           try {
             const ingestFn = ctx?.services.ingestTransactions
@@ -1962,76 +1927,32 @@ export const enableBankingExtension: Extension = {
               }
             }
 
-            // Mirror the balances the backfill just fetched into cash_accounts.
-            // accounts_data is deliberately NOT re-written here (see below), so
-            // without this the balances fetched during the initial sync would
-            // reach neither store until the next scheduled sync.
-            try {
-              const { updateBalancesFromSync } = await import('@/lib/cash-accounts/service')
-              await updateBalancesFromSync(
-                supabase,
-                companyId,
-                connection.id,
-                updatedAccounts.map((a) => ({
-                  external_uid: a.uid,
-                  balance: a.balance,
-                  available_balance: a.available_balance,
-                  balance_updated_at: a.balance_updated_at,
-                })),
-              )
-            } catch (mirrorErr) {
-              log.error('[enable-banking] Balance mirror after initial backfill failed', {
-                connectionId: connection.id,
-                error: mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr),
-              })
+            await persistBankSyncResult(supabase, {
+              companyId,
+              connectionId: connection.id,
+              sessionId: connection.session_id,
+              startedAt: initialSyncStartedAt,
+              completedAt: new Date().toISOString(),
+              accounts: accountsToSync,
+              initialSync: {
+                requestedFrom: fromDate,
+                returnedMin,
+                returnedMax,
+                lookbackDays: initialLookbackDays,
+              },
+            })
+            initialSyncSummary = {
+              imported: totalImported,
+              duplicates: totalDuplicates,
+              auto_matched: totalAutoMatched,
+              requested_from: fromDate,
+              returned_min_date: returnedMin,
+              returned_max_date: returnedMax,
             }
-
-            const completedAt = new Date().toISOString()
-            // Don't re-write accounts_data here: the first update already wrote it.
-            // Including it again races with any concurrent writer (e.g. cron firing in
-            // the sub-60s window) and would silently overwrite their changes.
-            const { error: metaUpdateError } = await supabase
-              .from('bank_connections')
-              .update({
-                last_synced_at: completedAt,
-                initial_sync_completed_at: completedAt,
-                initial_sync_requested_from: fromDate,
-                initial_sync_returned_min_date: returnedMin,
-                initial_sync_returned_max_date: returnedMax,
-                initial_sync_lookback_days: initialLookbackDays,
-              })
-              .eq('id', connection.id)
-
-            if (metaUpdateError) {
-              // The sync itself succeeded (transactions are ingested) but we
-              // couldn't persist that. Falsely reporting success would tell the
-              // client "imported N transactions" while the DB still has
-              // initial_sync_completed_at = NULL, causing the cron to re-run a
-              // 90-day backfill next morning. Surface this as initial_sync_error
-              // so the UI shows a "background sync needs retry" warning, and the
-              // cron's gate (initial_sync_completed_at IS NULL) will self-heal.
-              initialSyncError = `metadata_update_failed: ${metaUpdateError.message}`
-              log.error('[enable-banking] Failed to persist initial_sync metadata after backfill', {
-                connectionId: connection.id,
-                error: metaUpdateError.message,
-                userId: user.id,
-                companyId,
-              })
-            } else {
-              initialSyncSummary = {
-                imported: totalImported,
-                duplicates: totalDuplicates,
-                auto_matched: totalAutoMatched,
-                requested_from: fromDate,
-                returned_min_date: returnedMin,
-                returned_max_date: returnedMax,
-              }
-
-              log.info('[enable-banking] Inline initial backfill complete', {
-                connectionId: connection.id,
-                ...initialSyncSummary,
-              })
-            }
+            log.info('[enable-banking] Inline initial backfill complete', {
+              connectionId: connection.id,
+              ...initialSyncSummary,
+            })
           } catch (syncError) {
             initialSyncError = syncError instanceof Error ? syncError.message : String(syncError)
             log.error('[enable-banking] Inline initial backfill failed: cron will retry', {

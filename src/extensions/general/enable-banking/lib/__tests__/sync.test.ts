@@ -41,6 +41,15 @@ describe('syncAccountTransactions', () => {
     mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 0, reconciled: 0, auto_categorized: 0, auto_matched_invoices: 0, transaction_ids: ['tx-1'] })
   })
 
+  it('rejects a partially persisted batch after archiving it, so callers cannot advance the cursor', async () => {
+    mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: ['{"transactions":[]}'] })
+    mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 1, first_error: { code: '40001', message: 'route changed' } })
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toThrow('route changed')
+    expect(mockUploadDocument).toHaveBeenCalledTimes(1)
+    expect(mockGetAccountBalance).not.toHaveBeenCalled()
+  })
+
   it('calls uploadDocument for each raw page with correct filename pattern', async () => {
     const rawPage1 = JSON.stringify({ transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }] })
     const rawPage2 = JSON.stringify({ transactions: [{ transaction_amount: { amount: '200', currency: 'SEK' } }] })

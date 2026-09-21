@@ -74,6 +74,8 @@ interface SupabaseStub {
    * Falls back to updateError when the index isn't present.
    */
   updateErrorByCall?: Array<{ message: string } | null>
+  syncError?: { message: string }
+  capturedSync?: Record<string, unknown>
   /** BAS account numbers that exist in the company's chart_of_accounts (PR 2 ledger validation). */
   chartAccountNumbers?: string[]
   /** Existing cash_accounts rows for the company (ledger collision validation). */
@@ -103,6 +105,11 @@ interface SupabaseStub {
 function buildSupabase(stub: SupabaseStub) {
   let updateCallCount = 0
   return {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name !== 'persist_bank_sync_result') throw new Error('Unexpected RPC')
+      stub.capturedSync = args
+      return { data: { applied: true }, error: stub.syncError ?? null }
+    }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: stub.authUser }, error: null }),
     },
@@ -621,15 +628,14 @@ describe('PATCH /accounts (enable-banking)', () => {
         { strategy: 'longest' }
       )
 
-      // Two updates: status flip first, then initial_sync metadata.
-      expect(stub.capturedUpdates).toHaveLength(2)
+      // Configuration is written once; results go through the shared RPC.
+      expect(stub.capturedUpdates).toHaveLength(1)
       expect(stub.capturedUpdates?.[0]?.status).toBe('active')
-      const meta = stub.capturedUpdates?.[1]
-      expect(meta?.initial_sync_completed_at).toBeDefined()
-      expect(meta?.initial_sync_returned_min_date).toBe('2026-02-15')
-      expect(meta?.initial_sync_returned_max_date).toBe('2026-05-13')
-      expect(meta?.initial_sync_lookback_days).toBe(90)
-      expect(meta?.last_synced_at).toBeDefined()
+      expect(stub.capturedSync).toMatchObject({
+        p_company_id: 'company-1', p_connection_id: 'conn-1',
+        p_completed_at: expect.any(String),
+        p_initial_sync: { returned_min: '2026-02-15', returned_max: '2026-05-13', lookback_days: 90 },
+      })
     })
 
     it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
@@ -993,10 +999,10 @@ describe('PATCH /accounts (enable-banking)', () => {
         ctx
       )
 
-      expect(stub.capturedUpdates?.[1]?.initial_sync_lookback_days).toBe(365)
+      expect(stub.capturedSync?.p_initial_sync).toMatchObject({ lookback_days: 365 })
     })
 
-    it('surfaces metadata_update_failed when the second update errors after a successful sync', async () => {
+    it('surfaces persistence failure after a successful sync', async () => {
       // Sync runs and ingests transactions, but persisting initial_sync_completed_at
       // fails. The client must see the failure (not a fake success) so the UI can
       // show a retry warning; the cron will gate on initial_sync_completed_at IS NULL
@@ -1019,7 +1025,7 @@ describe('PATCH /accounts (enable-banking)', () => {
           accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
         },
         // First update (status flip) succeeds; second (metadata) fails.
-        updateErrorByCall: [null, { message: 'connection lost' }],
+        syncError: { message: 'connection lost' },
       }
       const supabase = buildSupabase(stub)
       const ctx = makeContext(supabase)
@@ -1039,10 +1045,10 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.initial_sync).toBeUndefined()
       // The error code surfaces the metadata-update failure mode so the UI
       // and audit log can distinguish it from an ingest-side failure.
-      expect(body.initial_sync_error).toMatch(/^metadata_update_failed:/)
+      expect(body.initial_sync_error).toContain('connection lost')
       // Status flip still happened: connection is active, cron will retry backfill.
       expect(stub.capturedUpdates?.[0]?.status).toBe('active')
-      expect(stub.capturedUpdates).toHaveLength(2)
+      expect(stub.capturedUpdates).toHaveLength(1)
     })
   })
 

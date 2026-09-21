@@ -437,6 +437,12 @@ export async function syncAccountTransactions(
     }
   }
 
+  if (ingestResult.errors > 0) {
+    // Keep the previous cursor so a retry fetches the incomplete batch again.
+    // Successfully inserted rows already have dedup keys and are not rebooked.
+    throw new Error(`Bank transaction persistence failed: ${ingestResult.first_error?.message ?? `${ingestResult.errors} rows rejected`}`)
+  }
+
   // Update account balance, but only when the stored one has gone stale:
   // every skipped call preserves the account's scarce daily BALANCES quota
   // (see BALANCE_MAX_AGE_MS). balance_updated_at is written ONLY on a

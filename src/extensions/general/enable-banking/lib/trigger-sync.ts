@@ -35,7 +35,7 @@ import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
 import { retryAfterSeconds } from './rate-limit-message'
-import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
+import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -216,27 +216,14 @@ export async function triggerConnectionSync(
     const duplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
 
     const syncedAt = new Date().toISOString()
-    await updateBalancesFromSync(
-      supabase,
+    await persistBankSyncResult(supabase, {
       companyId,
-      connection.id as string,
-      allAccounts.map((a) => ({
-        external_uid: a.uid,
-        balance: a.balance,
-        available_balance: a.available_balance,
-        balance_updated_at: a.balance_updated_at,
-      })),
-    )
-    await supabase
-      .from('bank_connections')
-      .update({
-        accounts_data: allAccounts,
-        last_synced_at: syncedAt,
-        ...(connection.status === 'error' ? { status: 'active' } : {}),
-        ...(connection.status === 'error' || connection.error_message ? { error_message: null } : {}),
-      })
-      .eq('id', connection.id)
-      .eq('company_id', companyId)
+      connectionId: connection.id as string,
+      sessionId: connection.session_id as string | null,
+      startedAt: syncStartedAt,
+      completedAt: syncedAt,
+      accounts,
+    })
 
     if (imported > 0) {
       const { data: syncedTransactions } = await supabase
@@ -307,11 +294,14 @@ export async function triggerConnectionSync(
 
     if (error instanceof SessionExpiredError) {
       log.warn('agent-triggered bank sync: session expired', { connectionId })
-      await supabase
-        .from('bank_connections')
-        .update({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
-        .eq('id', connection.id)
-        .eq('company_id', companyId)
+      await persistBankSyncFailure(supabase, {
+        companyId,
+        connectionId: connection.id as string,
+        sessionId: connection.session_id as string | null,
+        startedAt: syncStartedAt,
+        status: 'expired',
+        message: REAUTH_REQUIRED_MESSAGE,
+      })
       return {
         ok: false,
         code: 'BANK_SESSION_EXPIRED',
@@ -361,12 +351,15 @@ export async function triggerConnectionSync(
       message: error instanceof Error ? error.message : String(error),
       name: error instanceof Error ? error.name : undefined,
     })
-    if (connection.status === 'error') {
-      await supabase
-        .from('bank_connections')
-        .update({ error_message: SYNC_FAILED_MESSAGE })
-        .eq('id', connection.id)
-        .eq('company_id', companyId)
+    if (connection.status === 'error' && !(error instanceof BankSyncResultObsoleteError)) {
+      await persistBankSyncFailure(supabase, {
+        companyId,
+        connectionId: connection.id as string,
+        sessionId: connection.session_id as string | null,
+        startedAt: syncStartedAt,
+        status: 'error',
+        message: SYNC_FAILED_MESSAGE,
+      })
     }
     return {
       ok: false,
