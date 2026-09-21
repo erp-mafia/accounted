@@ -43,6 +43,7 @@ import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import { refreshMigratedSupplierPaymentState } from './lib/refresh-migrated-payment-state'
+import { repairMigratedInvoicePaidAt } from './lib/repair-migrated-invoice-paid-at'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -1747,6 +1748,13 @@ export const arcimMigrationExtension: Extension = {
     // either pass is reported beside the results that were already persisted,
     // as `registrationLinksError` / `paymentRefreshError`, rather than by
     // discarding them. The two passes are independent of each other.
+    //
+    // Pass { repairInvoicePaidAt: true } to ALSO run `invoicePaidAtRepair`:
+    // the sales-side repair of the payment date the migration fabricated
+    // before #2769 (paid_at = invoice date). It needs no consent, so it runs
+    // with or without one, but only when asked for: this route defaults to a
+    // real run, and a caller linking supplier vouchers must not find the
+    // dates on its customer invoices rewritten as a side effect.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1763,10 +1771,16 @@ export const arcimMigrationExtension: Extension = {
 
         let dryRun = false
         let consentId: string | null = null
+        let repairInvoicePaidAt = false
         try {
-          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown }
+          const body = (await request.json()) as {
+            dryRun?: boolean
+            consentId?: unknown
+            repairInvoicePaidAt?: unknown
+          }
           dryRun = body?.dryRun === true
           consentId = typeof body?.consentId === 'string' && body.consentId ? body.consentId : null
+          repairInvoicePaidAt = body?.repairInvoicePaidAt === true
         } catch {
           // empty body is fine: default to a real run
         }
@@ -1804,8 +1818,42 @@ export const arcimMigrationExtension: Extension = {
           })
         }
 
+        // Sales side, local evidence only (no provider call): see
+        // repair-migrated-invoice-paid-at.ts for which rows and why. A failure
+        // here is reported beside the results already persisted, like the
+        // provider-backed passes below. The database's own message stays in
+        // the log: the response carries the SQLSTATE only.
+        let invoicePaidAtRepair: Awaited<ReturnType<typeof repairMigratedInvoicePaidAt>> | null = null
+        let invoicePaidAtRepairError: { code: string } | null = null
+        if (repairInvoicePaidAt) {
+          try {
+            invoicePaidAtRepair = await repairMigratedInvoicePaidAt({ supabase, companyId, dryRun })
+            log.info('arcim invoice paid_at repair completed', {
+              companyId,
+              dryRun,
+              candidates: invoicePaidAtRepair.candidates,
+              setToDate: invoicePaidAtRepair.setToDate,
+              setToNull: invoicePaidAtRepair.setToNull,
+              leftAlone: invoicePaidAtRepair.leftAlone,
+              writeError: invoicePaidAtRepair.writeError?.code ?? null,
+            })
+          } catch (error) {
+            log.error('arcim invoice paid_at repair failed', error as Error)
+            invoicePaidAtRepairError = { code: 'PROVIDER_MIGRATE_FAILED' }
+          }
+        }
+        const invoicePaidAtRepairBody = repairInvoicePaidAt
+          ? {
+              invoicePaidAtRepair: invoicePaidAtRepair && {
+                ...invoicePaidAtRepair,
+                writeError: invoicePaidAtRepair.writeError && { code: invoicePaidAtRepair.writeError.code },
+              },
+              ...(invoicePaidAtRepairError ? { invoicePaidAtRepairError } : {}),
+            }
+          : {}
+
         if (!consentId) {
-          return NextResponse.json({ success: true, dryRun, result })
+          return NextResponse.json({ success: true, dryRun, result, ...invoicePaidAtRepairBody })
         }
 
         // resolveConsent throws plain `{ status, message }` objects for a
@@ -1882,6 +1930,7 @@ export const arcimMigrationExtension: Extension = {
           ...(registrationLinksError ? { registrationLinksError } : {}),
           paymentRefresh,
           ...(paymentRefreshError ? { paymentRefreshError } : {}),
+          ...invoicePaidAtRepairBody,
         })
       },
     },

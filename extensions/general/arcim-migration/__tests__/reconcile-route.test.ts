@@ -44,11 +44,16 @@ vi.mock('../lib/refresh-migrated-payment-state', () => ({
   refreshMigratedSupplierPaymentState: vi.fn(),
 }))
 
+vi.mock('../lib/repair-migrated-invoice-paid-at', () => ({
+  repairMigratedInvoicePaidAt: vi.fn(),
+}))
+
 import { arcimMigrationExtension } from '../index'
 import { getConsent, ConsentNotFoundError } from '../lib/provider-client'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from '../lib/relink-registration-vouchers'
 import { refreshMigratedSupplierPaymentState } from '../lib/refresh-migrated-payment-state'
+import { repairMigratedInvoicePaidAt } from '../lib/repair-migrated-invoice-paid-at'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
   (r) => r.method === 'POST' && r.path === '/reconcile',
@@ -59,6 +64,7 @@ const handler = route.handler as RouteHandler
 const mReconcile = reconcileSupplierInvoiceVouchers as Mock
 const mRelink = relinkRegistrationVouchers as Mock
 const mRefresh = refreshMigratedSupplierPaymentState as Mock
+const mRepairPaidAt = repairMigratedInvoicePaidAt as Mock
 const mGetConsent = getConsent as Mock
 
 const PAYMENT_RESULT = { scanned: 3, autoLinked: 2, ambiguous: 0, unmatched: 1, items: [] }
@@ -72,6 +78,15 @@ const LINK_RESULT = {
 }
 const REFRESH_RESULT = {
   providerInvoices: 4, matched: 3, updated: 2, unchanged: 1, unmatched: 1, dryRun: false,
+}
+
+const PAID_AT_RESULT = {
+  candidates: 311, setToDate: 0, setToDateBySource: { provider: 0, journal_entry: 0 }, setToNull: 311,
+  leftAlone: {
+    confirmedBySource: 0, ambiguousPaymentRows: 0, providerMaySupplyDate: 0,
+    providerUnknown: 0, changedSinceRead: 0, notWritten: 0,
+  },
+  providers: ['fortnox'], writeError: null, dryRun: true,
 }
 
 function buildCtx(user: { id: string } | null = { id: 'user-1' }): ExtensionContext {
@@ -95,6 +110,7 @@ describe('POST /reconcile', () => {
     mReconcile.mockResolvedValue(PAYMENT_RESULT)
     mRelink.mockResolvedValue(LINK_RESULT)
     mRefresh.mockResolvedValue(REFRESH_RESULT)
+    mRepairPaidAt.mockResolvedValue(PAID_AT_RESULT)
     mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
   })
 
@@ -106,6 +122,13 @@ describe('POST /reconcile', () => {
     expect(mReconcile).not.toHaveBeenCalled()
     expect(mRelink).not.toHaveBeenCalled()
     expect(mRefresh).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 without a user even when the paid_at repair is asked for', async () => {
+    const res = await handler(reconcileRequest({ repairInvoicePaidAt: true }), buildCtx(null))
+
+    expect(res.status).toBe(401)
+    expect(mRepairPaidAt).not.toHaveBeenCalled()
   })
 
   it('without consentId runs the payment reconcile only and answers as before', async () => {
@@ -193,5 +216,93 @@ describe('POST /reconcile', () => {
       paymentRefreshError: { code: 'PROVIDER_MIGRATE_FAILED' },
     })
     expect(JSON.stringify(body)).not.toContain('10.0.0.1')
+  })
+
+  // ── invoicePaidAtRepair (#2798 C) ─────────────────────────────
+
+  it('never runs the paid_at repair unless it is asked for: this route defaults to a real run', async () => {
+    await handler(reconcileRequest(), buildCtx())
+    await handler(reconcileRequest({ dryRun: true }), buildCtx())
+    await handler(reconcileRequest({ consentId: 'consent-1' }), buildCtx())
+    // Only the literal true opts in.
+    await handler(reconcileRequest({ repairInvoicePaidAt: 'true' }), buildCtx())
+    await handler(reconcileRequest({ repairInvoicePaidAt: 1 }), buildCtx())
+
+    expect(mRepairPaidAt).not.toHaveBeenCalled()
+  })
+
+  it('runs the paid_at repair without a consent, company-scoped, and passes dryRun through', async () => {
+    const res = await handler(reconcileRequest({ repairInvoicePaidAt: true, dryRun: true }), buildCtx())
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+
+    expect(status).toBe(200)
+    expect(body).toEqual({ success: true, dryRun: true, result: PAYMENT_RESULT, invoicePaidAtRepair: PAID_AT_RESULT })
+    expect(mRepairPaidAt).toHaveBeenCalledTimes(1)
+    expect(mRepairPaidAt).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', dryRun: true }))
+    // No provider is involved: nothing to look a consent up for.
+    expect(mGetConsent).not.toHaveBeenCalled()
+    expect(mRelink).not.toHaveBeenCalled()
+  })
+
+  it('writes for real only when dryRun is not set', async () => {
+    await handler(reconcileRequest({ repairInvoicePaidAt: true }), buildCtx())
+
+    expect(mRepairPaidAt).toHaveBeenCalledWith(expect.objectContaining({ companyId: 'company-1', dryRun: false }))
+  })
+
+  it('returns the paid_at repair beside the provider-backed passes when a consent is given too', async () => {
+    const res = await handler(reconcileRequest({ consentId: 'consent-1', repairInvoicePaidAt: true, dryRun: true }), buildCtx())
+    const { body } = await parseJsonResponse<Record<string, unknown>>(res)
+
+    expect(body).toEqual({
+      success: true,
+      dryRun: true,
+      result: PAYMENT_RESULT,
+      registrationLinks: LINK_RESULT,
+      paymentRefresh: REFRESH_RESULT,
+      invoicePaidAtRepair: PAID_AT_RESULT,
+    })
+  })
+
+  it('does not run the paid_at repair for a consent that is not the company\'s', async () => {
+    mGetConsent.mockRejectedValue(new ConsentNotFoundError())
+
+    const res = await handler(reconcileRequest({ consentId: 'consent-x', repairInvoicePaidAt: true }), buildCtx())
+
+    expect(res.status).toBe(404)
+    expect(mRepairPaidAt).not.toHaveBeenCalled()
+  })
+
+  it('keeps the other results when the paid_at repair fails, and leaks nothing of the failure', async () => {
+    mRepairPaidAt.mockRejectedValue(new Error('provider_consents read failed: connection to 10.0.0.1 refused'))
+
+    const res = await handler(reconcileRequest({ repairInvoicePaidAt: true }), buildCtx())
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(res)
+
+    expect(status).toBe(200)
+    expect(body).toEqual({
+      success: true,
+      dryRun: false,
+      result: PAYMENT_RESULT,
+      invoicePaidAtRepair: null,
+      invoicePaidAtRepairError: { code: 'PROVIDER_MIGRATE_FAILED' },
+    })
+    expect(JSON.stringify(body)).not.toContain('10.0.0.1')
+  })
+
+  it('reports a write the database refused by its SQLSTATE only, never by its message', async () => {
+    mRepairPaidAt.mockResolvedValue({
+      ...PAID_AT_RESULT,
+      setToNull: 0,
+      leftAlone: { ...PAID_AT_RESULT.leftAlone, notWritten: 311 },
+      writeError: { code: 'P0001', message: 'Archived migration reset source records are immutable' },
+    })
+
+    const res = await handler(reconcileRequest({ repairInvoicePaidAt: true }), buildCtx())
+    const { body } = await parseJsonResponse<{ invoicePaidAtRepair: { writeError: unknown; leftAlone: { notWritten: number } } }>(res)
+
+    expect(body.invoicePaidAtRepair.writeError).toEqual({ code: 'P0001' })
+    expect(body.invoicePaidAtRepair.leftAlone.notWritten).toBe(311)
+    expect(JSON.stringify(body)).not.toContain('Archived')
   })
 })
