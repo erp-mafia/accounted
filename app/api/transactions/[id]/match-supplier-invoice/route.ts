@@ -18,6 +18,7 @@ import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
+import { roundOre } from '@/lib/money'
 import { eventBus } from '@/lib/events/bus'
 import { ensureInitialized } from '@/lib/init'
 import type { SupplierInvoice, SupplierInvoiceItem, Transaction } from '@/types'
@@ -422,7 +423,10 @@ export const POST = withRouteContext(
         company_id: companyId,
         supplier_invoice_id,
         payment_date: transaction.date,
-        amount: paymentAmountInvoiceCurrency,
+        // Payment rows reconstruct and reverse paid_amount, so store the debt
+        // settled, including any 3740 adjustment. Actual cash stays on the
+        // linked bank transaction and the payment account's journal line.
+        amount: roundOre(newPaidAmount - (invoice.paid_amount || 0)),
         currency: invoice.currency,
         journal_entry_id: journalEntryId,
         transaction_id: transactionId,

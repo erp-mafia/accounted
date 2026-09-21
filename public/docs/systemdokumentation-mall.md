@@ -136,6 +136,12 @@ Undantaget från beskattningsunderlaget gäller bara fakturor i SEK och rader p�
 
 Bankkonto 1930 avstäms via bankavstämningsmodulen (flerstegs matchning: exakt belopp och datum, referensmatchning, datumintervall, sannolikhetsmatchning). Avstämningsstatus visas under **Rapporter > Bankavstämning**.
 
+### 4.7 Leverantörsbetalningens belopp och öresavrundning
+
+Vid bankmatchning anger betalningsraden (`supplier_invoice_payments.amount`) den reglerade skulden i fakturans valuta. Banktransaktionen och verifikatets betalningskonto visar faktiskt utbetalt belopp. Vid öresavrundning av en SEK-betalning som reglerar 2440 bokförs skillnaden på 3740: kredit när utbetalningen är lägre än skulden, debet när den är högre.
+
+PR #2850 rättar betalningsradens belopp för nya matchningar från den programversion som innehåller rättningen. Programversionens första registrerade drifttid framgår av Behandlingshistorik (`app_releases`). Betalningsdatumet är inte ändringens driftdatum. Äldre avrundade bankmatchningar kan ha sparat utbetalt belopp i stället för reglerad skuld, vilket kan påverka historiska reskontror och återföringar. Dessa rader och redan avvikande fakturasaldon ändras inte automatiskt. Vid granskning jämförs raden med betalningsverifikatet och banktransaktionen. Äldre delbetalningar utan avrundning har samma belopp enligt båda reglerna.
+
 ## 5. Verifikationer
 
 ### 5.1 Verifikationsnumrering (BFNAR 2013:2 punkt 9.6)
