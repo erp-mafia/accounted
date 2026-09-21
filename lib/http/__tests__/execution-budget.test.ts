@@ -60,6 +60,22 @@ describe('execution deadlines reach the actual work', () => {
     await expect(next).resolves.toBeUndefined()
   })
 
+  it('cancels a stalled response body even when provider headers arrived immediately', async () => {
+    const fetch = vi.fn((_url: string, init: RequestInit) => Promise.resolve(new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"Invoices":'))
+        init.signal!.addEventListener('abort', () => controller.error(init.signal!.reason), { once: true })
+      },
+    }), { headers: { 'Content-Type': 'application/json' } })))
+    vi.stubGlobal('fetch', fetch)
+    const request = withExecutionDeadline(Date.now() + 100, 'listing-body', () => new FortnoxClient().get('test-token', '/invoices'))
+    const assertion = expect(request).rejects.toBeInstanceOf(ExecutionBudgetExceeded)
+    await vi.advanceTimersByTimeAsync(100)
+    await assertion
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps overlapping callers and nested deadlines independent', async () => {
     let signalA: AbortSignal | undefined
     let signalB: AbortSignal | undefined
