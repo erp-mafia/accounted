@@ -1,4 +1,5 @@
 import type { AccountingMethod, MomsPeriod } from '@/types'
+import { roundOre } from '@/lib/money'
 import { daysBetween } from '@/lib/arkiv/agreements/dates'
 
 /**
@@ -334,7 +335,7 @@ export function expectedDocuments(lines: LedgerLine[], agreements: AgreementForL
         expected_type: rule.expectedType,
         evidence: {
           cost_months: costMonths.size,
-          cost_total: Math.round(costTotal * 100) / 100,
+          cost_total: roundOre(costTotal),
           balance_months: balanceMonths.size,
           accounts: [...new Set([...costLines, ...balanceLines].map((l) => l.account_number))].sort(),
           since,
