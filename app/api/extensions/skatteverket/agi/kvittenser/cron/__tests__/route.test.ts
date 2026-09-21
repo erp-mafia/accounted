@@ -362,7 +362,7 @@ describe('AGI kvittenser cron', () => {
     expect(errorRecorder).not.toHaveBeenCalled()
     expect(warnRecorder).toHaveBeenCalledTimes(1)
     expect(String(warnRecorder.mock.calls[0][0])).toContain('gateway refuses the APIGW client')
-    expect(warnRecorder.mock.calls[0][1]).toMatchObject({ issue: '#2226', pending: 3 })
+    expect(warnRecorder.mock.calls[0][1]).toMatchObject({ issue: '#2226', route: 'direct', pending: 3 })
     // Nothing about the connection is wrong: no reconsent flag, no grant downgrade.
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
     expect(mockMarkGrantRevoked).not.toHaveBeenCalled()
@@ -371,6 +371,59 @@ describe('AGI kvittenser cron', () => {
       .map((c: unknown[]) => String(c[0]))
       .find((m: string) => m.includes('Processed'))
     expect(summaryLine).toContain('gateway refused the APIGW client')
+  })
+
+  it('a refusal of this installation\'s client does not starve a company that goes through the connector', async () => {
+    // comp-2 is on the Skatteverket connector canary: its calls carry the
+    // broker's gateway client, which the direct refusal says nothing about.
+    const prev = {
+      key: process.env.GNUBOK_CONNECTOR_KEY,
+      oauth: process.env.SKATTEVERKET_OAUTH2_CLIENT_ID,
+      canary: process.env.CONNECT_SKV_CANARY_COMPANIES,
+    }
+    process.env.GNUBOK_CONNECTOR_KEY = 'gnubok_ck_test'
+    process.env.SKATTEVERKET_OAUTH2_CLIENT_ID = 'own-client'
+    process.env.CONNECT_SKV_CANARY_COMPANIES = 'comp-2'
+    try {
+      mockCreateClient.mockReturnValueOnce(
+        makeSupabaseStub({
+          agi_declarations: {
+            data: [
+              PENDING_DECLARATION,
+              { ...PENDING_DECLARATION, id: 'decl-2', company_id: 'comp-2', period_month: 6 },
+              { ...PENDING_DECLARATION, id: 'decl-3', company_id: 'comp-3', period_month: 7 },
+            ],
+          },
+          skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+          company_settings: { data: { org_number: '556123-4567', entity_type: 'aktiebolag' } },
+        }),
+      )
+      mockAgiGetKvittenser
+        .mockRejectedValueOnce(
+          new (SkatteverketAuthError as any)('nekade anropet', 'ACCESS_DENIED', 'APIGW_CLIENT_REFUSED'),
+        )
+        .mockResolvedValueOnce({ ok: true, status: 200, data: { kvittenser: [] } } as any)
+
+      const res = await GET(makeRequest())
+      const body = await res.json()
+
+      // decl-1 (direct) refused, decl-2 (connector) still asked, decl-3 (direct) skipped.
+      expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(2)
+      expect(body.results.map((r: { declarationId: string; status: string }) => [r.declarationId, r.status])).toEqual([
+        ['decl-1', 'gateway_refused'],
+        ['decl-2', 'still_pending'],
+      ])
+      expect(body.gatewayRefused).toBe(true)
+    } finally {
+      for (const [name, value] of [
+        ['GNUBOK_CONNECTOR_KEY', prev.key],
+        ['SKATTEVERKET_OAUTH2_CLIENT_ID', prev.oauth],
+        ['CONNECT_SKV_CANARY_COMPANIES', prev.canary],
+      ] as const) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
   })
 
   it('reports gatewayRefused false on an ordinary run, so the first accepted call is visible', async () => {

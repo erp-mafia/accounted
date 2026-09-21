@@ -8,6 +8,7 @@ import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/
 import { currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
 import { reconcileAgiDeclaration } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
+import { skatteverketConnectorMode } from '@/extensions/general/skatteverket/lib/connector-mode'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -108,11 +109,14 @@ export async function GET(request: Request) {
     error?: string
   }
   const results: Result[] = []
-  // Set when Skatteverket's gateway refuses the APIGW client itself. That
+  // Filled when Skatteverket's gateway refuses the APIGW client itself. That
   // verdict is reached before any bearer is read, so it is the same for every
-  // remaining declaration: the run stops asking instead of collecting one
-  // identical refusal (and one identical log line) per declaration.
-  let gatewayRefused = false
+  // remaining declaration behind the same client: the run stops asking
+  // instead of collecting one identical refusal (and one identical log line)
+  // per declaration. Keyed by route because a company on the connector canary
+  // reaches Skatteverket through the broker's client, not this installation's:
+  // a refusal of one must never starve the companies behind the other.
+  const refusedRoutes = new Set<'direct' | 'connector'>()
 
   for (const decl of pending) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
@@ -128,6 +132,9 @@ export async function GET(request: Request) {
       console.info('[agi-kvittenser-cron] skip: capability not entitled', { companyId })
       continue
     }
+
+    const route = skatteverketConnectorMode(companyId) ? 'connector' : 'direct'
+    if (refusedRoutes.has(route)) continue
 
     try {
       // The shared reconciler resolves auth (system grant → user token),
@@ -151,7 +158,7 @@ export async function GET(request: Request) {
       results.push(result)
 
       if (outcome.status === 'gateway_refused') {
-        gatewayRefused = true
+        refusedRoutes.add(route)
         // warn, once per run, not error per declaration: this is a standing
         // operator-side state (the APIGW client has no subscription to the AGI
         // hantera API in Utvecklarportalen, #973 / #2226), not something a
@@ -160,12 +167,11 @@ export async function GET(request: Request) {
         // days) without telling anyone anything new. The declarations stay
         // pending_signature and heal on the first run after the subscription
         // exists; the AGI panel tells the user the truth meanwhile.
-        log.warn('Skatteverket gateway refuses the APIGW client for AGI kvittens reads; run stopped', {
+        log.warn('Skatteverket gateway refuses the APIGW client for AGI kvittens reads; no further calls this run', {
           issue: '#2226',
+          route,
           pending: pending.length,
-          checkedBeforeRefusal: results.length - 1,
         })
-        break
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
@@ -225,6 +231,7 @@ export async function GET(request: Request) {
   const expired = results.filter(r => r.status === 'expired_token').length
   const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const errors = results.filter(r => r.status === 'error').length
+  const gatewayRefused = refusedRoutes.size > 0
 
   console.log(
     `[agi-kvittenser-cron] Processed ${results.length}: ${signed} signed, ${stillPending} still pending, ${alreadyClaimed} already claimed, ${expired} expired, ${grantRevoked} grants revoked, ${errors} errors${gatewayRefused ? ', stopped: gateway refused the APIGW client' : ''}`,
