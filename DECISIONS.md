@@ -701,3 +701,4 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-21] Bank ingest verifies UID/session/physical identity and destination under connection and cash-account locks. Inserts and manual-row adoption reject stale route tokens; provider responses are archived before persistence so failed batches retain their evidence.
 
 [2026-09-21] Bank routing conflicts return PT409: stale sessions, destinations and dedup scopes require refreshed input. PostgREST can retry deterministic serialization_failure errors indefinitely, as confirmed by the joint engine HTTP probe.
+[2026-09-21] Restore staging's journal-line guard from unchanged main/production SQL, with Emil's explicit exception: staging's applied migration history masked an older definition that rejected sanctioned inline replacement lines.
