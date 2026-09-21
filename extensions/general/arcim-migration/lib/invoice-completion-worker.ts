@@ -2,6 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { ExecutionBudgetExceeded, queryInExecutionBudget, withExecutionDeadline } from '@/lib/http/execution-budget'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
+import { ProviderCallError } from '@/lib/providers/with-provider-call'
+import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { fortnoxCompletionBlock, fortnoxCompletionRetrySeconds, type CompletionBlockReason } from '@/lib/providers/fortnox/completion-failure'
 import { fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage, type InvoiceCompletionSource } from '@/lib/providers/provider-data-fetcher'
 import type { ProviderName } from '@/lib/providers/types'
 import { completeInvoiceRows } from '@/lib/invoices/complete-invoice-rows'
@@ -36,7 +39,7 @@ export function emptyCompletionSummary() {
   return {
     companies: 0, completed: 0, alreadyCompleted: 0, headersUpdated: 0, historyAppended: 0,
     unmatched: 0, ambiguous: 0, providerEmpty: 0, totalMismatch: 0, rowsMismatch: 0, failed: 0,
-    deferred: 0, uncertain: 0, companiesFailed: 0, pages: 0,
+    deferred: 0, uncertain: 0, companiesFailed: 0, companiesBlocked: 0, pages: 0,
     budgetReachedAt: null as string | null,
     // Counts describe this invocation. Delayed retries and undiscovered work
     // are not a measured backlog, so never infer backlog completion from them.
@@ -85,6 +88,7 @@ export async function completeInvoiceCompletionWork(
   const uncertain = new Set<string>()
   let connection: ResolvedConsent | undefined
   let retrySeconds = 0
+  let block: { reason: CompletionBlockReason; revision: string } | undefined
   let currentStage = 'candidate-selection'
   let pendingIds = new Set<string>()
   const connectionForWork = async () => {
@@ -131,6 +135,8 @@ export async function completeInvoiceCompletionWork(
               fetchInvoiceCompletionDetail(work.provider, resolved.accessToken, resolved.providerCompanyId, row.source_ref!))
           } catch (error) {
             if (error instanceof ExecutionBudgetExceeded) throw error
+            if (work.provider === 'fortnox' && (fortnoxCompletionBlock(error) ||
+              error instanceof ProviderCallError || (error instanceof FortnoxApiError && error.statusCode === 429))) throw error
             const status = (error as { statusCode?: number }).statusCode
             if (status === 401 || status === 403) throw error
             log.warn('invoice detail failed; retry scheduled', { ...fields, invoiceId: row.id, error: String(error) })
@@ -195,7 +201,10 @@ export async function completeInvoiceCompletionWork(
       log.info('invoice completion yielded at deadline', { ...fields, stage: currentStage })
     } else {
       result.companiesFailed++
-      retrySeconds = 3600
+      retrySeconds = work.provider === 'fortnox' ? fortnoxCompletionRetrySeconds(error) : 3600
+      const reason = work.provider === 'fortnox' ? fortnoxCompletionBlock(error) : null
+      const revision = error instanceof ProviderCallError ? error.credentialRevision ?? connection?.credentialRevision : connection?.credentialRevision
+      if (reason && revision) block = { reason, revision }
       log.error('invoice completion company interrupted', { ...fields, stage: currentStage, error: String(error) })
     }
   }
@@ -214,7 +223,17 @@ export async function completeInvoiceCompletionWork(
   result.deferred = [...pendingIds].filter(id => !confirmed.has(id) && !uncertain.has(id)).length
   result.uncertain = uncertain.size
   for (const receipt of confirmed.values()) addReceipt(result, receipt)
-  try { await rpc(supabase, 'release_invoice_completion_work', { ...args, p_retry_seconds: retrySeconds }, deadline) }
+  try {
+    if (block) {
+      const blocked = await rpc<boolean>(supabase, 'block_invoice_completion_work', {
+        ...args, p_consent_id: work.consent_id, p_credential_revision: block.revision, p_reason: block.reason,
+      }, deadline)
+      if (blocked) result.companiesBlocked++
+      // A newer revision/attempt won. Release only our lease, without imposing
+      // the obsolete failure's delay on renewed credentials.
+      else await rpc(supabase, 'release_invoice_completion_work', { ...args, p_retry_seconds: 0 }, deadline)
+    } else await rpc(supabase, 'release_invoice_completion_work', { ...args, p_retry_seconds: retrySeconds }, deadline)
+  }
   catch { log.warn('invoice completion lease will expire', fields) }
   return result
 }

@@ -6135,6 +6135,11 @@
     "col_payroll_late_fees": "Förseningsavgifter"
   },
   "extensions": {
+    "ext_arcim_completion_reconnect_needed": "Hämtningen av fakturarader väntar på att du återansluter Fortnox.",
+    "ext_arcim_completion_license_needed": "Hämtningen av fakturarader är pausad. Kontrollera integrations- eller applicensen i Fortnox och försök igen.",
+    "ext_arcim_completion_permission_needed": "Hämtningen av fakturarader är pausad. Kontrollera licens och behörighet för fakturor i Fortnox och försök igen.",
+    "ext_arcim_completion_retry": "Försök hämta igen",
+    "ext_arcim_completion_queued": "Fakturaraderna hämtas vid nästa automatiska körning. Dina sparade framsteg finns kvar.",
     "ext_arcim_job_error_connection": "Återanslut till leverantören och återuppta sedan importen.",
     "ext_arcim_job_error_access": "Kontrollera leverantörens API-abonnemang och din behörighet att importera till företaget.",
     "ext_arcim_job_error_review": "Posten har motstridiga träffar och behöver granskas innan den kan slutföras.",

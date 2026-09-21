@@ -9,6 +9,8 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchInvoiceCompletionDetail: vi.fn(), fetchInvoiceCompletionPage: vi.fn(),
   fetchSalesInvoicesDirect: vi.fn(), hydrateSalesInvoices: vi.fn(),
 }))
+import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage } from '@/lib/providers/provider-data-fetcher'
 import { completeInvoiceCompletionWork, runInvoiceCompletion, type InvoiceCompletionWork } from '../invoice-completion-worker'
@@ -43,7 +45,7 @@ function untilAborted<T>(): Promise<T> {
 }
 function database(rows: ReturnType<typeof fixture>['rows'], work: InvoiceCompletionWork) {
   const receipts = new Map<string, { status: string; headerUpdated: boolean; eventId: string | null }>()
-  const state = { loseReply: false, concurrent: false, discoveryMs: 0, slowCandidates: false }
+  const state = { blockWins: true, loseReply: false, concurrent: false, discoveryMs: 0, slowCandidates: false }
   const rpc = vi.fn((name: string, args: Record<string, unknown>) => {
     let signal: AbortSignal | undefined
     const builder = {
@@ -51,7 +53,8 @@ function database(rows: ReturnType<typeof fixture>['rows'], work: InvoiceComplet
       async then(onFulfilled: (v: unknown) => unknown, onRejected: (e: unknown) => unknown) {
         try {
           let data: unknown
-          if (name === 'enqueue_invoice_completion_work') { vi.setSystemTime(Date.now() + state.discoveryMs); data = 1 }
+          if (name === 'block_invoice_completion_work') data = state.blockWins
+          else if (name === 'enqueue_invoice_completion_work') { vi.setSystemTime(Date.now() + state.discoveryMs); data = 1 }
           else if (name === 'claim_invoice_completion_work') data = (args.p_exclude as string[]).length ? null : work
           else if (name === 'load_invoice_completion_candidates') {
             if (state.slowCandidates) data = await new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }))
@@ -86,7 +89,7 @@ function database(rows: ReturnType<typeof fixture>['rows'], work: InvoiceComplet
 }
 beforeEach(() => {
   vi.resetAllMocks(); vi.useFakeTimers()
-  resolve.mockResolvedValue({ consent: { provider: 'fortnox' }, accessToken: 'synthetic-token', providerCompanyId: 'synthetic-account' })
+  resolve.mockResolvedValue({ consent: { provider: 'fortnox' }, accessToken: 'synthetic-token', providerCompanyId: 'synthetic-account', credentialRevision: 'request-revision' })
   detail.mockImplementation(async (_provider, _token, _company, source) => invoice(source.id))
   page.mockResolvedValue({ sources: [], nextPage: null, nextPart: 'invoices' })
 })
@@ -159,5 +162,51 @@ describe('resumable invoice completion', () => {
     expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000))
       .toMatchObject({ completed: 0, unmatched: 1 })
     expect(db.rpc.mock.calls.find(c => c[0] === 'finish_invoice_completion')?.[1].p_rows).toBeUndefined()
+  })
+})
+
+
+describe('Fortnox completion recovery', () => {
+  it('records one definitive failure for the revision that failed', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    resolve.mockRejectedValueOnce(new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox', 'expired', {
+      providerCode: 'invalid_grant', credentialRevision: 'failed-revision',
+    }))
+    const result = await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(result).toMatchObject({ companiesBlocked: 1, completed: 0 })
+    expect(db.rpc).toHaveBeenCalledWith('block_invoice_completion_work', expect.objectContaining({
+      p_consent_id: work.consent_id, p_credential_revision: 'failed-revision', p_reason: 'PROVIDER_AUTH_EXPIRED',
+    }))
+    expect(detail).not.toHaveBeenCalled()
+    expect(page).not.toHaveBeenCalled()
+  })
+
+  it.each([[2001103, 'PROVIDER_LICENSE_MISSING'], [2001101, 'PROVIDER_RESOURCE_FORBIDDEN'], [2000663, 'PROVIDER_RESOURCE_FORBIDDEN']])(
+    'stops at the first resource failure %s', async (code, reason) => {
+      const { work, rows } = fixture(); const db = database(rows, work)
+      detail.mockRejectedValueOnce(new FortnoxApiError('denied', 400, JSON.stringify({ ErrorInformation: { code } })))
+      expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 1, failed: 0 })
+      expect(detail).toHaveBeenCalledOnce()
+      expect(db.rpc).toHaveBeenCalledWith('block_invoice_completion_work', expect.objectContaining({
+        p_credential_revision: 'request-revision', p_reason: reason,
+      }))
+    },
+  )
+
+  it('keeps a temporary error retryable and preserves a longer provider delay', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    resolve.mockRejectedValueOnce(new ProviderCallError('PROVIDER_RATE_LIMITED', 'fortnox', 'limited', { retryAfterSeconds: 7200 }))
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 0 })
+    expect(db.rpc).toHaveBeenCalledWith('release_invoice_completion_work', expect.objectContaining({ p_retry_seconds: 7200 }))
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
+  })
+
+  it('does not impose an obsolete delay when newer credentials won', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work); db.state.blockWins = false
+    resolve.mockRejectedValueOnce(new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox', 'expired', {
+      providerCode: 'invalid_grant', credentialRevision: 'old-revision',
+    }))
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 0 })
+    expect(db.rpc).toHaveBeenCalledWith('release_invoice_completion_work', expect.objectContaining({ p_retry_seconds: 0 }))
   })
 })

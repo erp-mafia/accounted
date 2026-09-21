@@ -22,6 +22,7 @@ import { refreshBrioxToken } from '@/lib/providers/briox/oauth';
 import { refreshFortnoxToken } from '@/lib/providers/fortnox/oauth';
 import { refreshWintToken } from '@/lib/providers/wint/oauth';
 import { resolveConsent } from '../resolve-consent';
+import { FortnoxOAuthError } from '../fortnox/oauth-error';
 import { ProviderCallError } from '../with-provider-call';
 import { currentExecutionBudget, ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget';
 import { TimeoutError } from '@/lib/http/fetch-with-timeout';
@@ -29,6 +30,7 @@ import { TimeoutError } from '@/lib/http/fetch-with-timeout';
 const consentRow = { id: 'c1', company_id: 'co1', provider: 'briox', status: 1 };
 
 const expiredTokens = {
+  credential_revision: 'old-revision',
   access_token: 'old-access',
   refresh_token: 'old-refresh',
   token_expires_at: '2020-01-01T00:00:00.000Z',
@@ -177,9 +179,7 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     // license must be re-ordered first: so it gets its own code rather than the
     // generic "reconnect" PROVIDER_AUTH_EXPIRED.
     vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
-      new Error(
-        'Fortnox token refresh failed: 401 {"error":"error_missing_license","error_description":"The client credentials are invalid"}',
-      ),
+      new FortnoxOAuthError('refresh', 401, 'error_missing_license'),
     );
 
     const err = await resolveConsent('co1', 'c2').catch((e) => e);
@@ -194,10 +194,12 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     mock.enqueue({ data: [fortnoxConsent] }); // consent lookup
     mock.enqueue({ data: [expiredTokens] }); // expired token row
 
+    mock.enqueue({ data: [expiredTokens] }); // revision reconciliation
+
     // A plain expired/revoked grant IS revivable by reconnecting: it must not
     // be mis-mapped to the license code.
     vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(
-      new Error('Fortnox token refresh failed: 400 {"error":"invalid_grant"}'),
+      new FortnoxOAuthError('refresh', 400, 'invalid_grant'),
     );
 
     const err = await resolveConsent('co1', 'c2').catch((e) => e);
@@ -205,6 +207,47 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(err).toBeInstanceOf(ProviderCallError);
     expect(err.code).toBe('PROVIDER_AUTH_EXPIRED');
     expect(err.provider).toBe('fortnox');
+  });
+
+  it.each([
+    [new FortnoxOAuthError('refresh', 429, 'rate_limited', 7200), 'PROVIDER_RATE_LIMITED'],
+    [new FortnoxOAuthError('refresh', 503), 'PROVIDER_UPSTREAM_ERROR'],
+    [new FortnoxOAuthError('refresh', 401, 'invalid_client'), 'PROVIDER_CONFIGURATION_ERROR'],
+    [new TypeError('fetch failed'), 'PROVIDER_UNREACHABLE'],
+    [new Error('unexpected response'), 'PROVIDER_UPSTREAM_ERROR'],
+  ])('does not turn temporary or operator failures into expired authorization', async (failure, code) => {
+    mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+    mock.enqueue({ data: [expiredTokens] });
+    vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(failure);
+    await expect(resolveConsent('co1', 'c1')).rejects.toMatchObject({ code, credentialRevision: 'old-revision' });
+    expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined();
+  });
+
+  it('adopts renewed credentials after a losing invalid_grant without refreshing again', async () => {
+    mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+    mock.enqueue({ data: [expiredTokens] });
+    mock.enqueue({ data: [{ ...expiredTokens, access_token: 'renewed', credential_revision: 'new-revision' }] });
+    vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(new FortnoxOAuthError('refresh', 400, 'invalid_grant'));
+    await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'renewed', credentialRevision: 'new-revision' });
+    expect(refreshFortnoxToken).toHaveBeenCalledOnce();
+  });
+
+  it('requires reconnection when an expired Fortnox token has no refresh token', async () => {
+    mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+    mock.enqueue({ data: [{ ...expiredTokens, refresh_token: null }] });
+    await expect(resolveConsent('co1', 'c1')).rejects.toMatchObject({
+      code: 'PROVIDER_AUTH_EXPIRED', providerCode: 'refresh_token_missing', credentialRevision: 'old-revision',
+    });
+    expect(refreshFortnoxToken).not.toHaveBeenCalled();
+  });
+
+  it('returns the revision of the saved Fortnox token, not the expired snapshot', async () => {
+    mock.enqueue({ data: [{ ...consentRow, provider: 'fortnox' }] });
+    mock.enqueue({ data: [expiredTokens] });
+    mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'saved-revision' }] });
+    vi.mocked(refreshFortnoxToken).mockResolvedValueOnce({ access_token: 'saved', refresh_token: 'saved-refresh', token_type: 'Bearer', expires_in: 3600 });
+    await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'saved', credentialRevision: 'saved-revision' });
+    expect(mock.findCalls('provider_consent_tokens', 'eq').find(args => args[0] === 'credential_revision')?.[1]).toBe('old-revision');
   });
 
   it('refreshes an expired WINT consent via refreshWintToken and persists the rotated pair', async () => {

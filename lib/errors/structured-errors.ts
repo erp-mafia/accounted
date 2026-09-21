@@ -3937,6 +3937,11 @@ const API_KEY: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const PROVIDER: Record<string, StructuredErrorEntry> = {
+  PROVIDER_CONFIGURATION_ERROR: {
+    httpStatus: 503,
+    message_sv: 'Fortnox-anslutningen behöver åtgärdas av Accounted. Kontakta supporten. Du behöver inte återansluta.',
+    message_en: 'The Fortnox connection needs attention from Accounted. Contact support. You do not need to reconnect.',
+  },
   PROVIDER_AUTH_EXPIRED: {
     httpStatus: 401,
     message_sv: 'Anslutningen till leverantören har gått ut. Återanslut för att fortsätta.',
@@ -3956,9 +3961,9 @@ const PROVIDER: Record<string, StructuredErrorEntry> = {
   PROVIDER_LICENSE_MISSING: {
     httpStatus: 403,
     message_sv:
-      'Fortnox nekade anslutningen eftersom integrationslicensen inte är aktiv. Aktivera tilläggstjänsten "Fortnox Integration" i ditt Fortnox-konto (Inställningar → Tilläggstjänster) och återanslut sedan. Du kan även importera via SIE-fil under tiden.',
+      'Fortnox nekade åtkomst eftersom en licens saknas eller inte är aktiv. Kontrollera integrations- eller applicensen i Fortnox och försök sedan igen. Du kan även importera via SIE-fil under tiden.',
     message_en:
-      'Fortnox refused the connection because the integration license is not active. Activate the "Fortnox Integration" add-on in your Fortnox account, then reconnect. You can also import via SIE file in the meantime.',
+      'Fortnox refused access because a license is missing or inactive. Check the integration or app license in Fortnox, then try again. You can also import via SIE file in the meantime.',
   },
   PROVIDER_API_MODULE_INACTIVE: {
     httpStatus: 403,

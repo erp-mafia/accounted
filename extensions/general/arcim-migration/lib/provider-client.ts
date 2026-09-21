@@ -494,7 +494,7 @@ export async function exchangeAuthToken(
   await assertProviderCompanyMatchesConsent(supabase, consentId, provider, tokenResponse.access_token)
 
   // Store tokens
-  await supabase
+  const { error: tokenError } = await supabase
     .from('provider_consent_tokens')
     .upsert({
       consent_id: consentId,
@@ -503,12 +503,14 @@ export async function exchangeAuthToken(
       refresh_token: tokenResponse.refresh_token,
       token_expires_at: expiresAt,
     })
+  if (tokenError) throw new Error('Provider credentials could not be saved')
 
   // Mark consent as accepted
-  await supabase
+  const { error: consentError } = await supabase
     .from('provider_consents')
     .update({ status: 1 })
     .eq('id', consentId)
+  if (consentError) throw new Error('Provider connection could not be accepted')
 
   return { success: true, consentId }
 }

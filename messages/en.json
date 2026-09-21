@@ -6135,6 +6135,11 @@
     "col_payroll_late_fees": "Late fees"
   },
   "extensions": {
+    "ext_arcim_completion_reconnect_needed": "Invoice row retrieval is waiting for you to reconnect Fortnox.",
+    "ext_arcim_completion_license_needed": "Invoice row retrieval is paused. Check the integration or app license in Fortnox, then try again.",
+    "ext_arcim_completion_permission_needed": "Invoice row retrieval is paused. Check invoice permissions and licensing in Fortnox, then try again.",
+    "ext_arcim_completion_retry": "Try retrieving again",
+    "ext_arcim_completion_queued": "Invoice rows will be retrieved during the next scheduled run. Your saved progress is preserved.",
     "ext_arcim_job_error_connection": "Reconnect to your provider, then resume the import.",
     "ext_arcim_job_error_access": "Check your provider API subscription and your permission to import into this company.",
     "ext_arcim_job_error_review": "This record has conflicting matches and needs review before it can be completed.",

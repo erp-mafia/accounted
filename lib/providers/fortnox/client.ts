@@ -3,6 +3,7 @@ import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { FORTNOX_BASE_URL, FORTNOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { fortnoxRetryAfter } from './oauth-error';
 
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -16,6 +17,16 @@ export class FortnoxApiError extends Error {
     super(message);
     this.name = 'FortnoxApiError';
   }
+}
+
+/** Fortnox documents numeric resource error codes separately from OAuth errors. */
+export function fortnoxApiErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof FortnoxApiError) || !error.body) return undefined;
+  try {
+    const parsed = JSON.parse(error.body);
+    const code = parsed?.ErrorInformation?.code;
+    return typeof code === 'number' || (typeof code === 'string' && /^\d+$/.test(code)) ? String(code) : undefined;
+  } catch { return undefined; }
 }
 
 /**
@@ -91,7 +102,8 @@ export class FortnoxClient {
           let retryAfterMs: number | undefined;
           if (response.status === 429) {
             const retryAfter = response.headers.get('Retry-After');
-            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+            const seconds = fortnoxRetryAfter(retryAfter);
+            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
           }
           throw new FortnoxApiError(
             `Fortnox API error: ${response.status} ${response.statusText}`,
@@ -135,7 +147,8 @@ export class FortnoxClient {
           let retryAfterMs: number | undefined;
           if (response.status === 429) {
             const retryAfter = response.headers.get('Retry-After');
-            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+            const seconds = fortnoxRetryAfter(retryAfter);
+            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
           }
           throw new FortnoxApiError(
             `Fortnox API error: ${response.status} ${response.statusText}`,
@@ -185,7 +198,8 @@ export class FortnoxClient {
           let retryAfterMs: number | undefined;
           if (response.status === 429) {
             const retryAfter = response.headers.get('Retry-After');
-            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+            const seconds = fortnoxRetryAfter(retryAfter);
+            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
           }
           throw new FortnoxApiError(
             `Fortnox API error: ${response.status} ${response.statusText}`,
@@ -236,7 +250,8 @@ export class FortnoxClient {
           let retryAfterMs: number | undefined;
           if (response.status === 429) {
             const retryAfter = response.headers.get('Retry-After');
-            retryAfterMs = retryAfter ? Math.ceil(parseFloat(retryAfter)) * 1000 : undefined;
+            const seconds = fortnoxRetryAfter(retryAfter);
+            retryAfterMs = seconds === undefined ? undefined : seconds * 1000;
           }
           throw new FortnoxApiError(
             `Fortnox API error: ${response.status} ${response.statusText}`,

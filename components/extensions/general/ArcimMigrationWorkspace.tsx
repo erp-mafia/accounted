@@ -1,6 +1,7 @@
 'use client'
 
 import { SIEJobFailedError, uploadSIEFile, waitForSIEJob } from '@/lib/import/sie-job-client'
+import InvoiceCompletionRecovery from './InvoiceCompletionRecovery'
 import { describeImportResponseFailure, formatImportFailure } from '@/lib/import/import-failure'
 import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
@@ -3573,6 +3574,10 @@ export default function ArcimMigrationWorkspace({
 
   return (
     <div className="space-y-8">
+      {step === 'provider' && <InvoiceCompletionRecovery onReconnect={id => {
+        setStep('preview')
+        void handleReconnect('fortnox', id)
+      }} />}
       {step === 'provider' && latestJobId && <Button variant="outline" onClick={() => setProviderJobId(latestJobId)}>{t('ext_arcim_job_latest')}</Button>}
       {/* Step indicator: only during interactive steps */}
       {step !== 'provider' && isInteractiveStep && (
