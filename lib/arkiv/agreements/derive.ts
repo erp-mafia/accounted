@@ -1,4 +1,5 @@
 import type { Payload } from '@/lib/documents/extract/fields'
+import { ISO_DATE_RE } from '@/lib/invariants'
 import { roundOre } from '@/lib/money'
 import { addMonths, monthlySeries } from './dates'
 
@@ -125,7 +126,7 @@ class SettledRecord {
 
   date(name: string): string | null {
     const v = this.settled(name)
-    return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null
+    return typeof v === 'string' && ISO_DATE_RE.test(v) ? v : null
   }
 
   /** The fields a schedule needed but could not use, in field order. */
