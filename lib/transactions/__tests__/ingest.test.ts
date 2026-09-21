@@ -111,6 +111,14 @@ function createQueueMockSupabase() {
 const USER_ID = 'user-1'
 const COMPANY_ID = 'company-1'
 
+/** The company's cash_accounts rows as ingest reads them: the batch row first. */
+const cashAccountRows = (
+  id: string,
+  ledgerAccount: string,
+  iban: string | null = null,
+  others: Array<{ id: string; ledger_account: string; iban: string | null; currency: string }> = [],
+) => [{ id, ledger_account: ledgerAccount, iban, currency: 'SEK' }, ...others]
+
 function makeRaw(overrides: Partial<RawTransaction> = {}): RawTransaction {
   return {
     date: '2024-06-15',
@@ -201,7 +209,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // unbooked map
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'ca-1931' }, error: null }) // cash_accounts lookup
+    enqueue({ data: cashAccountRows('ca-1931', '1931'), error: null }) // cash_accounts lookup
     enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -214,6 +222,74 @@ describe('ingestTransactions', () => {
     const txInserts = inserts['transactions'] ?? []
     expect(txInserts).toHaveLength(1)
     expect((txInserts[0] as { cash_account_id?: string | null }).cash_account_id).toBe('ca-1931')
+  })
+
+  // desk crm#59: the v1 ingest endpoint binds by ledger without running
+  // ensureManualCashAccount, so the re-enable lives at this chokepoint too.
+  it('turns a disabled account no bank connection holds back on before binding rows to it', async () => {
+    const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+    const inserted = makeTransaction({ id: 'tx-1', external_id: raw.external_id })
+
+    enqueue({ data: [], error: null }) // booked map
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [], error: null }) // external_id dedup
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: null }],
+      error: null,
+    }) // cash_accounts lookup: the seeded 1930, turned off
+    enqueue({ data: [{ id: 'ca-1930' }], error: null }) // re-enable matched the row
+    enqueue({ data: inserted, error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      settlementAccount: '1930',
+    })
+
+    expect(result.imported).toBe(1)
+    expect(updates['cash_accounts']).toEqual([{ enabled: true }])
+    expect((inserts['transactions']?.[0] as { cash_account_id?: string | null }).cash_account_id).toBe('ca-1930')
+  })
+
+  it('refuses to bind rows to a disabled invoice payee instead of turning it back on', async () => {
+    const { supabase, enqueue, inserts, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: null, invoice_payee: true }],
+      error: null,
+    })
+
+    await expect(
+      ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1930' }),
+    ).rejects.toMatchObject({ code: 'CASH_ACCOUNT_DISABLED_PAYEE' })
+    expect(updates['cash_accounts'] ?? []).toHaveLength(0)
+    expect(inserts['transactions'] ?? []).toHaveLength(0)
+  })
+
+  it('does not touch a disabled account a bank connection holds', async () => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ amount: -100 })
+
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({
+      data: [{ id: 'ca-1930', ledger_account: '1930', iban: null, currency: 'SEK', enabled: false, bank_connection_id: 'conn-1' }],
+      error: null,
+    })
+    enqueue({ data: makeTransaction({ id: 'tx-1', external_id: raw.external_id }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], { settlementAccount: '1930' })
+
+    expect(updates['cash_accounts'] ?? []).toHaveLength(0)
   })
 
   it('inserts cash_account_id null when no settlementAccount is given', async () => {
@@ -717,7 +793,7 @@ describe('ingestTransactions', () => {
     // Batch external_id dedup query: no match
     enqueue({ data: [], error: null })
     // cash_accounts lookup → batch settled on account B
-    enqueue({ data: { id: 'acct-B' }, error: null })
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null })
     // Insert: different account, not a duplicate
     enqueue({ data: inserted, error: null })
 
@@ -1043,7 +1119,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // unbooked map
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts → batch on account B
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → batch on account B
     enqueue({ data: inserted, error: null }) // insert: kept
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -1080,7 +1156,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // unbooked map
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'acct-A' }, error: null }) // cash_accounts → batch on account A
+    enqueue({ data: cashAccountRows('acct-A', '1930'), error: null }) // cash_accounts → batch on account A
     enqueue({ data: null, error: null }) // adoption stamp update
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
@@ -1149,7 +1225,7 @@ describe('ingestTransactions', () => {
     enqueue({ data: [], error: null }) // unbooked map
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts → account B
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → account B
     enqueue({ data: inserted, error: null }) // insert R1
     enqueue({ data: null, error: null }) // adoption stamp for M1 (text-bridged by R2)
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
@@ -1202,7 +1278,7 @@ describe('ingestTransactions', () => {
     })
     enqueue({ data: [], error: null }) // supplier invoices: none
     enqueue({ data: [], error: null }) // external_id dedup: OLD id not among incoming NEW ids
-    enqueue({ data: { id: 'ca-1930' }, error: null }) // cash_accounts: same account as the stored row
+    enqueue({ data: cashAccountRows('ca-1930', '1930'), error: null }) // cash_accounts: same account as the stored row
     enqueue({ data: inserted, error: null }) // insert: STILL imported (shadow only logs)
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -1254,7 +1330,7 @@ describe('ingestTransactions', () => {
     }) // unbooked twin on account A
     enqueue({ data: [], error: null }) // supplier
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts → batch settled on account B
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → batch settled on account B
     enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -1431,7 +1507,7 @@ describe('ingestTransactions', () => {
     })
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup: no match
-    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts lookup → batch settled on account B
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts lookup → batch settled on account B
     enqueue({ data: inserted, error: null }) // insert: not a duplicate
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -1461,7 +1537,7 @@ describe('ingestTransactions', () => {
     })
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup: no match
-    enqueue({ data: { id: 'acct-A' }, error: null }) // cash_accounts lookup → batch settled on account A (same)
+    enqueue({ data: cashAccountRows('acct-A', '1930'), error: null }) // cash_accounts lookup → batch settled on account A (same)
     // No insert: deduped.
 
     const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
@@ -1505,7 +1581,7 @@ describe('ingestTransactions', () => {
     })
     enqueue({ data: [], error: null }) // supplier invoices
     enqueue({ data: [], error: null }) // external_id dedup: different date bucket, no match
-    enqueue({ data: { id: 'ca-1930' }, error: null }) // cash_accounts: same account
+    enqueue({ data: cashAccountRows('ca-1930', '1930'), error: null }) // cash_accounts: same account
     enqueue({ data: inserted, error: null }) // insert: STILL imported (shadow only logs)
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -1577,7 +1653,7 @@ describe('ingestTransactions', () => {
     }) // bridging twin one day earlier, but on account A
     enqueue({ data: [], error: null }) // supplier
     enqueue({ data: [], error: null }) // external_id dedup
-    enqueue({ data: { id: 'acct-B' }, error: null }) // cash_accounts → batch on account B
+    enqueue({ data: cashAccountRows('acct-B', '1931'), error: null }) // cash_accounts → batch on account B
     enqueue({ data: inserted, error: null }) // insert
     mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
 
@@ -2566,5 +2642,131 @@ describe('ingestTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.duplicates).toBe(0)
+  })
+
+  // -----------------------------------------------------------------------
+  // Twin cash accounts: a broken reconnect left two cash_accounts rows for one
+  // physical bank account (same IBAN + currency). The account guard compares
+  // the physical account, not the row id, so a stored row on one twin dedups an
+  // incoming row on the other.
+  // -----------------------------------------------------------------------
+  describe('account guard across twin cash accounts', () => {
+    const IBAN = 'SE4550000000058398257466'
+    const twin = (iban: string | null, currency = 'SEK') => [
+      { id: 'acct-A', ledger_account: '1930', iban, currency },
+    ]
+    const storedOnA = (overrides: Record<string, unknown> = {}) => ({
+      id: 'tx-stored',
+      date: '2026-06-24', amount: -520,
+      original_description: 'Hotel expense', description: 'Hotel expense',
+      import_source: 'enable_banking', bank_connection_id: 'conn-1',
+      cash_account_id: 'acct-A', currency: 'SEK',
+      external_id: 'old_format_id',
+      ...overrides,
+    })
+    const incomingOnB = (overrides: Record<string, unknown> = {}) =>
+      makeRaw({
+        date: '2026-06-24', amount: -520, description: 'Hotel expense',
+        external_id: 'eb_acctB_2026-06-24_-52000_0', import_source: 'enable_banking',
+        ...overrides,
+      })
+
+    it('dedups an incoming row against a stored row on the IBAN twin', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      enqueue({ data: [storedOnA()], error: null }) // booked map: row on twin A
+      enqueue({ data: [], error: null }) // unbooked map
+      enqueue({ data: [], error: null }) // supplier invoices
+      enqueue({ data: [], error: null }) // external_id dedup
+      enqueue({ data: cashAccountRows('acct-B', '1931', IBAN, twin(IBAN)), error: null })
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [incomingOnB()], {
+        settlementAccount: '1931',
+      })
+
+      expect(result.duplicates).toBe(1)
+      expect(result.imported).toBe(0)
+    })
+
+    it('keeps counting semantics: one stored twin row consumes exactly one incoming row', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      const rows = [
+        incomingOnB({ external_id: 'eb_acctB_0' }),
+        incomingOnB({ external_id: 'eb_acctB_1' }),
+      ]
+      enqueue({ data: [storedOnA()], error: null }) // booked map
+      enqueue({ data: [], error: null }) // unbooked map
+      enqueue({ data: [], error: null }) // supplier invoices
+      enqueue({ data: [], error: null }) // external_id dedup
+      enqueue({ data: cashAccountRows('acct-B', '1931', IBAN, twin(IBAN)), error: null })
+      enqueue({ data: makeTransaction({ id: 'tx-new', amount: -520 }), error: null }) // insert
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows, {
+        settlementAccount: '1931',
+      })
+
+      expect(result.duplicates).toBe(1)
+      expect(result.imported).toBe(1)
+    })
+
+    it.each([
+      ['a different IBAN', twin('SE3550000000054910000003')],
+      ['no IBAN (manual, CSV or kassa row)', twin(null)],
+      ['the same IBAN in another currency', twin(IBAN, 'EUR')],
+    ])('still imports when the stored row sits on a row with %s', async (_label, otherRows) => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // currency null on the stored row so only the ACCOUNT guard can reject.
+      enqueue({ data: [storedOnA({ currency: null })], error: null }) // booked map
+      enqueue({ data: [], error: null }) // unbooked map
+      enqueue({ data: [], error: null }) // supplier invoices
+      enqueue({ data: [], error: null }) // external_id dedup
+      enqueue({ data: cashAccountRows('acct-B', '1931', IBAN, otherRows), error: null })
+      enqueue({ data: makeTransaction({ id: 'tx-new', amount: -520 }), error: null }) // insert
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [incomingOnB()], {
+        settlementAccount: '1931',
+      })
+
+      expect(result.duplicates).toBe(0)
+      expect(result.imported).toBe(1)
+    })
+
+    it('does not match two rows that BOTH lack an IBAN', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      enqueue({ data: [storedOnA({ currency: null })], error: null }) // booked map
+      enqueue({ data: [], error: null }) // unbooked map
+      enqueue({ data: [], error: null }) // supplier invoices
+      enqueue({ data: [], error: null }) // external_id dedup
+      enqueue({ data: cashAccountRows('acct-B', '1931', null, twin(null)), error: null })
+      enqueue({ data: makeTransaction({ id: 'tx-new', amount: -520 }), error: null }) // insert
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [incomingOnB()], {
+        settlementAccount: '1931',
+      })
+
+      expect(result.duplicates).toBe(0)
+      expect(result.imported).toBe(1)
+    })
+
+    it('shadow-flags a date-drift twin stored on the IBAN twin', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      const raw = incomingOnB({ date: '2026-06-25' })
+      enqueue({ data: [], error: null }) // booked map
+      enqueue({ data: [storedOnA()], error: null }) // unbooked: one day earlier, on twin A
+      enqueue({ data: [], error: null }) // supplier invoices
+      enqueue({ data: [], error: null }) // external_id dedup
+      enqueue({ data: cashAccountRows('acct-B', '1931', IBAN, twin(IBAN)), error: null })
+      enqueue({ data: makeTransaction({ id: 'tx-new', amount: -520 }), error: null }) // insert
+      mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+      const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+        settlementAccount: '1931',
+      })
+
+      expect(result.imported).toBe(1)
+      expect(result.shadow_date_drift_candidates).toBe(1)
+    })
   })
 })

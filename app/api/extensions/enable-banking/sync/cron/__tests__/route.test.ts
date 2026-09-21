@@ -1,29 +1,26 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 /**
- * Covers the session health probe added to the daily bank sync.
- *
- * Before it, a connection only ever left 'active' by failing a transaction
- * fetch, so a session killed bank-side (several ASPSPs drop the previous AIS
- * session when the same PSU authorizes again) kept rendering as healthy with a
- * stale last_synced_at. Connections the sync loop skips (capability gate, every
- * account deselected) and connections parked in 'pending_selection' were never
- * checked at all.
+ * Covers the hourly bank sync cron: which connections a run takes (due,
+ * entitled, lease free), how it fans out, and what it leaves for the next run.
+ * The session health probe has its own route and tests (../../health-probe).
  */
 
+const EPOCH = '1970-01-01T00:00:00.000Z'
+
 interface ClientState {
+  /** bank_connections as the database holds them: writes land on these rows. */
   active: Record<string, unknown>[]
-  probeCandidates: Record<string, unknown>[]
-  /**
-   * Rows touched by an update. Always a list: the probe marks every connection
-   * sharing one dead session in a single .in('id', [...]) write.
-   */
+  /** Non-lease updates, in order. */
   updates: { ids: unknown[]; payload: Record<string, unknown> }[]
+  /** Lease writes (claims and holds) and the rows each one landed on. */
+  leaseWrites: { ids: unknown[]; until: string }[]
+  /** Connections whose claim loses the race although the plan saw the lease free. */
+  claimLosers: Set<string>
 }
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
-  probeSessionHealth: vi.fn(),
   syncAccountTransactions: vi.fn(),
   getCompanyIdsWithCapability: vi.fn(),
   runReconciliation: vi.fn(),
@@ -71,18 +68,6 @@ vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted' }),
 }))
 
-// Partial mock: the route also imports the real message constants and the
-// consent-expiry helpers, and only the probe needs stubbing.
-vi.mock('@/extensions/general/enable-banking/lib/api-client', async () => {
-  const actual = await vi.importActual<
-    typeof import('@/extensions/general/enable-banking/lib/api-client')
-  >('@/extensions/general/enable-banking/lib/api-client')
-  return {
-    ...actual,
-    probeSessionHealth: (...args: unknown[]) => mocks.probeSessionHealth(...args),
-  }
-})
-
 import {
   REAUTH_REQUIRED_MESSAGE,
   SessionExpiredError,
@@ -97,32 +82,54 @@ function makeClient(state: ClientState) {
       const filters: Record<string, unknown> = {}
       let isDelete = false
       let updatePayload: Record<string, unknown> | null = null
+      let leaseBound: { op: 'lte' | 'lt'; value: string } | null = null
 
       function result() {
         if (isDelete) return { data: [], error: null }
         if (updatePayload) {
-          state.updates.push({
-            ids: filters['in:id'] ? (filters['in:id'] as unknown[]) : [filters.id],
-            payload: updatePayload,
-          })
+          const targets = state.active.filter(row =>
+            filters.session_id ? row.session_id === filters.session_id : row.id === filters.id,
+          )
+          if (Object.keys(updatePayload).join() === 'sync_lease_until') {
+            // The conditional lease write of lib/sync-lease.ts, reproduced:
+            // claim = `<= now`, hold = `< until`.
+            if (!leaseBound) throw new Error('lease write must carry its conditional filter')
+            const bound = leaseBound
+            const hit = targets.filter(row => {
+              if (bound.op === 'lte' && state.claimLosers.has(row.id as string)) return false
+              const current = (row.sync_lease_until as string | undefined) ?? EPOCH
+              return bound.op === 'lte' ? current <= bound.value : current < bound.value
+            })
+            for (const row of hit) Object.assign(row, updatePayload)
+            state.leaseWrites.push({
+              ids: hit.map(row => row.id),
+              until: updatePayload.sync_lease_until as string,
+            })
+            return { data: hit.map(row => ({ id: row.id })), error: null }
+          }
+          for (const row of targets) Object.assign(row, updatePayload)
+          state.updates.push({ ids: [filters.id], payload: updatePayload })
           return { data: null, error: null }
         }
-        // The sync loop asks for status = 'active'; the probe pass asks for
-        // status IN ('active','pending_selection').
-        if (filters['in:status']) return { data: state.probeCandidates, error: null }
-        if (filters.status === 'active') return { data: state.active, error: null }
+        if (filters.status === 'active') {
+          return { data: state.active.filter(row => row.status === 'active'), error: null }
+        }
         return { data: null, error: null }
       }
 
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'not', 'lt', 'gte', 'order', 'limit', 'range']
+      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range']
       for (const method of passthrough) chain[method] = vi.fn(() => chain)
       chain.eq = vi.fn((col: string, value: unknown) => {
         filters[col] = value
         return chain
       })
-      chain.in = vi.fn((col: string, values: unknown) => {
-        filters[`in:${col}`] = values
+      chain.lte = vi.fn((col: string, value: string) => {
+        if (col === 'sync_lease_until') leaseBound = { op: 'lte', value }
+        return chain
+      })
+      chain.lt = vi.fn((col: string, value: string) => {
+        if (col === 'sync_lease_until') leaseBound = { op: 'lt', value }
         return chain
       })
       chain.delete = vi.fn(() => {
@@ -153,6 +160,8 @@ function connection(overrides: Record<string, unknown> = {}) {
     consent_expires: '2099-01-01T00:00:00Z',
     accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
     initial_sync_completed_at: '2026-01-01T00:00:00Z',
+    last_synced_at: null,
+    sync_lease_until: EPOCH,
     last_expiry_notification_at: null,
     error_message: null,
     ...overrides,
@@ -168,13 +177,12 @@ beforeEach(() => {
   vi.clearAllMocks()
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
-  state = { active: [], probeCandidates: [], updates: [] }
+  state = { active: [], updates: [], leaseWrites: [], claimLosers: new Set() }
   mocks.createClient.mockImplementation(() => makeClient(state))
   mocks.getCompanyIdsWithCapability.mockImplementation(
     async (_supabase: unknown, companyIds: string[]) => new Set(companyIds),
   )
   mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
-  mocks.probeSessionHealth.mockResolvedValue('unknown')
 })
 
 afterEach(() => {
@@ -186,100 +194,51 @@ function cronRequest(): Request {
   return new Request('http://localhost:3000/api/extensions/enable-banking/sync/cron')
 }
 
-describe('GET /api/extensions/enable-banking/sync/cron: session health probe', () => {
-  it('expires a connection whose session the bank has killed', async () => {
-    state.probeCandidates = [connection()]
-    mocks.probeSessionHealth.mockResolvedValue('dead')
+const HOUR_MS = 60 * 60 * 1000
+const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR_MS).toISOString()
+const companyId = (index: number) => `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`
+/** One connection per company, so nothing serializes unless a test wants it to. */
+const fleet = (count: number, overrides: Record<string, unknown> = {}) =>
+  Array.from({ length: count }, (_, index) =>
+    connection({ id: `conn-${String(index).padStart(4, '0')}`, company_id: companyId(index), ...overrides }),
+  )
 
-    const response = await GET(cronRequest())
-
-    expect(response.status).toBe(200)
-    await expect(response.json()).resolves.toMatchObject({ probedDead: 1 })
-    expect(state.updates).toEqual([
-      {
-        ids: ['conn-1'],
-        payload: { status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE },
-      },
-    ])
+/** A sync mock whose calls the test resolves by hand. */
+function manualSyncs() {
+  const started: string[] = []
+  const resolvers = new Map<string, () => void>()
+  mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
+    const id = args[3] as string
+    started.push(id)
+    return new Promise(resolve => {
+      resolvers.set(id, () => resolve({ imported: 0, duplicates: 0, errors: 0 }))
+    })
   })
+  const finish = (id: string) => {
+    resolvers.get(id)?.()
+    resolvers.delete(id)
+  }
+  return { started, finish, finishAll: () => [...resolvers.keys()].forEach(finish) }
+}
 
-  it('expires every company sharing one dead session, on a single probe', async () => {
-    // Cross-company session reuse means one consent can back several
-    // companies. Probing per row would spend N identical API calls on one
-    // session and expire the companies one nightly run at a time, so the
-    // others would keep rendering as healthy in the meantime.
-    state.probeCandidates = [
-      connection({ id: 'conn-1', company_id: 'company-1' }),
-      connection({ id: 'conn-2', company_id: 'company-2' }),
+describe('GET /api/extensions/enable-banking/sync/cron: which connections a run takes', () => {
+  it('skips a connection synced within the day and takes an overdue one', async () => {
+    state.active = [
+      connection({ id: 'fresh', company_id: companyId(1), last_synced_at: hoursAgo(2) }),
+      connection({ id: 'overdue', company_id: companyId(2), last_synced_at: hoursAgo(30) }),
     ]
-    mocks.probeSessionHealth.mockResolvedValue('dead')
 
     const response = await GET(cronRequest())
-
-    expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
-    await expect(response.json()).resolves.toMatchObject({ probedDead: 2 })
-    expect(state.updates).toEqual([
-      {
-        ids: ['conn-1', 'conn-2'],
-        payload: { status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE },
-      },
-    ])
-  })
-
-  it('probes a connection parked in pending_selection, which the sync loop never touches', async () => {
-    state.probeCandidates = [connection({ status: 'pending_selection', last_synced_at: null })]
-    mocks.probeSessionHealth.mockResolvedValue('dead')
-
-    await GET(cronRequest())
-
-    expect(mocks.probeSessionHealth).toHaveBeenCalledWith('sess-1')
-    expect(state.updates[0].payload).toMatchObject({ status: 'expired' })
-  })
-
-  it('leaves the connection alone when the probe is inconclusive', async () => {
-    // Flipping a live connection to expired costs the user a full BankID
-    // re-authorization, so only a definite 'dead' may act.
-    state.probeCandidates = [connection()]
-    mocks.probeSessionHealth.mockResolvedValue('unknown')
-
-    await GET(cronRequest())
-
-    expect(state.updates).toHaveLength(0)
-  })
-
-  it('leaves the connection alone when the session is alive', async () => {
-    state.probeCandidates = [connection()]
-    mocks.probeSessionHealth.mockResolvedValue('alive')
-
-    await GET(cronRequest())
-
-    expect(state.updates).toHaveLength(0)
-  })
-
-  it('does not probe a connection the sync loop just proved alive', async () => {
-    // A successful transaction fetch is stronger evidence than the probe, and
-    // the extra call would burn the ASPSP's per-consent request budget.
-    state.active = [connection()]
-    state.probeCandidates = [connection()]
-
-    await GET(cronRequest())
 
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
-    expect(mocks.probeSessionHealth).not.toHaveBeenCalled()
-  })
-
-  it('probes a connection the capability gate skipped instead of leaving it "Aktiv"', async () => {
-    // The silent skip that let a dead connection sit at 'active' for days.
-    state.active = [connection()]
-    state.probeCandidates = [connection()]
-    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set())
-    mocks.probeSessionHealth.mockResolvedValue('dead')
-
-    await GET(cronRequest())
-
-    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
-    expect(mocks.probeSessionHealth).toHaveBeenCalledWith('sess-1')
-    expect(state.updates[0].payload).toMatchObject({ status: 'expired' })
+    expect(mocks.syncAccountTransactions.mock.calls[0][3]).toBe('overdue')
+    await expect(response.json()).resolves.toMatchObject({
+      eligible: 2,
+      fresh: 1,
+      due: 1,
+      completed: 1,
+      oldestOverdueHours: 7,
+    })
   })
 
   it('selects an entitled connection after fifty ineligible queue rows', async () => {
@@ -299,59 +258,84 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
     expect(response.status).toBe(200)
     expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(1)
     expect(mocks.syncAccountTransactions.mock.calls[0][3]).toBe('paid-connection')
-    await expect(response.json()).resolves.toMatchObject({ processed: 1 })
+    await expect(response.json()).resolves.toMatchObject({ processed: 1, notEntitled: 50, eligible: 1 })
   })
 
-  it('applies the connection cap after entitlement filtering', async () => {
-    state.active = Array.from({ length: 301 }, (_, index) => connection({
-      id: `paid-${index}`,
-      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
-    }))
+  it('works through more than one batch of due connections over successive runs', async () => {
+    state.active = fleet(650)
 
-    await GET(cronRequest())
+    const first = await (await GET(cronRequest())).json()
+    expect(first).toMatchObject({ due: 650, selected: 300, completed: 300, deferredByBatchLimit: 350 })
 
-    expect(mocks.syncAccountTransactions).toHaveBeenCalledTimes(300)
+    const second = await (await GET(cronRequest())).json()
+    expect(second).toMatchObject({ due: 350, selected: 300, deferredByBatchLimit: 50 })
+
+    const third = await (await GET(cronRequest())).json()
+    expect(third).toMatchObject({ due: 50, selected: 50, deferredByBatchLimit: 0 })
+
+    const fourth = await (await GET(cronRequest())).json()
+    expect(fourth).toMatchObject({ due: 0, fresh: 650, processed: 0 })
+
+    // Every connection exactly once: a finished sync is fresh for the next run.
+    const synced = mocks.syncAccountTransactions.mock.calls.map(call => call[3])
+    expect(synced).toHaveLength(650)
+    expect(new Set(synced).size).toBe(650)
   })
 
-  it('syncs connections in concurrent waves of four', async () => {
-    const started: string[] = []
-    const resolvers: (() => void)[] = []
-    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
-      started.push(args[3] as string)
-      return new Promise(resolve => {
-        resolvers.push(() => resolve({ imported: 0, duplicates: 0, errors: 0 }))
-      })
-    })
-    state.active = Array.from({ length: 6 }, (_, index) => connection({
-      id: `conn-${index}`,
-      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
-    }))
+  it('leaves a connection with every account deselected out of the work list', async () => {
+    // It can never record a sync, so it would sit first in the queue forever.
+    state.active = [connection({ accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: false }] })]
+
+    const response = await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({ noAccounts: 1, due: 0 })
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: worker pool', () => {
+  it('keeps four companies in flight and replaces each one the moment it finishes', async () => {
+    const syncs = manualSyncs()
+    state.active = fleet(6)
 
     const responsePromise = GET(cronRequest())
 
-    // The first wave fans out to exactly SYNC_CONCURRENCY connections; the
-    // second wave must not start until every sync in the first has settled.
-    await vi.waitFor(() => expect(started).toHaveLength(4))
-    resolvers.splice(0).forEach(resolve => resolve())
-    await vi.waitFor(() => expect(started).toHaveLength(6))
-    resolvers.splice(0).forEach(resolve => resolve())
+    await vi.waitFor(() => expect(syncs.started).toHaveLength(4))
+    // One finishes: exactly one more starts. The old waves waited for all four.
+    syncs.finish(syncs.started[1])
+    await vi.waitFor(() => expect(syncs.started).toHaveLength(5))
+    syncs.finishAll()
+    await vi.waitFor(() => expect(syncs.started).toHaveLength(6))
+    syncs.finishAll()
 
-    const response = await responsePromise
-    await expect(response.json()).resolves.toMatchObject({ processed: 6 })
+    await expect((await responsePromise).json()).resolves.toMatchObject({ processed: 6 })
+  })
+
+  it('does not let one slow company hold the others back', async () => {
+    const syncs = manualSyncs()
+    state.active = fleet(12)
+
+    const responsePromise = GET(cronRequest())
+
+    await vi.waitFor(() => expect(syncs.started).toHaveLength(4))
+    const slow = syncs.started[0]
+    // Everything but the slow one drains through the three remaining workers.
+    while (syncs.started.length < 12) {
+      const before = syncs.started.length
+      syncs.started.filter(id => id !== slow).forEach(syncs.finish)
+      await vi.waitFor(() => expect(syncs.started.length).toBeGreaterThan(before))
+    }
+    syncs.started.filter(id => id !== slow).forEach(syncs.finish)
+    syncs.finish(slow)
+
+    await expect((await responsePromise).json()).resolves.toMatchObject({ processed: 12 })
   })
 
   it('never syncs two connections of the same company concurrently', async () => {
     // The post-sync unattended sweep is company-scoped: two concurrent sweeps
     // for one company can both read a journal entry as unlinked and claim it
     // for different bank transactions. Same-company connections must serialize.
-    const started: string[] = []
-    const resolvers: (() => void)[] = []
-    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
-      started.push(args[3] as string)
-      return new Promise(resolve => {
-        resolvers.push(() => resolve({ imported: 0, duplicates: 0, errors: 0 }))
-      })
-    })
+    const syncs = manualSyncs()
     state.active = [
       connection({ id: 'same-a', company_id: 'company-shared' }),
       connection({ id: 'same-b', company_id: 'company-shared' }),
@@ -360,60 +344,156 @@ describe('GET /api/extensions/enable-banking/sync/cron: session health probe', (
 
     const responsePromise = GET(cronRequest())
 
-    // First wave: one slot per company, so same-b must wait for same-a.
-    await vi.waitFor(() => expect(started).toContain('other'))
-    expect(started).toEqual(expect.arrayContaining(['same-a', 'other']))
-    expect(started).not.toContain('same-b')
-    resolvers.splice(0).forEach(resolve => resolve())
-    await vi.waitFor(() => expect(started).toContain('same-b'))
-    resolvers.splice(0).forEach(resolve => resolve())
+    await vi.waitFor(() => expect(syncs.started).toContain('other'))
+    expect(syncs.started).toEqual(expect.arrayContaining(['same-a', 'other']))
+    syncs.finish('other')
+    // A free worker is not enough: same-b waits for same-a.
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(syncs.started).not.toContain('same-b')
+    syncs.finish('same-a')
+    await vi.waitFor(() => expect(syncs.started).toContain('same-b'))
+    syncs.finish('same-b')
 
-    const response = await responsePromise
-    await expect(response.json()).resolves.toMatchObject({ processed: 3 })
+    await expect((await responsePromise).json()).resolves.toMatchObject({ processed: 3 })
   })
 
-  it('isolates one failing connection inside a wave', async () => {
+  it('isolates one failing connection', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) => {
-      if (args[3] === 'conn-1') return Promise.reject(new Error('ASPSP 500'))
+      if (args[3] === 'conn-0001') return Promise.reject(new Error('ASPSP 500'))
       return Promise.resolve({ imported: 0, duplicates: 0, errors: 0 })
     })
-    state.active = Array.from({ length: 4 }, (_, index) => connection({
-      id: `conn-${index}`,
-      company_id: `11111111-1111-4111-8111-${String(index).padStart(12, '0')}`,
-    }))
+    state.active = fleet(4)
 
-    const response = await GET(cronRequest())
+    const body = await (await GET(cronRequest())).json()
 
-    const body = await response.json()
-    expect(body.processed).toBe(4)
-    expect(body.totalFailed).toBe(1)
-    const failed = body.results.find(
-      (r: { connectionId: string }) => r.connectionId === 'conn-1',
-    )
+    expect(body).toMatchObject({ processed: 4, completed: 3, totalFailed: 1 })
+    const failed = body.results.find((r: { connectionId: string }) => r.connectionId === 'conn-0001')
     expect(failed).toMatchObject({ status: 'error', errors: 1 })
+    consoleError.mockRestore()
   })
+})
 
-  it('probes a connection whose accounts are all deselected', async () => {
-    // This branch reports 'synced' without writing last_synced_at, so the row
-    // looks fresh forever.
-    state.active = [connection({ accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: false }] })]
-    state.probeCandidates = [connection()]
-    mocks.probeSessionHealth.mockResolvedValue('dead')
+describe('GET /api/extensions/enable-banking/sync/cron: shared sync lease', () => {
+  it('claims the lease before it calls the bank', async () => {
+    state.active = [connection()]
+    mocks.syncAccountTransactions.mockImplementation(async () => {
+      expect(state.leaseWrites).toHaveLength(1)
+      return { imported: 0, duplicates: 0, errors: 0 }
+    })
 
     await GET(cronRequest())
 
-    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
-    expect(state.updates[0].payload).toMatchObject({ status: 'expired' })
+    expect(state.leaseWrites[0].ids).toEqual(['conn-1'])
+    expect(Date.parse(state.leaseWrites[0].until)).toBeGreaterThan(Date.now() + 14 * 60 * 1000)
   })
 
-  it('runs the probe even when there is nothing to sync', async () => {
-    state.active = []
-    state.probeCandidates = [connection({ status: 'pending_selection' })]
-    mocks.probeSessionHealth.mockResolvedValue('dead')
+  it('stays off a connection whose lease another sync holds', async () => {
+    // An agent-triggered sync, "Synka nu", or a rate-limit cooldown.
+    state.active = [connection({ sync_lease_until: new Date(Date.now() + 5 * 60 * 1000).toISOString() })]
 
     const response = await GET(cronRequest())
 
-    await expect(response.json()).resolves.toMatchObject({ processed: 0, probedDead: 1 })
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({ coolingDown: 1, due: 0, processed: 0 })
+  })
+
+  it('yields when it loses the claim to a sync that started after the plan', async () => {
+    state.active = [connection()]
+    state.claimLosers.add('conn-1')
+
+    const response = await GET(cronRequest())
+
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    await expect(response.json()).resolves.toMatchObject({
+      selected: 1,
+      leaseLost: 1,
+      processed: 0,
+      deferredByTimeBudget: 0,
+    })
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: bank rate limit', () => {
+  it('leaves the row alone and cools down every connection on the consent', async () => {
+    // Before: an untyped 429 parked the row in 'error', which no cron run
+    // selects again, under a message telling the user to renew the consent.
+    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    state.active = [
+      connection({ id: 'limited', company_id: companyId(1) }),
+      connection({ id: 'sibling', company_id: companyId(2), last_synced_at: hoursAgo(1) }),
+      connection({ id: 'stranger', company_id: companyId(3), session_id: 'sess-2', last_synced_at: hoursAgo(1) }),
+    ]
+    mocks.syncAccountTransactions.mockRejectedValue(
+      new AspspUnavailableError(429, '{"message":"Consent daily limit 4 is exceeded"}', 'rate-limited', undefined, {
+        dailyQuota: true,
+      }),
+    )
+
+    const body = await (await GET(cronRequest())).json()
+
+    expect(body).toMatchObject({ totalRateLimited: 1, totalFailed: 0 })
+    expect(state.updates).toEqual([])
+    const lease = (id: string) => Date.parse(state.active.find(row => row.id === id)?.sync_lease_until as string)
+    expect(lease('limited')).toBeGreaterThan(Date.now() + 5 * HOUR_MS)
+    expect(lease('sibling')).toBe(lease('limited'))
+    expect(lease('stranger')).toBe(0)
+
+    // The next hourly run does not spend another refused call.
+    mocks.syncAccountTransactions.mockClear()
+    const next = await (await GET(cronRequest())).json()
+    expect(mocks.syncAccountTransactions).not.toHaveBeenCalled()
+    expect(next).toMatchObject({ coolingDown: 1, due: 0 })
+    consoleWarn.mockRestore()
+  })
+})
+
+describe('GET /api/extensions/enable-banking/sync/cron: time budget', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('stops starting work at the budget and leaves the rest due for the next run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const start = Date.parse('2026-09-02T05:00:00.000Z')
+    vi.setSystemTime(start)
+    state.active = fleet(6)
+    mocks.syncAccountTransactions.mockImplementation(async () => {
+      // The first bank call eats the whole budget.
+      vi.setSystemTime(start + 231_000)
+      return { imported: 0, duplicates: 0, errors: 0 }
+    })
+
+    const first = await (await GET(cronRequest())).json()
+
+    // The four workers were already in flight; nothing new starts.
+    expect(first).toMatchObject({ selected: 6, completed: 4, deferredByTimeBudget: 2 })
+    const unsynced = state.active.filter(row => row.last_synced_at === null).map(row => row.id)
+    expect(unsynced).toEqual(['conn-0004', 'conn-0005'])
+
+    // Next hour: only the two left over are due.
+    vi.setSystemTime(start + HOUR_MS)
+    mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 0, errors: 0 })
+    const second = await (await GET(cronRequest())).json()
+    expect(second).toMatchObject({ due: 2, completed: 2, deferredByTimeBudget: 0 })
+  })
+
+  it('reports at the deadline instead of dying with a bank call that hangs', async () => {
+    vi.useFakeTimers()
+    state.active = fleet(2)
+    mocks.syncAccountTransactions.mockImplementation((...args: unknown[]) =>
+      args[3] === 'conn-0000'
+        ? new Promise(() => {})
+        : Promise.resolve({ imported: 0, duplicates: 0, errors: 0 }),
+    )
+
+    const responsePromise = GET(cronRequest())
+    await vi.advanceTimersByTimeAsync(281_000)
+    const body = await (await responsePromise).json()
+
+    expect(body).toMatchObject({ hitReportDeadline: true, completed: 1, deferredByTimeBudget: 1 })
+    // Nothing was recorded for the hung one: it is due again next run.
+    expect(state.active.find(row => row.id === 'conn-0000')?.last_synced_at).toBeNull()
   })
 })
 
@@ -464,8 +544,8 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
   // 2026-09-04: a connector contract mismatch parked four canary companies in
   // 'error' with "förnya anslutningen", and users re-authorized consents that
   // were fine. Neither a connector-hop failure nor a bank refusing right now
-  // says anything about the PSD2 session, so the row keeps its status and the
-  // health probe still checks the session.
+  // says anything about the PSD2 session, so the row keeps its status (the
+  // daily health probe checks the session itself).
   it('does not park a connection in error when the connector hop fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -500,18 +580,6 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
     consoleError.mockRestore()
     consoleWarn.mockRestore()
   })
-
-  it('still probes the session of a connection whose sync failed transiently', async () => {
-    state.active = [connection()]
-    state.probeCandidates = [connection()]
-    mocks.syncAccountTransactions.mockRejectedValue(new ConnectorSyncError(null, 'CONNECTOR_TIMEOUT', 'aborted'))
-    mocks.probeSessionHealth.mockResolvedValue('dead')
-
-    await GET(cronRequest())
-
-    expect(mocks.probeSessionHealth).toHaveBeenCalledTimes(1)
-    expect(state.updates.at(-1)?.payload).toMatchObject({ status: 'expired' })
-  })
 })
 
 describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', () => {
@@ -533,7 +601,6 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
 
   it('uses the 7-day window when the connection synced yesterday', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(1) })]
-    mocks.probeSessionHealth.mockResolvedValue('alive')
 
     await GET(cronRequest())
 
@@ -547,7 +614,6 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
     // A subscription that lapsed for 20 days and was paid again: a fixed
     // 7-day window would silently drop the 13 days in between.
     state.active = [connection({ last_synced_at: syncedDaysAgo(20) })]
-    mocks.probeSessionHealth.mockResolvedValue('alive')
 
     await GET(cronRequest())
 
@@ -558,7 +624,6 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
 
   it('asks for the deepest history the bank serves on a gap of a month or more', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(40) })]
-    mocks.probeSessionHealth.mockResolvedValue('alive')
 
     await GET(cronRequest())
 
@@ -569,7 +634,6 @@ describe('GET /api/extensions/enable-banking/sync/cron: incremental lookback', (
 
   it('caps the widened window at 90 days', async () => {
     state.active = [connection({ last_synced_at: syncedDaysAgo(200) })]
-    mocks.probeSessionHealth.mockResolvedValue('alive')
 
     await GET(cronRequest())
 

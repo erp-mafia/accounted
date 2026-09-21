@@ -590,6 +590,28 @@ describe('api-client', () => {
     const ASPSP_ERROR_BODY =
       '{"code":400,"message":"Error interacting with ASPSP","detail":"Unknown error","error":"ASPSP_ERROR"}'
 
+    it('types a 429 as a rate limit, with the quota kind and Retry-After', async () => {
+      // An untyped 429 used to reach the cron as a plain Error, which parks
+      // the connection in 'error': a state no cron run selects again.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', {
+          status: 429,
+          headers: { 'Retry-After': '120' },
+        })
+      )
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
+
+      expect(error).toBeInstanceOf(AspspUnavailableError)
+      expect(error).toMatchObject({
+        status: 429,
+        reason: 'rate-limited',
+        rateLimit: { dailyQuota: true, retryAfterSeconds: 120 },
+      })
+      errorSpy.mockRestore()
+    })
+
     it('narrows the window when the ASPSP rejects the history range', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
