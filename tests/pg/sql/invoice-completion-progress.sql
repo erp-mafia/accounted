@@ -152,4 +152,11 @@ BEGIN
   SELECT COALESCE(array_agg(company_id),'{}') INTO excluded FROM invoice_completion_work WHERE company_id NOT IN (co,co2);
   next_work:=claim_invoice_completion_work(gen_random_uuid(),excluded);
   ASSERT next_work.company_id=co2,'a resumed large company does not monopolize the queue';
+
+  -- Clearing operational recovery state never deletes the accounting results
+  -- and must not leave child evidence blocking an otherwise permitted cleanup.
+  DELETE FROM invoice_completion_work WHERE company_id=co;
+  ASSERT NOT EXISTS(SELECT 1 FROM invoice_completion_entries WHERE company_id=co),'recovery entries follow their parent';
+  ASSERT EXISTS(SELECT 1 FROM invoice_items WHERE invoice_id=b),'completed invoice rows survive recovery cleanup';
+  ASSERT EXISTS(SELECT 1 FROM processing_history WHERE event_id=expected_event_id),'processing history survives recovery cleanup';
 END $$;
