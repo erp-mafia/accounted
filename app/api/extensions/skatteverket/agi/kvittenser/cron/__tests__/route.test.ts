@@ -352,10 +352,12 @@ describe('AGI kvittenser cron', () => {
     // Asked once, not three times: the answer cannot differ per declaration.
     expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(1)
     expect(body.gatewayRefused).toBe(true)
-    expect(body.processed).toBe(1)
+    expect(body.processed).toBe(3)
     expect(body.errors).toBe(0)
     expect(body.results).toEqual([
       { declarationId: 'decl-1', period: '202605', status: 'gateway_refused' },
+      { declarationId: 'decl-2', period: '202606', status: 'gateway_refused' },
+      { declarationId: 'decl-3', period: '202607', status: 'gateway_refused' },
     ])
 
     // A standing operator-side state, not a fresh error per tick.
@@ -407,12 +409,15 @@ describe('AGI kvittenser cron', () => {
       const res = await GET(makeRequest())
       const body = await res.json()
 
-      // decl-1 (direct) refused, decl-2 (connector) still asked, decl-3 (direct) skipped.
+      // decl-1 (direct) refused, decl-2 (connector) still asked, decl-3
+      // (direct) answered from what the run already knows, without a call.
       expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(2)
       expect(body.results.map((r: { declarationId: string; status: string }) => [r.declarationId, r.status])).toEqual([
         ['decl-1', 'gateway_refused'],
         ['decl-2', 'still_pending'],
+        ['decl-3', 'gateway_refused'],
       ])
+      expect(warnRecorder).toHaveBeenCalledTimes(1)
       expect(body.gatewayRefused).toBe(true)
     } finally {
       for (const [name, value] of [

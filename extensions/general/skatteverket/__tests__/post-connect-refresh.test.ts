@@ -182,7 +182,7 @@ describe('runPostConnectRefresh', () => {
   it('stops at the first gateway refusal of the APIGW client: the user is waiting on this callback', async () => {
     // Three stranded periods, one refused call: the gateway decides before it
     // reads the bearer, so the fresh token changes nothing for the other two.
-    mockReconcile.mockResolvedValue({ status: 'gateway_refused' })
+    mockReconcile.mockResolvedValue({ status: 'gateway_refused', route: 'direct', asked: true })
     const supabase = makeSupabase({ data: [pendingDecl('decl-1'), pendingDecl('decl-2'), pendingDecl('decl-3')] })
 
     const result = await runPostConnectRefresh(supabase, USER, COMPANY)

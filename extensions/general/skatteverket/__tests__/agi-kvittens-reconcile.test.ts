@@ -219,10 +219,35 @@ describe('reconcileAgiDeclaration: claim semantics', () => {
 
     const outcome = await reconcileAgiDeclaration(supabase, DECL, { reconciledBy: 'cron' })
 
-    expect(outcome).toEqual({ status: 'gateway_refused' })
+    expect(outcome).toEqual({ status: 'gateway_refused', route: 'direct', asked: true })
     expect(mutatedTables).toEqual([])
     expect(mockCompleteTaxDeadline).not.toHaveBeenCalled()
     expect(mockSendKvittensNotification).not.toHaveBeenCalled()
+  })
+
+  it('does not ask again for a route the caller has already seen refused', async () => {
+    const { supabase, mutatedTables } = makeSupabase()
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, {
+      reconciledBy: 'cron',
+      refusedRoutes: new Set(['direct'] as const),
+    })
+
+    expect(outcome).toEqual({ status: 'gateway_refused', route: 'direct', asked: false })
+    expect(mockAgiGetKvittenser).not.toHaveBeenCalled()
+    expect(mutatedTables).toEqual([])
+  })
+
+  it('still asks when only the OTHER route was refused', async () => {
+    const { supabase } = makeSupabase()
+
+    const outcome = await reconcileAgiDeclaration(supabase, DECL, {
+      reconciledBy: 'cron',
+      refusedRoutes: new Set(['connector'] as const),
+    })
+
+    expect(outcome).toEqual({ status: 'signed', kvittensnummer: 'uuid-1' })
+    expect(mockAgiGetKvittenser).toHaveBeenCalledTimes(1)
   })
 
   it('still propagates every other auth error to the caller (the cron owns those side effects)', async () => {

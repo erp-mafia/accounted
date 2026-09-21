@@ -7,8 +7,7 @@ import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
-import { reconcileAgiDeclaration } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
-import { skatteverketConnectorMode } from '@/extensions/general/skatteverket/lib/connector-mode'
+import { reconcileAgiDeclaration, type SkvGatewayRoute } from '@/extensions/general/skatteverket/lib/agi-kvittens-reconcile'
 import { formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -115,8 +114,10 @@ export async function GET(request: Request) {
   // instead of collecting one identical refusal (and one identical log line)
   // per declaration. Keyed by route because a company on the connector canary
   // reaches Skatteverket through the broker's client, not this installation's:
-  // a refusal of one must never starve the companies behind the other.
-  const refusedRoutes = new Set<'direct' | 'connector'>()
+  // a refusal of one must never starve the companies behind the other. The
+  // reconciler owns the route (it knows which credential it resolved) and
+  // answers gateway_refused without calling for a route already in the set.
+  const refusedRoutes = new Set<SkvGatewayRoute>()
 
   for (const decl of pending) {
     if (Date.now() - startTime > TIME_BUDGET_MS) {
@@ -133,9 +134,6 @@ export async function GET(request: Request) {
       continue
     }
 
-    const route = skatteverketConnectorMode(companyId) ? 'connector' : 'direct'
-    if (refusedRoutes.has(route)) continue
-
     try {
       // The shared reconciler resolves auth (system grant → user token),
       // fetches the kvittens, and on a hit promotes the declaration +
@@ -150,15 +148,15 @@ export async function GET(request: Request) {
           period_year: decl.period_year as number,
           period_month: decl.period_month as number,
         },
-        { reconciledBy: 'cron' },
+        { reconciledBy: 'cron', refusedRoutes },
       )
 
       const result: Result = { declarationId, period, status: outcome.status }
       if ('error' in outcome) result.error = outcome.error
       results.push(result)
 
-      if (outcome.status === 'gateway_refused') {
-        refusedRoutes.add(route)
+      if (outcome.status === 'gateway_refused' && outcome.asked) {
+        refusedRoutes.add(outcome.route)
         // warn, once per run, not error per declaration: this is a standing
         // operator-side state (the APIGW client has no subscription to the AGI
         // hantera API in Utvecklarportalen, #973 / #2226), not something a
@@ -169,7 +167,7 @@ export async function GET(request: Request) {
         // exists; the AGI panel tells the user the truth meanwhile.
         log.warn('Skatteverket gateway refuses the APIGW client for AGI kvittens reads; no further calls this run', {
           issue: '#2226',
-          route,
+          route: outcome.route,
           pending: pending.length,
         })
       }

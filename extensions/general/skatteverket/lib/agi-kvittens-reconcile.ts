@@ -5,6 +5,7 @@ import { parseEntityType } from '@/lib/company/entity-type'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { agiGetKvittenser } from './agi-client'
 import { isApigwClientRefusal } from './api-client'
+import { skatteverketConnectorMode } from './connector-mode'
 import { resolveReadAuth } from './resolve-auth'
 import { sendKvittensNotification } from './kvittens-notification'
 import type { SkatteverketAGIKvittens } from '../types'
@@ -56,9 +57,22 @@ export type AgiReconcileOutcome =
   | { status: 'no_token' }
   | { status: 'expired_token'; error: string }
   | { status: 'no_company_settings' }
-  /** Skatteverket's gateway refused the APIGW client: installation-level, see above. */
-  | { status: 'gateway_refused' }
+  /**
+   * Skatteverket's gateway refused the APIGW client, see above. `route` is the
+   * client that was (or would have been) refused; `asked` is false when the
+   * caller already knew and the call was not made.
+   */
+  | { status: 'gateway_refused'; route: SkvGatewayRoute; asked: boolean }
   | { status: 'error'; error: string }
+
+/**
+ * Which APIGW client a read goes out with: this installation's own, or the
+ * connector broker's (connector mode, or a company on the connector canary).
+ * A refusal says something about one client only, so callers key what they
+ * know by this. Same rule as skvRequestWithAuth: system credentials are never
+ * brokered, so only a user-token read can take the connector route.
+ */
+export type SkvGatewayRoute = 'direct' | 'connector'
 
 export type AgiPromotionOutcome = Extract<
   AgiReconcileOutcome,
@@ -78,7 +92,12 @@ const KVITTENS_NOTIFICATION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 export async function reconcileAgiDeclaration(
   supabase: SupabaseClient,
   decl: PendingAgiDeclaration,
-  opts: { reconciledBy: 'cron' | 'post-connect'; userId?: string },
+  opts: {
+    reconciledBy: 'cron' | 'post-connect'
+    userId?: string
+    /** Routes the caller has already seen refused in this run: not asked again. */
+    refusedRoutes?: ReadonlySet<SkvGatewayRoute>
+  },
 ): Promise<AgiReconcileOutcome> {
   const companyId = decl.company_id
   const period = formatRedovisningsperiod('monthly', decl.period_year, decl.period_month)
@@ -117,11 +136,19 @@ export async function reconcileAgiDeclaration(
     parseEntityType(settings.entity_type),
   )
 
+  // Decided here, from the credential that was actually resolved, so the
+  // caller's breaker can never disagree with the request about the route.
+  const route: SkvGatewayRoute =
+    resolved.auth.mode === 'user' && skatteverketConnectorMode(companyId) ? 'connector' : 'direct'
+  if (opts.refusedRoutes?.has(route)) {
+    return { status: 'gateway_refused', route, asked: false }
+  }
+
   let kvittRes: Awaited<ReturnType<typeof agiGetKvittenser>>
   try {
     kvittRes = await agiGetKvittenser(resolved.auth, arbetsgivare, period)
   } catch (err) {
-    if (isApigwClientRefusal(err)) return { status: 'gateway_refused' }
+    if (isApigwClientRefusal(err)) return { status: 'gateway_refused', route, asked: true }
     throw err
   }
   if (!kvittRes.ok) {
