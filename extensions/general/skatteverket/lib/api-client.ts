@@ -46,6 +46,28 @@ function safeBodyForLog(body: string): string {
 }
 
 /**
+ * Receipt URLs contain an employer identifier, so the logger redacts the
+ * whole URL. Keep routing evidence separately, without copying its path,
+ * query or credentials. For Connect, the host is the broker we actually
+ * called; its upstream environment cannot be inferred from the local base.
+ */
+function requestDiagnostics(url: string, baseUrl: string, viaConnector: boolean) {
+  let requestHost = 'unknown'
+  let apiService = 'unknown'
+  try {
+    requestHost = new URL(url).host
+  } catch {
+    // Diagnostic parsing must not replace the original authentication error.
+  }
+  try {
+    apiService = baseUrlToService(baseUrl)
+  } catch {
+    // Direct calls can use APIs outside the connector's service allowlist.
+  }
+  return { requestHost, apiService, gatewayRoute: viaConnector ? 'connector' : 'direct' }
+}
+
+/**
  * Skatteverket API client.
  *
  * Handles:
@@ -553,6 +575,7 @@ export async function skvRequestWithAuth(
     // SkatteverketAuthError below carries the signal to the caller.
     log.warn('401 from Skatteverket API', {
       url,
+      ...requestDiagnostics(url, effectiveBase, connector !== null),
       statusCode: 401,
       authMode: auth.mode,
       body: safeBodyForLog(text),
@@ -688,6 +711,7 @@ export async function skvRequestWithAuth(
     // server-side, surface only the actionable Swedish guidance.
     log.warn('403 from Skatteverket API', {
       url,
+      ...requestDiagnostics(url, effectiveBase, connector !== null),
       statusCode: 403,
       authMode: auth.mode,
       body: safeBodyForLog(text),
