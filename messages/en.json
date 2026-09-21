@@ -9740,6 +9740,7 @@
     "cp_refreshing": "Reading…",
     "cp_refreshed": "{count} new counterparts read",
     "cp_refresh_failed": "Could not read new counterparts.",
+    "cp_refresh_partial": "Some new counterparts could not be read. The list shows the updates that succeeded. Try again.",
     "cp_th_name": "Counterpart",
     "cp_th_account": "Books as",
     "cp_th_count": "Rows",

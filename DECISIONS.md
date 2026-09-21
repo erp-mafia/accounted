@@ -1278,3 +1278,4 @@ Entries dated before 2026-08-01 were archived on 2026-09-13 to keep this file re
 
 [2026-09-21] Fortnox completion blocks require explicit provider codes and an atomic credential-revision/worker check. Token replacement clears auth blocks; licence retry consumes the saved block ID. Reuse completion cursors and leases rather than another queue.
 [2026-09-21] Fortnox recovery keeps expiry-based refresh persistence until credential revisions exist. Deployment order must never lose a provider-rotated token pair; durable blocking activates after the schema migration.
+[2026-09-21] Observed parties: aggregate eligible lines once, then normalize distinct descriptions and enrich only ranked keys. Preserve full history and the existing 1000-key cap; expose partial refresh failures instead of adding a queue, cache, retries or a longer timeout.

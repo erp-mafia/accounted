@@ -24,6 +24,7 @@ import type { ScbCandidate } from '@/lib/parties/scb/client'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { CounterpartList as CounterpartListData, CounterpartRow } from '@/lib/parties/list'
 import type { PartyRole, RegisterPeriod } from '@/lib/parties/register'
+import { refreshCounterparts } from '@/lib/parties/refresh'
 
 async function post<T>(url: string, body?: unknown): Promise<T> {
   const res = await fetch(url, {
@@ -102,23 +103,18 @@ function CounterpartsPage() {
 
   const fail = useCallback(() => toast({ title: t('cp_action_failed'), variant: 'destructive' }), [toast, t])
 
-  // Read what is new: the ledger's suggestions and the bank strings the
-  // resolver has not seen. Once per visit by itself, and on the quiet link.
+  // Read new ledger suggestions and bank strings on the explicit action.
   const refresh = useCallback(
-    async (auto: boolean) => {
+    async () => {
       if (refreshing) return
       setRefreshing(true)
       try {
-        const [suggested, resolved] = await Promise.all([
-          post<{ created: number; attached: number }>('/api/parties/suggest').catch(() => ({ created: 0, attached: 0 })),
-          post<{ written: number }>('/api/parties/resolver/run').catch(() => ({ written: 0 })),
-        ])
-        const count = suggested.created + resolved.written
-        if (!auto || count > 0) toast({ title: t('cp_refreshed', { count }) })
-        if (count > 0) reload()
-      } catch {
-        if (!auto) toast({ title: t('cp_refresh_failed'), variant: 'destructive' })
+        const result = await refreshCounterparts(post)
+        if (result.status === 'success') toast({ title: t('cp_refreshed', { count: result.count }) })
+        else toast({ title: t(result.status === 'partial' ? 'cp_refresh_partial' : 'cp_refresh_failed'), variant: 'destructive' })
       } finally {
+        // Attachments, merges and partially committed requests also change rows.
+        reload()
         setRefreshing(false)
       }
     },
@@ -253,7 +249,7 @@ function CounterpartsPage() {
         help={<HelpPopover>{t('cp_help')}</HelpPopover>}
         action={
           canWrite ? (
-            <button type="button" className={QUIET_LINK_CLASS} disabled={refreshing} onClick={() => void refresh(false)}>
+            <button type="button" className={QUIET_LINK_CLASS} disabled={refreshing} onClick={() => void refresh()}>
               {refreshing ? t('cp_refreshing') : t('cp_refresh')}
             </button>
           ) : undefined

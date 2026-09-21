@@ -9740,6 +9740,7 @@
     "cp_refreshing": "Läser…",
     "cp_refreshed": "{count} nya motparter lästa",
     "cp_refresh_failed": "Kunde inte läsa nya motparter.",
+    "cp_refresh_partial": "Alla nya motparter kunde inte läsas. Listan visar det som kunde uppdateras. Försök igen.",
     "cp_th_name": "Motpart",
     "cp_th_account": "Bokförs som",
     "cp_th_count": "Rader",
