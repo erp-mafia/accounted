@@ -1,7 +1,7 @@
 /**
- * completeInvoiceRows: the one TypeScript call site for the
- * complete_invoice_rows RPC (migration 20260906135730), and the one place the
- * behandlingshistorik event for a completed migrated invoice is written.
+ * completeInvoiceRows: the shared TypeScript writer for completed migrated
+ * invoices and their behandlingshistorik. Atomic RPCs wrap the original
+ * complete_invoice_rows write (migration 20260906135730).
  *
  * Two writers put rows under migrated sales invoices: the migration wizard
  * (extensions/general/arcim-migration/lib/migration-orchestrator.ts, rows
@@ -18,13 +18,9 @@
  * that wrote the invoice header records no event of its own, so this event
  * is what lets the two writers reconcile per invoice.
  *
- * Failure semantics: the event is written only after the RPC has answered
- * wrote = true, so an invoice whose completion failed, or that another writer
- * had already filled, gets no event. The append itself is best-effort, the
- * convention every processing_history writer follows (the rows are
- * committed; a missing change-log row is logged, not turned into a failed
- * invoice that the next run would try again and find full). The caller sees
- * a null eventId when that happened.
+ * Failure semantics: every writer commits rows and history in one RPC. A
+ * history failure rolls the rows back, and an already-filled invoice gets no
+ * duplicate event. The cron additionally persists a receipt under its lease.
  *
  * PII boundary: the payload carries UUIDs, counts, amounts and enum strings
  * only. Invoice numbers and provider document numbers are deliberately left
@@ -35,13 +31,12 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProcessingHistoryActor } from '@/types'
-import { createLogger } from '@/lib/logger'
 import {
-  appendProcessingHistoryWithClient,
+  prepareProcessingHistoryRow,
+  type AppendEventInput,
   type ProcessingHistoryEventType,
 } from '@/lib/processing-history/append'
-
-const log = createLogger('invoices/complete-invoice-rows')
+import { queryInExecutionBudget } from '@/lib/http/execution-budget'
 
 /** Registered in processing_event_types by migration 20260906210100. */
 export const INVOICE_ROWS_COMPLETED_EVENT = 'InvoiceRowsCompleted' satisfies ProcessingHistoryEventType
@@ -83,6 +78,8 @@ export interface CompleteInvoiceRowsTrail {
 }
 
 export interface CompleteInvoiceRowsInput {
+  /** A fenced cron lease enables atomic history and a durable completion receipt. */
+  completionWorkerId?: string
   companyId: string
   invoiceId: string
   /** The invoice_items columns per row; the RPC stamps invoice_id itself. */
@@ -93,15 +90,14 @@ export interface CompleteInvoiceRowsInput {
   headerBefore?: InvoiceHeaderVatSnapshot | null
   trail: CompleteInvoiceRowsTrail
   /**
-   * The client the event row is written with. processing_history has no
-   * INSERT policy, so this must be a service-role client: the cron's own
-   * client already is, the wizard (on the user's session client) passes one.
+   * Retained for existing callers. History is now written inside the RPC,
+   * with the same caller authorization as the invoice write.
    */
-  historyClient: HistoryClient
+  historyClient?: HistoryClient
 }
 
 export type CompleteInvoiceRowsResult =
-  /** The rows (and the header, when one was given) landed; eventId is null when the trail append failed. */
+  /** The rows, optional header and history event landed together. */
   | { status: 'written'; rows: number; headerUpdated: boolean; eventId: string | null }
   /** Another writer filled the invoice first; nothing was written and nothing is recorded. */
   | { status: 'already_filled' }
@@ -115,6 +111,7 @@ interface CompleteRowsRpcOutcome {
   wrote?: boolean
   rows?: number
   header_updated?: boolean
+  event_id?: string
 }
 
 function snapshotOf(split: InvoiceHeaderVatSnapshot | InvoiceHeaderVatSplit | null | undefined): InvoiceHeaderVatSnapshot | null {
@@ -132,12 +129,26 @@ export async function completeInvoiceRows(
   input: CompleteInvoiceRowsInput,
 ): Promise<CompleteInvoiceRowsResult> {
   const header = input.header ?? null
-  const { data, error } = await supabase.rpc('complete_invoice_rows', {
+  if (input.completionWorkerId) {
+    const { data, error } = await queryInExecutionBudget(supabase.rpc('finish_invoice_completion', {
+      p_company_id: input.companyId,
+      p_worker_id: input.completionWorkerId,
+      p_invoice_id: input.invoiceId,
+      p_outcome: 'written',
+      p_rows: input.rows,
+      p_header: header,
+      p_event: prepareProcessingHistoryRow(completedEvent(input, input.rows.length, header !== null)),
+    }))
+    if (error) throw new Error(`Completion receipt not confirmed: ${error.message}`)
+    return data as CompleteInvoiceRowsResult
+  }
+  const { data, error } = await queryInExecutionBudget(supabase.rpc('complete_invoice_rows_with_history', {
     p_company_id: input.companyId,
     p_invoice_id: input.invoiceId,
     p_rows: input.rows,
     p_header: header,
-  })
+    p_event: prepareProcessingHistoryRow(completedEvent(input, input.rows.length, header !== null)),
+  }))
   const outcome = (data ?? null) as CompleteRowsRpcOutcome | null
   if (error || !outcome?.ok) {
     return { status: 'failed', reason: error?.message ?? outcome?.code ?? 'empty RPC response' }
@@ -146,44 +157,27 @@ export async function completeInvoiceRows(
 
   const rows = outcome.rows ?? input.rows.length
   const headerUpdated = outcome.header_updated === true
-  const eventId = await appendCompletedEvent(input, rows, headerUpdated)
-  return { status: 'written', rows, headerUpdated, eventId }
+  return { status: 'written', rows, headerUpdated, eventId: outcome.event_id ?? null }
 }
 
-async function appendCompletedEvent(
-  input: CompleteInvoiceRowsInput,
-  rows: number,
-  headerUpdated: boolean,
-): Promise<string | null> {
+function completedEvent(input: CompleteInvoiceRowsInput, rows: number, headerUpdated: boolean): AppendEventInput {
   const { trail } = input
-  try {
-    return await appendProcessingHistoryWithClient(input.historyClient, {
-      companyId: input.companyId,
-      correlationId: trail.correlationId,
-      aggregateType: 'Invoice',
-      aggregateId: input.invoiceId,
-      eventType: INVOICE_ROWS_COMPLETED_EVENT,
-      payload: {
-        source: trail.source,
-        provider: trail.provider,
-        consent_id: trail.consentId,
-        rows,
-        header_updated: headerUpdated,
-        header_before: headerUpdated ? snapshotOf(input.headerBefore) : null,
-        header_after: headerUpdated ? snapshotOf(input.header) : null,
-      },
-      actor: trail.actor,
-      occurredAt: new Date(),
-    })
-  } catch (err) {
-    // The rows are committed; the trail row is what is missing. Logged so
-    // the gap is visible, never a reason to report the invoice as failed.
-    log.error('InvoiceRowsCompleted append failed; rows written without their behandlingshistorik row', {
-      companyId: input.companyId,
-      invoiceId: input.invoiceId,
+  return {
+    companyId: input.companyId,
+    correlationId: trail.correlationId,
+    aggregateType: 'Invoice',
+    aggregateId: input.invoiceId,
+    eventType: INVOICE_ROWS_COMPLETED_EVENT,
+    payload: {
       source: trail.source,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
+      provider: trail.provider,
+      consent_id: trail.consentId,
+      rows,
+      header_updated: headerUpdated,
+      header_before: headerUpdated ? snapshotOf(input.headerBefore) : null,
+      header_after: headerUpdated ? snapshotOf(input.header) : null,
+    },
+    actor: trail.actor,
+    occurredAt: new Date(),
   }
 }

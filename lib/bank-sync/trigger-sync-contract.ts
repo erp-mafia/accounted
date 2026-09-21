@@ -34,6 +34,7 @@ export type TriggerSyncFailureCode =
   | 'BANK_SYNC_NOT_ACTIVE'
   | 'BANK_SYNC_NO_ACCOUNTS'
   | 'BANK_SYNC_COOLDOWN'
+  | 'BANK_RATE_LIMITED'
   | 'BANK_SESSION_EXPIRED'
   | 'BANK_SYNC_FAILED'
 
@@ -53,9 +54,9 @@ export type TriggerSyncResult =
       code: TriggerSyncFailureCode
       connection_id: string
       status?: string
-      /** ISO timestamp after which a sync is accepted again (cooldown only). */
+      /** ISO timestamp after which a sync is accepted again (cooldown and bank rate limit). */
       next_allowed_at?: string
-      /** Seconds until next_allowed_at (cooldown only). */
+      /** Seconds until next_allowed_at (cooldown and bank rate limit). */
       retry_after_seconds?: number
     }
 

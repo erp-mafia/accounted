@@ -31,7 +31,7 @@ import {
   type ApiKeyScope,
 } from '@/lib/auth/api-keys'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
-import { getCanonicalBaseUrl } from '@/lib/api/v1/base-url'
+import { getCanonicalBaseUrl, resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-url'
 import { createCompanyCore } from '@/lib/company/create-company'
 import {
   AssetCorrectionBlockedError,
@@ -4632,6 +4632,19 @@ export const tools: McpTool[] = [
               'A sync ran or was attempted on this connection within the last 15 minutes. Check last_synced_at via gnubok_connect_bank: if it is fresh, transactions and balances are already current, continue with gnubok_list_uncategorized_transactions. If it is still stale, the previous attempt failed; retry once after next_allowed_at, never before.',
           }
         }
+        // The bank's own rate limit: also in-band, because the one thing the
+        // agent must learn is WHEN, and the thrown envelope carries no time.
+        if (result.code === 'BANK_RATE_LIMITED') {
+          return {
+            synced: false,
+            connection_id: result.connection_id,
+            bank: null,
+            last_synced_at: null,
+            next_allowed_at: result.next_allowed_at ?? null,
+            instructions:
+              'The bank is rate limiting this consent (PSD2 banks allow only a few unattended fetches per day). Nothing was fetched. Do not call again before next_allowed_at; it is our cooldown, not a reset time confirmed by the bank. The connection is still valid: do not ask the user to renew it. Continue with the transactions already imported (gnubok_list_uncategorized_transactions).',
+          }
+        }
         throw Object.assign(
           new Error(`Bank sync refused for connection ${result.connection_id}: ${result.code}`),
           { code: result.code },
@@ -6313,7 +6326,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['kvittojakten', 'kvitto', 'underlag', 'saknar underlag', 'mail'],
     title: 'Kvittojakten Worklist',
-    description: 'What lacks an underlag, shaped for a mail search: posted verifikat and unbooked purchases, largest first, with counterparty, amount, date window, portal hint and the inbox address to forward to. Load skill kvittojakten first.',
+    description: 'What lacks an underlag, shaped for a mail search: posted verifikat and unbooked purchases, largest first, with counterparty, amount, date window, portal hint, the inbox address to forward to and a next step per item. Load skill kvittojakten first.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6354,6 +6367,8 @@ export const tools: McpTool[] = [
                   note: { type: ['string', 'null'] },
                 },
               },
+              tip_possible: { type: 'boolean', description: 'Restaurant or bar: the charge is the bill plus a tip, so a receipt up to a quarter smaller is still this purchase.' },
+              next_step: { type: 'string', description: 'One Swedish sentence for the user when the document cannot be fetched: where the receipt is and what to do. Report it verbatim.' },
             },
           },
         },
@@ -23705,8 +23720,18 @@ function emitWorkflowStarted(payload: {
  */
 export async function handleMcpRequest(request: Request): Promise<Response> {
   const toolNamespace = resolveMcpToolNamespace(request)
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
-  const resourceMetadataUrl = new URL('/.well-known/oauth-protected-resource', appUrl)
+  // The challenge must name the metadata document on the SAME host the client
+  // called. Pinned to NEXT_PUBLIC_APP_URL it broke every OAuth attempt against
+  // app.gnubok.se, the machine host existing connectors are configured with:
+  // the 401 pointed at app.accounted.se while the document served on
+  // app.gnubok.se names itself, and clients refuse the mismatch ("Protected
+  // resource ... does not match expected"). resolveDiscoveryBaseUrl is what
+  // the metadata route itself uses, so header and document always agree, and
+  // it reflects allowlisted hosts only: a spoofed Host falls back to canonical.
+  const resourceMetadataUrl = new URL(
+    '/.well-known/oauth-protected-resource',
+    resolveDiscoveryBaseUrl(request),
+  )
   if (toolNamespace === 'accounted') {
     resourceMetadataUrl.searchParams.set('tool_namespace', 'accounted')
   }

@@ -1,3 +1,4 @@
+import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
 import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { FORTNOX_BASE_URL, FORTNOX_RATE_LIMIT } from './config';
@@ -76,7 +77,7 @@ export class FortnoxClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             Accept: 'application/json',
@@ -122,7 +123,7 @@ export class FortnoxClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -172,7 +173,7 @@ export class FortnoxClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
@@ -223,7 +224,7 @@ export class FortnoxClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },

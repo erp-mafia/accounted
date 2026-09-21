@@ -30,7 +30,7 @@ const log = createLogger('api.agent.ask')
 // A tool-loop answer can take minutes (several model turns, each preceded by
 // real report reads). The plan default cap would kill the function mid-answer
 // and the client would see a silent empty stop; 300 s matches the other
-// long-running model surfaces (app/api/receipt-hunt/run).
+// long-running model surface (app/api/agent/invoke).
 export const maxDuration = 300
 
 // The Swedish body AskConsole's !res.ok branch renders verbatim.

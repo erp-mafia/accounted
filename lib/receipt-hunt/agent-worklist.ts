@@ -52,6 +52,21 @@ export interface AgentWorklistItem {
   mail_searchable: boolean
   /** Where the invoice lives when the vendor does not mail it. */
   portal: { vendor: string; url: string; note: string | null } | null
+  /**
+   * The card charge may exceed the receipt total: a restaurant bill is signed
+   * for with a tip the printed kvitto never shows. An agent comparing amounts
+   * strictly calls that a mismatch, which is what happened to the restaurant
+   * rows in the first trial run.
+   */
+  tip_possible: boolean
+  /**
+   * One sentence in Swedish, naming one place and one action, for the human
+   * who has to fetch this underlag themselves. Written for the person, not the
+   * agent: the agent repeats it verbatim when it comes up empty, and the app
+   * can render it on the Att göra row. It says where the receipt is, never
+   * what was tried.
+   */
+  next_step: string
 }
 
 export interface AgentWorklist {
@@ -71,6 +86,34 @@ const LINK_OPERATION_TYPES = [
 const LOOKUP_CHUNK = 150
 const MAX_ITEMS = 100
 
+/**
+ * How far back an invoice settled by bankgiro, plusgiro or OCR is worth
+ * searching for. The payment happens on the due date; the invoice that backs
+ * it was mailed when it was issued, which is a month or more earlier, so the
+ * symmetric ±10-day window around the payment misses it entirely. Three such
+ * rows (a supplier invoice, a subscription and a legal fee) were reported as
+ * "not in mail" in the first trial run while the invoices sat in the mailbox.
+ */
+const INVOICE_DAYS_BEFORE = 45
+
+/** A payment that settles an invoice rather than buying something on the spot. */
+const INVOICE_DESCRIPTOR = /bankgiro|plusgiro|\bbg\b|\bpg\b|\bocr\b|faktura|invoice/i
+
+/** Places where the card charge is the bill plus a tip. */
+const TIP_DESCRIPTOR =
+  /restaurang|restaurant|\brest\b|bistro|brasserie|pizzeria|sushi|kebab|krog|\bbar\b|cafe|café|\bkafe\b|deli|matsal/i
+
+/**
+ * Chains that send their receipt to Kivra instead of mailing it. A mail search
+ * for these is wasted: the receipt exists, just not in any inbox.
+ */
+const KIVRA_DESCRIPTOR =
+  /\bica\b|\bcoop\b|apotek|\bjula\b|kjell|rusta|stadium|åhléns|ahlens|systembolaget|willys|hemköp|clas ohlson/i
+
+/** Bought in person, so the receipt is usually paper or in the vendor's app. */
+const IN_PERSON_DESCRIPTOR =
+  /parkering|easypark|parkster|circle k|preem|okq8|\bshell\b|\bst1\b|\btaxi\b|uber|pressbyrån|7-eleven|zettle|izettle/i
+
 interface VerifikatRow {
   journal_entry_id: string
   voucher_series: string | null
@@ -87,17 +130,60 @@ function shiftDate(isoDate: string, days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+/**
+ * What to tell the person when the agent cannot fetch this one.
+ *
+ * One sentence, one place, one action, ordered by how the receipt actually
+ * reaches a Swedish company: a vendor that withholds its invoice behind a
+ * login, a chain that sends to Kivra, a counter purchase that only exists on
+ * paper, and otherwise the mailbox. Never mentions searching, agents or what
+ * failed: by the time this is read, the reader only wants the errand.
+ */
+function nextStep(
+  descriptor: string | null,
+  portal: AgentWorklistItem['portal'],
+  mailSearchable: boolean,
+): string {
+  if (!mailSearchable) {
+    return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
+  }
+  if (portal) {
+    return `Logga in på ${portal.vendor} och ladda ner fakturan: ${portal.url}`
+  }
+  if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) {
+    return 'Kvittot ligger troligen i Kivra: öppna det, tryck Dela och välj Accounted.'
+  }
+  if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) {
+    return 'Papperskvitto: fota det med mobilen och skicka det till kvittoadressen.'
+  }
+  return 'Leta i mejlen och vidarebefordra kvittot till kvittoadressen.'
+}
+
 function withSearchHints(
-  base: Omit<AgentWorklistItem, 'search_from' | 'search_to' | 'mail_searchable' | 'portal'>,
+  base: Omit<
+    AgentWorklistItem,
+    'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step'
+  >,
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
   const portal = lookupPortal(descriptor)
+  const mailSearchable = canHaveEmailReceipt(descriptor)
+  // A payment that settles an invoice opens the window earlier: the invoice was
+  // mailed when it was issued, the payment happens on the due date. The window
+  // never closes later, because a document dated well after the charge belongs
+  // to the next period, not this purchase.
+  const settlesInvoice = Boolean(base.invoice_number) || INVOICE_DESCRIPTOR.test(descriptor ?? '')
+  const portalHint = portal
+    ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null }
+    : null
   return {
     ...base,
-    search_from: shiftDate(base.date, -FETCH_DATE_WINDOW_DAYS),
+    search_from: shiftDate(base.date, -(settlesInvoice ? INVOICE_DAYS_BEFORE : FETCH_DATE_WINDOW_DAYS)),
     search_to: shiftDate(base.date, FETCH_DATE_WINDOW_DAYS),
-    mail_searchable: canHaveEmailReceipt(descriptor),
-    portal: portal ? { vendor: portal.vendor, url: portal.url, note: portal.note ?? null } : null,
+    mail_searchable: mailSearchable,
+    portal: portalHint,
+    tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
+    next_step: nextStep(descriptor, portalHint, mailSearchable),
   }
 }
 

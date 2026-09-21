@@ -1,3 +1,5 @@
+import { checkExecutionBudget, ExecutionBudgetExceeded, waitInExecutionBudget } from '@/lib/http/execution-budget';
+
 export interface RetryOptions {
   maxAttempts?: number;
   initialDelayMs?: number;
@@ -23,9 +25,12 @@ export async function withRetry<T>(
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= opts.maxAttempts; attempt++) {
+    checkExecutionBudget();
     try {
       return await fn();
     } catch (error) {
+      if (error instanceof ExecutionBudgetExceeded) throw error;
+      checkExecutionBudget();
       lastError = error;
 
       if (attempt === opts.maxAttempts) break;
@@ -40,7 +45,7 @@ export async function withRetry<T>(
         opts.maxDelayMs,
       );
 
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await waitInExecutionBudget(delay);
     }
   }
 

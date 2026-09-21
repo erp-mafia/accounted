@@ -1,3 +1,4 @@
+import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import { WINT_BASE_URL } from './config';
 import { WintApiError } from './client';
 import type { TokenResponse } from '../types';
@@ -115,6 +116,7 @@ async function postAuth(path: string, body: unknown, context: string): Promise<T
     `${WINT_BASE_URL}${path}`,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/json',
         Accept: 'application/json',

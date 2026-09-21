@@ -6,6 +6,7 @@ import { TAX_FREE_REIMBURSEMENT_TYPES } from './account-mapping'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { groupOneOffBasesByRate, oneOffTaxForGroup, validateOneOffTaxLine } from './one-off-tax'
+import { isBenefitItemType, resolveTaxableBenefits } from './benefit-payments'
 import type { SalaryLineItemType } from '@/types'
 
 // ============================================================
@@ -119,6 +120,12 @@ export interface CalculationStep {
 export interface SalaryCalculationResult {
   grossSalary: number
   grossDeductions: number
+  /**
+   * The TAXABLE förmånsvärde: benefit rows less what the employee paid for the
+   * benefit via nettolöneavdrag, never below zero. Stored as
+   * salary_run_employees.benefit_values, so taxableIncome = grossSalary +
+   * benefitValues holds. The value before payment is the benefit rows.
+   */
   benefitValues: number
   taxableIncome: number
   taxWithheld: number
@@ -344,7 +351,8 @@ export function monthlyBaseSalary(input: MonthlyBaseInput): number {
  *   2. Add additions (overtime, bonus, etc.)
  *   3. Subtract absence deductions
  *   4. Apply bruttolöneavdrag (MUST be before tax)
- *   5. Add förmånsvärden to tax base
+ *   5. Add förmånsvärden to tax base, reduced by what the employee paid for
+ *      the benefit via nettolöneavdrag (never below zero)
  *   6. Tax withholding
  *   7. Net salary
  *   8. Employer contributions (avgifter)
@@ -500,15 +508,31 @@ export function calculateSalary(
   })
 
   // ─── Step 5: Add förmånsvärden to tax base ───
-  const benefitItems = input.lineItems.filter(
-    li => ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other'].includes(li.itemType)
-  )
-  const totalBenefits = r(benefitItems.reduce((sum, li) => sum + li.amount, 0))
-  if (totalBenefits > 0) {
+  // The förmånsvärde that enters the tax base and the avgifter basis is the
+  // value AFTER what the employee paid for the benefit (deductions-
+  // lonevaxling.md: "Calculate förmånsvärden (reduced by nettolöneavdrag if
+  // applicable)"). The payment itself still leaves net pay in Step 7. The
+  // definition is shared with the AGI and KU (lib/salary/benefit-payments.ts).
+  // run-calculation refuses the ambiguous payslip by name before it gets
+  // here; the throw is the engine's own guard.
+  const benefitResolution = resolveTaxableBenefits(input.lineItems)
+  if (!benefitResolution.ok) throw new Error(benefitResolution.error)
+  const benefits = benefitResolution.benefits
+  const benefitItems = input.lineItems.filter(li => isBenefitItemType(li.itemType))
+  const totalBenefits = benefits.taxableTotal
+  if (benefits.grossTotal > 0) {
     steps.push({
       label: 'Förmånsvärden',
       formula: 'summa förmåner',
       input: { count: benefitItems.length },
+      output: benefits.grossTotal,
+    })
+  }
+  if (benefits.reduction > 0) {
+    steps.push({
+      label: 'Förmånsvärde efter den anställdes betalning',
+      formula: 'förmånsvärde − betalning via nettolöneavdrag (lägst 0)',
+      input: { benefit_values: benefits.grossTotal, employee_payment: benefits.paid, reduction: benefits.reduction },
       output: totalBenefits,
     })
   }

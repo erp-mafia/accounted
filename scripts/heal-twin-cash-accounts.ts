@@ -101,6 +101,10 @@ function print(result: HealTwinsResult): void {
   for (const group of result.groups) {
     // The IBAN is not printed: the report is pasted into tickets.
     const head = `  ledgers ${group.ledgers.join(' + ')} (posted lines on: ${group.postedLedgers.join(', ') || 'none'})`
+    if (group.skipped === 'already-merged') {
+      console.log(`${head}\n    already merged, nothing to do (keeps ${group.keeper?.ledger_account})`)
+      continue
+    }
     if (group.skipped) {
       const routed = group.skipped === 'routing-outside-group' ? ` (sync routes to ${group.accountsDataLedgerFrom})` : ''
       console.log(`${head}\n    SKIPPED: ${group.skipped}${routed}`)

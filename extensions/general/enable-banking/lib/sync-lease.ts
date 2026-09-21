@@ -7,8 +7,10 @@
  *   so an overlapping cron run, a retried invocation or an agent loop can
  *   never sync the same connection twice inside the window.
  * - "Synka nu" only HOLDS it: a person asking for a sync is never told to
- *   wait for a cooldown, but the automatic paths stay off the connection
- *   while and right after they sync it.
+ *   wait for the ordinary 15-minute window, but the automatic paths stay off
+ *   the connection while and right after they sync it. The one lease a
+ *   person does wait for is a bank rate-limit cooldown (rateLimitHoldUntil):
+ *   a call the bank will refuse only spends quota.
  * - A bank 429 holds it for hours instead of minutes, for every connection
  *   sharing the PSD2 session: the refusal names the consent ("Consent daily
  *   limit 4 is exceeded"), and a retry next hour only spends another
@@ -76,6 +78,25 @@ export function rateLimitCooldownMs(error: unknown): number | null {
   }
   if (error instanceof ConnectorSyncError && error.status === 429) return RATE_LIMIT_COOLDOWN_MS
   return null
+}
+
+/**
+ * When the held lease is a bank rate-limit cooldown, the instant it ends;
+ * otherwise null. The lease column carries both meanings, and they are told
+ * apart by length: every ordinary claim or hold is SYNC_COOLDOWN_MS, every
+ * rate-limit hold is RATE_LIMIT_COOLDOWN_MS or more, so a lease ending later
+ * than one ordinary window from now can only be a rate limit. The last
+ * SYNC_COOLDOWN_MS of a cooldown therefore reads as an ordinary lease: the
+ * worst case is one early call, which the bank refuses and which holds the
+ * lease again.
+ */
+export function rateLimitHoldUntil(
+  connection: { sync_lease_until?: string | null },
+  now: number,
+): number | null {
+  if (!connection.sync_lease_until) return null
+  const until = new Date(connection.sync_lease_until).getTime()
+  return Number.isFinite(until) && until - now > SYNC_COOLDOWN_MS ? until : null
 }
 
 /**

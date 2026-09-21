@@ -659,6 +659,67 @@ describe('collectKontantmetodCutoff', () => {
     expect(result.receivables).toEqual([])
   })
 
+  // A migrated supplier invoice arrives settled (status 'paid') with no payment
+  // row: the provider names neither a payment date nor a payment voucher. The
+  // cut-off keys on payment DATE alone, so until a row exists the invoice reads
+  // as a skuld at year end. attach_supplier_invoice_settlement_voucher writes
+  // that row, dated at the verifikat that paid it.
+  describe('migrated supplier invoice settled without a payment row', () => {
+    const migratedPaid = {
+      id: 'si-migrated', supplier_invoice_number: 'L-MIG', invoice_date: '2026-12-10', status: 'paid',
+      total: 1250, vat_amount: 250, reverse_charge: false, is_credit_note: false, currency: 'SEK',
+      items: [{ account_number: '5410', line_total: 1000 }],
+    }
+    // makePagedSupabase ignores lte(), so it cannot tell a December payment
+    // from a January one. This one applies it, as PostgREST does, which also
+    // pins that the collector asks for payments up to period end at all.
+    function makeDateFilteringSupabase(rows: Record<string, Array<Record<string, unknown>>>) {
+      return {
+        from: (table: string) => {
+          let result = rows[table] ?? []
+          const query: Record<string, unknown> = {}
+          for (const name of ['select', 'eq', 'in', 'order', 'range']) query[name] = () => query
+          query.lte = (column: string, value: string) => {
+            result = result.filter((row) => String(row[column]) <= value)
+            return query
+          }
+          query.then = (resolve: (value: unknown) => unknown) => resolve({ data: result, error: null })
+          return query
+        },
+      }
+    }
+    const collect = (payments: Array<Record<string, unknown>>) =>
+      collectKontantmetodCutoff(makeDateFilteringSupabase({
+        invoices: [],
+        invoice_payments: [],
+        supplier_invoices: [migratedPaid],
+        supplier_invoice_payments: payments,
+      }) as never, 'co-1', '2026-01-01', '2026-12-31')
+
+    it('counts it as a payable while no row explains the settlement', async () => {
+      const result = await collect([])
+      expect(result.payables[0]).toMatchObject({ outstanding: 1250, vat: 250 })
+    })
+
+    it('drops it once the evidence row is dated on or before period end', async () => {
+      const result = await collect([{
+        id: 'sp-evidence', supplier_invoice_id: 'si-migrated', amount: 1250, payment_date: '2026-12-20',
+        transaction_id: null, journal_entry_id: 'je-v342',
+      }])
+      expect(result.payables).toEqual([])
+    })
+
+    // The reason the row is dated at the verifikat and not at the invoice: a
+    // December invoice paid in January WAS a skuld on 31 December.
+    it('keeps it when the verifikat that paid it is dated after period end', async () => {
+      const result = await collect([{
+        id: 'sp-evidence', supplier_invoice_id: 'si-migrated', amount: 1250, payment_date: '2027-01-08',
+        transaction_id: null, journal_entry_id: 'je-v7',
+      }])
+      expect(result.payables[0]).toMatchObject({ outstanding: 1250, vat: 250 })
+    })
+  })
+
   // Issue #2248: ROT/RUT under fakturamodellen. The skattereduktion is a
   // fordran on Skatteverket (1513) booked by the payment voucher itself, and
   // every settlement path records the CUSTOMER share as the payment row

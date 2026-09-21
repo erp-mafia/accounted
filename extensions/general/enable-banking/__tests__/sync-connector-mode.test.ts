@@ -12,7 +12,7 @@ vi.mock('../lib/api-client', async () => {
 })
 
 import { syncAccountTransactions } from '../lib/sync'
-import { SessionExpiredError, ConnectorSyncError } from '../lib/api-client'
+import { SessionExpiredError, ConnectorSyncError, AspspUnavailableError } from '../lib/api-client'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
 import type { StoredAccount } from '../types'
 
@@ -82,6 +82,20 @@ describe('syncAccountTransactions in connector mode', () => {
   it('maps the connector 410 onto SessionExpiredError so callers flip the connection to expired', async () => {
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'expired', code: 'CONNECTOR_BANK_SESSION_EXPIRED', retryable: false }), { status: 410 }))
     await expect(syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())).rejects.toBeInstanceOf(SessionExpiredError)
+  })
+
+  it("preserves the bank's rate limit through the connector: same typed error, upstream status, Retry-After", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(
+      JSON.stringify({ error: 'The bank is rate limiting this consent', code: 'CONNECTOR_BANK_RATE_LIMITED', retryable: true, detail: 'ASPSP_RATE_LIMIT_EXCEEDED' }),
+      { status: 429, headers: { 'Retry-After': '900' } },
+    ))
+    const failed = syncAccountTransactions(supabase, 'company-1', 'user-1', 'conn-1', account, '2026-08-01', '2026-09-03', vi.fn())
+    await expect(failed).rejects.toBeInstanceOf(AspspUnavailableError)
+    await expect(failed).rejects.toMatchObject({
+      status: 429,
+      reason: 'rate-limited',
+      rateLimit: { dailyQuota: true, retryAfterSeconds: 900 },
+    })
   })
 
   it('surfaces other connector failures as ConnectorSyncError, never as a dead session', async () => {

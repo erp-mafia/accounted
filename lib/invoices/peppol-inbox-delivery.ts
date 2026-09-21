@@ -1,10 +1,9 @@
 /**
  * Hand a routed inbound Peppol document to the supplier-invoice inbox.
  *
- * Follows the mail-hunt precedent (lib/receipt-hunt/ingest.ts): core archives
- * the underlag through uploadDocument() and inserts the inbox row directly,
- * with the extraction already filled in from the structured UBL, so no AI
- * pass runs and the reviewer sees exactly what the sender wrote.
+ * Core archives the underlag through uploadDocument() and inserts the inbox
+ * row directly, with the extraction already filled in from the structured
+ * UBL, so no AI pass runs and the reviewer sees exactly what the sender wrote.
  *
  * What is archived:
  * - the exact received XML, always, as a WORM document (upload_source

@@ -168,6 +168,48 @@ describe('MCP lazy authentication', () => {
     )
   })
 
+  it('names the metadata document on the host the client called', async () => {
+    // app.gnubok.se is the machine host existing connectors are configured
+    // with. Pinning the challenge to NEXT_PUBLIC_APP_URL pointed it at
+    // app.accounted.se, and clients refused the mismatch against the document
+    // app.gnubok.se serves about itself, so OAuth could never start there.
+    const response = await handleMcpRequest(
+      new Request('https://app.gnubok.se/api/extensions/ext/mcp-server/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', host: 'app.gnubok.se' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'gnubok_list_companies', arguments: {} },
+        }),
+      })
+    )
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="https://app.gnubok.se/.well-known/oauth-protected-resource"'
+    )
+  })
+
+  it('ignores a Host that is not allowlisted and challenges with the canonical one', async () => {
+    const response = await handleMcpRequest(
+      new Request('https://spoofed.example/api/extensions/ext/mcp-server/mcp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', host: 'spoofed.example' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 7,
+          method: 'tools/call',
+          params: { name: 'gnubok_list_companies', arguments: {} },
+        }),
+      })
+    )
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).toBe(
+      'Bearer resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource"'
+    )
+  })
+
   it('challenges tenant-scoped methods (resources/read, tasks/get) without a token', async () => {
     for (const [method, params] of [
       ['resources/read', { uri: 'Accounted://company/current' }],

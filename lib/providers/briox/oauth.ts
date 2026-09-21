@@ -1,3 +1,4 @@
+import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import { BRIOX_TOKEN_URL, BRIOX_REFRESH_URL } from './config';
 import { BrioxApiError } from './client';
 import type { TokenResponse } from '../types';
@@ -35,6 +36,7 @@ async function postForToken(url: string, description: string): Promise<TokenResp
     url,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/json',
       },

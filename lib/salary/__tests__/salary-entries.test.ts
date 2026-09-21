@@ -203,6 +203,46 @@ describe('salary entries: net deductions', () => {
     assertBalanced(salary)
   })
 
+  it('a fully paid car benefit books a balanced verifikat: salary in full, payment credited, benefit value not booked', async () => {
+    // The engine's totals for salary 48 000, bilförmån 6 664 and a payment of
+    // the same amount (lib/salary/__tests__/benefit-payment.test.ts): the
+    // taxable förmånsvärde is 0, tax is on 48 000, net = 48 000 - 10 050 - 6 664.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 48000,
+        tax_withheld: 10050,
+        net_salary: 31286,
+        avgifter_basis: 48000,
+        avgifter_amount: 15081.6,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 48000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'benefit_car', amount: 6664, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          {
+            item_type: 'net_deduction_benefit_payment',
+            amount: -6664,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(48000)
+    // The employee's payment for the benefit is the only 7385 line, a credit.
+    // The förmånsvärde itself has no cash flow and is never booked.
+    expect(linesOn(salary, '7385')).toHaveLength(1)
+    expect(linesOn(salary, '7385')[0].credit_amount).toBe(6664)
+    expect(linesOn(salary, '7385')[0].debit_amount).toBe(0)
+    expect(linesOn(salary, '2710')[0].credit_amount).toBe(10050)
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(31286)
+    // 48 000 = 6 664 + 10 050 + 31 286
+    assertBalanced(salary)
+  })
+
   it('books a positive correction as a debit repayment', async () => {
     const run = makeRun([
       makeEmployee({

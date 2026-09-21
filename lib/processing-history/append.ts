@@ -155,40 +155,39 @@ export async function appendProcessingHistory(
   return appendProcessingHistoryWithClient(createServiceClient(), input)
 }
 
+/** Prepare the same validated event row for an atomic business RPC. */
+export function prepareProcessingHistoryRow(input: AppendEventInput) {
+  piiSafePayload.parse(input.payload)
+  assertActorPiiSafe(input.actor)
+  const eventId = crypto.randomUUID()
+  return {
+    event_id: eventId,
+    company_id: input.companyId,
+    correlation_id: input.correlationId,
+    causation_id: input.causationId ?? null,
+    aggregate_type: input.aggregateType,
+    aggregate_id: input.aggregateId,
+    event_type: input.eventType,
+    payload: input.payload,
+    payload_schema_version: input.payloadSchemaVersion ?? 1,
+    actor: input.actor,
+    rubric_version: input.rubricVersion ?? null,
+    occurred_at: input.occurredAt.toISOString(),
+  }
+}
+
 /**
  * Same append, on a caller-supplied service-role client. For standalone
- * scripts (e.g. scripts/backfill-inbox-booked-underlag.ts) that cannot build
- * the Next-bound service client but must still write behandlingshistorik
- * through the one shared row shape and PII validation (BFNAR 2013:2 p. 9.16:
- * the change log has to reconcile across writers, so scripts never hand-roll
- * the insert).
+ * scripts that cannot build the Next-bound service client but must still
+ * write through the shared row shape and PII validation.
  */
 export async function appendProcessingHistoryWithClient(
   supabase: SupabaseClientLike,
   input: AppendEventInput
 ): Promise<string> {
-  // Validate payload + actor.label contain no PII
-  piiSafePayload.parse(input.payload)
-  assertActorPiiSafe(input.actor)
-
-  const eventId = crypto.randomUUID()
-
-  const { error } = await supabase
-    .from('processing_history')
-    .insert({
-      event_id: eventId,
-      company_id: input.companyId,
-      correlation_id: input.correlationId,
-      causation_id: input.causationId ?? null,
-      aggregate_type: input.aggregateType,
-      aggregate_id: input.aggregateId,
-      event_type: input.eventType,
-      payload: input.payload,
-      payload_schema_version: input.payloadSchemaVersion ?? 1,
-      actor: input.actor,
-      rubric_version: input.rubricVersion ?? null,
-      occurred_at: input.occurredAt.toISOString(),
-    })
+  const row = prepareProcessingHistoryRow(input)
+  const eventId = row.event_id
+  const { error } = await supabase.from('processing_history').insert(row)
 
   if (error) {
     throw new Error(

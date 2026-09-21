@@ -221,6 +221,26 @@ describe('v1 bank-connections sync', () => {
     expect(body.error.details.next_allowed_at).toBe('2026-09-02T09:29:03.000Z')
   })
 
+  it('429 BANK_RATE_LIMITED with next_allowed_at and Retry-After, connection still active', async () => {
+    authOk(['transactions:write'])
+    triggerSyncMock.mockResolvedValue({
+      ok: false,
+      code: 'BANK_RATE_LIMITED',
+      connection_id: CONNECTION_ID,
+      status: 'active',
+      next_allowed_at: '2026-09-20T16:00:00.000Z',
+      retry_after_seconds: 21600,
+    })
+    const res = await POST(req(), params)
+    expect(res.status).toBe(429)
+    expect(res.headers.get('Retry-After')).toBe('21600')
+    const body = (await res.json()) as {
+      error: { code: string; details: { next_allowed_at: string; status: string } }
+    }
+    expect(body.error.code).toBe('BANK_RATE_LIMITED')
+    expect(body.error.details).toMatchObject({ next_allowed_at: '2026-09-20T16:00:00.000Z', status: 'active' })
+  })
+
   it('409 BANK_SESSION_EXPIRED with a recovery hint pointing at the connect link', async () => {
     authOk(['transactions:write'])
     triggerSyncMock.mockResolvedValue({

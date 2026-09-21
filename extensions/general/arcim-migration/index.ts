@@ -1746,7 +1746,7 @@ export const arcimMigrationExtension: Extension = {
     // writes anything, so a wrong id is a clean 404; a provider failure inside
     // either pass is reported beside the results that were already persisted,
     // as `registrationLinksError` / `paymentRefreshError`, rather than by
-    // discarding them. The two passes are independent of each other.
+    // discarding them. A failed refresh defers registration linking for retry.
     {
       method: 'POST',
       path: '/reconcile',
@@ -1820,37 +1820,13 @@ export const arcimMigrationExtension: Extension = {
             : classifyProviderError(error) ?? 'PROVIDER_MIGRATE_FAILED'
         }
 
-        let registrationLinks: Awaited<ReturnType<typeof relinkRegistrationVouchers>> | null = null
-        let registrationLinksError: { code: string } | null = null
-        try {
-          registrationLinks = await relinkRegistrationVouchers({
-            supabase,
-            companyId,
-            consentId,
-            dryRun,
-          })
-          log.info('arcim registration relink completed', {
-            companyId,
-            dryRun,
-            providerInvoices: registrationLinks.providerInvoices,
-            matched: registrationLinks.matched,
-            linked: registrationLinks.linked,
-            refNotFetched: registrationLinks.refNotFetched,
-            ambiguous: registrationLinks.ambiguous,
-            amountMismatch: registrationLinks.amountMismatch,
-          })
-        } catch (error) {
-          log.error('arcim registration relink failed', error as Error)
-          registrationLinksError = { code: providerErrorCode(error) }
-        }
-
         // The same consent also knows which migrated supplier invoices the
         // provider considers settled. A migration can only write what its
         // mapper read, and the Bokio supplier-invoice mapper read fields that
         // schema does not have, so those rows stand as "Registrerad" with
         // their whole total open. Ask the provider and write what it says,
-        // by the same rule the import uses. Independent of the relink: a
-        // provider failure in one must not discard the other's result.
+        // by the same rule the import uses. This must run BEFORE the relink,
+        // which makes open rows ineligible for a later refresh.
         let paymentRefresh: Awaited<ReturnType<typeof refreshMigratedSupplierPaymentState>> | null = null
         let paymentRefreshError: { code: string } | null = null
         try {
@@ -1859,6 +1835,9 @@ export const arcimMigrationExtension: Extension = {
             companyId,
             consentId,
             dryRun,
+            // Dry runs leave these rows untouched, but the real payment pass
+            // has already made them ineligible for a provider-state refresh.
+            excludeInvoiceIds: result.links.map(link => link.supplier_invoice_id),
           })
           log.info('arcim supplier payment-state refresh completed', {
             companyId,
@@ -1872,6 +1851,35 @@ export const arcimMigrationExtension: Extension = {
         } catch (error) {
           log.error('arcim supplier payment-state refresh failed', error as Error)
           paymentRefreshError = { code: providerErrorCode(error) }
+        }
+
+        let registrationLinks: Awaited<ReturnType<typeof relinkRegistrationVouchers>> | null = null
+        let registrationLinksError: { code: string } | null = null
+        // Do not make a failed refresh permanently ineligible for retry.
+        if (paymentRefreshError) {
+          registrationLinksError = paymentRefreshError
+        } else {
+          try {
+            registrationLinks = await relinkRegistrationVouchers({
+              supabase,
+              companyId,
+              consentId,
+              dryRun,
+            })
+            log.info('arcim registration relink completed', {
+              companyId,
+              dryRun,
+              providerInvoices: registrationLinks.providerInvoices,
+              matched: registrationLinks.matched,
+              linked: registrationLinks.linked,
+              refNotFetched: registrationLinks.refNotFetched,
+              ambiguous: registrationLinks.ambiguous,
+              amountMismatch: registrationLinks.amountMismatch,
+            })
+          } catch (error) {
+            log.error('arcim registration relink failed', error as Error)
+            registrationLinksError = { code: providerErrorCode(error) }
+          }
         }
 
         return NextResponse.json({

@@ -33,7 +33,8 @@ import {
 } from './api-client'
 import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
-import { applyRateLimitCooldown, claimSyncLease } from './sync-lease'
+import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
+import { retryAfterSeconds } from './rate-limit-message'
 import { updateBalancesFromSync } from '@/lib/cash-accounts/service'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -115,6 +116,24 @@ export async function triggerConnectionSync(
     return { ok: false, code: 'NOT_FOUND', connection_id: connectionId }
   }
   const isViewer = (membership as { role?: string }).role === 'viewer'
+
+  // A lease held for hours is a bank rate-limit cooldown (set here, by the
+  // web button, the cron, or a sibling company on the same consent). Say so
+  // instead of BANK_SYNC_COOLDOWN, whose "the data is fresh" is untrue here.
+  const rateLimitedUntil = rateLimitHoldUntil(
+    connection as { sync_lease_until?: string | null },
+    now,
+  )
+  if (rateLimitedUntil !== null) {
+    return {
+      ok: false,
+      code: 'BANK_RATE_LIMITED',
+      connection_id: connectionId,
+      status: connection.status as string,
+      next_allowed_at: new Date(rateLimitedUntil).toISOString(),
+      retry_after_seconds: retryAfterSeconds(rateLimitedUntil, now),
+    }
+  }
 
   // A successful sync (ours, the web button's or the cron's) within the
   // window: the data is fresh, say so without touching the bank.
@@ -266,13 +285,25 @@ export async function triggerConnectionSync(
       trigger: 'agent',
       error,
     })
-    // A bank 429 keeps every automatic path away for hours, not minutes.
-    await applyRateLimitCooldown(
+    // A bank 429 keeps every path away for hours, not minutes. The row keeps
+    // its status, error_message and last_synced_at: the consent is fine.
+    const cooldownMs = await applyRateLimitCooldown(
       supabase,
       { id: connection.id as string, session_id: connection.session_id as string | null },
       error,
       now,
     )
+    if (cooldownMs !== null) {
+      log.warn('agent-triggered bank sync: bank rate limit', { connectionId, cooldownMs })
+      return {
+        ok: false,
+        code: 'BANK_RATE_LIMITED',
+        connection_id: connectionId,
+        status: connection.status as string,
+        next_allowed_at: new Date(now + cooldownMs).toISOString(),
+        retry_after_seconds: retryAfterSeconds(now + cooldownMs, now),
+      }
+    }
 
     if (error instanceof SessionExpiredError) {
       log.warn('agent-triggered bank sync: session expired', { connectionId })

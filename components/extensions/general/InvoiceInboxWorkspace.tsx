@@ -46,7 +46,7 @@ import {
   Globe,
 } from 'lucide-react'
 import Link from 'next/link'
-import { cn, formatCurrency, formatDate, formatDateLong, formatDateTime } from '@/lib/utils'
+import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
@@ -54,7 +54,6 @@ import { StartCard } from '@/components/dashboard/StartCard'
 import EditKonteringDialog from '@/components/extensions/general/EditKonteringDialog'
 import InvoiceInboxSkeleton from '@/components/extensions/general/InvoiceInboxSkeleton'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
-import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { createClient } from '@/lib/supabase/client'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
@@ -656,11 +655,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const [purchases, setPurchases] = useState<PurchaseWithoutUnderlag[]>([])
   const [selectedPurchaseId, setSelectedPurchaseId] = useState<string | null>(null)
 
-  // Where underlag come from. Three routes in, and the page should say so:
-  // the mailboxes we search, WhatsApp for photographed receipts, and the
-  // forwarding address that works with nothing connected at all.
-  const [mailConnections, setMailConnections] = useState<InboxMailConnection[]>([])
-  const [mailConnectEnabled, setMailConnectEnabled] = useState(false)
+  // Where underlag come from. Two routes in, and the page should say so:
+  // WhatsApp for photographed receipts, and the forwarding address that works
+  // with nothing connected at all.
   const [whatsapp, setWhatsapp] = useState<{ linked: boolean; phoneMasked?: string; verifiedAt?: string | null } | null>(null)
   const [sourcesOpen, setSourcesOpen] = useState(false)
   // Received-mail history (#2181): read when its panel is first opened, so
@@ -688,21 +685,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   }, [])
 
   useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/extensions/ext/mail/connections')
-        if (!res.ok) return
-        const json = (await res.json()) as {
-          data?: { connections?: InboxMailConnection[]; connectEnabled?: boolean }
-        }
-        setMailConnections(json.data?.connections ?? [])
-        // While Google's scope review keeps new consents withheld, the start
-        // card must not send people to a settings page with no connect button.
-        setMailConnectEnabled(json.data?.connectEnabled === true)
-      } catch {
-        // The extension may not be enabled at all; stay quiet.
-      }
-    })()
     void (async () => {
       try {
         const res = await fetch('/api/extensions/ext/whatsapp-inbox/link')
@@ -736,20 +718,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     })()
   }, [])
 
-  // Counting rows would not answer whether anything is searchable: a revoked
-  // or expired connection is still a row, and the hunt skips it, so the button
-  // would promise a search that returns nothing every pass. A dead mailbox
-  // looking healthy is the exact failure this feature exists to surface, so it
-  // must not start by doing it in its own header.
-  const mailConnected = useMemo(
-    () => mailConnections.some((c) => c.status === 'active'),
-    [mailConnections],
-  )
-  const ailingMailbox = useMemo(
-    () => mailConnections.find((c) => c.status !== 'active') ?? null,
-    [mailConnections],
-  )
-  const sourceCount = mailConnections.length + (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
+  const sourceCount = (whatsapp?.linked ? 1 : 0) + (inboxAddress ? 1 : 0)
 
   const fetchPurchases = useCallback(async () => {
     try {
@@ -765,32 +734,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   useEffect(() => {
     void fetchPurchases()
   }, [fetchPurchases])
-
-  // A pass can attach a document to a purchase, which moves a row from one
-  // list to the other, so both refresh as the run goes rather than at the end.
-  const {
-    hunt,
-    stop: stopHunt,
-    hunting,
-    progress: huntProgress,
-    result: huntResult,
-    setResult: setHuntResult,
-  } = useReceiptHunt(() => {
-    void fetchItems()
-    void fetchPurchases()
-  })
-
-  // A run that found nothing leaves nothing to act on, so the line has no
-  // reason to outlive the glance that reads it. A run that found something,
-  // or failed, stays: both name a next step (press again, or a mailbox to
-  // check) and both are worth still being on screen a minute later.
-  useEffect(() => {
-    if (hunting || !huntResult) return
-    if (huntResult.failed || huntResult.fetched > 0) return
-    const timer = setTimeout(() => setHuntResult(null), 6000)
-    return () => clearTimeout(timer)
-  }, [hunting, huntResult, setHuntResult])
-
 
   const selectedPurchase = useMemo(
     () => purchases.find((p) => p.id === selectedPurchaseId) ?? null,
@@ -1390,30 +1333,17 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
           <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
-              (which mailbox, when it was last read) is a thing people look up
-              when something seems wrong, not something they read every visit.
-              A mailbox that has stopped working is the exception, so that
-              surfaces on the chip itself. */}
+              is a thing people look up when something seems wrong, not
+              something they read every visit. */}
           {sourceCount > 0 ? (
             <Button
               variant="ghost"
               size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
-              className={cn(
-                'h-7 px-2 text-xs font-normal shrink-0',
-                ailingMailbox ? 'text-warning' : 'text-muted-foreground',
-              )}
+              className="h-7 px-2 text-xs font-normal shrink-0 text-muted-foreground"
               aria-expanded={sourcesOpen}
             >
-              {/* No marker on the healthy state. Convention 5: a normal state
-                  is muted text, and a chip every company sees always is a chip
-                  that says nothing. Convention 12 rules out the sage anyway,
-                  semantic colour being data rather than chrome. What remains is
-                  the exception, which is the one thing worth an ochre word. */}
-              {ailingMailbox && <AlertTriangle className="h-3 w-3 mr-1.5" />}
-              {ailingMailbox
-                ? `${ailingMailbox.emailAddress} behöver återanslutas`
-                : `${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              {`${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
               <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
@@ -1456,26 +1386,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             className="hidden"
             onChange={handleFileInputChange}
           />
-          {/* The hunt lived only in Settings, so the button that fills this
-              page sat on a different page. It runs in passes and reports as it
-              goes, because a backlog does not clear in one request. */}
           {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
             <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
-          )}
-          {mailConnected && (
-            <Button variant="ghost" size="sm" onClick={hunting ? stopHunt : hunt} disabled={false}>
-              {hunting ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  {t('hunt_stop')}
-                </>
-              ) : (
-                <>
-                  <Search className="h-3.5 w-3.5 mr-1.5" />
-                  Leta i mejlen
-                </>
-              )}
-            </Button>
           )}
           <Button
             variant="outline"
@@ -1517,97 +1429,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         )}
       </div>
 
-      {/* A pass takes over two minutes and reports nothing until it lands, so
-          a spinner alone leaves somebody watching a button. This says which
-          mailboxes are being read, what has been found so far, and keeps
-          moving while the pass is silent. The bar is deliberately
-          indeterminate: there is no honest percentage inside a pass, and a
-          fake one is worse than none. */}
-      {hunting && (
-        <div className="border-b bg-secondary/30">
-          <div className="h-0.5 overflow-hidden bg-border/40">
-            <div className="hunt-sweep h-full w-1/3 bg-foreground/40" />
-          </div>
-          <div className="px-4 py-2.5 flex items-center gap-3 flex-wrap text-xs">
-            <span className="flex items-center gap-2 min-w-0">
-              <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0 text-muted-foreground" />
-              <span className="truncate">
-                {t('hunt_reading', {
-                  mailboxes: mailConnections
-                    .filter((c) => c.status === 'active')
-                    .map((c) => c.emailAddress)
-                    .join(', '),
-                })}
-              </span>
-            </span>
-            <span className="flex-1" />
-            {huntProgress && (
-              <span className="text-muted-foreground tabular-nums">
-                {t('hunt_progress', {
-                  pass: huntProgress.passes,
-                  found: huntProgress.fetched,
-                })}
-              </span>
-            )}
-            <button type="button" onClick={stopHunt} className={QUIET_LINK_CLASS}>
-              {t('hunt_stop')}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {!hunting && huntResult && (
-        <div className="border-b px-4 py-2 text-xs flex items-center gap-2">
-          {huntResult.failed ? (
-            <span className="text-warning">
-              {/* searchFailures counts mailboxes that refused; without it the
-                  failure was ours, and telling somebody to go check a healthy
-                  Gmail sends them after the wrong thing. */}
-              {(huntResult.searchFailures ?? 0) > 0
-                ? 'En brevlåda svarade inte. Försök igen om en stund.'
-                : 'Sökningen kunde inte slutföras. Försök igen.'}
-            </span>
-          ) : huntResult.fetched > 0 ? (
-            <span>
-              <b className="font-medium tabular-nums">{huntResult.fetched}</b> nya underlag hämtade.{' '}
-              {huntResult.remaining > 0 && (
-                <>
-                  <b className="font-medium tabular-nums">{huntResult.remaining}</b> köp kvar att söka
-                  för: tryck igen.{' '}
-                </>
-              )}
-              {/* "proposed" counts pending_operations rows, not links. The hunt
-                  stages attach_document_to_transaction for a human to approve
-                  and books nothing, so calling them kopplade would send the
-                  user away believing purchases were done. */}
-              {huntResult.proposed > 0 ? (
-                <>
-                  <b className="font-medium tabular-nums">{huntResult.proposed}</b> förslag väntar på{' '}
-                  <Link href="/pending" className="underline hover:text-foreground">
-                    granskning
-                  </Link>
-                  .
-                </>
-              ) : (
-                // A press fetches a bounded number of receipts, so an empty
-                // result usually means "not yet", not "nothing there". Saying
-                // only the first sends people away from a mailbox that still
-                // has their receipts in it.
-                <>Inget matchade något köp än. Tryck igen för att leta vidare.</>
-              )}
-            </span>
-          ) : (
-            <span className="text-muted-foreground">
-              Inga nya underlag i brevlådorna för de köp som saknar ett.
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Opened from the chip. Three ways in, each with the one fact that
-          matters about it: an address you can forward to, mailboxes we search,
-          and the number receipts arrive from. Nothing here is configuration;
-          that still lives in Inställningar. */}
+      {/* Opened from the chip. Two ways in, each with the one fact that
+          matters about it: an address you can forward to, and the number
+          receipts arrive from. Nothing here is configuration; that still
+          lives in Inställningar. */}
       {sourcesOpen && (
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
@@ -1679,44 +1504,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               </div>
             </details>
           )}
-
-          {mailConnections.map((c) => (
-            <details key={c.id} className="group border-b border-border">
-              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
-                {c.provider === 'gmail' ? (
-                  <GoogleMark className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <MicrosoftMark className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="truncate flex-1">{c.emailAddress}</span>
-                {c.status !== 'active' && (
-                  <Badge variant="warning" className="text-[10px] font-normal shrink-0">
-                    Behöver återanslutas
-                  </Badge>
-                )}
-                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
-              </summary>
-              {/* One level down, because this is what you look up when a
-                  mailbox seems to have gone quiet, not what you read on the
-                  way past. */}
-              <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
-                <div className="flex gap-2">
-                  <dt className="w-24 shrink-0">{t('source_last_searched')}</dt>
-                  <dd className="tabular-nums">
-                    {c.lastSearchedAt ? formatDateLong(c.lastSearchedAt) : t('source_never_searched')}
-                  </dd>
-                </div>
-                <div className="flex gap-2">
-                  <dt className="w-24 shrink-0">Status</dt>
-                  <dd>
-                    {c.status === 'active'
-                      ? t('source_searched_when_hunting')
-                      : t('source_not_searched')}
-                  </dd>
-                </div>
-              </dl>
-            </details>
-          ))}
 
           {whatsapp?.linked && (
             <details className="group border-b border-border">
@@ -1857,16 +1644,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     dense
                     title={tStart('inbox_title')}
                     body={tStart('inbox_body')}
-                    primary={
-                      mailConnectEnabled
-                        ? { label: tStart('inbox_primary'), href: '/settings/mail' }
-                        : { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
-                    }
-                    secondary={
-                      mailConnectEnabled
-                        ? { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
-                        : undefined
-                    }
+                    primary={{ label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }}
                     onDismiss={handleDismissOnboarding}
                     dismissLabel={tStart('inbox_dismiss')}
                   />
@@ -1948,7 +1726,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
                     ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och släpp den här.`
-                    : 'Vi har sökt i brevlådorna. Släpp kvittot här, eller vidarebefordra det till inkorgsadressen.'}
+                    : t('purchase_drop_hint')}
                 </p>
 
                 {selectedPurchase.portal && (
@@ -2019,16 +1797,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   floatIcons
                   title={tStart('inbox_title')}
                   body={tStart('inbox_body')}
-                  primary={
-                    mailConnectEnabled
-                      ? { label: tStart('inbox_primary'), href: '/settings/mail' }
-                      : { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
-                  }
-                  secondary={
-                    mailConnectEnabled
-                      ? { label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }
-                      : undefined
-                  }
+                  primary={{ label: tStart('inbox_secondary'), onClick: () => fileInputRef.current?.click() }}
                   onDismiss={handleDismissOnboarding}
                   dismissLabel={tStart('inbox_dismiss')}
                 />
@@ -2665,13 +2434,6 @@ function EmptyPreview({
   )
 }
 
-interface InboxMailConnection {
-  id: string
-  provider: 'gmail' | 'microsoft'
-  emailAddress: string
-  status: 'active' | 'needs_reconsent' | 'revoked'
-  lastSearchedAt: string | null
-}
 
 // ── Purchases with no underlag ───────────────────────────────
 

@@ -261,6 +261,9 @@ export interface BankTransaction {
 const FETCH_TIMEOUT_MS = 15_000
 const MAX_RETRIES = 2
 const RETRY_DELAY_MS = 1000
+// Longest bank-supplied Retry-After worth sitting out inside a request. With
+// MAX_RETRIES this bounds the added wait to 10s, inside every caller's budget.
+const INLINE_RETRY_AFTER_MAX_MS = 5000
 const MAX_PAGINATION_PAGES = 100
 const DEFAULT_PAGE_SIZE = 500
 
@@ -458,7 +461,11 @@ async function authenticatedFetch(
 
 /**
  * Retry wrapper for idempotent read operations.
- * Retries on 429, 502, 503, 504, and AbortError (timeout).
+ * Retries on 502, 503, 504 and AbortError (timeout). A 429 is retried only
+ * when the bank names a wait short enough to sit out inside this request
+ * (INLINE_RETRY_AFTER_MAX_MS) and the limit is not a quota: a blind retry a
+ * second later only spends more of a quota that is already gone. Every other
+ * 429 is returned at once for the caller to type.
  */
 async function authenticatedFetchWithRetry(
   endpoint: string,
@@ -467,22 +474,25 @@ async function authenticatedFetchWithRetry(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const response = await authenticatedFetch(endpoint, options)
-      if (attempt < MAX_RETRIES && [429, 502, 503, 504].includes(response.status)) {
-        // A 429 caused by a DAILY quota cannot clear within the retry window:
-        // PSD2 unattended consents allow only a handful of balance calls per
-        // day (observed body: "Consent daily limit 4 is exceeded"), so
-        // retrying just burns time and duplicates the failure in logs. Read
-        // the body from a clone so the returned response stays consumable.
-        if (response.status === 429) {
-          const body = await response.clone().text().catch(() => '')
-          if (/daily limit/i.test(body)) {
-            console.warn(`[enable-banking] 429 daily quota exhausted for ${endpoint}: not retrying`, {
-              status: response.status,
-              body,
-            })
-            return response
-          }
-        }
+      if (response.status === 429) {
+        // Read the body from a clone so the returned response stays consumable.
+        const body = await response.clone().text().catch(() => '')
+        const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))
+        const quota = isQuotaLimit(body)
+        const canWait =
+          attempt < MAX_RETRIES && !quota && retryAfterMs !== null && retryAfterMs <= INLINE_RETRY_AFTER_MAX_MS
+        // Never the body: a provider error can quote account identifiers.
+        console.warn(`[enable-banking] 429 for ${endpoint}: ${canWait ? 'waiting out Retry-After' : 'not retrying'}`, {
+          status: response.status,
+          retryAfterMs,
+          quota,
+          bodyLength: body.length,
+        })
+        if (!canWait) return response
+        await new Promise(resolve => setTimeout(resolve, retryAfterMs as number))
+        continue
+      }
+      if (attempt < MAX_RETRIES && [502, 503, 504].includes(response.status)) {
         console.warn(`[enable-banking] Retrying ${endpoint} (attempt ${attempt + 1}/${MAX_RETRIES})`, {
           status: response.status,
           statusText: response.statusText,
@@ -1269,16 +1279,50 @@ function bankUnavailable(
   return new AspspUnavailableError(status, body, reason, activeDateFrom)
 }
 
-/** Build the error both transaction fetch paths throw on a 429. */
-function bankRateLimited(
+/** A Retry-After beyond this is treated as malformed, not obeyed. */
+const RETRY_AFTER_MAX_MS = 24 * 60 * 60 * 1000
+
+/**
+ * Retry-After per RFC 9110: delay-seconds or an HTTP-date. Returns the delay
+ * in ms from `now`, or null when the header is missing, malformed, or beyond
+ * RETRY_AFTER_MAX_MS. A date in the past is a valid "now": 0.
+ */
+export function parseRetryAfter(header: string | null | undefined, now: number = Date.now()): number | null {
+  const value = header?.trim()
+  if (!value) return null
+  let delayMs: number
+  if (/^\d+$/.test(value)) {
+    delayMs = Number(value) * 1000
+  } else {
+    // Date.parse accepts far more than an HTTP-date ("12", "1.5"); require
+    // the shape of one so a stray number is not read as a year.
+    if (!/[a-z]{3}/i.test(value)) return null
+    const at = Date.parse(value)
+    if (!Number.isFinite(at)) return null
+    delayMs = Math.max(0, at - now)
+  }
+  return Number.isFinite(delayMs) && delayMs <= RETRY_AFTER_MAX_MS ? delayMs : null
+}
+
+/**
+ * Quota-type limits cannot clear within a request or within the hour: the
+ * PSD2 unattended quota is a handful of calls per DAY (observed: "Consent
+ * daily limit 4 is exceeded", ASPSP_RATE_LIMIT_EXCEEDED).
+ */
+function isQuotaLimit(body: string): boolean {
+  return /daily limit/i.test(body) || body.includes('ASPSP_RATE_LIMIT_EXCEEDED')
+}
+
+/** Build the error every transaction fetch path throws on a 429 (direct, and the connector relaying the bank's). */
+export function bankRateLimited(
   response: Response,
   body: string,
   activeDateFrom: string | undefined
 ): AspspUnavailableError {
-  const retryAfter = Number(response.headers.get('retry-after'))
+  const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'))
   return new AspspUnavailableError(response.status, body, 'rate-limited', activeDateFrom, {
-    dailyQuota: /daily limit/i.test(body),
-    ...(Number.isFinite(retryAfter) && retryAfter > 0 ? { retryAfterSeconds: retryAfter } : {}),
+    dailyQuota: isQuotaLimit(body),
+    ...(retryAfterMs !== null && retryAfterMs > 0 ? { retryAfterSeconds: Math.ceil(retryAfterMs / 1000) } : {}),
   })
 }
 

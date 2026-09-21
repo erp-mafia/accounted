@@ -142,7 +142,7 @@ export interface CompleteInvoiceLinesResult {
   dryRun: boolean
 }
 
-interface CandidateRow {
+export interface CandidateRow {
   id: string
   user_id: string
   customer_id: string
@@ -324,56 +324,10 @@ export async function completeMigratedInvoiceLines(
       result.notHydrated++
       continue
     }
-    if (dto.lines.length === 0) {
-      result.noLinesAtProvider++
-      continue
-    }
-
-    // The same mapper the migration used, so a row written here is
-    // indistinguishable from one written by a fully hydrated import. No FX
-    // index: the SEK twins are derived from the rate the row already carries.
-    const mapped = mapSalesInvoice(dto, row.user_id, companyId, row.customer_id)
-    const mappedTotal = mapped.invoice.total as number
-    if (!equalOre(mappedTotal, row.total)) {
-      result.totalMismatch++
-      log.warn('detail total differs from the stored total; invoice left untouched', {
-        companyId, invoiceId: row.id, invoiceNumber: row.invoice_number, stored: row.total, provider: mappedTotal,
-      })
-      continue
-    }
-
-    if (!mapped.vatUnresolved) {
-      const rowsNet = mapped.items.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0)
-      const rowsVat = mapped.items.reduce((sum, item) => sum + Number(item.vat_amount ?? 0), 0)
-      const headerNet = mapped.invoice.subtotal as number
-      const headerVat = mapped.invoice.vat_amount as number
-      if (Math.abs(rowsNet - headerNet) > ROWS_TOLERANCE_KR || Math.abs(rowsVat - headerVat) > ROWS_TOLERANCE_KR) {
-        result.rowsMismatch++
-        log.warn('mapped rows do not add up to the header; invoice left untouched', {
-          companyId, invoiceId: row.id, invoiceNumber: row.invoice_number,
-          headerNet, rowsNet: roundOre(rowsNet), headerVat, rowsVat: roundOre(rowsVat), rows: mapped.items.length,
-        })
-        continue
-      }
-    }
-
-    let header: InvoiceHeaderVatSplit | null = null
-    if (mapped.vatUnresolved) {
-      result.vatUnresolved++
-    } else if (headerHoldsNoVatEvidence(row)) {
-      const subtotal = mapped.invoice.subtotal as number
-      const vatAmount = mapped.invoice.vat_amount as number
-      header = {
-        subtotal,
-        subtotal_sek: toRowSek(subtotal, row),
-        vat_amount: vatAmount,
-        vat_amount_sek: toRowSek(vatAmount, row),
-        vat_rate: mapped.invoice.vat_rate as number | null,
-        vat_treatment: mapped.invoice.vat_treatment as string,
-      }
-    }
-
-    planned.push({ row, items: mapped.items, header })
+    const prepared = planInvoiceLineCompletion(row, dto, companyId)
+    if ('reason' in prepared) { result[prepared.reason]++; continue }
+    if (prepared.vatUnresolved) result.vatUnresolved++
+    planned.push(prepared.plan)
   }
 
   if (dryRun) {
@@ -450,4 +404,55 @@ export async function completeMigratedInvoiceLines(
     hydration: result.hydration,
   })
   return result
+}
+
+/** Shared validation for the resumable cron and standalone completion pass. */
+export function planInvoiceLineCompletion(row: CandidateRow, dto: SalesInvoiceDto, companyId: string):
+  | { reason: 'noLinesAtProvider' | 'totalMismatch' | 'rowsMismatch' }
+  | { plan: PlannedWrite; vatUnresolved: boolean } {
+  if (dto.lines.length === 0) {
+    return { reason: 'noLinesAtProvider' }
+  }
+
+  // The same mapper the migration used, so a row written here is
+  // indistinguishable from one written by a fully hydrated import. No FX
+  // index: the SEK twins are derived from the rate the row already carries.
+  const mapped = mapSalesInvoice(dto, row.user_id, companyId, row.customer_id)
+  const mappedTotal = mapped.invoice.total as number
+  if (!equalOre(mappedTotal, row.total)) {
+    log.warn('detail total differs from the stored total; invoice left untouched', {
+      companyId, invoiceId: row.id, invoiceNumber: row.invoice_number, stored: row.total, provider: mappedTotal,
+    })
+    return { reason: 'totalMismatch' }
+  }
+
+  if (!mapped.vatUnresolved) {
+    const rowsNet = mapped.items.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0)
+    const rowsVat = mapped.items.reduce((sum, item) => sum + Number(item.vat_amount ?? 0), 0)
+    const headerNet = mapped.invoice.subtotal as number
+    const headerVat = mapped.invoice.vat_amount as number
+    if (Math.abs(rowsNet - headerNet) > ROWS_TOLERANCE_KR || Math.abs(rowsVat - headerVat) > ROWS_TOLERANCE_KR) {
+      log.warn('mapped rows do not add up to the header; invoice left untouched', {
+        companyId, invoiceId: row.id, invoiceNumber: row.invoice_number,
+        headerNet, rowsNet: roundOre(rowsNet), headerVat, rowsVat: roundOre(rowsVat), rows: mapped.items.length,
+      })
+      return { reason: 'rowsMismatch' }
+    }
+  }
+
+  let header: InvoiceHeaderVatSplit | null = null
+  if (!mapped.vatUnresolved && headerHoldsNoVatEvidence(row)) {
+    const subtotal = mapped.invoice.subtotal as number
+    const vatAmount = mapped.invoice.vat_amount as number
+    header = {
+      subtotal,
+      subtotal_sek: toRowSek(subtotal, row),
+      vat_amount: vatAmount,
+      vat_amount_sek: toRowSek(vatAmount, row),
+      vat_rate: mapped.invoice.vat_rate as number | null,
+      vat_treatment: mapped.invoice.vat_treatment as string,
+    }
+  }
+
+  return { plan: { row, items: mapped.items, header }, vatUnresolved: mapped.vatUnresolved }
 }

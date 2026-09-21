@@ -3,6 +3,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { generateKU10Xml } from '@/lib/salary/ku/ku10-generator'
 import type { KU10EmployeeData, KU10CompanyData } from '@/lib/salary/ku/ku10-generator'
+import { resolveTaxableBenefits, staleBenefitTotalRefusal } from '@/lib/salary/benefit-payments'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 ensureInitialized()
@@ -50,10 +51,10 @@ export const GET = withRouteContext<{ params: Promise<{ year: string }> }>(
     const { data: runEmployees, error } = await supabase
       .from('salary_run_employees')
       .select(`
-        employee_id, gross_salary, tax_withheld, tax_withheld_override,
+        employee_id, gross_salary, benefit_values, tax_withheld, tax_withheld_override,
         avgifter_basis, avgifter_basis_override,
         employee:employees(personnummer, specification_number, employment_start, employment_end),
-        salary_run:salary_runs!inner(period_year, status),
+        salary_run:salary_runs!inner(period_year, period_month, status),
         line_items:salary_line_items(item_type, amount)
       `)
       .eq('company_id', companyId)
@@ -106,6 +107,44 @@ export const GET = withRouteContext<{ params: Promise<{ year: string }> }>(
         else if (li.item_type === 'benefit_housing') current.benefitHousing += li.amount
         else if (li.item_type === 'benefit_meals') current.benefitMeals += li.amount
         else if (['benefit_wellness', 'benefit_other'].includes(li.item_type)) current.benefitOther += li.amount
+      }
+
+      // The kontrolluppgift carries the same förmånsvärde the payslip was
+      // taxed on: the value after what the employee paid for the benefit
+      // (lib/salary/benefit-payments.ts). The reduction is per payslip, so it
+      // is taken off here, before the year is summed.
+      const resolution = resolveTaxableBenefits(
+        lineItems.map((li) => ({ itemType: li.item_type, amount: li.amount })),
+      )
+      if (!resolution.ok) {
+        return NextResponse.json(
+          { error: `Anställd ${emp.specification_number}: ${resolution.error}` },
+          { status: 422 },
+        )
+      }
+      // A booked payslip calculated before the reduction existed stores tax
+      // and underlag for the unreduced benefit; a KU built from it would
+      // disagree with the tax actually withheld. Same rule and helper as the
+      // AGI generator: refuse, never a silently inconsistent kontrolluppgift.
+      const run = sre.salary_run as unknown as { period_year: number; period_month: number }
+      const stale = staleBenefitTotalRefusal({
+        who: `Anställd ${emp.specification_number}`,
+        periodYear: run.period_year,
+        periodMonth: run.period_month,
+        document: 'kontrolluppgiften',
+        storedBenefitValues: sre.benefit_values,
+        benefits: resolution.benefits,
+      })
+      if (stale) return NextResponse.json({ error: stale }, { status: 422 })
+
+      const { reduction, reducedType } = resolution.benefits
+      if (reduction > 0) {
+        if (reducedType === 'benefit_car') current.benefitCar -= reduction
+        else if (reducedType === 'benefit_housing') current.benefitHousing -= reduction
+        else if (reducedType === 'benefit_meals') current.benefitMeals -= reduction
+        else if (reducedType === 'benefit_wellness' || reducedType === 'benefit_other') current.benefitOther -= reduction
+        // benefit_bike is not summed into any KU bucket above, so there is
+        // nothing to take the reduction from.
       }
 
       byEmployee.set(sre.employee_id, current)

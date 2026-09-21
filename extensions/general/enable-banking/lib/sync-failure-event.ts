@@ -20,10 +20,11 @@ import { createLogger } from '@/lib/logger'
 import { bankConnectorMode } from '@/lib/connect/instance/upstreams'
 import type { CoreEvent } from '@/lib/events/types'
 import { AspspUnavailableError, ConnectorSyncError, SessionExpiredError } from './api-client'
+import { rateLimitCooldownMs } from './sync-lease'
 
 const log = createLogger('enable-banking:sync-failed')
 
-export type BankSyncFailureClass = 'session_expired' | 'bank_unavailable' | 'connector' | 'unknown'
+export type BankSyncFailureClass = 'session_expired' | 'bank_unavailable' | 'rate_limited' | 'connector' | 'unknown'
 export type BankSyncTrigger = 'agent' | 'cron' | 'manual'
 
 export interface BankSyncFailure {
@@ -38,6 +39,10 @@ export interface BankSyncFailure {
   diagnostic: string
   httpStatus?: number
   ebCode?: string
+  /** rate_limited only: the cooldown applied, in seconds. */
+  cooldownSeconds?: number
+  /** rate_limited only: the bank's own Retry-After in seconds, when it sent one. */
+  bankRetryAfterSeconds?: number
 }
 
 /** Enough to tell failures apart in a list; never a place for a body. */
@@ -88,6 +93,15 @@ function extractEbCode(body: string): string | undefined {
   }
 }
 
+function extractProviderToken(body: string): string | undefined {
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown } | null
+    return typeof parsed?.error === 'string' && EB_CODE_RE.test(parsed.error) ? parsed.error : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function classifyBankSyncFailure(error: unknown): BankSyncFailure {
   if (error instanceof SessionExpiredError) {
     const ebCode = extractEbCode(error.body)
@@ -96,6 +110,23 @@ export function classifyBankSyncFailure(error: unknown): BankSyncFailure {
       diagnostic: `SessionExpiredError: bank session expired (HTTP ${error.status})`,
       httpStatus: error.status,
       ...(ebCode ? { ebCode } : {}),
+    }
+  }
+  if (error instanceof AspspUnavailableError && error.reason === 'rate-limited') {
+    // A quota, not an outage: its own class so the two can be counted apart.
+    // The provider token (ASPSP_RATE_LIMIT_EXCEEDED) sits in `error`; the
+    // envelope's numeric `code` only repeats the HTTP status.
+    const ebCode = extractProviderToken(error.body) ?? extractEbCode(error.body)
+    const cooldownMs = rateLimitCooldownMs(error)
+    return {
+      errorClass: 'rate_limited',
+      diagnostic: `AspspUnavailableError: bank rate limit (HTTP ${error.status}${error.rateLimit?.dailyQuota ? ', quota exhausted' : ''})`,
+      httpStatus: error.status,
+      ...(ebCode ? { ebCode } : {}),
+      ...(cooldownMs !== null ? { cooldownSeconds: Math.round(cooldownMs / 1000) } : {}),
+      ...(error.rateLimit?.retryAfterSeconds !== undefined
+        ? { bankRetryAfterSeconds: error.rateLimit.retryAfterSeconds }
+        : {}),
     }
   }
   if (error instanceof AspspUnavailableError) {

@@ -15,9 +15,18 @@ vi.mock('../lib/sync', () => ({
 }))
 
 // The shared sync lease has its own tests (lib/__tests__/sync-lease.test.ts).
-vi.mock('../lib/sync-lease', () => ({
-  holdSyncLease: vi.fn().mockResolvedValue(undefined),
-  applyRateLimitCooldown: vi.fn().mockResolvedValue(null),
+vi.mock('../lib/sync-lease', async () => {
+  const actual = await vi.importActual<typeof import('../lib/sync-lease')>('../lib/sync-lease')
+  return {
+    ...actual,
+    holdSyncLease: vi.fn().mockResolvedValue(undefined),
+    applyRateLimitCooldown: vi.fn().mockResolvedValue(null),
+  }
+})
+
+const SERVICE_CLIENT = { service: true }
+vi.mock('@/lib/supabase/server', () => ({
+  createServiceClient: vi.fn(async () => SERVICE_CLIENT),
 }))
 
 vi.mock('@/lib/entitlements/has-capability', () => ({
@@ -149,7 +158,9 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     expect(holdSyncLease).toHaveBeenCalledWith(expect.anything(), { connectionId: 'conn-1' }, expect.any(Number))
   })
 
-  it('hands a failed sync to the rate-limit cooldown', async () => {
+  it('hands a rate-limited sync to the cooldown through the service-role client', async () => {
+    // The hold covers every connection on the session, which crosses
+    // companies; RLS limits the user client to the active company.
     const error = new ConnectorSyncError(429, 'HTTP_429', '')
     ;(syncAccountTransactions as unknown as Mock).mockRejectedValue(error)
     const ctx = makeContext(makeConnection({ status: 'active', session_id: 'sess-1' }), vi.fn())
@@ -157,9 +168,10 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     await syncRoute.handler(makeRequest(), ctx)
 
     expect(applyRateLimitCooldown).toHaveBeenCalledWith(
-      expect.anything(),
+      SERVICE_CLIENT,
       expect.objectContaining({ id: 'conn-1', session_id: 'sess-1' }),
       error,
+      expect.any(Number),
     )
   })
 

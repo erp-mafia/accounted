@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createQueuedMockSupabase } from '@/tests/helpers';
 
 vi.mock('@/lib/supabase/server', () => ({
@@ -23,6 +23,8 @@ import { refreshFortnoxToken } from '@/lib/providers/fortnox/oauth';
 import { refreshWintToken } from '@/lib/providers/wint/oauth';
 import { resolveConsent } from '../resolve-consent';
 import { ProviderCallError } from '../with-provider-call';
+import { currentExecutionBudget, ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execution-budget';
+import { TimeoutError } from '@/lib/http/fetch-with-timeout';
 
 const consentRow = { id: 'c1', company_id: 'co1', provider: 'briox', status: 1 };
 
@@ -46,6 +48,42 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
       token_type: 'Bearer',
       expires_in: 3600,
     });
+  });
+
+  afterEach(() => vi.useRealTimers());
+
+  it('defers without rotating a token when the refresh and persistence reserve cannot fit', async () => {
+    mock.enqueue({ data: [consentRow] });
+    mock.enqueue({ data: [expiredTokens] });
+    await expect(withExecutionDeadline(Date.now() + 14_000, 'credentials', () => resolveConsent('co1', 'c1')))
+      .rejects.toBeInstanceOf(ExecutionBudgetExceeded);
+    expect(refreshBrioxToken).not.toHaveBeenCalled();
+    expect(mock.findCall('provider_consent_tokens', 'update')).toBeUndefined();
+  });
+
+  it('saves a rotated pair within the parent budget after the refresh scope has finished', async () => {
+    vi.useFakeTimers();
+    const deadline = Date.now() + 20_000;
+    mock.enqueue({ data: [consentRow] });
+    mock.enqueue({ data: [expiredTokens] });
+    mock.enqueue({ data: [{ consent_id: 'c1' }] });
+    vi.mocked(refreshBrioxToken).mockImplementationOnce(async () => {
+      expect(currentExecutionBudget()?.deadline).toBe(deadline - 5000);
+      vi.setSystemTime(Date.now() + 9500);
+      return { access_token: 'rotated', refresh_token: 'rotated-refresh', token_type: 'Bearer', expires_in: 3600 };
+    });
+    const result = await withExecutionDeadline(deadline, 'credentials', () => resolveConsent('co1', 'c1'));
+    expect(result.accessToken).toBe('rotated');
+    expect(mock.findCall('provider_consent_tokens', 'update')?.[0]).toMatchObject({ refresh_token: 'rotated-refresh' });
+  });
+
+  it('does not turn a slow refresh into an expired-credentials instruction', async () => {
+    mock.enqueue({ data: [consentRow] });
+    mock.enqueue({ data: [expiredTokens] });
+    const timeout = new TimeoutError('refresh timed out');
+    vi.mocked(refreshBrioxToken).mockRejectedValueOnce(timeout);
+    await expect(withExecutionDeadline(Date.now() + 20_000, 'credentials', () => resolveConsent('co1', 'c1')))
+      .rejects.toBe(timeout);
   });
 
   it('returns the stored token without refreshing when not expired', async () => {

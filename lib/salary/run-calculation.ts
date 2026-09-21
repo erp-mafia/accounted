@@ -30,6 +30,13 @@ import { calculateSalary, monthlyBaseSalary } from './calculation-engine'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
 import { isAutomaticVacationLine, VACATION_COMPENSATION_SOURCE } from './calculated-line-items'
 import { validateOneOffTaxLine } from './one-off-tax'
+import {
+  benefitPaymentRefusalDetails,
+  collectDescribedLines,
+  describeDoubleBenefitAdjustments,
+  doubleBenefitAdjustmentWarning,
+  resolveTaxableBenefits,
+} from './benefit-payments'
 import { loadPayrollConfig, serializePayrollConfig } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
 import { loadAndDeriveAbsence } from './derive-absence-line-items'
@@ -388,6 +395,7 @@ export async function runSalaryCalculation(
   // calculation, not an error.
   const lakarintygEmployees: string[] = []
   const fkReportingEmployees: string[] = []
+  const doubleBenefitAdjustments: string[] = []
 
   // 8. Per-employee calculation loop.
   for (const sre of runEmployees) {
@@ -800,6 +808,31 @@ export async function runSalaryCalculation(
       ...derivedRecurringLineItems,
     ]
 
+    // 8e2. An employee's payment for a benefit lowers the taxable
+    //      förmånsvärde (lib/salary/benefit-payments.ts). Checked on the FINAL
+    //      set, not on the stored rows: steps 8d and 8d3 just rebuilt the
+    //      benefit and recurring rows from their registers. Refuse by name
+    //      rather than let the engine throw a 500 when the payslip cannot say
+    //      which benefit the payment is for.
+    const benefitResolution = resolveTaxableBenefits(lineItems)
+    if (!benefitResolution.ok) {
+      return {
+        ok: false,
+        code: 'VALIDATION_ERROR',
+        details: benefitPaymentRefusalDetails(`${emp.first_name} ${emp.last_name}`, benefitResolution.error),
+      }
+    }
+    // A bruttolöneavdrag of the same amount is the pre-fix workaround and now
+    // lowers the tax base twice. It can also be a real bruttolöneavdrag, so
+    // this warns on every calculation until the row is gone, never blocks.
+    doubleBenefitAdjustments.push(
+      ...describeDoubleBenefitAdjustments(
+        `${emp.first_name} ${emp.last_name}`,
+        collectDescribedLines((sre.line_items || []) as Array<Record<string, unknown>>, derivedRecurringRows),
+        benefitResolution.benefits,
+      ),
+    )
+
     // 8f. Run the engine for this employee.
     const result = calculateSalary(
       {
@@ -1030,6 +1063,8 @@ export async function runSalaryCalculation(
         `Säkerställ att anmälan till FK är gjord.`,
     )
   }
+  const doubleAdjustmentWarning = doubleBenefitAdjustmentWarning(doubleBenefitAdjustments)
+  if (doubleAdjustmentWarning) warnings.push(doubleAdjustmentWarning)
 
   opLog.info('salary calculation complete', {
     requestId,

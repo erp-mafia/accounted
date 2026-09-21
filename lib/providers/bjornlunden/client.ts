@@ -1,3 +1,4 @@
+import { fetchInExecutionBudget } from '@/lib/http/execution-budget';
 import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { BL_BASE_URL, BL_BATCH_PAGE_SIZE, BL_RATE_LIMIT } from './config';
@@ -96,7 +97,7 @@ export class BjornLundenClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'User-Key': userKey,
@@ -179,7 +180,7 @@ export class BjornLundenClient {
       async () => {
         await this.rateLimiter.acquire();
         const url = `${this.baseUrl}${path}`;
-        const response = await fetch(url, {
+        const response = await fetchInExecutionBudget(url, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
             'User-Key': userKey,

@@ -1,3 +1,4 @@
+import { executionBudgetSignal } from '@/lib/http/execution-budget';
 import { VISMA_AUTH_URL, VISMA_TOKEN_URL } from './config';
 import type { OAuthConfig, TokenResponse } from '../types';
 import {
@@ -55,6 +56,7 @@ export async function exchangeVismaCode(
     VISMA_TOKEN_URL,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Authorization: basicAuthHeader(config),
@@ -84,6 +86,7 @@ export async function refreshVismaToken(
     VISMA_TOKEN_URL,
     {
       method: 'POST',
+      signal: executionBudgetSignal(),
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         Authorization: basicAuthHeader(config),

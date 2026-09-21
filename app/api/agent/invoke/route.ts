@@ -21,7 +21,7 @@ ensureInitialized()
 // 15-27k-token prompt prefix) can outlive the plan default duration cap; a
 // function killed mid-stream closes the NDJSON stream cleanly, which the chat
 // used to render as silent success. 300 s matches the other long-running model
-// surfaces (app/api/receipt-hunt/run, app/api/agent/ask).
+// surfaces (app/api/agent/ask).
 export const maxDuration = 300
 
 // Hard cap on the per-turn user input. Generous for a chat composer (about
