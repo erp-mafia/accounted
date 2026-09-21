@@ -74,6 +74,34 @@ describe('bank adoption of an existing manual transaction', () => {
     await changeLedger()
     await expect(bind(id, await route())).rejects.toMatchObject({ code: 'PT409', message: 'BANK_INGEST_ADOPTION_ANCHOR_CHANGED' })
   })
+  it.each(['same', 'changed', 'both-ledgers'])('checks a posted bank origin before adoption: %s route', async scenario => {
+    const id = await manualTransaction()
+    const entryId = randomUUID()
+    const context = [{ transaction_id: id, cash_account_id: null, settlement_account: '1930',
+      date: '2026-01-02', amount: -25, currency: 'SEK' }]
+    await client.query(`INSERT INTO journal_entries(id,company_id,user_id,fiscal_period_id,voucher_number,
+      entry_date,description,source_type,status,bank_booking_context)
+      VALUES ($1,$2,$3,$4,0,'2026-01-02','PG adoption origin','manual','draft',$5)`,
+    [entryId, owner.companyId, owner.userId, owner.fiscalPeriodId, JSON.stringify(context)])
+    await client.query(`INSERT INTO journal_entry_lines(journal_entry_id,account_number,debit_amount,credit_amount)
+      VALUES ($1,'1930',0,25),($1,'2999',25,0)`, [entryId])
+    if (scenario === 'both-ledgers') {
+      await client.query(`INSERT INTO journal_entry_lines(journal_entry_id,account_number,debit_amount,credit_amount)
+        VALUES ($1,'1931',0,25),($1,'2999',25,0)`, [entryId])
+    }
+    await client.query('SELECT * FROM commit_journal_entry($1,$2)', [owner.companyId, entryId])
+    if (scenario === 'same') {
+      expect(await bind(id, await route())).toBe(cashId)
+    } else {
+      await changeLedger()
+      await client.query('SAVEPOINT adoption')
+      await expect(bind(id, await route())).rejects.toMatchObject({ code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' })
+      await client.query('ROLLBACK TO SAVEPOINT adoption')
+      expect((await client.query('SELECT cash_account_id FROM transactions WHERE id=$1', [id])).rows[0].cash_account_id).toBeNull()
+    }
+    expect((await client.query('SELECT status,bank_booking_context FROM journal_entries WHERE id=$1', [entryId])).rows[0])
+      .toMatchObject({ status: 'posted', bank_booking_context: context })
+  })
   it('rejects a concurrent edit to the matched amount', async () => {
     const id = await manualTransaction()
     await client.query('UPDATE transactions SET amount = -50 WHERE id = $1', [id])
