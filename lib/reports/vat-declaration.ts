@@ -323,6 +323,97 @@ export async function resolvePeriodDates(
  */
 export const VAT_SETTLEMENT_NET_ACCOUNTS = ['2650', '1650']
 
+/**
+ * Accounts a VAT account can be moved against WITHOUT passing 2650/1650, for
+ * the second momsredovisning shape (#2805). 1630 is the ledger mirror of the
+ * skattekonto at Skatteverket: companies that never use the redovisningskonto
+ * settle or receive VAT straight against it (2611 D / 1630 K, 1630 D / 2641 K),
+ * and a Skatteverket omprövning credited to the skattekonto gets booked the
+ * same way (1630 D / 2610 K). None of that is a sale or a purchase.
+ *
+ * MIRRORS the `tax_shape_constants` CTE in
+ * supabase/migrations/20260920182259_vat_exclude_skattekonto_counter_entries.sql,
+ * which both get_vat_declaration_totals and get_vat_ruta_source_lines carry.
+ * The SQL holds its own literals on purpose: a new RPC parameter would break
+ * the already-deployed app in the window between migration and deploy. Change
+ * one side and you must change the other, in a NEW migration.
+ */
+export const VAT_TAX_ACCOUNT_COUNTERPARTS = ['1630']
+
+/**
+ * 3740 (öres- och kronutjämning): the only line besides 26xx and the
+ * skattekonto that a verifikat of the second shape may carry. Same mirror rule
+ * as VAT_TAX_ACCOUNT_COUNTERPARTS.
+ */
+export const VAT_SHAPE_ROUNDING_ACCOUNTS = ['3740']
+
+/**
+ * BAS 26xx, the moms accounts. The second shape needs a declaration account IN
+ * this class (the 3xxx/4xxx beskattningsunderlag accounts of ACCOUNT_RUTA do
+ * not qualify) and tolerates any other 26xx line. `'26%'` in the SQL.
+ */
+export const VAT_ACCOUNT_CLASS_PREFIX = '26'
+
+/**
+ * How an entry was recognised as a momsredovisning:
+ *   - `tagged`: source_type 'vat_settlement';
+ *   - `net_account_shape`: a declaration account AND a 2650/1650 line;
+ *   - `tax_account_shape`: a pure 26xx / skattekonto (/ 3740) verifikat.
+ */
+export type MomsredovisningDetection = 'tagged' | 'net_account_shape' | 'tax_account_shape'
+
+const DECLARATION_ACCOUNT_SET: ReadonlySet<string> = new Set(Object.keys(ACCOUNT_RUTA))
+
+/**
+ * Classify one verifikat from its source_type and the account numbers of ALL
+ * its lines. Returns null when the entry is ordinary VAT-bearing activity that
+ * belongs in the rutor.
+ *
+ * This is the TypeScript mirror of the exclusion predicate in
+ * get_vat_declaration_totals / get_vat_ruta_source_lines (migration
+ * 20260920182259). The web report never calls it: the SQL decides there. It
+ * exists for callers that already hold every line of every entry in memory
+ * (the MCP VAT report), so they apply the same rule instead of a third one.
+ *
+ * `lineAccounts` must be every line of the entry, not a filtered subset: the
+ * second shape is a purity test, and a missing cost line would turn a business
+ * verifikat (5410 D / 2641 D / 1630 K) into a false momsredovisning.
+ */
+export function detectMomsredovisning(
+  sourceType: string | null | undefined,
+  lineAccounts: Iterable<string>,
+): MomsredovisningDetection | null {
+  if (sourceType === 'vat_settlement') return 'tagged'
+  // Carried-in 26xx balances are unsettled VAT that belongs in the next
+  // declaration, whatever else the opening balance touches.
+  if (sourceType === 'opening_balance') return null
+
+  let hasDeclarationAccount = false
+  let hasDeclarationVatAccount = false
+  let hasNetAccount = false
+  let hasTaxAccount = false
+  let pure = true
+  for (const account of lineAccounts) {
+    const isVatClass = account.startsWith(VAT_ACCOUNT_CLASS_PREFIX)
+    if (DECLARATION_ACCOUNT_SET.has(account)) {
+      hasDeclarationAccount = true
+      if (isVatClass) hasDeclarationVatAccount = true
+    }
+    if (VAT_SETTLEMENT_NET_ACCOUNTS.includes(account)) hasNetAccount = true
+    const isTaxAccount = VAT_TAX_ACCOUNT_COUNTERPARTS.includes(account)
+    if (isTaxAccount) hasTaxAccount = true
+    if (!isVatClass && !isTaxAccount && !VAT_SHAPE_ROUNDING_ACCOUNTS.includes(account)) {
+      pure = false
+    }
+  }
+
+  if (hasDeclarationAccount && hasNetAccount) return 'net_account_shape'
+  if (hasDeclarationVatAccount && hasTaxAccount && !hasNetAccount && pure) {
+    return 'tax_account_shape'
+  }
+  return null
+}
+
 /** A momsredovisning entry detected by shape rather than source_type. */
 export interface VatSettlementShapedEntry {
   id: string
@@ -336,9 +427,10 @@ export interface VatSettlementShapedEntry {
 export interface VatAccountTotals {
   totals: Map<string, { debit: number; credit: number }>
   /**
-   * Untagged momsredovisning entries found in the period (manual vouchers,
-   * SIE-imported settlements, stornos of a settlement). Already excluded
-   * from `totals`; surfaced so the settlement proposal can warn and gate.
+   * Untagged momsredovisning entries found in the period, by either shape
+   * (manual vouchers, SIE-imported settlements, stornos of a settlement, VAT
+   * moved straight against the skattekonto). Already excluded from `totals`;
+   * surfaced so the settlement proposal can warn and gate.
    */
   settlementShapedEntries: VatSettlementShapedEntry[]
   /**
@@ -368,19 +460,34 @@ interface VatTotalsRpcPayload {
  * declaration, not VAT-bearing business activity; including them would zero
  * out the rutor the moment the settlement is booked, turning the report, its
  * exports, and a later Skatteverket submission into an empty declaration
- * (#984). Two detection paths:
+ * (#984). Intent is not recorded on manual and imported verifikat, so beyond
+ * the tag it is inferred from shape. Three detection paths, all in the SQL:
  *
  *   - tagged: source_type 'vat_settlement' (the app's own settlement flow),
  *     filtered in the query;
- *   - shaped: an entry with at least one line on a declaration account
- *     (ACCOUNT_RUTA) and at least one on 2650/1650. This catches settlements
- *     booked before the tagged flow existed, manual vouchers, SIE-imported
- *     settlements, and storno reversals of a settlement (source_type
- *     'storno', which would otherwise re-inflate the rutor after annullera).
+ *   - net-account shape: an entry with at least one line on a declaration
+ *     account (ACCOUNT_RUTA) and at least one on 2650/1650. This catches
+ *     settlements booked before the tagged flow existed, manual vouchers,
+ *     SIE-imported settlements, and storno reversals of a settlement
+ *     (source_type 'storno', which would otherwise re-inflate the rutor after
+ *     annullera). Deliberately broad: every arithmetic narrowing tried against
+ *     production broke real settlements (#2805), so it stays as it is;
+ *   - tax-account shape (#2805): an entry with a 26xx declaration account and
+ *     a skattekonto line (VAT_TAX_ACCOUNT_COUNTERPARTS), no 2650/1650 line,
+ *     and NOTHING else but 26xx and 3740. VAT settled, refunded or reassessed
+ *     straight against 1630 is a movement between a VAT account and the
+ *     skattekonto, not a sale or a purchase. Purity is what keeps business
+ *     verifikat in: 1630 D / 3980 K (a bidrag) and 5410 D / 2641 D / 1630 K
+ *     still count.
  *
- * Opening-balance entries are exempt from the shape rule: 26xx balances
+ * Opening-balance entries are exempt from both shape rules: 26xx balances
  * carried in by a migrating company are unsettled VAT that belongs in the
  * next declaration, even when the same entry carries a 2650/1650 balance.
+ *
+ * The shapes cannot tell a settlement from a business verifikat that happens
+ * to touch 2650 (a supplier invoice with input VAT booked against 2650, say).
+ * No rule separates that tail; it needs an explicit per-entry override.
+ * detectMomsredovisning() above is the TypeScript mirror of the predicate.
  */
 export async function fetchVatAccountTotals(
   supabase: SupabaseClient,
@@ -397,7 +504,8 @@ export async function fetchVatAccountTotals(
   //
   // The company's own ruta 05 accounts join p_accounts (they must be summed)
   // but deliberately NOT p_ruta_accounts. That second list is the settlement
-  // SHAPE detector: an entry with a line on it plus a line on 2650/1650 is
+  // SHAPE detector: an entry with a line on it plus a line on 2650/1650 (or,
+  // for its 26xx members, a pure movement against the skattekonto) is
   // classified a momsredovisning and dropped from the totals entirely. A plain
   // sale booked 1930 / 3013 / 2650 (a company clearing moms straight off the
   // revenue voucher) would then vanish from its own declaration. The fixed

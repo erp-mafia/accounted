@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
@@ -9,6 +9,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { useFetch } from '@/lib/hooks/use-fetch'
 import { useFormat } from '@/lib/hooks/use-format'
 import type { AiClient } from '@/lib/onboarding/ai-clients'
+import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { AI_TASK_HREF, AI_TASK_LABEL_KEY, listAiTasks } from '@/lib/worklist/ai-task'
 import type { WorklistCounts } from '@/lib/worklist/types'
 import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
@@ -17,8 +18,17 @@ import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import type { BooksCtx } from '../context'
 
-/** How often the Done step asks whether an AI client has signed in, while it is showing. */
-export const AI_POLL_MS = 4000
+/** Null when the status is unavailable: the chips keep what they last showed. */
+async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
+  try {
+    const res = await fetch('/api/onboarding/ai-status', { signal })
+    if (!res.ok) return null
+    const json = (await res.json()) as { data: { connected: AiClient[] } }
+    return json.data.connected
+  } catch {
+    return null
+  }
+}
 
 /**
  * Klart: a few flecks let go, the card of what got connected, the three
@@ -37,15 +47,16 @@ export function DoneStep({ ctx, onLeave, leaving }: {
   const { company } = useCompany()
   const { appName } = useBranding()
   const { formatDateLong } = useFormat()
-  const { findings, state, loadFindings } = ctx
+  const { findings, state } = ctx
   const hasAi = useCapability(CAPABILITY.ai)
   const [preferredClient, setPreferredClient] = useState<AiClient>()
+  const [polledConnected, setPolledConnected] = useState<AiClient[] | null>(null)
   const [open, setOpen] = useState(false)
   const { data: worklist, loading, error, refetch } = useFetch<{ data: WorklistCounts }, WorklistCounts>(
     '/api/worklist/counts',
     { select: (body) => body.data },
   )
-  const connected = findings?.ai.connected ?? []
+  const connected = polledConnected ?? findings?.ai.connected ?? []
   const connectionKey = connected.join(',')
   const tasks = worklist && !error ? listAiTasks(worklist.counts, { hasAi }) : []
 
@@ -59,21 +70,29 @@ export function DoneStep({ ctx, onLeave, leaving }: {
     return () => window.removeEventListener('focus', refetch)
   }, [refetch])
 
-  // The OAuth sign-in happens in another tab. Poll the findings while this
-  // step is on screen so the client's chip turns green the moment the token
-  // route has minted its key; stop once all three are connected.
-  const allConnected = (findings?.ai.connected.length ?? 0) >= 3
+  // The OAuth sign-in happens in another tab, so the chip turns green by
+  // asking the status route (one api_keys read, never the findings): in a
+  // bounded window after an Anslut click, and once when the user comes back.
+  const pollerRef = useRef<AiStatusPoller | null>(null)
   useEffect(() => {
-    const refresh = () => {
-      if (document.visibilityState !== 'hidden') void loadFindings()
-    }
-    window.addEventListener('focus', refresh)
-    const id = allConnected ? null : window.setInterval(refresh, AI_POLL_MS)
+    const poller = createAiStatusPoller({
+      fetchStatus: fetchAiStatus,
+      onStatus: setPolledConnected,
+      isHidden: () => document.visibilityState === 'hidden',
+    })
+    pollerRef.current = poller
+    const onFocus = () => poller.check()
+    window.addEventListener('focus', onFocus)
     return () => {
-      window.removeEventListener('focus', refresh)
-      if (id !== null) window.clearInterval(id)
+      window.removeEventListener('focus', onFocus)
+      poller.stop()
+      pollerRef.current = null
     }
-  }, [allConnected, loadFindings])
+  }, [])
+  const onConnect = (client: AiClient) => {
+    setPreferredClient(client)
+    pollerRef.current?.attempt(client)
+  }
   const b = findings?.books
   const rows: [string, string][] = [
     [
@@ -108,7 +127,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       <h2 className="agent-title">{t('ai_title')}</h2>
       <p className="agent-lead">{t('ai_lead')}</p>
-      <AgentChips connected={connected} onConnect={setPreferredClient} />
+      <AgentChips connected={connected} onConnect={onConnect} />
 
       {error ? (
         <p className="found-note" role="alert">

@@ -432,12 +432,18 @@ const MAPPING_RULE_FIELDS: Record<string, string> = {
 }
 
 /**
- * cash_accounts columns that are behandlingsregler. Only voucher_series: the
- * trigger (20260902124513) fires on that column alone, and the read model
- * must not resurrect balance/name churn from bank sync if a row slips through.
+ * cash_accounts columns that are behandlingsregler. Each has a column-scoped
+ * trigger (voucher_series 20260902124513, payee 20260904010000, enabled and
+ * is_primary 20260921070500), and the read model must not resurrect
+ * balance/name churn from bank sync if a row slips through.
  */
 const CASH_ACCOUNT_FIELDS: Record<string, string> = {
   voucher_series: 'Verifikationsserie',
+  // Migration 20260921070500. Both redirect an automatic account choice:
+  // enabled decides the bank leg of a transaction with no bank account of its
+  // own (resolveSettlementAccount), is_primary the skattekonto counter account.
+  enabled: 'Aktivt',
+  is_primary: 'Primärt bankkonto',
   // Payee fields (migration 20260904010000): what customer invoices print.
   bank_name: 'Bank',
   clearing_number: 'Clearingnummer',

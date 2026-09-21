@@ -47,6 +47,7 @@ export const PROCESSING_EVENT_TYPES = [
   'AttachmentsTruncated',
   'BankTransactionDuplicateDismissed',
   'BankTransactionStrandedRepaired',
+  'CashAccountTwinsMerged',
   'ChannelQuestionAnswered',
   'ChannelQuestionAsked',
   'ChannelQuestionExpired',

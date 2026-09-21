@@ -2538,6 +2538,10 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
   voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
   name: z.string().trim().min(1).max(100).nullable().optional(),
   invoice_payee: z.boolean().optional(),
+  // Accounts no bank connection holds only: a connection-held account's
+  // enabled state is owned by the AccountPickerDialog (enabled_uids), and
+  // setEnabled() refuses it (409), so the shape alone cannot say which.
+  enabled: z.boolean().optional(),
 }).strict().refine((body) => Object.keys(body).length > 0, {
   message: 'Inget att uppdatera',
 })
