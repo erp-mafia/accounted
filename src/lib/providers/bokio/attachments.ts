@@ -38,6 +38,16 @@ interface BokioJournalEntry {
   id: string;
   journalEntryNumber: string | null;
   date: string;
+  items?: { account: number | string; debit: number; credit: number }[];
+  reversingJournalEntryId?: string | null;
+  reversedByJournalEntryId?: string | null;
+}
+
+export interface BokioVoucherEvidence extends BokioVoucherRef {
+  id: string;
+  items: { account: string; debit: number; credit: number }[];
+  reversingJournalEntryId: string | null;
+  reversedByJournalEntryId: string | null;
 }
 
 /** A Bokio voucher reference parsed from its journalEntryNumber. */
@@ -62,12 +72,15 @@ export async function fetchBokioVoucherRef(
   accessToken: string,
   companyId: string,
   entryId: string,
-): Promise<BokioVoucherRef> {
+): Promise<BokioVoucherEvidence> {
   const entry = await client.get<BokioJournalEntry>(accessToken,
     `/companies/${encodeURIComponent(companyId)}${JOURNAL_ENTRIES_PATH}/${encodeURIComponent(entryId)}`);
   const ref = entry.id === entryId ? voucherRef(entry) : null;
   if (!ref || ref.number <= 0) throw new Error('Bokio journal entry did not supply a matching, readable voucher reference');
-  return ref;
+  return { ...ref, id: entry.id,
+    items: (entry.items ?? []).map(item => ({ ...item, account: String(item.account) })),
+    reversingJournalEntryId: entry.reversingJournalEntryId ?? null,
+    reversedByJournalEntryId: entry.reversedByJournalEntryId ?? null };
 }
 
 async function paginate<T>(

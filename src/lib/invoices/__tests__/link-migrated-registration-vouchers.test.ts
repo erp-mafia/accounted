@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -19,6 +19,9 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
  * periods, entry status, entry lines, supplier_invoices referencing the
  * entries, invoices referencing the entries, then one update per link.
  */
+
+vi.mock('../attach-settlement-voucher', () => ({ attachSupplierInvoiceSettlementVoucher: vi.fn() }))
+import { attachSupplierInvoiceSettlementVoucher } from '../attach-settlement-voucher'
 
 const COMPANY = 'company-1'
 const PERIOD_2025 = 'period-2025'
@@ -605,4 +608,40 @@ it('limits a durable batch to its source voucher numbers and preserves dry-run s
   expect(mock.calls.some(c => c.table === 'journal_entries' && c.method === 'in' && c.args[0] === 'source_voucher_number'
     && JSON.stringify(c.args[1]) === '[329]')).toBe(true)
   expect(mock.calls.filter(c => c.method === 'update' || c.method === 'insert')).toHaveLength(0)
+})
+
+
+describe('Bokio cash-purchase source references', () => {
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+    vi.mocked(attachSupplierInvoiceSettlementVoucher).mockReset()
+    vi.mocked(attachSupplierInvoiceSettlementVoucher).mockResolvedValue({ ok: true } as never)
+  })
+  function cashQueue() {
+    queue({ vouchers: [voucher({ id: 'cash' })], entries: [{ id: 'cash', status: 'posted' }],
+      lines: [line('cash', '4000', 800, 0), line('cash', '2641', 200, 0), line('cash', '1930', 0, 1000)],
+      supplierRefs: [], customerRefs: [] })
+  }
+  const cashInput = () => input({ invoiceId: 'paid', currencyCode: 'SEK',
+    sourceVoucher: { series: 'A', number: 329, date: '2025-03-14' },
+    settlement: { sourcePaid: true, userId: 'user' } })
+  it('attaches settlement evidence without writing the registration FK', async () => {
+    cashQueue()
+    expect((await run([cashInput()])).reports[0]).toMatchObject({ outcome: 'linked', linkType: 'settlement' })
+    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: false, journalEntryId: 'cash' }))
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+  it('uses the source entry date across a fiscal year boundary', async () => {
+    cashQueue()
+    expect((await run([{ ...cashInput(), invoiceDate: '2024-12-20' }], true)).linked).toBe(1)
+    expect(attachSupplierInvoiceSettlementVoucher).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ dryRun: true }))
+  })
+  it('reports an open source invoice and refuses a mismatched source date', async () => {
+    cashQueue()
+    expect((await run([{ ...cashInput(), settlement: { sourcePaid: false, userId: 'user' } }])).unresolved).toBe(1)
+    expect(attachSupplierInvoiceSettlementVoucher).not.toHaveBeenCalled()
+    mock = createQueuedMockSupabase(); cashQueue()
+    expect((await run([{ ...cashInput(), sourceVoucher: { series: 'A', number: 329, date: '2025-03-15' } }])).linked).toBe(0)
+    expect(attachSupplierInvoiceSettlementVoucher).not.toHaveBeenCalled()
+  })
 })

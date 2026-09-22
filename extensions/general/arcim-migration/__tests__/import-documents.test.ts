@@ -71,7 +71,7 @@ function rangeMockSupabase(byTable: Record<string, unknown[]>): SupabaseClient {
     }
     return node
   }
-  return { from: (table: string) => builder(table) } as unknown as SupabaseClient
+  return { from: (table: string) => builder(table), rpc: vi.fn().mockResolvedValue({ data: null, error: null }) } as unknown as SupabaseClient
 }
 
 function bytesOf(text: string): ArrayBuffer {
@@ -114,7 +114,7 @@ const FORTNOX_CONNECTION: FortnoxFileConnection = {
 }
 
 function wireBokio(
-  opts: { existingAttachments?: { sha256_hash: string; journal_entry_id: string | null }[] } = {},
+  opts: { existingAttachments?: { id: string; sha256_hash: string; journal_entry_id: string | null }[] } = {},
 ) {
   mockFetchUploads.mockResolvedValue([UPLOAD] as never)
   mockFetchVoucherIndex.mockResolvedValue(new Map([['bokio-je-1', VOUCHER_REF]]))
@@ -191,18 +191,22 @@ describe('importProviderDocuments', () => {
 
   it('skips a receipt already archived on the same verifikat (sha256 + journal entry idempotency)', async () => {
     const supabase = wireBokio({
-      existingAttachments: [{ sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1' }],
+      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-1' }],
     })
 
     const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
 
     expect(result).toMatchObject({ scanned: 1, linked: 0, skipped: 1 })
+    expect(supabase.rpc).toHaveBeenCalledWith('record_bokio_upload', {
+      p_company_id: COMPANY, p_consent_id: 'c1', p_upload_id: 'up-1', p_document_id: 'existing-doc',
+    })
+    expect(mockDownload).toHaveBeenCalledTimes(1)
     expect(mockUpload).not.toHaveBeenCalled()
   })
 
   it('still archives content already attached to a DIFFERENT verifikat (same contract, several vouchers)', async () => {
     const supabase = wireBokio({
-      existingAttachments: [{ sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-other' }],
+      existingAttachments: [{ id: 'existing-doc', sha256_hash: 'sha-PDFBYTES', journal_entry_id: 'je-other' }],
     })
 
     const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })

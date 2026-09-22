@@ -5,6 +5,8 @@ vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: vi.fn() 
 vi.mock('@/lib/auth/cron', () => ({ verifyCronSecret: vi.fn().mockReturnValue(null) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn(() => ({})) }))
 vi.mock('@/extensions/general/arcim-migration/lib/invoice-completion-worker', () => ({ runInvoiceCompletion: vi.fn() }))
+vi.mock('@/extensions/general/arcim-migration/lib/complete-bokio-supplier-invoices', () => ({ runBokioSupplierCompletion: vi.fn().mockResolvedValue([]) }))
+import { runBokioSupplierCompletion } from '@/extensions/general/arcim-migration/lib/complete-bokio-supplier-invoices'
 import { GET, maxDuration } from '../route'
 import { loadExtensions } from '@/lib/extensions/loader'
 import { extensionRegistry } from '@/lib/extensions/registry'
@@ -13,6 +15,7 @@ import { runInvoiceCompletion } from '@/extensions/general/arcim-migration/lib/i
 const request = () => new Request('http://localhost/api/extensions/arcim-migration/complete-invoice-lines/cron')
 beforeEach(() => {
   vi.resetAllMocks()
+  vi.mocked(runBokioSupplierCompletion).mockResolvedValue([])
   vi.mocked(verifyCronSecret).mockReturnValue(null)
   vi.mocked(extensionRegistry.get).mockReturnValue({ id: 'arcim-migration' } as never)
 })
@@ -37,7 +40,12 @@ describe('invoice completion cron', () => {
     const response = await GET(request())
     expect(maxDuration).toBe(300)
     expect(runInvoiceCompletion).toHaveBeenCalledWith(expect.anything(), start + 240_000)
-    expect(await response.json()).toEqual({ data: summary })
+    expect(await response.json()).toEqual({ data: summary, supplierCompletion: [] })
+  })
+  it('continues customer completion when the supplier queue fails', async () => {
+    vi.mocked(runBokioSupplierCompletion).mockRejectedValue(new Error('unavailable'))
+    expect((await GET(request())).status).toBe(200)
+    expect(runInvoiceCompletion).toHaveBeenCalled()
   })
   it('surfaces a discovery failure instead of returning an empty successful run', async () => {
     vi.mocked(runInvoiceCompletion).mockRejectedValue(new Error('database unavailable'))

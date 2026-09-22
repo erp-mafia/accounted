@@ -67,6 +67,7 @@ export const PROCESSING_EVENT_TYPES = [
   'PendingOperationApproved',
   'PendingOperationRejected',
   'RateLimitedDropped',
+  'SupplierInvoiceCompleted',
   'TransactionDocumentReplaced',
 ] as const
 

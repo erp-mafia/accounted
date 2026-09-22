@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../rate-limiter', () => ({ TokenBucketRateLimiter: class { async acquire() {} } }));
 import { fetchMigrationPage, fetchSalesInvoicesHydrated, fetchSupplierInvoicesHydrated, hydrateSalesInvoices, hydrateSupplierInvoices } from '../provider-data-fetcher';
-import { mapBokioToSalesInvoice } from '../bokio/mapper';
+import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '../bokio/mapper';
 import type { SupplierInvoiceDto } from '../dto';
 
 const COMPANY = 'source-company';
@@ -37,22 +37,31 @@ describe('Bokio invoice voucher hydration', () => {
     const requested = stubBokio();
     const { invoices, unhydratedIds } = await fetchInvoices('bokio', 'token', COMPANY);
 
-    expect(invoices[0].sourceVoucher).toEqual({ series: 'V', number: 342 });
+    expect(invoices[0].sourceVoucher).toMatchObject({ series: 'V', number: 342 });
     expect(invoices[0]._raw).toEqual(INVOICE);
     expect(unhydratedIds.size).toBe(0);
     expect(requested.filter(path => path.includes('/journal-entries'))).toEqual([`${BASE}/journal-entries/journal-1`]);
     expect(requested.some(path => path.endsWith('/invoice-1'))).toBe(false);
   });
 
-  it('resolves a persisted worker page after supplier detail hydration without dropping the reference', async () => {
+  it('uses the voucher without redundantly hydrating a supplier detail payload', async () => {
     const requested = stubBokio();
     const page = await fetchMigrationPage('bokio', 'token', COMPANY, 'supplierInvoices', 1);
     const listed = page.items[0] as SupplierInvoiceDto;
     listed.taxTotal = undefined;
     const { invoices } = await hydrateSupplierInvoices('bokio', 'token', COMPANY, [listed]);
 
-    expect(requested).toContain(`${BASE}/supplier-invoices/invoice-1`);
-    expect(invoices[0].sourceVoucher).toEqual({ series: 'V', number: 342 });
+    expect(requested).not.toContain(`${BASE}/supplier-invoices/invoice-1`);
+    expect(invoices[0].sourceVoucher).toEqual({ series: 'V', number: 342, date: '2025-06-01' });
+  });
+
+  it('retains an explicit unresolved marker after supplier voucher hydration fails', async () => {
+    stubBokio(() => new Response('', { status: 403 }));
+    const dto = mapBokioToSupplierInvoice({ ...INVOICE, totalTax: undefined,
+      lineItems: [{ quantity: 1, unitPrice: 1000, taxRate: null }] });
+    const result = await hydrateSupplierInvoices('bokio', 'token', COMPANY, [dto]);
+    expect(result.unhydratedIds.has(dto.id)).toBe(true);
+    expect(result.invoices[0].supplierEvidence).toMatchObject({ vatSource: 'unresolved', itemsComplete: false });
   });
 
   it('also resolves credit notes and preserves their original-invoice reference', async () => {

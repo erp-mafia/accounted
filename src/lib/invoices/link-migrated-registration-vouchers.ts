@@ -1,50 +1,13 @@
 /**
- * Link migrated invoices to the REGISTRATION voucher that booked them in the
- * source system.
+ * Corroborate provider-named vouchers against the imported journal. Registration
+ * links require the matching AP/AR amount. A dated Bokio cash-purchase reference
+ * on a paid SEK supplier invoice delegates settlement to the existing guarded
+ * attachment RPC and keeps registration_journal_entry_id empty.
  *
- * A provider migration (Visma, Fortnox via the arcim-migration extension)
- * imports the general ledger through SIE and the invoice registers through
- * the provider API. Nothing connected the two: every migrated invoice landed
- * with `registration_journal_entry_id` / `journal_entry_id` NULL although its
- * booking verifikat exists in the GL, so the UI reads "Inget verifikat", the
- * worklists count the invoice as unbooked, and an accrual company risks
- * booking it a second time on payment.
- *
- * The provider names the booking voucher on the invoice ("A329"); the SIE
- * import preserved that source ref on the entry it created. This module joins
- * the two and writes the link, and nothing else:
- *
- *  - it NEVER inserts, updates or deletes a journal entry or a line; the only
- *    writes are the two invoice-side foreign keys, and only from NULL;
- *  - a link is written only when the ref resolves to exactly ONE posted
- *    verifikat in the invoice's fiscal year, that verifikat is dated within a
- *    short corridor of the invoice date, its AP (244x) or AR (151x) net
- *    corroborates the invoice's SEK total to the öre, and no other invoice
- *    already points at it;
- *  - everything else stays NULL and is reported with its reason, so a
- *    kontantmetod invoice (the named voucher has no 244x/151x line), a split
- *    voucher, a credit note sharing its number or a duplicate ref is left for
- *    a human.
- *
- * The date corridor exists because source systems restart voucher numbering
- * every fiscal year and the invoice date picks the year on our side: a
- * December invoice that the source booked in January carries next year's
- * number, which in the invoice-date year belongs to an unrelated voucher from
- * the previous January. Requiring the verifikat to be dated near the invoice
- * rejects that voucher even when a recurring amount happens to match; the
- * cut-off invoice itself is reported `unresolved` rather than linked across
- * the year boundary (a wrong link is räkenskapsinformation, a missing one is
- * a worklist item).
- *
- * Foreign-currency invoices are corroborated on `total_sek`, which the
- * migration derives from OUR rate index, while the source voucher was booked
- * at the source system's rate. The two rarely agree to the öre, so such
- * invoices normally land in `amountMismatch` with a reason that says so; the
- * bucket is honest (the SEK amounts do differ), not a bookkeeping fault.
- *
- * Idempotent: re-running over already-linked invoices reports `alreadyLinked`
- * and writes nothing. Payment vouchers are out of scope here; they are linked
- * by lib/invoices/bulk-reconcile-supplier-vouchers.ts.
+ * An exact source entry date selects its fiscal year, including cross-year
+ * booking. Providers without one retain the conservative invoice-date corridor.
+ * Duplicate, reversed, open-source cash and amount-mismatched evidence is
+ * reported for review. No journal entry or line is written here.
  */
 
 import { chunk } from '@/lib/utils'
@@ -67,6 +30,7 @@ import {
   type VoucherRow,
 } from '@/lib/documents/voucher-ref-resolver'
 import type { SourceVoucherRefDto } from '@/lib/providers/dto'
+import { attachSupplierInvoiceSettlementVoucher } from './attach-settlement-voucher'
 
 const log = createLogger('link-migrated-registration-vouchers')
 
@@ -92,6 +56,8 @@ export interface MigratedInvoiceLinkInput {
   currencyCode?: string | null
   /** Display only, carried into the report. */
   invoiceNumber?: string | null
+  /** Only supplied for a corroborated source cash-purchase voucher. */
+  settlement?: { sourcePaid: boolean; userId: string }
 }
 
 export type RegistrationLinkOutcome =
@@ -110,6 +76,7 @@ export interface RegistrationLinkReport {
   outcome: RegistrationLinkOutcome
   /** Set for `linked` and `alreadyLinked`, when the entry is known. */
   journalEntryId?: string
+  linkType?: 'registration' | 'settlement'
   /** Machine-readable one-liner for logs and the migration report. */
   reason: string
 }
@@ -202,6 +169,11 @@ type Resolution =
  * check alone does not reliably tell them apart.
  */
 function checkEntryDate(row: VoucherRow, input: MigratedInvoiceLinkInput): Resolution {
+  if (input.sourceVoucher?.date) {
+    return row.entry_date === input.sourceVoucher.date
+      ? { outcome: 'resolved', entryId: row.id }
+      : { outcome: 'unresolved', reason: 'source and imported voucher dates differ' }
+  }
   const days = daysBetween(input.invoiceDate, row.entry_date)
   if (days === null) {
     return { outcome: 'unresolved', reason: `verifikat date ${row.entry_date} or invoice date ${input.invoiceDate} is unreadable` }
@@ -235,7 +207,8 @@ function resolveInput(
     return { outcome: 'noRef', reason: 'provider reported no booking voucher' }
   }
 
-  const periodId = input.invoiceDate ? periodIdForDate(periods, input.invoiceDate) : null
+  const referenceDate = ref.date ?? input.invoiceDate
+  const periodId = referenceDate ? periodIdForDate(periods, referenceDate) : null
   if (!periodId) {
     return { outcome: 'unresolved', reason: `no fiscal period covers invoice date ${input.invoiceDate || '(none)'}` }
   }
@@ -249,7 +222,7 @@ function resolveInput(
     return { outcome: 'ambiguous', reason: `source number ${ref.number} matches ${hits.length} series in that fiscal year` }
   }
 
-  const entryId = resolveDatedRef(index, periods, { series: ref.series, number: ref.number, date: input.invoiceDate })
+  const entryId = resolveDatedRef(index, periods, { series: ref.series, number: ref.number, date: referenceDate })
   if (entryId) {
     // resolveDatedRef hands back the id; the row (with its entry_date) sits
     // in the period-agnostic index under the same source ref.
@@ -269,6 +242,7 @@ function resolveInput(
 interface EntryRow {
   id: string
   status: string
+  reversed_by_id?: string | null
 }
 
 interface LineRow {
@@ -343,7 +317,7 @@ export async function linkMigratedRegistrationVouchers(
     const rows = await fetchAllRows<EntryRow>(({ from, to }) =>
       supabase
         .from('journal_entries')
-        .select('id, status')
+        .select('id, status, reversed_by_id')
         .eq('company_id', companyId)
         .in('id', ids)
         .order('id', { ascending: true })
@@ -359,10 +333,14 @@ export async function linkMigratedRegistrationVouchers(
   )
   const apNetCreditByEntry = new Map<string, number>()
   const arNetDebitByEntry = new Map<string, number>()
+  const bankNetCreditByEntry = new Map<string, number>()
   for (const line of lines) {
     const account = String(line.account_number ?? '')
     const debit = Number(line.debit_amount ?? 0)
     const credit = Number(line.credit_amount ?? 0)
+    if (account.startsWith('19')) {
+      bankNetCreditByEntry.set(line.journal_entry_id, roundOre((bankNetCreditByEntry.get(line.journal_entry_id) ?? 0) + credit - debit))
+    }
     if (account.startsWith(AP_ACCOUNT_PREFIX)) {
       apNetCreditByEntry.set(line.journal_entry_id, roundOre((apNetCreditByEntry.get(line.journal_entry_id) ?? 0) + credit - debit))
     }
@@ -418,7 +396,7 @@ export async function linkMigratedRegistrationVouchers(
       report(input, 'unresolved', 'verifikat not found in this company')
       continue
     }
-    if (entry.status !== 'posted') {
+    if (entry.status !== 'posted' || entry.reversed_by_id) {
       report(input, 'unresolved', `verifikat is ${entry.status}, not posted`)
       continue
     }
@@ -443,6 +421,28 @@ export async function linkMigratedRegistrationVouchers(
       : arNetDebitByEntry.get(entryId)
     const side = input.kind === 'supplier' ? 'net credit on 244x' : 'net debit on 151x'
     if (booked === undefined) {
+      if (input.kind === 'supplier' && input.settlement && input.sourceVoucher?.date) {
+        const cash = bankNetCreditByEntry.get(entryId)
+        if (!input.settlement.sourcePaid) {
+          report(input, 'unresolved', 'source invoice is open but names a cash-purchase voucher')
+          continue
+        }
+        if (input.currencyCode !== 'SEK' || expected <= 0 || cash === undefined || Math.abs(cash - expected) > ORE_TOLERANCE) {
+          report(input, 'amountMismatch', 'cash-purchase voucher does not corroborate the SEK invoice total')
+          continue
+        }
+        const attached = await attachSupplierInvoiceSettlementVoucher(supabase, {
+          companyId, userId: input.settlement.userId, supplierInvoiceId: input.invoiceId,
+          journalEntryId: entryId, dryRun, notes: 'Bokio source invoice reference',
+        })
+        if (!attached.ok) {
+          report(input, attached.code === 'ATTACH_SI_SETTLEMENT_ALREADY_LINKED' ? 'alreadyLinked' : 'unresolved', attached.code, entryId)
+        } else {
+          report(input, 'linked', dryRun ? 'would attach settlement evidence (dry run)' : 'settlement evidence attached', entryId)
+          reports[reports.length - 1].linkType = 'settlement'
+        }
+        continue
+      }
       // No AP/AR line at all: the provider named a voucher, but it is not a
       // registration voucher for this kind of invoice. A kontantmetod company
       // books on payment (Dr cost / Cr bank) and may still name that voucher.

@@ -1173,7 +1173,9 @@ export function mapSupplierInvoice(
     notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
   }
 
-  const items = amounts.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
+  const items = dto.supplierEvidence && !dto.supplierEvidence.itemsComplete
+    ? []
+    : amounts.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
 
   return {
     invoice,

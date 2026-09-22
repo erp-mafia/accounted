@@ -298,6 +298,7 @@ export type ProcessingHistoryAggregateType =
   | 'Migration'
   | 'System'
   | 'Invoice'
+  | 'SupplierInvoice'
 
 // Bank connection status
 // 'pending_selection' = PSD2 consent granted, awaiting user to pick which

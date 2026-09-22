@@ -20,6 +20,7 @@ import { BokioClient, BokioApiError } from './bokio/client';
 import { BOKIO_RESOURCE_CONFIGS } from './bokio/config';
 import { isBokioCreditNotePayload } from './bokio/mapper';
 import { fetchBokioVoucherRef } from './bokio/attachments';
+import { enrichBokioSupplierInvoice } from './bokio/supplier-evidence';
 import { BjornLundenClient } from './bjornlunden/client';
 import { BL_RESOURCE_CONFIGS } from './bjornlunden/config';
 import { WintClient } from './wint/client';
@@ -877,18 +878,28 @@ interface InvoiceEnrichment<T> {
  */
 function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   provider: ProviderName, accessToken: string, companyId: string | undefined,
+  supplier = false,
 ): InvoiceEnrichment<T> | undefined {
   if (provider !== 'bokio' || !companyId) return undefined;
   const entryId = (dto: T): string | undefined => {
     const ref = dto._raw?.['journalEntryRef'] as { id?: unknown } | null | undefined;
     return typeof ref?.id === 'string' && ref.id ? ref.id : undefined;
   };
+  const entries = new Map<string, ReturnType<typeof fetchBokioVoucherRef>>();
   return {
-    needed: dto => !dto.sourceVoucher && !!entryId(dto),
+    needed: dto => supplier ? !(dto as SupplierInvoiceDto).supplierEvidence?.sourceEntryId && !!entryId(dto) : !dto.sourceVoucher && !!entryId(dto),
     apply: async dto => {
       const id = entryId(dto);
-      if (!id || dto.sourceVoucher) return dto;
-      const { series, number } = await fetchBokioVoucherRef(bokioClient, accessToken, companyId, id);
+      if (!id) return supplier ? enrichBokioSupplierInvoice(dto as SupplierInvoiceDto) as T : dto;
+      if (!supplier && dto.sourceVoucher) return dto;
+      let pending = entries.get(id);
+      if (!pending) {
+        pending = fetchBokioVoucherRef(bokioClient, accessToken, companyId, id);
+        entries.set(id, pending);
+      }
+      const entry = await pending;
+      if (supplier) return enrichBokioSupplierInvoice(dto as SupplierInvoiceDto, entry) as T;
+      const { series, number } = entry;
       return { ...dto, sourceVoucher: { series, number } };
     },
   };
@@ -1104,13 +1115,13 @@ export async function hydrateSupplierInvoices(
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
   const { items, report, unhydratedIds } = await hydrateInvoices<SupplierInvoiceDto>(
     invoices,
-    supplierInvoiceNeedsDetail,
+    provider === 'bokio' ? () => false : supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
     resourceMapper(provider, ResourceType.SupplierInvoices),
     `${provider} supplier-invoice`,
     budgetMs,
-    bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
+    bokioVoucherEnrichment(provider, accessToken, providerCompanyId, true),
   );
 
-  return { invoices: items, hydration: report, unhydratedIds };
+  return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds };
 }

@@ -14,6 +14,7 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxRateIndex } from './entity-mapper'
+import { bokioSupplierSource } from './bokio-supplier-source'
 import { invoiceWithinScope } from './invoice-scope'
 
 const log = createLogger('provider-migration-worker')
@@ -132,10 +133,14 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
     && await hasPreNormalisationCreditNote(supabase, job, mapped.invoice, deadline)) {
     return { id: c.id, skip: 'creditNoteInOldShape' }
   }
-  if (!mapped.items.length) return { id: c.id, error: 'MIGRATION_SOURCE_LINES_MISSING' }
+  // Bokio preview rows may be absent or lack a defensible VAT allocation.
+  // Keep the invoice and let completion revisit it without fabricating rows.
+  if (!mapped.items.length && !(c.resource === 'supplierInvoices' && (invoice as SupplierInvoiceDto).supplierEvidence)) {
+    return { id: c.id, error: 'MIGRATION_SOURCE_LINES_MISSING' }
+  }
   // Use the same tolerance as the existing completion pass. Store no row set
   // that contradicts the header established by that exact detail payload.
-  if (!mapped.vatUnresolved) {
+  if (!mapped.vatUnresolved && mapped.items.length) {
     const net = mapped.items.reduce((n, item) => n + Number(item.line_total ?? 0), 0)
     const vat = mapped.items.reduce((n, item) => n + Number(item.vat_amount ?? 0), 0)
     if (Math.abs(net - Number(mapped.invoice.subtotal)) > 1 || Math.abs(vat - Number(mapped.invoice.vat_amount)) > 1) {
@@ -145,7 +150,10 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   return {
     id: c.id, row: mapped.invoice, items: mapped.items,
     party_source_id: invoicePartySourceId(job.provider, c.resource, invoice), party: mappedParty(job, c.resource, invoice),
-    link: { kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
+    link: { ...(provider === 'bokio' && c.resource === 'supplierInvoices'
+      ? { bokioSource: bokioSupplierSource(invoice as SupplierInvoiceDto, placeholder) } : {}), kind: c.resource === 'salesInvoices' ? 'customer' : 'supplier', sourceVoucher: invoice.sourceVoucher ?? null,
+      ...((invoice as SupplierInvoiceDto).supplierEvidence?.voucherKind === 'cash_purchase'
+        ? { settlement: { sourcePaid: invoice.paymentStatus.paid, userId: job.user_id } } : {}),
       invoiceDate: invoice.issueDate, currencyCode: invoice.currencyCode,
       // What the registration voucher must show: a supplier credit note is
       // stored in magnitudes but DEBITS 2440 (supplierPayableEffectSek).

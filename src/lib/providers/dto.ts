@@ -117,6 +117,8 @@ export interface PaginatedResponse<T> {
 export interface SourceVoucherRefDto {
   series: string | null;
   number: number;
+  /** Source entry date, when known. Voucher numbers restart each fiscal year. */
+  date?: string;
 }
 
 /**
@@ -324,9 +326,22 @@ export interface SupplierInvoiceDto {
   ocrNumber?: string;
   financialDimensions?: FinancialDimensionRef[];
   sourceVoucher?: SourceVoucherRefDto;
+  supplierEvidence?: SupplierInvoiceEvidenceDto;
   createdAt?: string;
   updatedAt?: string;
   _raw?: Record<string, unknown>;
+}
+
+/** Observations are separate from invoice facts. Unknown VAT is never zero VAT. */
+export interface SupplierInvoiceEvidenceDto {
+  version: 1;
+  sourceEntryId?: string;
+  entryDate?: string;
+  voucherKind: 'registration' | 'cash_purchase' | 'settlement' | 'unsupported';
+  vatSource: 'invoice_lines' | 'voucher' | 'unresolved';
+  vatReason: string;
+  bookedVat?: number;
+  itemsComplete: boolean;
 }
 
 // ============================================

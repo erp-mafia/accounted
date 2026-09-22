@@ -97,6 +97,7 @@ const RETAINED = new Set([
   'sie_imports.execution_actor_id',
   'migration_jobs.user_id', // Company import provenance and recovery.
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
+  'bokio_supplier_completion_work.user_id', // Company supplier recovery and attribution.
   'migration_source_records.user_id', // Stable provider identities.
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.

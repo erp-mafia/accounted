@@ -1252,6 +1252,8 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  bokio_supplier_completion_work: 'opt-in provider recovery scheduling and leases; no accounting content',
+  bokio_supplier_completion_entries: 'retry receipts; completed invoices, source identities and processing history are exported separately',
   invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',
   invoice_completion_entries: 're-fetchable matching evidence and retry receipts; completed invoices and processing history are exported separately',
   sie_period_read_leases: 'short-lived coordination leases; no accounting content',

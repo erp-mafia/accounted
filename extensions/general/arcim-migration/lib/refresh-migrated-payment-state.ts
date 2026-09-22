@@ -32,6 +32,7 @@
  * re-fetching a schema that adds nothing here.
  */
 
+import { queryInExecutionBudget } from '@/lib/http/execution-budget'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import type { ProviderName } from '@/lib/providers/types'
@@ -40,6 +41,7 @@ import { fetchSupplierInvoicesDirect } from '@/lib/providers/provider-data-fetch
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSupplierSettlement } from './entity-mapper'
 import { joinKey, uniqueByKey } from './relink-registration-vouchers'
+import type { BokioSupplierSnapshot } from './complete-bokio-supplier-invoices'
 
 const log = createLogger('extensions/arcim-migration/refresh-payment-state')
 
@@ -57,6 +59,8 @@ export interface RefreshMigratedSupplierPaymentStateOptions {
   dryRun?: boolean
   /** Payment vouchers already linked (or planned in a dry run) by reconciliation. */
   excludeInvoiceIds?: string[]
+  snapshot?: BokioSupplierSnapshot
+  eligibleInvoiceIds?: ReadonlySet<string>
 }
 
 export interface RefreshMigratedSupplierPaymentStateResult {
@@ -85,17 +89,17 @@ export async function refreshMigratedSupplierPaymentState(
 ): Promise<RefreshMigratedSupplierPaymentStateResult> {
   const { supabase, companyId, consentId, dryRun = false } = options
 
-  const resolved = await resolveConsent(companyId, consentId)
+  const resolved = options.snapshot?.connection ?? await resolveConsent(companyId, consentId)
   const provider = resolved.consent.provider as ProviderName
 
-  const providerInvoices = await fetchSupplierInvoicesDirect(
+  const providerInvoices = options.snapshot?.invoices ?? await fetchSupplierInvoicesDirect(
     provider,
     resolved.accessToken,
     resolved.providerCompanyId,
   )
 
   const openRows = await fetchAllRows<OpenSupplierRow>(({ from, to }) =>
-    supabase
+    queryInExecutionBudget(supabase
       .from('supplier_invoices')
       .select('id, supplier_invoice_number, invoice_date, total')
       .eq('company_id', companyId)
@@ -105,11 +109,12 @@ export async function refreshMigratedSupplierPaymentState(
       .eq('is_credit_note', false)
       .in('status', [...OPEN_STATUSES])
       .order('id', { ascending: true })
-      .range(from, to),
+      .range(from, to)),
   )
 
   const excluded = new Set(options.excludeInvoiceIds)
-  const openByKey = uniqueByKey(openRows.filter(row => !excluded.has(row.id)),
+  const openByKey = uniqueByKey(openRows.filter(row => !excluded.has(row.id)
+    && (!options.eligibleInvoiceIds || options.eligibleInvoiceIds.has(row.id))),
     (row) => joinKey(row.supplier_invoice_number, row.invoice_date))
   const providerByKey = uniqueByKey(providerInvoices, (dto) => joinKey(dto.invoiceNumber, dto.issueDate))
 
@@ -138,7 +143,7 @@ export async function refreshMigratedSupplierPaymentState(
     }
 
     if (!dryRun) {
-      const { data, error } = await supabase
+      const { data, error } = await queryInExecutionBudget(supabase
         .from('supplier_invoices')
         .update({
           status: settlement.status,
@@ -159,7 +164,7 @@ export async function refreshMigratedSupplierPaymentState(
         .eq('supplier_invoice_number', row.supplier_invoice_number)
         .eq('invoice_date', row.invoice_date)
         .select('id')
-        .maybeSingle()
+        .maybeSingle())
 
       if (error) {
         log.error('supplier invoice payment-state update failed', new Error(error.message), {

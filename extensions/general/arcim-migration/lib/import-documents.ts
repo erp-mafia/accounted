@@ -317,10 +317,10 @@ export async function importProviderDocuments(
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
     // and PostgREST paging without a deterministic order can skip or repeat
     // rows once a table exceeds one page, which would defeat the hash dedup.
-    fetchAllRows<{ sha256_hash: string; journal_entry_id: string | null }>(({ from, to }) =>
+    fetchAllRows<{ id: string; sha256_hash: string; journal_entry_id: string | null }>(({ from, to }) =>
       supabase
         .from('document_attachments')
-        .select('sha256_hash, journal_entry_id')
+        .select('id, sha256_hash, journal_entry_id')
         .eq('company_id', companyId)
         .order('id', { ascending: true })
         .range(from, to),
@@ -343,11 +343,18 @@ export async function importProviderDocuments(
   // on hash + journal entry, NOT hash alone: the same content may back
   // several verifikat and each deserves its own attachment.
   const attachmentKey = (sha256: string, journalEntryId: string) => `${sha256}|${journalEntryId}`
-  const seenAttachments = new Set(
+  const seenAttachments = new Map(
     existingAttachments
       .filter((r) => r.journal_entry_id != null)
-      .map((r) => attachmentKey(r.sha256_hash, r.journal_entry_id as string)),
+      .map((r) => [attachmentKey(r.sha256_hash, r.journal_entry_id as string), r.id]),
   )
+  const recordUpload = async (uploadId: string, documentId: string) => {
+    if (provider !== 'bokio') return
+    const { error } = await supabase.rpc('record_bokio_upload', {
+      p_company_id: companyId, p_consent_id: consentId, p_upload_id: uploadId, p_document_id: documentId,
+    })
+    if (error) throw new Error('BOKIO_UPLOAD_MAPPING_FAILED')
+  }
 
   const recordUnmatched = (uploadId: string, voucher: string, date: string) => {
     result.unmatched++
@@ -395,6 +402,7 @@ export async function importProviderDocuments(
 
       const sha256 = await computeSHA256(bytes)
       if (seenAttachments.has(attachmentKey(sha256, journalEntryId))) {
+        await recordUpload(attachment.id, seenAttachments.get(attachmentKey(sha256, journalEntryId))!)
         result.skipped++
         return
       }
@@ -415,7 +423,7 @@ export async function importProviderDocuments(
           ? declaredType
           : undefined)
 
-      await uploadDocument(
+      const document = await uploadDocument(
         supabase,
         userId,
         companyId,
@@ -433,7 +441,8 @@ export async function importProviderDocuments(
         },
       )
 
-      seenAttachments.add(attachmentKey(sha256, journalEntryId))
+      seenAttachments.set(attachmentKey(sha256, journalEntryId), document.id)
+      await recordUpload(attachment.id, document.id)
       result.linked++
     }
 

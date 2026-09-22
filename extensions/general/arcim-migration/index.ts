@@ -44,6 +44,7 @@ import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
 import { refreshMigratedSupplierPaymentState } from './lib/refresh-migrated-payment-state'
+import { completeBokioSupplierInvoices } from './lib/complete-bokio-supplier-invoices'
 import type { ArcimProvider } from './types'
 import { ARCIM_PROVIDERS } from './types'
 import { parseSIEFile, validateSIEFile } from '@/lib/import/sie-parser'
@@ -1765,9 +1766,15 @@ export const arcimMigrationExtension: Extension = {
 
         let dryRun = false
         let consentId: string | null = null
+        let completeBokio = false
         try {
-          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown }
+          const body = (await request.json()) as { dryRun?: boolean; consentId?: unknown; completeBokioSupplierInvoices?: unknown }
+          if (body.completeBokioSupplierInvoices !== undefined && typeof body.completeBokioSupplierInvoices !== 'boolean') {
+            return NextResponse.json({ error: 'completeBokioSupplierInvoices måste vara ett booleskt värde' }, { status: 400 })
+          }
+          completeBokio = body.completeBokioSupplierInvoices === true
           dryRun = body?.dryRun === true
+          if (completeBokio) dryRun = body.dryRun !== false
           consentId = typeof body?.consentId === 'string' && body.consentId ? body.consentId : null
         } catch {
           // empty body is fine: default to a real run
@@ -1777,9 +1784,23 @@ export const arcimMigrationExtension: Extension = {
           // A foreign consent throws the same ConsentNotFoundError as a
           // nonexistent one (no cross-tenant existence oracle).
           try {
-            await getConsent(consentId, companyId)
+            const consent = await getConsent(consentId, companyId)
+            if (completeBokio && consent.provider !== 'bokio') {
+              return NextResponse.json({ error: 'Välj en Bokio-anslutning för att komplettera leverantörsfakturor.' }, { status: 400 })
+            }
           } catch (error) {
             log.error('arcim reconcile: consent lookup failed', error as Error)
+            return migrateFailureResponse(error, consentId)
+          }
+        }
+
+        if (completeBokio) {
+          if (!consentId) return NextResponse.json({ error: 'Anslutningens consentId krävs.' }, { status: 400 })
+          try {
+            const supplierCompletion = await completeBokioSupplierInvoices({ supabase, companyId, consentId, dryRun, start: !dryRun })
+            return NextResponse.json({ success: true, dryRun, supplierCompletion })
+          } catch (error) {
+            log.error('Bokio supplier completion failed', error as Error)
             return migrateFailureResponse(error, consentId)
           }
         }

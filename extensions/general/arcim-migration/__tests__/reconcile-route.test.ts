@@ -44,6 +44,8 @@ vi.mock('../lib/refresh-migrated-payment-state', () => ({
   refreshMigratedSupplierPaymentState: vi.fn(),
 }))
 
+vi.mock('../lib/complete-bokio-supplier-invoices', () => ({ completeBokioSupplierInvoices: vi.fn() }))
+import { completeBokioSupplierInvoices } from '../lib/complete-bokio-supplier-invoices'
 import { arcimMigrationExtension } from '../index'
 import { getConsent, ConsentNotFoundError } from '../lib/provider-client'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
@@ -223,5 +225,34 @@ describe('POST /reconcile', () => {
     })
     expect(mRelink).not.toHaveBeenCalled()
     expect(JSON.stringify(body)).not.toContain('10.0.0.1')
+  })
+})
+
+
+describe('Bokio supplier completion opt-in', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'bokio' })
+  })
+  it('rejects missing authentication and a consent from another provider', async () => {
+    expect((await handler(reconcileRequest({ completeBokioSupplierInvoices: true, consentId: 'consent-1' }), buildCtx(null))).status).toBe(401)
+    mGetConsent.mockResolvedValue({ id: 'consent-1', status: 1, provider: 'fortnox' })
+    expect((await handler(reconcileRequest({ completeBokioSupplierInvoices: true, consentId: 'consent-1' }), buildCtx())).status).toBe(400)
+    expect(completeBokioSupplierInvoices).not.toHaveBeenCalled()
+  })
+  it('requires a consent and validates the flag before work', async () => {
+    expect((await handler(reconcileRequest({ completeBokioSupplierInvoices: true }), buildCtx())).status).toBe(400)
+    expect((await handler(reconcileRequest({ consentId: 'consent-1', completeBokioSupplierInvoices: 'yes' }), buildCtx())).status).toBe(400)
+  })
+  it('defaults to preview and does not enroll historical repair', async () => {
+    vi.mocked(completeBokioSupplierInvoices).mockResolvedValue({ dryRun: true } as never)
+    const response = await handler(reconcileRequest({ consentId: 'consent-1', completeBokioSupplierInvoices: true }), buildCtx())
+    expect(response.status).toBe(200)
+    expect(completeBokioSupplierInvoices).toHaveBeenLastCalledWith(expect.objectContaining({ dryRun: true, start: false }))
+  })
+  it('enrolls only an explicit live request', async () => {
+    const response = await handler(reconcileRequest({ consentId: 'consent-1', completeBokioSupplierInvoices: true, dryRun: false }), buildCtx())
+    expect(response.status).toBe(200)
+    expect(completeBokioSupplierInvoices).toHaveBeenLastCalledWith(expect.objectContaining({ dryRun: false, start: true }))
   })
 })
