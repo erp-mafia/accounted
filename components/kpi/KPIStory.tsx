@@ -212,6 +212,15 @@ function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
     </div>
   )
   switch (id) {
+    case 'netResult':
+      return {
+        id,
+        title: t('def_netResult_label'),
+        value: formatCurrency(report.netResult),
+        note: t('sub_netto'),
+        tooltip,
+        destructive: report.netResult < 0,
+      }
     case 'cashPosition': {
       const days = cashRunwayDays(report)
       return {
@@ -291,6 +300,11 @@ function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
   }
 }
 
+/** Visible KPI ids in user order (includes netResult when toggled on). */
+export function orderedVisibleKpiIds(preferences: KPIPreferences): string[] {
+  return preferences.kpiOrder.filter((id) => preferences.visibleKpis.includes(id))
+}
+
 /** The instrument grid: result bars + one pane per visible preference KPI. */
 export function KPIPanes({
   report,
@@ -301,9 +315,7 @@ export function KPIPanes({
 }) {
   const t = useTranslations('kpi')
 
-  const orderedIds = preferences.kpiOrder.filter(
-    (id) => preferences.visibleKpis.includes(id) && id !== 'netResult',
-  )
+  const orderedIds = orderedVisibleKpiIds(preferences)
   const panes = orderedIds
     .map((id) => metricPane(id, report, t as TFn))
     .filter(Boolean) as MetricPane[]
