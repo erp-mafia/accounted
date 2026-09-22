@@ -162,6 +162,60 @@ async function waitForBlock(pid: number) {
 }
 
 describe('bank sync and configuration concurrency', () => {
+  it.each(['balance-first', 'posting-first'])('serializes a balance refresh with bank posting: %s', async ordering => {
+    const txId = randomUUID()
+    const entryId = randomUUID()
+    await client.query(`INSERT INTO transactions(id, company_id, user_id, date, amount, currency, description, cash_account_id)
+      VALUES ($1, $2, $3, '2026-01-02', -25, 'SEK', 'Balance/posting race', $4)`, [txId, owner.companyId, owner.userId, cashId])
+    await client.query(`INSERT INTO journal_entries(id, company_id, user_id, fiscal_period_id, voucher_number,
+      entry_date, description, source_type, source_id, status, bank_booking_context)
+      VALUES ($1, $2, $3, $4, 0, '2026-01-02', 'Balance/posting race', 'bank_transaction', $5, 'draft', $6)`,
+    [entryId, owner.companyId, owner.userId, owner.fiscalPeriodId, txId, JSON.stringify([{
+      transaction_id: txId, cash_account_id: cashId, settlement_account: '1930',
+      date: '2026-01-02', amount: -25, currency: 'SEK',
+    }])])
+    await client.query(`INSERT INTO journal_entry_lines(journal_entry_id, account_number, debit_amount, credit_amount)
+      VALUES ($1, '1930', 0, 25), ($1, '2999', 25, 0)`, [entryId])
+    await client.query('COMMIT')
+    const other = await getClient()
+    let pending: Promise<unknown> | undefined
+    const post = (db: PoolClient) => db.query('SELECT * FROM commit_journal_entry($1, $2)', [owner.companyId, entryId])
+    try {
+      await client.query('BEGIN')
+      await other.query('BEGIN')
+      const pid = (await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
+      if (ordering === 'balance-first') {
+        await persist()
+        pending = post(other)
+      } else {
+        await post(client)
+        pending = persist(undefined, {}, other)
+      }
+      void pending.catch(() => {})
+      await Promise.race([waitForBlock(pid), pending.then(() => {
+        throw new Error('Competing operation finished before the first writer released its locks')
+      })])
+      await client.query('ROLLBACK')
+      await pending
+      if (ordering === 'balance-first') {
+        expect((await other.query('SELECT status FROM journal_entries WHERE id = $1', [entryId])).rows[0].status).toBe('posted')
+      } else {
+        expect((await other.query('SELECT balance FROM cash_accounts WHERE id = $1', [cashId])).rows[0].balance).toBe('25')
+      }
+    } finally {
+      await client.query('ROLLBACK')
+      await pending?.catch(() => {})
+      await other.query('ROLLBACK')
+      other.release()
+      // Posting was rolled back. Retain the synthetic journal as cancelled.
+      await client.query("UPDATE journal_entries SET status = 'cancelled' WHERE id = $1 AND status = 'draft'", [entryId])
+      await client.query('DELETE FROM transactions WHERE id = $1', [txId])
+      await client.query('DELETE FROM cash_accounts WHERE id = $1', [cashId])
+      await client.query('DELETE FROM bank_connections WHERE id = $1', [connectionId])
+      await client.query('BEGIN')
+    }
+  })
+
   it.each(['config-first', 'sync-first'])('keeps the current route in the %s ordering', async (ordering) => {
     // Only these isolated fixture rows are committed so both connections can see them.
     await client.query('COMMIT')
