@@ -9,7 +9,7 @@ BEGIN
   WHERE oid = 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text)'::regprocedure;
 
   -- SHA-256 of the complete literal body reviewed in migration 20260922090239.
-  IF encode(extensions.digest(v_function.prosrc, 'sha256'), 'hex') IS DISTINCT FROM
+  IF pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(v_function.prosrc, 'UTF8')), 'hex') IS DISTINCT FROM
        '466e715356f5b63e05d605e89afd4b83f8c0d85080898597a3c1301a596b966b'
     OR v_function.prosecdef IS NOT TRUE
     OR v_function.proconfig IS DISTINCT FROM ARRAY['search_path=public']::text[]
