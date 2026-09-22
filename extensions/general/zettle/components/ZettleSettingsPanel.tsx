@@ -37,6 +37,7 @@ const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' |
   error: 'destructive',
 }
 
+/** Zettle integration settings: connect, sync, transaction sync, and store display name. */
 export default function ZettleSettingsPanel() {
   const t = useTranslations('zettle')
   const tCommon = useTranslations('common')
@@ -60,6 +61,7 @@ export default function ZettleSettingsPanel() {
 
   const failureCopy = { timeout: t('action_timeout'), network: t('action_network') }
 
+  /** Loads connection status; seeds the store name field via zettleStoreDisplayName (never the UUID). */
   const loadStatus = useCallback(async () => {
     const result = await zettleRequest<ZettleStatusResponse>({
       url: '/api/extensions/ext/zettle/status',
@@ -206,6 +208,7 @@ export default function ZettleSettingsPanel() {
     }
   }
 
+  /** POST /organization-name; refreshes connection state from the server after save. */
   async function handleSaveStoreName() {
     if (!connection || connection.status !== 'active' || savingStoreName) return
     const next = storeNameDraft.trim().replace(/\s+/g, ' ')
@@ -228,16 +231,11 @@ export default function ZettleSettingsPanel() {
         })
         return
       }
-      const saved = result.data?.organization_name ?? next
-      // Functional update: sync/toggle can refresh connection while rename awaits.
-      setConnection((current) =>
-        current ? { ...current, organization_name: saved } : current,
-      )
-      setStoreNameDraft(saved)
       toast({
         title: t('store_name_saved_toast'),
         description: result.data?.warning ? t('store_name_saved_orders_warning') : undefined,
       })
+      await loadStatus()
     } finally {
       setSavingStoreName(false)
     }

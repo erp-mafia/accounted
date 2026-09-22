@@ -35,12 +35,14 @@ import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
+/** Registered Zettle extension route for handler tests. */
 function findRoute(method: string, path: string) {
   const route = zettleExtension.apiRoutes?.find((r) => r.method === method && r.path === path)
   expect(route, `${method} ${path} must be registered`).toBeDefined()
   return route!
 }
 
+/** JSON Request stub for extension route handlers. */
 function makeRequest(method: string, body?: unknown): Request {
   return new Request('https://test.local/api/extensions/ext/zettle/x', {
     method,
@@ -49,6 +51,7 @@ function makeRequest(method: string, body?: unknown): Request {
   })
 }
 
+/** ExtensionContext with the queued Supabase mock. */
 function makeContext(supabase: unknown): ExtensionContext {
   return {
     userId: 'user-1',

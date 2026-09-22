@@ -297,6 +297,7 @@ export function mapLineItems(purchase: ZettlePurchase): WebshopOrderLineItem[] {
   return items
 }
 
+/** Maps one Zettle purchase to webshop order rows; store_label uses organization_name, not the UUID. */
 export function mapPurchaseToWebshopRows(
   connection: Pick<ZettleConnection, 'id' | 'organization_name'>,
   storeScope: string,

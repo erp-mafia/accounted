@@ -6,6 +6,7 @@ import {
   ZETTLE_ORGANIZATION_NAME_MAX_LEN,
 } from '../lib/organization-name'
 
+/** Validation for the merchant-editable Zettle store display name. */
 describe('parseZettleOrganizationName', () => {
   it('trims and collapses internal whitespace', () => {
     expect(parseZettleOrganizationName('  Café   Norr  ')).toEqual({
@@ -34,6 +35,7 @@ describe('parseZettleOrganizationName', () => {
   })
 })
 
+/** Orders Butik label: human name or default, never the organization UUID. */
 describe('zettleStoreDisplayName', () => {
   it('never falls back to a UUID-shaped string', () => {
     expect(zettleStoreDisplayName(null)).toBe(ZETTLE_DEFAULT_ORGANIZATION_NAME)
