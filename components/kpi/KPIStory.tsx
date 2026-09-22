@@ -204,6 +204,7 @@ function cashRunwayDays(report: KPIReport): number | null {
   return Math.round(report.cashPosition / dailyBurn)
 }
 
+/** Builds one top-row KPI pane (label, formatted value, note) for a definition id. */
 function metricPane(id: string, report: KPIReport, t: TFn): MetricPane | null {
   const tooltip = (
     <div className="space-y-1 text-xs">
