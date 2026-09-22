@@ -101,7 +101,10 @@ describe('repair_stranded_transactions (issue #2057)', () => {
     const ignored = await insertStranded({ companyId, userId, isIgnored: true })
     const privateRow = await insertStranded({ companyId, userId, isBusiness: false })
 
-    const entryId = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId })
+    const entryId = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, lines: [
+      { accountNumber: '4000', debitAmount: 100, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 100 },
+    ] })
     const direct = await insertStranded({ companyId, userId })
     await getPool().query(`UPDATE public.transactions SET journal_entry_id = $2 WHERE id = $1`, [
       direct,
