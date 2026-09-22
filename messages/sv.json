@@ -10219,6 +10219,7 @@
     "say_label": "Säg till din AI",
     "prompt": "{say} Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den.",
     "own_prompt": "Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den: {name}.",
+    "now_tag": "Gör nu",
     "run_client": "Gör det med {client}",
     "copied_open": "Kopierat. Klistra in i {client}.",
     "show_full": "Visa hela instruktionen",

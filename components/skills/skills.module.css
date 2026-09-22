@@ -100,6 +100,8 @@
 .face:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
 .face h3 { font-weight: 500; font-size: 17px; line-height: 23px; color: #fff; }
 .face p { font-size: 13px; line-height: 20px; color: rgba(247, 244, 236, .72); }
+.faceTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 20px; }
+.faceTop .led { margin-left: auto; }
 .led { align-self: flex-end; width: 26px; height: 3px; border-radius: 2px; background: #fff; box-shadow: 0 0 10px 1px #fff; }
 .card[data-lit] .face { opacity: 1; border-color: rgba(255, 255, 255, .5); }
 .card[data-lit]:hover .face { border-color: rgba(255, 255, 255, .65); }
@@ -257,6 +259,26 @@
 .run:hover { background: hsl(var(--foreground)); border-color: hsl(var(--foreground)); color: hsl(var(--background)); }
 .run:hover::before { background: var(--rb); }
 .run:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
+/* "Gör nu": the Att göra list has work waiting that this skill does */
+.now {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  padding: 0 8px 0 7px;
+  border: 1px solid rgba(255, 255, 255, .34);
+  border-radius: 99px;
+  background: rgba(255, 255, 255, .14);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+.now::before { content: ""; width: 5px; height: 5px; border-radius: 99px; background: #fff; animation: rundot 2.6s ease-in-out infinite; }
+.nowLight { position: absolute; top: 12px; right: 12px; pointer-events: none; border-color: rgba(var(--rf), .9); background: #EEF3FA; color: #2A4468; }
+.nowLight::before { background: var(--rbd); }
+.row[data-now] .nm { padding-right: 64px; }
 .anchor { position: absolute; left: 16px; top: 16px; width: 0; height: 0; }
 .row[data-own] { animation: rise .5s cubic-bezier(.2, .7, .2, 1); }
 

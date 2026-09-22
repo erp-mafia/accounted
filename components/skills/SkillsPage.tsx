@@ -7,7 +7,8 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
-import { FREE_SKILLS, REGISTRY_SKILLS, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import type { WorklistCategory } from '@/lib/worklist/types'
+import { FREE_SKILLS, REGISTRY_SKILLS, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
@@ -54,6 +55,13 @@ function simulatedClient(): AiClient | null {
   return AI_CLIENTS.find((c) => c.id === value)?.id ?? null
 }
 
+/** The "Att göra" counts; a failed read tags nothing rather than breaking the page. */
+async function readWorklist(url: string): Promise<Partial<Record<WorklistCategory, number>>> {
+  const response = await fetch(url)
+  if (!response.ok) return {}
+  return ((await response.json()).data as { counts: Record<WorklistCategory, number> }).counts
+}
+
 async function readCatalog(url: string): Promise<SkillSummary[]> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skills request failed')
@@ -70,6 +78,8 @@ function Registry({ companyId }: { companyId: string }) {
   const { canWrite } = useCanWrite()
   const { appName } = useBranding()
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
+  const worklist = useSWR(['/api/worklist/counts', companyId], ([url]) => readWorklist(url))
+  const doNow = skillsToDoNow(worklist.data ?? {})
   const own: OwnRow[] = (catalog.data ?? [])
     .filter((skill) => skill.tier === 'own' && skill.shareStatus !== 'withdrawn' && skill.installations[0])
     .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id }))
@@ -334,7 +344,10 @@ function Registry({ companyId }: { companyId: string }) {
               data-down={sheetKey === skill.id ? '' : undefined}
             >
               <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
-                <span className={styles.led} aria-hidden />
+                <span className={styles.faceTop}>
+                  {doNow.has(skill.id) && <span className={styles.now}>{t('now_tag')}</span>}
+                  <span className={styles.led} aria-hidden />
+                </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
               </button>
@@ -354,6 +367,7 @@ function Registry({ companyId }: { companyId: string }) {
                   className={styles.row}
                   style={{ '--i': i } as CSSProperties}
                   data-own={row.own ? '' : undefined}
+                  data-now={row.id && doNow.has(row.id) ? '' : undefined}
                   data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
                 >
                   <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
@@ -361,6 +375,7 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_tag')}</span>}
                 </div>
               </li>
             ))}

@@ -1,4 +1,5 @@
 import { kvittojaktenSkillSlug, type AiClient } from '@/lib/onboarding/ai-clients'
+import type { WorklistCategory } from '@/lib/worklist/types'
 
 /**
  * The ten skills the Skills page shows, in display order. The first three
@@ -43,4 +44,25 @@ export function registrySkillSlug(id: RegistrySkillId, client: AiClient): string
  */
 export function registrySkillHasBody(id: RegistrySkillId): boolean {
   return id !== 'kvittojakten'
+}
+
+/**
+ * Which "Att göra" counts make a skill worth running right now. A skill is
+ * tagged "Gör nu" when any of its categories has work waiting. Skills with
+ * no entry are never tagged: VAT and payroll deadlines share one count
+ * (deadline_action) that does not say which tax is due.
+ */
+const NOW_CATEGORIES: Partial<Record<RegistrySkillId, readonly WorklistCategory[]>> = {
+  bookkeep: ['book_transaction', 'book_skattekonto'],
+  kvittojakten: ['verifikat_missing_document', 'inbox_document'],
+  'reconcile-month': ['reconciliation_due'],
+}
+
+/** The skills with waiting work, given the worklist counts. */
+export function skillsToDoNow(counts: Partial<Record<WorklistCategory, number>>): Set<RegistrySkillId> {
+  const now = new Set<RegistrySkillId>()
+  for (const [id, categories] of Object.entries(NOW_CATEGORIES) as [RegistrySkillId, readonly WorklistCategory[]][]) {
+    if (categories.some((category) => (counts[category] ?? 0) > 0)) now.add(id)
+  }
+  return now
 }

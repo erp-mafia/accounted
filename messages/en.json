@@ -10219,6 +10219,7 @@
     "say_label": "Tell your AI",
     "prompt": "{say} Load the skill \"{skill}\" from Accounted (load_skill) and follow it.",
     "own_prompt": "Load the skill \"{skill}\" from Accounted (load_skill) and follow it: {name}.",
+    "now_tag": "Do now",
     "run_client": "Do it with {client}",
     "copied_open": "Copied. Paste it into {client}.",
     "show_full": "Show the full instruction",
