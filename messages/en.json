@@ -10199,7 +10199,6 @@
     "help": "Skills are instructions your AI loads from Accounted when it works in your company. Three are free from the start. The rest light up when you connect Claude, ChatGPT or Grok. Your AI proposes, you approve.",
     "create": "Create skill",
     "hero_title": "Agent Skills",
-    "count_of": "of {total} lit",
     "sign_title": "Seven skills are waiting for your AI.",
     "sign_body": "Connect Claude, ChatGPT or Grok and they light up. Free, takes a minute.",
     "connect_client": "Connect {client}",

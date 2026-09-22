@@ -171,10 +171,6 @@
 
 /* ── the list below ── */
 .lower { display: flex; flex-direction: column; gap: 24px; }
-.ihead { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 24px; }
-.count { display: flex; align-items: baseline; gap: 12px; }
-.num { font-family: var(--font-display); font-size: 56px; line-height: .9; font-variant-numeric: tabular-nums; }
-.of { font-family: var(--font-mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .veilwrap { position: relative; }
 .rows { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
 

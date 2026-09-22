@@ -293,8 +293,6 @@ function Registry({ companyId }: { companyId: string }) {
     ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), tag: t(`groups.${skill.group}`), id: skill.id })),
   ]
   useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
-  const total = REGISTRY_SKILLS.length + own.length
-  const litCount = state === 'open' ? total : state === 'unlocking' ? FREE_SKILLS + (unlocking ?? 0) : FREE_SKILLS
   const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
   const sheetKey = sheet?.kind === 'registry' ? sheet.id : null
   const pendingName = pending ? AI_CLIENTS.find((c) => c.id === pending)!.name : ''
@@ -341,12 +339,6 @@ function Registry({ companyId }: { companyId: string }) {
       </section>
 
       <section className={styles.lower} aria-label={t('title')}>
-        <div className={styles.ihead}>
-          <div className={styles.count} aria-live="polite">
-            <span className={styles.num}>{litCount}</span>
-            <span className={styles.of}>{t('count_of', { total })}</span>
-          </div>
-        </div>
         {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
         {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
         <div className={styles.veilwrap}>
