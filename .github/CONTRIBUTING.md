@@ -43,7 +43,7 @@ npm run build
 
 ## DCO Sign-Off
 
-All commits must include a `Signed-off-by` line certifying that you have the right to submit the contribution under the project's license. This is the [Developer Certificate of Origin](../DCO) (DCO).
+All commits must include a `Signed-off-by` line certifying that you have the right to submit the contribution under the project's license. This is the [Developer Certificate of Origin](DCO) (DCO).
 
 Add the sign-off automatically with `git commit -s`:
 
@@ -98,4 +98,4 @@ The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/r
 
 ## Questions?
 
-Open a discussion or issue on GitHub. For security vulnerabilities, see [SECURITY.md](../SECURITY.md).
+Open a discussion or issue on GitHub. For security vulnerabilities, see [SECURITY.md](SECURITY.md).

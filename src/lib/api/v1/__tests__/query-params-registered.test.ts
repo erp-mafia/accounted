@@ -36,7 +36,7 @@ const WRAPPER_PARAMS = new Set(['dry_run'])
 
 function routeFile(path: string): string {
   const segments = path.replace(/^\//, '').replace(/:([^/]+)/g, '[$1]')
-  return join(process.cwd(), 'app', segments, 'route.ts')
+  return join(process.cwd(), 'src', 'app', segments, 'route.ts')
 }
 
 function paramsReadBy(source: string): Set<string> {

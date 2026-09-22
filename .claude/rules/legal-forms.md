@@ -9,8 +9,8 @@ paths:
   - "src/lib/tax/deadline-config.ts"
   - "src/lib/bokslut/**"
   - "src/lib/import/**"
-  - "components/onboarding/**"
-  - "components/bookkeeping/year-end/**"
+  - "src/components/onboarding/**"
+  - "src/components/bookkeeping/year-end/**"
 ---
 
 # Legal Forms

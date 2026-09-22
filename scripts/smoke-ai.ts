@@ -36,7 +36,7 @@ import {
 } from '../src/lib/ai/provider'
 
 type ComposerModule = typeof import('../src/lib/agent/composer/client')
-type ExtractionModule = typeof import('../extensions/general/invoice-inbox/lib/extract-invoice-fields')
+type ExtractionModule = typeof import('../src/extensions/general/invoice-inbox/lib/extract-invoice-fields')
 
 let getAnthropic: ComposerModule['getAnthropic']
 let EFFORT_DEEP: ComposerModule['EFFORT_DEEP']
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
   // overrides are exercised by the smoke test.
   const [composer, extractionModule] = await Promise.all([
     import('../src/lib/agent/composer/client'),
-    import('../extensions/general/invoice-inbox/lib/extract-invoice-fields'),
+    import('../src/extensions/general/invoice-inbox/lib/extract-invoice-fields'),
   ])
   getAnthropic = composer.getAnthropic
   EFFORT_DEEP = composer.EFFORT_DEEP

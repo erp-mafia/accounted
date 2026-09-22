@@ -21,7 +21,7 @@ async function main() {
   const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const { fetchProviderSieFiles } = await import('../../extensions/general/arcim-migration/lib/sie-fetcher')
+  const { fetchProviderSieFiles } = await import('../../src/extensions/general/arcim-migration/lib/sie-fetcher')
   const { detectEncoding, decodeBuffer } = await import('../../src/lib/import/sie-parser')
   const { readSIEIntakeFile } = await import('../../src/lib/import/sie-intake')
   const { submitSIEJob } = await import('../../src/lib/import/sie-jobs')

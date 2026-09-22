@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'fs'
  * is independent of extensions.config.json.
  */
 function buildDefinitionsFromManifests(): Record<string, unknown[]> {
-  const extensionsDir = resolve(__dirname, '../../../../extensions')
+  const extensionsDir = resolve(__dirname, '../../../extensions')
   const result: Record<string, unknown[]> = {}
 
   function walk(dir: string) {

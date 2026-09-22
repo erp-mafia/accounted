@@ -1,4 +1,3 @@
-import { sourcePath } from '@/scripts/checks/source-paths.mjs'
 /**
  * employees.monthly_salary is the FULL-TIME salary; employment_degree says
  * how much of it the employee earns. The engine's Step 1 always applied the
@@ -22,8 +21,8 @@ import {
 } from '@/lib/salary/work-schedule'
 import type { PayrollConfig } from '@/lib/salary/payroll-config'
 
-const ROOT = join(__dirname, '..', '..', '..', '..')
-const source = (rel: string) => readFileSync(sourcePath(ROOT, rel), 'utf8')
+const ROOT = join(__dirname, '..', '..', '..')
+const source = (rel: string) => readFileSync(join(ROOT, rel), 'utf8')
 
 describe('degreeAdjustedMonthlySalary', () => {
   it('is monthly x degree / 100, rounded to öre', () => {
@@ -156,7 +155,7 @@ describe('source pins: no consumer reads monthly_salary raw as money', () => {
       'lib/salary/semesterberedning.ts',
       'app/api/v1/companies/[companyId]/employees/[id]/vacation-balance/route.ts',
       'extensions/general/mcp-server/server.ts',
-    ].filter((rel) => existsSync(sourcePath(ROOT, rel)))
+    ].filter((rel) => existsSync(join(ROOT, rel)))
     expect(files.length).toBeGreaterThanOrEqual(2)
     for (const rel of files) {
       const text = source(rel)

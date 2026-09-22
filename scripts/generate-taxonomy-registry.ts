@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
  * Generate the iXBRL taxonomy concept registry from the official Bolagsverket/
- * taxonomier.se element lists in dev_docs/bokslut/taxonomi/dokumentation/.
+ * taxonomier.se element lists in docs/reference/bokslut/taxonomi/dokumentation/.
  *
  * Why generated (not hand-authored):
  *   - The element lists (xlsx) are the official mapping spec for which concepts
@@ -13,7 +13,7 @@
  *     JSON files + a new entry in lib/bokslut/ixbrl/taxonomy/entry-points.ts,
  *     leaving emitters for older versions untouched.
  *
- * Sources (committed in dev_docs/bokslut/):
+ * Sources (committed in docs/reference/bokslut/):
  *   - k2-ab-arsredovisning-elementlista-2024-09-12_rev20250312_sv.xlsx
  *     → one sheet per delrapport (allmän info, FB, RR, BR, noter, underskrifter…)
  *   - tuple-innehallsmodell-arsredovisning-k2-2024-09-12.xlsx
@@ -41,10 +41,11 @@ import JSZip from 'jszip'
 
 const __filename = fileURLToPath(import.meta.url)
 const ROOT = dirname(dirname(__filename))
-const DOC_DIR = join(ROOT, 'dev_docs', 'bokslut', 'taxonomi', 'dokumentation')
+const DOC_DIR = join(ROOT, 'docs', 'reference', 'bokslut', 'taxonomi', 'dokumentation')
 const PACKAGE_ZIP = join(
   ROOT,
-  'dev_docs',
+  'docs',
+  'reference',
   'bokslut',
   'taxonomi',
   'taxonomi-paket-2024-09-12_rev20250312.zip',

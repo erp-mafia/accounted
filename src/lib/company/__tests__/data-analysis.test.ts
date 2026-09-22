@@ -99,8 +99,8 @@ describe('data analysis consent copy', () => {
   // claim that free text or underlag are excluded (review of #1346).
   const locales = ['sv', 'en'] as const
   const messages = {
-    sv: readFileSync(join(process.cwd(), 'messages/sv.json'), 'utf8'),
-    en: readFileSync(join(process.cwd(), 'messages/en.json'), 'utf8'),
+    sv: readFileSync(join(process.cwd(), 'src/messages/sv.json'), 'utf8'),
+    en: readFileSync(join(process.cwd(), 'src/messages/en.json'), 'utf8'),
   }
 
   it.each(locales)('%s names the evaluation-run inputs the backtest reads', (locale) => {

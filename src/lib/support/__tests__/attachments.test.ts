@@ -85,7 +85,7 @@ describe('support attachments', () => {
 
   it('does not expose attachment names in session-replay attributes', () => {
     const source = readFileSync(
-      join(process.cwd(), 'components', 'ui', 'support-link.tsx'),
+      join(process.cwd(), 'src', 'components', 'ui', 'support-link.tsx'),
       'utf8'
     )
     expect(source).toContain('ph-no-capture')

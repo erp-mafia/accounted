@@ -25,6 +25,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 | `parties/` | Party matching evaluation; [method and fixtures](parties/README.md) |
 | `perf/` | Performance analysis; [usage](perf/README.md) |
 | `peppol/`, `scb/` | Integration probes and discovery |
+| `data/` | Versioned input files for import tools, including tax tables |
 
 Standalone `backfill-*`, `migrate-*`, `repair-*`, and parity scripts are manual operational tools, not application startup steps. Their headers document the incident, target environment, and invocation. A lack of imports does not mean a manual tool is retired.
 

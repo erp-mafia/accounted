@@ -33,7 +33,6 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { sourcePath, sourceRelative } from './source-paths.mjs'
 
 /** Keep in sync with ENTITY_TYPES in lib/company/entity-type.ts. */
 export const LEGAL_FORM_CODES = ['enskild_firma', 'aktiebolag', 'ideell_forening']
@@ -95,8 +94,8 @@ function walk(dir, out) {
 export function findLiteralLegalForms(root) {
   const findings = []
   for (const dir of SCAN_DIRS) {
-    for (const file of walk(sourcePath(root, dir), [])) {
-      const relPath = sourceRelative(root, file)
+    for (const file of walk(path.join(root, dir), [])) {
+      const relPath = path.relative(root, file).split(path.sep).join('/')
       if (isExempt(relPath)) continue
       for (const f of findLiteralLegalFormsInSource(fs.readFileSync(file, 'utf8'))) {
         findings.push({ file: relPath, ...f })
@@ -107,7 +106,7 @@ export function findLiteralLegalForms(root) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..')
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'src')
   const findings = findLiteralLegalForms(root)
   for (const f of findings) console.log(`${f.file}:${f.line}: ${f.text}`)
   console.log(`\n${findings.length} literal legal-form site(s).`)

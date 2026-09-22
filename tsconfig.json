@@ -19,8 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./*"],
-      "@/lib/*": ["./src/lib/*"],
+      "@/*": ["./src/*"],
+      "@/tests/*": ["./tests/*"],
+      "@/scripts/*": ["./scripts/*"],
       "@accounted/connect-contract": ["./packages/connect-contract/src/index.ts"]
     },
     "types": ["vitest/globals"]
@@ -33,5 +34,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "dev_docs"]
+  "exclude": ["node_modules", "docs/reference", "dev_docs"]
 }

@@ -13,7 +13,7 @@ some parts are deliberately rigid. For contribution workflow, see
 - **Deployment**: Vercel-hosted is the primary target; a Docker self-hosted
   setup is fully supported (see [docs/SELF-HOSTING.md](SELF-HOSTING.md)).
 - **UI**: Tailwind CSS with shadcn/ui components. User-facing product language
-  is Swedish and English (`messages/sv.json`, `messages/en.json`).
+  is Swedish and English (`src/messages/sv.json`, `src/messages/en.json`).
 
 ## The bookkeeping engine
 
@@ -90,7 +90,7 @@ so the Next.js app and RLS always agree on which company is active.
 
 Core is a complete accounting product on its own. Optional functionality
 (AI categorization, receipt OCR, email, calendar, the MCP server, and more)
-ships as extensions under `extensions/`, toggled by `extensions.config.json`.
+ships as extensions under `src/extensions/`, toggled by `extensions.config.json`.
 
 The boundary is strict and CI-enforced:
 
@@ -101,7 +101,7 @@ The boundary is strict and CI-enforced:
 - Provider integrations (banks, Skatteverket, Peppol, migration sources) are
   moving behind the connector: a self-hosted instance with a connector key
   and no credentials of its own for an upstream reaches that upstream through
-  the hosted `app/api/connect/*` side (an instance running on its own
+  the hosted `src/app/api/connect/*` side (an instance running on its own
   registered credentials talks to the provider directly, see
   `docs/SELF-HOSTING.md`), and the open ledger keeps the contract plus the
   manual file paths. `npm run check:guards` ratchets the set of files that
@@ -121,12 +121,12 @@ declarations.
 
 - Authentication uses scoped API keys (stored as SHA-256 hashes, rate limited
   per key). Claude, ChatGPT and Grok connectors instead authenticate with OAuth 2.1
-  (PKCE; `app/api/mcp-oauth/{authorize,register,token}` plus the
+  (PKCE; `src/app/api/mcp-oauth/{authorize,register,token}` plus the
   `.well-known` discovery documents), which mints a scoped API key behind the
   scenes. Authentication is lazy: a client can connect, list tools, and call a
   small set of public discovery tools before an account exists; the first
   tenant-touching call answers 401 and triggers the client's connect prompt
-  (`extensions/general/mcp-server/public-tools.ts`).
+  (`src/extensions/general/mcp-server/public-tools.ts`).
 - Posting operations are staged: an agent proposes an operation, and a human
   approves it before anything is committed to the journal.
 
@@ -140,18 +140,18 @@ to core activity without core knowing about them.
 
 | Path | Contents |
 |---|---|
-| `app/` | Next.js App Router pages and API routes |
+| `src/app/` | Next.js App Router pages and API routes |
 | `src/lib/bookkeeping/` | Engine, entry generators, account mapping, BAS chart data |
 | `src/lib/core/` | Periods, year-end, storno, tax codes, audit, documents |
 | `src/lib/reports/` | Balance sheet, income statement, VAT, SIE, tax reports |
 | `src/lib/` (other) | Invoices, transactions, imports, salary, reconciliation, tax, providers |
-| `components/` | React components (shadcn/ui based) |
-| `extensions/` | Opt-in extension plugins |
+| `src/components/` | React components (shadcn/ui based) |
+| `src/extensions/` | Opt-in extension plugins |
 | `supabase/migrations/` | Database schema, RLS policies, enforcement triggers |
 | `packages/accounted-mcp` | Published stdio MCP bridge for new installs (`accounted_*` tool namespace) |
 | `packages/gnubok-mcp` | Compatibility MCP bridge for existing installs (kept on purpose) |
 | `packages/claude-plugin/` | Claude Code plugin: OAuth connector plus approval-gated workflow skills |
-| `messages/` | Swedish and English UI strings |
+| `src/messages/` | Swedish and English UI strings |
 | `tests/` | Shared test helpers and fixtures |
 | `docs/` | Self-hosting, Docker, extensions, white-label guides |
 

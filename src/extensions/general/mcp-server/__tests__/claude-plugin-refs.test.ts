@@ -13,7 +13,7 @@ import { discoverAtoms } from '@/scripts/lib/atom-discovery'
  * chat session.
  */
 
-const repoRoot = join(__dirname, '..', '..', '..', '..')
+const repoRoot = join(__dirname, '..', '..', '..', '..', '..')
 const skillsDir = join(repoRoot, 'packages', 'claude-plugin', 'skills')
 const commandsDir = join(repoRoot, 'packages', 'claude-plugin', 'commands')
 

@@ -232,7 +232,7 @@ describe('Skills registry', () => {
     const v1RouteTexts = [
       'app/api/v1/companies/[companyId]/invoices/[id]/send/route.ts',
       'app/api/v1/companies/[companyId]/invoices/[id]/mark-sent/route.ts',
-    ].map((relativePath) => readFileSync(join(process.cwd(), relativePath), 'utf8'))
+    ].map((relativePath) => readFileSync(join(process.cwd(), 'src', relativePath), 'utf8'))
     for (const text of v1RouteTexts) {
       for (const pattern of capabilityAbsentPatterns) {
         expect(text).not.toMatch(pattern)

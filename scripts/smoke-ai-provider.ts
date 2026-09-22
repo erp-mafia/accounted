@@ -39,7 +39,7 @@ import { basename, extname } from 'node:path'
 import { promisify } from 'node:util'
 
 type AiModule = typeof import('../src/lib/ai')
-type ExtractionModule = typeof import('../extensions/general/invoice-inbox/lib/extract-invoice-fields')
+type ExtractionModule = typeof import('../src/extensions/general/invoice-inbox/lib/extract-invoice-fields')
 
 let failures = 0
 
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
       const start = Date.now()
       try {
         const extraction: ExtractionModule = await import(
-          '../extensions/general/invoice-inbox/lib/extract-invoice-fields'
+          '../src/extensions/general/invoice-inbox/lib/extract-invoice-fields'
         )
         const buffer = await readFile(file)
         const result = await extraction.extractInvoiceFields({

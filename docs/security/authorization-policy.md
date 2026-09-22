@@ -204,7 +204,7 @@ in the runbook.
 The contract is pinned by:
 
 - `tests/pg/company-migration-reset.pg.test.ts`
-- `app/api/company/[id]/migration-reset/__tests__/route.test.ts`
+- `src/app/api/company/[id]/migration-reset/__tests__/route.test.ts`
 
 Any change to the owner gate, eligibility boundary, source-retention
 invariant, grants, or audit immutability must update those tests and this

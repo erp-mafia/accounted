@@ -41,7 +41,7 @@ The entity generates and uses relevant, quality information internally and exter
 
 ### CC2.3 - External communication
 
-* **Deterministic**: `SECURITY.md` in repository root with responsible disclosure and (if applicable) bug bounty instructions.
+* **Deterministic**: `.github/SECURITY.md` with responsible disclosure and (if applicable) bug bounty instructions.
 
 ## CC3: Risk Assessment
 

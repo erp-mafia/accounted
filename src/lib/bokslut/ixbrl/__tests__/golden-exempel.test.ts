@@ -1,6 +1,6 @@
 /**
  * Golden tests against the official Bolagsverket/taxonomier.se example
- * documents in dev_docs/bokslut/exempel/. They pin our generator's
+ * documents in docs/reference/bokslut/exempel/. They pin our generator's
  * conventions (context naming, entity scheme, fact attributes, hidden
  * vallistor, fastställelseintyg structure) to what a known-accepted filing
  * actually looks like.
@@ -15,7 +15,7 @@ import { makeInput } from './fixtures'
 
 const EXEMPEL_PATH = resolve(
   __dirname,
-  '../../../../../dev_docs/bokslut/exempel/k2/faststalld-arsredovisning-exempel-1-rev20240214.xhtml',
+  '../../../../../docs/reference/bokslut/exempel/k2/faststalld-arsredovisning-exempel-1-rev20240214.xhtml',
 )
 const official = readFileSync(EXEMPEL_PATH, 'utf8')
 const generated = generateK2IxbrlDocument(makeInput()).xhtml

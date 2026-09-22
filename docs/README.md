@@ -12,10 +12,12 @@ Start with the [user and API documentation](https://docs.gnubok.se) for using Ac
 | Connect Claude Code | [Accounted plugin](../packages/claude-plugin/README.md) |
 | Build an integration | [Public API](https://docs.gnubok.se), [API skill](../skills/accounted-api/SKILL.md) |
 | Build an extension | [Extension development](EXTENSIONS.md) |
-| Report a vulnerability | [Security policy](../SECURITY.md) |
+| Report a vulnerability | [Security policy](../.github/SECURITY.md) |
 
 ## Architecture and domain
 
+- [Source directory](../src/README.md): application modules and import conventions.
+- [Reference materials](reference/README.md): taxonomy inputs and official report examples.
 - [Architecture](architecture.md): accounting engine, tenancy, extensions, events, and agent access.
 - [Glossary](glossary.md): white-label brands, teams, home domains, and shared terminology.
 - [Legal forms](LEGAL-FORMS.md): capability profiles and the cross-surface support contract.
@@ -35,7 +37,7 @@ Start with the [user and API documentation](https://docs.gnubok.se) for using Ac
 
 ## Security and policies
 
-- [Vulnerability reporting](../SECURITY.md).
+- [Vulnerability reporting](../.github/SECURITY.md).
 - [Company authorization policy](../.compliance/authorization-policy.md): membership and shared-resource decisions.
 - [Privileged RPC authorization](security/authorization-policy.md): database-operation access contracts.
 - [Authentication abuse protection](security/auth-abuse-protection.md).

@@ -12,8 +12,8 @@ cd your-brand
 git remote add upstream https://github.com/erp-mafia/accounted
 
 # 3. Copy the example branding extension
-cp -r extensions/general/_example-branding extensions/general/your-brand
-# Edit extensions/general/your-brand/index.ts with your brand values
+cp -r src/extensions/general/_example-branding src/extensions/general/your-brand
+# Edit src/extensions/general/your-brand/index.ts with your brand values
 
 # 4. (Optional) Set env vars instead of / in addition to the extension. See "Env vars" below.
 
@@ -102,7 +102,7 @@ A few things that look brand-related but are configured elsewhere:
 - **OAuth redirect allowlist for MCP**: `src/lib/auth/oauth-allowlist.ts` has built-in entries for Claude (`claude.ai/api/*`, `claude.com/api/*`), ChatGPT, Grok, Cursor and localhost; anything else is registered per user under Settings > API & MCP > OAuth clients. Your domain is the OAuth issuer, not a redirect target: no change needed unless you're integrating with new MCP clients.
 - **iCal feed PRODID** (`src/lib/calendar/ics-generator.ts`): defaults to `erp-base.se`, callers may pass their domain.
 - **`NEXT_PUBLIC_APP_URL`**: used as the OAuth issuer and safe auth-link fallback. For a dedicated one-brand deployment, set this to your domain (e.g. `https://app.your-brand.se`). For a shared hosted deployment, keep the canonical main app URL here; additional hosts are the `brands.domain` rows (see below).
-- **Skatteverket submission identity**: `extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
+- **Skatteverket submission identity**: `src/extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
 
 ## Shared hosted deployment with custom domains
 
@@ -200,7 +200,7 @@ jobs:
 
 ## Conflict avoidance
 
-The fork-friendliness of this design depends on you keeping changes confined to your branding extension folder. Every file you edit in `src/lib/`, `app/`, or `components/` becomes a potential conflict on the next upstream merge. If you find yourself wanting to override something the branding service doesn't expose, prefer:
+The fork-friendliness of this design depends on you keeping changes confined to your branding extension folder. Every file you edit in `src/lib/`, `src/app/`, or `src/components/` becomes a potential conflict on the next upstream merge. If you find yourself wanting to override something the branding service doesn't expose, prefer:
 
 1. **Open an upstream issue**: the branding service is intentionally minimal; missing fields can be added.
 2. **PR a hook upstream**: extending the service or adding a registry pattern keeps your fork clean.

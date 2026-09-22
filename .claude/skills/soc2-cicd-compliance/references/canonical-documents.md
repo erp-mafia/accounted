@@ -35,7 +35,7 @@ The agentic auditor reasons over the repository's policy artifacts to extract co
 Repository community artifacts (CC2.3, CC1.1):
 
 ```
-SECURITY.md                   # responsible disclosure
+.github/SECURITY.md                   # responsible disclosure
 .github/CODE_OF_CONDUCT.md    # tone-at-the-top
 ```
 

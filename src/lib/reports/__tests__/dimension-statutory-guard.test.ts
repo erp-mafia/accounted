@@ -1,4 +1,3 @@
-import { sourcePath } from '@/scripts/checks/source-paths.mjs'
 import { describe, it, expect } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
@@ -16,7 +15,7 @@ import { REPORT_CATALOG, DIMENSION_FILTER_SLUGS } from '../catalog'
 // this file.
 // ============================================================
 
-const ROOT = process.cwd()
+const ROOT = join(process.cwd(), 'src')
 
 /** The only reports allowed to accept the dimension value filter. */
 const FILTERABLE_SLUGS = ['resultatrapport', 'income-statement', 'huvudbok', 'kpi']
@@ -72,7 +71,7 @@ describe('dimension filter: statutory exclusion', () => {
   })
 
   it('no statutory report route imports the dimension filter parser', () => {
-    const reportRoutes = walk(sourcePath(ROOT, 'app/api/reports'))
+    const reportRoutes = walk(join(ROOT, 'app/api/reports'))
     const importers = reportRoutes
       .filter((f) => readFileSync(f, 'utf8').includes('lib/reports/dimension-filter'))
       // Normalize to POSIX separators so the allowlist matches on Windows too.
@@ -87,7 +86,7 @@ describe('dimension filter: statutory exclusion', () => {
 
   it('statutory generators never apply a dimensions containment filter', () => {
     for (const rel of STATUTORY_GENERATORS) {
-      const src = readFileSync(sourcePath(ROOT, rel), 'utf8')
+      const src = readFileSync(join(ROOT, rel), 'utf8')
       expect(src, `${rel} must not filter on line dimensions`).not.toMatch(
         /contains\(\s*['"]dimensions['"]/,
       )
@@ -103,7 +102,7 @@ describe('dimension filter: statutory exclusion', () => {
     // fixed character window: a long options object cannot slip the key
     // past the guard (#862 review).
     for (const rel of STATUTORY_GENERATORS) {
-      const src = readFileSync(sourcePath(ROOT, rel), 'utf8')
+      const src = readFileSync(join(ROOT, rel), 'utf8')
       let idx = src.indexOf('generateTrialBalance(')
       while (idx !== -1) {
         const argsStart = idx + 'generateTrialBalance('.length

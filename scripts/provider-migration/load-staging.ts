@@ -97,7 +97,7 @@ async function child() {
     assert.ok(page >= 1 && size > 0)
     return Response.json(providerPage(provider, page, size, count, detailEvery))
   }
-  const { runProviderMigrationWorker } = await import('../../extensions/general/arcim-migration/lib/migration-job-worker')
+  const { runProviderMigrationWorker } = await import('../../src/extensions/general/arcim-migration/lib/migration-job-worker')
   const start = performance.now()
   const result = await runProviderMigrationWorker({ jobId: values.job, budgetMs: budget })
   const elapsedMs = Math.round(performance.now() - start)

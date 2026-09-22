@@ -4,7 +4,7 @@ import { resolve } from 'path'
 
 describe('type decoupling', () => {
   it('types/index.ts must not import from @/extensions/', () => {
-    const typesPath = resolve(__dirname, '../../../../types/index.ts')
+    const typesPath = resolve(__dirname, '../../../types/index.ts')
     const content = readFileSync(typesPath, 'utf-8')
 
     const extensionImports = content

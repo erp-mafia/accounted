@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { loadPacks, sortPacks, type LoadedPack } from '../src/lib/packs/load'
 import { applyTemplate } from '../src/lib/bookkeeping/template-library'
 import { getBASReference } from '../src/lib/bookkeeping/bas-reference'
-import type { BookingTemplateLibraryLine } from '../types'
+import type { BookingTemplateLibraryLine } from '../src/types'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 

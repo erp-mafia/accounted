@@ -66,9 +66,9 @@ describe('Turnstile rollout state', () => {
 
 describe('Turnstile integration contract', () => {
   it('protects every public Supabase Auth flow in scope', () => {
-    const login = readRepoFile('app/(auth)/login/login-client.tsx')
-    const register = readRepoFile('app/(auth)/register/register-client.tsx')
-    const sandbox = readRepoFile('app/sandbox/page.tsx')
+    const login = readRepoFile('src/app/(auth)/login/login-client.tsx')
+    const register = readRepoFile('src/app/(auth)/register/register-client.tsx')
+    const sandbox = readRepoFile('src/app/sandbox/page.tsx')
 
     expect(login).toMatch(
       /signInWithPassword\([\s\S]*?options: captchaTokenOptions\(passwordCaptchaToken\)/,
@@ -80,7 +80,7 @@ describe('Turnstile integration contract', () => {
     expect(login).toMatch(
       /fetch\('\/api\/auth\/password-reset'[\s\S]*?captchaTokenOptions\(resetCaptchaToken\)/,
     )
-    const resetRoute = readRepoFile('app/api/auth/password-reset/route.ts')
+    const resetRoute = readRepoFile('src/app/api/auth/password-reset/route.ts')
     expect(resetRoute).toMatch(/resetPasswordForEmail\([\s\S]*?captchaToken/)
     expect(login).toContain('action="accounted_login"')
     expect(login).toContain('action="accounted_password_reset"')
@@ -93,7 +93,7 @@ describe('Turnstile integration contract', () => {
       /fetch\('\/api\/auth\/signup'[\s\S]*?captchaTokenOptions\(captchaToken\)/,
     )
     expect(register).toContain('action="accounted_signup"')
-    const signupRoute = readRepoFile('app/api/auth/signup/route.ts')
+    const signupRoute = readRepoFile('src/app/api/auth/signup/route.ts')
     expect(signupRoute).toMatch(/signUp\(\{[\s\S]*?captchaToken/)
 
     expect(sandbox).toMatch(
@@ -123,8 +123,8 @@ describe('Turnstile integration contract', () => {
   })
 
   it('ships matching Swedish and English challenge messages', () => {
-    const swedish = JSON.parse(readRepoFile('messages/sv.json')).auth
-    const english = JSON.parse(readRepoFile('messages/en.json')).auth
+    const swedish = JSON.parse(readRepoFile('src/messages/sv.json')).auth
+    const english = JSON.parse(readRepoFile('src/messages/en.json')).auth
     const keys = [
       'turnstile_checking',
       'turnstile_required',

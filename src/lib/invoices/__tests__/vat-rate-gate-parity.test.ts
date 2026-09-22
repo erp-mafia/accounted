@@ -1,4 +1,3 @@
-import { sourcePath } from '@/scripts/checks/source-paths.mjs'
 /**
  * Every server-side write path that validates an invoice line's VAT rate must
  * gate on the SAME set, or the surfaces disagree about what is lawful: the web
@@ -19,7 +18,7 @@ import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
 
-const REPO_ROOT = path.resolve(__dirname, '../../../..')
+const REPO_ROOT = path.resolve(__dirname, '../../..')
 
 const WRITE_GATES = [
   'lib/invoices/build-invoice-write.ts',
@@ -32,7 +31,7 @@ const WRITE_GATES = [
 
 describe('invoice VAT-rate gates agree with buildInvoiceWriteData', () => {
   for (const relative of WRITE_GATES) {
-    const source = fs.readFileSync(sourcePath(REPO_ROOT, relative), 'utf8')
+    const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
 
     it(`${relative} gates on getPermittedVatRates`, () => {
       expect(source).toContain('getPermittedVatRates(')
@@ -74,7 +73,7 @@ const EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT = [
 describe('narrow customer projections that decide a VAT treatment carry every input', () => {
   for (const relative of EXPLAINING_PATHS_WITH_NARROW_CUSTOMER_SELECT) {
     it(`${relative} selects vat_number and country wherever it selects vat_number_validated`, () => {
-      const source = fs.readFileSync(sourcePath(REPO_ROOT, relative), 'utf8')
+      const source = fs.readFileSync(path.join(REPO_ROOT, relative), 'utf8')
       // Directly, or through the shared builder's result.
       expect(source).toMatch(/explainVatTreatment\(|build\.warnings/)
       const selects = Array.from(source.matchAll(/\.select\(\s*'([^']*\bvat_number_validated\b[^']*)'/g)).map(
@@ -133,6 +132,6 @@ function listSourceFiles(roots: string[]): string[] {
       else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) found.push(full)
     }
   }
-  for (const root of roots) walk(sourcePath(REPO_ROOT, root))
+  for (const root of roots) walk(path.join(REPO_ROOT, root))
   return found
 }

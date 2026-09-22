@@ -19,10 +19,9 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { sourcePath, sourceRelative } from '../checks/source-paths.mjs'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
 const SCAN_DIRS = ['app', 'components', 'contexts', 'extensions', 'lib', 'i18n']
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage', '__tests__'])
 const EXTS = ['.ts', '.tsx', '.js', '.mjs', '.jsx']
@@ -53,13 +52,13 @@ export function walkFiles(root = ROOT) {
       else if (/\.(?:ts|tsx|js|mjs|jsx)$/.test(entry.name) && !/\.(?:test|pg\.test)\.tsx?$/.test(entry.name)) out.push(full)
     }
   }
-  for (const d of SCAN_DIRS) visit(sourcePath(root, d))
+  for (const d of SCAN_DIRS) visit(path.join(root, d))
   return out
 }
 
 export function resolveSpecifier(spec, fromFile, root = ROOT) {
   let base
-  if (spec.startsWith('@/')) base = sourcePath(root, spec.slice(2))
+  if (spec.startsWith('@/')) base = path.join(root, spec.slice(2))
   else if (spec.startsWith('.')) base = path.resolve(path.dirname(fromFile), spec)
   else return { bare: spec }
   const candidates = [base, ...EXTS.map((e) => base + e), ...EXTS.map((e) => path.join(base, 'index' + e))]
@@ -97,7 +96,7 @@ export function buildGraph(root = ROOT) {
  * closures that contain `target` (a repo-relative file path or `bare:<spec>`).
  */
 export function clientReachers(graph, target, root = ROOT) {
-  const targetKey = target.startsWith('bare:') ? target : sourcePath(root, target)
+  const targetKey = target.startsWith('bare:') ? target : path.join(root, target)
   const hits = new Map()
   for (const [file, node] of graph) {
     if (!node.client) continue
@@ -117,7 +116,7 @@ export function clientReachers(graph, target, root = ROOT) {
     if (found) {
       const chain = []
       for (let n = found; n; n = prev.get(n)) chain.unshift(n)
-      hits.set(sourceRelative(root, file), chain.map((n) => (n.startsWith('bare:') ? n : sourceRelative(root, n))))
+      hits.set(path.relative(root, file), chain.map((n) => (n.startsWith('bare:') ? n : path.relative(root, n))))
     }
   }
   return hits

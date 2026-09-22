@@ -48,7 +48,6 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { sourcePath, sourceRelative } from './source-paths.mjs'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
@@ -243,10 +242,10 @@ export function findSekLabelledFxAmountsInSource(relPath, text) {
 
 /** Findings across `SCAN_DIRS` under `root`, sorted and de-duplicated. */
 export function findSekLabelledFxAmounts(root) {
-  const files = SCAN_DIRS.flatMap((dir) => walk(sourcePath(root, dir)))
+  const files = SCAN_DIRS.flatMap((dir) => walk(path.join(root, dir)))
   const findings = []
   for (const file of files) {
-    const relPath = sourceRelative(root, file)
+    const relPath = path.relative(root, file).split(path.sep).join('/')
     findings.push(...findSekLabelledFxAmountsInSource(relPath, fs.readFileSync(file, 'utf8')))
   }
   const seen = new Set()
@@ -265,7 +264,7 @@ export function findSekLabelledFxAmounts(root) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
-  const root = args.find((a) => !a.startsWith('--')) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const root = args.find((a) => !a.startsWith('--')) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
   const findings = findSekLabelledFxAmounts(root)
   if (json) {
     console.log(JSON.stringify(findings, null, 2))

@@ -24,7 +24,7 @@ import { listEndpoints } from '../registry'
 // Side-effect import: populates the ENDPOINTS registry from every route file.
 import '../load-routes'
 
-const REPO_ROOT = fileURLToPath(new URL('../../../../../', import.meta.url))
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url))
 const V1_APP_DIR = join(REPO_ROOT, 'app', 'api', 'v1')
 
 /**
@@ -108,7 +108,7 @@ describe('V1_ENDPOINT_SCOPES <-> endpoint registry parity', () => {
   })
 
   it('imports every app/api/v1 route file from load-routes.ts', () => {
-    const loader = readFileSync(join(REPO_ROOT, 'src', 'lib', 'api', 'v1', 'load-routes.ts'), 'utf8')
+    const loader = readFileSync(join(REPO_ROOT, 'lib', 'api', 'v1', 'load-routes.ts'), 'utf8')
     const notLoaded = walkRouteFiles(V1_APP_DIR)
       .map((full) => full.slice(REPO_ROOT.length).replace(/^\/+/, ''))
       .filter((rel) => !ROUTE_FILES_WITHOUT_REGISTRY_ENTRY.has(rel))

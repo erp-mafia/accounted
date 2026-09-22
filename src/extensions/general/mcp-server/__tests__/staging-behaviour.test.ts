@@ -441,7 +441,7 @@ const NON_VOLATILE = /\b(STABLE|IMMUTABLE)\b/i
  * the last match in sorted order is the definition that is live.
  */
 function latestFunctionHeader(fn: string): string | undefined {
-  const dir = resolve(__dirname, '../../../../supabase/migrations')
+  const dir = resolve(__dirname, '../../../../../supabase/migrations')
   const files = readdirSync(dir).filter((f) => f.endsWith('.sql')).sort()
   const pattern = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fn}\\s*\\(`, 'gi')
   let header: string | undefined

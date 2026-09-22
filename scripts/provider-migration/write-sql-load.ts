@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
 import { mapVismaToSalesInvoice } from '../../src/lib/providers/visma/mapper'
 import { mapBokioToSalesInvoice } from '../../src/lib/providers/bokio/mapper'
-import { mapCustomer, mapSalesInvoice } from '../../extensions/general/arcim-migration/lib/entity-mapper'
+import { mapCustomer, mapSalesInvoice } from '../../src/extensions/general/arcim-migration/lib/entity-mapper'
 import { invoiceFixture, type LoadProvider } from './fixtures'
 
 const count = Number(process.argv[2] ?? 25000)

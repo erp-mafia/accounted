@@ -2,7 +2,7 @@
 
 Swedish accounting SaaS: double-entry bookkeeping under Swedish accounting law (Bokföringslagen) for sole traders (enskild firma) and limited companies (aktiebolag). Multi-tenant: users belong to companies via `company_members`; `teams` group companies for consultants.
 
-**Stack**: Next.js 16 (App Router), React 19, TypeScript 5 strict, Zod 4, Supabase (Postgres + RLS + auth), Tailwind 4 + shadcn/ui. Vercel-hosted is the primary target; Docker self-hosted must keep working but never at hosted's expense. Path alias `@/*` = repo root; `@/lib/*` = `src/lib/`. All code, comments, and commits in English.
+**Stack**: Next.js 16 (App Router), React 19, TypeScript 5 strict, Zod 4, Supabase (Postgres + RLS + auth), Tailwind 4 + shadcn/ui. Vercel-hosted is the primary target; Docker self-hosted must keep working but never at hosted's expense. Path alias `@/*` = `src/`; `@/tests/*` and `@/scripts/*` resolve from the repo root. All code, comments, and commits in English.
 
 ---
 
@@ -34,7 +34,7 @@ General prohibitions:
 
 - **Stop and ask; do not guess.** Especially for anything touching posted entries, the production database, money math, or Swedish tax law.
 - **Swedish domain questions are never answered from training data.** Load the matching `swedish-*` skill (vat, accounting-compliance, invoice-compliance, payroll, year-end-closing, sie-import-export, sru-filing, financial-reporting, asset-accounting, project-accounting, tax-planning, e-invoicing).
-- Scaffolding has skills; use them instead of improvising: `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment). API routes follow `.claude/rules/api-routes.md`, which loads automatically under `app/api/`.
+- Scaffolding has skills; use them instead of improvising: `/supabase-migration` (migrations), `/create-extension` (extensions), `/frontend-design` (new UI), `vercel:deploy` (deployment). API routes follow `.claude/rules/api-routes.md`, which loads automatically under `src/app/api/`.
 
 ## Fix From First Principles
 
@@ -51,9 +51,9 @@ When the chosen path differs from the one proposed in the issue, record it in `D
 A change is done when all of these hold; iterate until they do:
 
 1. `npm run lint` is clean and `npm test` passes (`npx vitest run <dir>` while iterating).
-2. New or changed logic in `src/lib/` or `app/api/` has tests: auth 401, validation 400, 404, happy path; mock `@/lib/supabase/server`.
+2. New or changed logic in `src/lib/` or `src/app/api/` has tests: auth 401, validation 400, 404, happy path; mock `@/lib/supabase/server`.
 3. Any change to a trigger, RPC, RLS policy, or DEFERRABLE constraint ships with a `*.pg.test.ts` (`npm run test:pg`).
-4. New UI strings exist in **both** `messages/sv.json` and `messages/en.json`.
+4. New UI strings exist in **both** `src/messages/sv.json` and `src/messages/en.json`.
 5. If you edited an atom `SKILL.md`, `npm run skills:generate` was run (CI's `skills:check` fails otherwise).
 6. `npm run check:guards` passes if you touched API routes.
 7. Commit is conventional (`feat:`/`fix:`/`refactor:`/`test:`/`docs:`), atomic, branched from `main`.
@@ -83,15 +83,15 @@ npm run skills:generate  # Regenerate agent_atom_registry seed after editing an 
 - **Auth**: Supabase email+password + TOTP MFA, enforced **application-side**, not in RLS. `NEXT_PUBLIC_REQUIRE_MFA=true` on hosted; `NEXT_PUBLIC_SELF_HOSTED=true` disables MFA. Hosted browser sessions also have signed server-enforced idle/absolute limits (`src/lib/auth/session-timeout.ts`); API-key and MCP bearer surfaces are exempt. API routes wrap `withRouteContext`: it is the only path that enforces MFA, so never hand-roll `supabase.auth.getUser()` in a route.
 - **Events**: `src/lib/events/bus.ts` is a module-level singleton. Any route that emits events must call `ensureInitialized()` (`src/lib/init.ts`) at module level: otherwise extension handlers are never wired and events silently go nowhere.
 - **Supabase clients**: browser `client.ts`, server `createClient()`, service role `createServiceClient()`, cookieless service role `createServiceClientNoCookies()` (lives in `src/lib/auth/api-keys.ts`; for API-key/MCP paths). Paginate with `fetchAllRows()`: PostgREST silently caps at 1000 rows.
-- **Extensions**: opt-in plugins in `extensions/general/<name>/`; `extensions.config.json` is the source of truth for what's enabled. Core must run with zero extensions.
-- **MCP server**: the bookkeeping engine is exposed as 150+ MCP tools (`extensions/general/mcp-server/`), authenticated by `gnubok_sk_` API keys (SHA-256, scoped, default 100 RPM per key).
-- **Types**: import from `@/types` (`types/index.ts`); event types in `src/lib/events/types.ts`.
+- **Extensions**: opt-in plugins in `src/extensions/general/<name>/`; `extensions.config.json` is the source of truth for what's enabled. Core must run with zero extensions.
+- **MCP server**: the bookkeeping engine is exposed as 150+ MCP tools (`src/extensions/general/mcp-server/`), authenticated by `gnubok_sk_` API keys (SHA-256, scoped, default 100 RPM per key).
+- **Types**: import from `@/types` (`src/types/index.ts`); event types in `src/lib/events/types.ts`.
 - **User-facing errors are Swedish**: map through `src/lib/errors/get-error-message.ts`.
 - **Cron**: hosted cron jobs live in `vercel.json`, authenticated via `verifyCronSecret()` (`src/lib/auth/cron.ts`).
 
 ## Repository Map
 
-Shared application services live in `src/lib/`. Other application folders remain at the root until PR #2932 completes the source relocation. Existing skill references to `lib/` resolve to `src/lib/` during this transition.
+Application code lives under `src/`. Source paths in historical decisions and existing skill instructions (for example `lib/...` or `app/...`) are relative to `src/`. Database migrations, published skill bodies, setup entry points, and repository tooling keep their root paths.
 
 - `src/lib/bookkeeping/`: engine, entry generators, mapping, templates, BAS 2026 data (`bas-data/`)
 - `src/lib/core/`: period, year-end, storno, tax codes, audit, documents
@@ -99,19 +99,19 @@ Shared application services live in `src/lib/`. Other application folders remain
 - `src/lib/reports/`: balance sheet, income statement, trial balance, GL, ledgers, VAT, SIE, INK2, NE-bilaga, salary, …
 - `src/lib/invoices/`, `src/lib/transactions/`, `src/lib/import/`, `src/lib/documents/`, `src/lib/salary/`, `src/lib/reconciliation/`, `src/lib/tax/`, `src/lib/vat/`, `src/lib/providers/` (Fortnox/Bokio/Briox/BL/Visma), `src/lib/skatteverket/`, `src/lib/currency/`, `src/lib/bankgiro/`, `src/lib/deadlines/`, `src/lib/calendar/`
 - `src/lib/utils.ts`: `cn()`, `formatCurrency()`, `formatDate()`, `formatOrgNumber()`; `src/lib/logger.ts`
-- `app/(dashboard)/*` pages; `app/api/*` routes; `supabase/migrations/` schema; `extensions/general/*` plugins
+- `src/app/(dashboard)/*` pages; `src/app/api/*` routes; `supabase/migrations/` schema; `src/extensions/general/*` plugins
 
 ## Testing
 
-Vitest 4, `node` env, tests in `__tests__/`, scope `src/lib/` + `app/api/` (no component/E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, …). `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Trigger/RPC/RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
+Vitest 4, `node` env, tests in `__tests__/`, scope `src/lib/` + `src/app/api/` (no component/E2E tests). Helpers in `tests/helpers.ts`: `createMockSupabase()`, `createQueuedMockSupabase()`, `createMockRequest()`, `parseJsonResponse()`, plus fixture factories (`makeTransaction`, `makeJournalEntry`, `makeInvoice`, …). `vi.clearAllMocks()` + `eventBus.clear()` in `beforeEach`. Trigger/RPC/RLS behavior is tested in `*.pg.test.ts` against real Postgres, not with mocks.
 
 ## Detail Loads On Demand
 
 Don't duplicate these here; they auto-load when you touch matching paths:
 
-- `.claude/rules/design.md`: design system, locked tokens (`app/**`, `components/**`)
+- `.claude/rules/design.md`: design system, locked tokens (`src/app/**`, `src/components/**`)
 - `.claude/rules/i18n.md`: sv/en conventions, "stays Swedish" surfaces
-- `.claude/rules/api-routes.md`: `withRouteContext` route pattern, endpoint map (`app/api/**`)
+- `.claude/rules/api-routes.md`: `withRouteContext` route pattern, endpoint map (`src/app/api/**`)
 - `.claude/rules/database.md`: migration rules, key tables/RPCs/triggers, pg-real (`supabase/migrations/**`)
 - `.claude/rules/mcp-server.md`: MCP tool authoring, staged-operation pattern
 - `.claude/rules/bookkeeping.md`: BAS accounts, VAT treatments/rutor, `src/lib/core/` services

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const source = fs.readFileSync(
-  path.resolve(__dirname, '../../../../app/(dashboard)/invoices/page.tsx'),
+  path.resolve(__dirname, '../../../app/(dashboard)/invoices/page.tsx'),
   'utf8',
 )
 

@@ -29,7 +29,6 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { sourcePath, sourceRelative } from './source-paths.mjs'
 
 export const REFERENCE_API_PATHS = [
   'bookkeeping/fiscal-periods',
@@ -125,10 +124,10 @@ function walk(dir, out) {
 /** Sorted repo-relative paths of files with at least one raw reference fetch. */
 export function findRawReferenceFetches(root) {
   const files = []
-  for (const dir of SCAN_DIRS) walk(sourcePath(root, dir), files)
+  for (const dir of SCAN_DIRS) walk(path.join(root, dir), files)
   const offenders = []
   for (const file of files) {
-    const rel = sourceRelative(root, file)
+    const rel = path.relative(root, file).split(path.sep).join('/')
     if (rel.startsWith('app/api/') || RAW_REFERENCE_SANCTIONED.has(rel)) continue
     const source = fs.readFileSync(file, 'utf8')
     if (findRawReferenceFetchesInSource(source).length) offenders.push(rel)

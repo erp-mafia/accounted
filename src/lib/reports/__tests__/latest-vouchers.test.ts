@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { getLatestPostedVouchers } from '../latest-vouchers'
 import { formatLatestVouchers, LATEST_VOUCHERS_LABEL } from '../latest-vouchers-format'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import enMessages from '../../../../messages/en.json'
-import svMessages from '../../../../messages/sv.json'
+import enMessages from '../../../messages/en.json'
+import svMessages from '../../../messages/sv.json'
 
 beforeEach(() => {
   vi.clearAllMocks()

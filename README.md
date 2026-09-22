@@ -72,9 +72,7 @@ See [contributing guide](.github/CONTRIBUTING.md) for the full development workf
 
 | Path | Purpose |
 | --- | --- |
-| [`app/`](app/), [`components/`](components/) | Application routes, API endpoints, and interface components |
-| [`src/lib/`](src/lib/) | Accounting engine, domain services, and integrations |
-| [`extensions/`](extensions/) | Opt-in product extensions |
+| [`src/`](src/README.md) | Application routes, components, accounting services, translations, and extensions |
 | [`packages/`](packages/) | MCP bridges, connector contract, and Claude Code plugin |
 | [`supabase/`](supabase/) | Database configuration and migration history |
 | [`tests/`](tests/) | Shared fixtures, database suites, and cross-cutting tests; unit tests also live beside their code |
@@ -91,19 +89,19 @@ The [documentation index](docs/README.md) groups the repository guides by task.
 - [Architecture](docs/architecture.md)
 - [Self-hosting](docs/SELF-HOSTING.md) and [Docker reference](docs/DOCKER.md)
 - [Extension development](docs/EXTENSIONS.md)
-- [Contributing](.github/CONTRIBUTING.md) and [security reporting](SECURITY.md)
+- [Contributing](.github/CONTRIBUTING.md) and [security reporting](.github/SECURITY.md)
 
 ## Community
 
 - Found a bug or have an idea? [Open an issue](https://github.com/erp-mafia/accounted/issues/new/choose)
-- Security vulnerabilities: see [SECURITY.md](SECURITY.md), never a public issue
+- Security vulnerabilities: see [SECURITY.md](.github/SECURITY.md), never a public issue
 - Everyone interacting in the project is expected to follow the [Code of Conduct](.github/CODE_OF_CONDUCT.md)
 
 ## Contributing
 
 Contributions are welcome. See [contributing guide](.github/CONTRIBUTING.md) for the full guide.
 
-All commits require a [DCO sign-off](DCO) (`git commit -s`).
+All commits require a [DCO sign-off](.github/DCO) (`git commit -s`).
 
 ## License
 
