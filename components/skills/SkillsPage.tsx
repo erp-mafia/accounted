@@ -392,12 +392,10 @@ function Registry({ companyId }: { companyId: string }) {
               <div className={styles.pin}>
                 <h2>{t('sign_title')}</h2>
                 <div className={styles.btns}>
-                  {AI_CLIENTS.map((c, i) => i === 0 ? (
-                    <span key={c.id} className={styles.cta}>
-                      <Button onClick={() => connect(c.id)}>{t('connect_client', { client: c.name })}</Button>
-                    </span>
-                  ) : (
-                    <Button key={c.id} variant="outline" className="h-11 px-6" onClick={() => connect(c.id)}>{c.name}</Button>
+                  {AI_CLIENTS.map((c, i) => (
+                    <button key={c.id} type="button" className={i === 0 ? styles.sbtn : `${styles.sbtn} ${styles.sbtnGhost}`} onClick={() => connect(c.id)}>
+                      {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+                    </button>
                   ))}
                 </div>
               </div>

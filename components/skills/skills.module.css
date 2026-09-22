@@ -537,39 +537,43 @@
   .forgekey::before, .forgekey::after { opacity: .9; }
 }
 
-/* the sign's call to action burns in Himmel so it reads as the next step */
-.btns { isolation: isolate; }
-.cta { position: relative; display: inline-flex; border-radius: 99px; }
-.cta > * { height: 44px; padding: 0 24px; font-size: 14px; }
-.cta::before {
-  content: "";
-  position: absolute;
-  inset: -10px;
+/*
+ * The sign's buttons, made for its white face: an ink pill for the first
+ * client with the run pill's breathing Himmel dot, white keys for the rest.
+ * All three carry the keys' small pressed edge.
+ */
+.sbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 20px 0 16px;
+  border: 1px solid hsl(var(--foreground));
   border-radius: 99px;
-  z-index: -1;
-  pointer-events: none;
-  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(var(--rf), 1) 50%, transparent 72% 100%);
-  filter: blur(10px);
-  opacity: .8;
-  animation: spin 5s linear infinite;
-  transition: opacity .4s, inset .4s;
+  background: hsl(var(--foreground));
+  color: hsl(var(--background));
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 2px 0 hsl(var(--foreground) / .35), 0 8px 18px -10px rgba(var(--g), .6);
+  transition: transform .12s cubic-bezier(.2, .7, .2, 1), box-shadow .12s, background-color .18s, border-color .18s;
 }
-.cta:hover::before { inset: -14px; opacity: 1; }
-.cta::after {
+.sbtn::before {
   content: "";
-  position: absolute;
-  inset: -3px;
-  padding: 2px;
+  width: 6px;
+  height: 6px;
   border-radius: 99px;
-  z-index: -1;
-  pointer-events: none;
-  background: conic-gradient(from var(--ang), var(--rb) 0 28%, var(--rbd) 50%, var(--rb) 72% 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: spin 5s linear infinite;
+  background: var(--rb);
+  animation: rundot 2.6s ease-in-out infinite;
 }
+.sbtn:hover { transform: translateY(-1px); box-shadow: 0 3px 0 hsl(var(--foreground) / .35), 0 12px 22px -10px rgba(var(--g), .6); }
+.sbtn:active { transform: translateY(2px); box-shadow: 0 0 0 hsl(var(--foreground) / .35); }
+.sbtn:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
+.sbtnGhost { padding: 0 20px; border-color: hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); box-shadow: 0 2px 0 hsl(var(--border)); }
+.sbtnGhost::before { content: none; }
+.sbtnGhost:hover { border-color: var(--rbd); box-shadow: 0 3px 0 hsl(var(--border)); }
+.sbtnGhost:active { box-shadow: 0 0 0 hsl(var(--border)); }
 .cled { margin-right: 2px; }
 
 /* The creator renders in a portal outside .page: give it the page's fire and muted tokens. */
