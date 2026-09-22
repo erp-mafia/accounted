@@ -215,12 +215,10 @@
 }
 .row:hover::after { opacity: 1; }
 .row[data-hit] { animation: hitflare .8s ease-out; }
-.row .tg { margin-bottom: 6px; font-family: var(--font-mono); font-size: 10px; line-height: 16px; letter-spacing: .08em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
-.row[data-own] .tg { color: hsl(var(--foreground)); }
 /* the name is the button; its ::after stretches the click over the whole key */
 .rowMain { all: unset; cursor: pointer; }
 .rowMain::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
-.row .nm { display: block; font-weight: 500; font-size: 14px; line-height: 20px; color: hsl(var(--foreground)); }
+.row .nm { display: block; margin-bottom: 2px; font-weight: 500; font-size: 14px; line-height: 20px; color: hsl(var(--foreground)); }
 .row .ds { flex: 1; font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .run {
   position: relative;

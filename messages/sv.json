@@ -10228,8 +10228,6 @@
     "hide_full": "Dölj instruktionen",
     "body_failed": "Kunde inte hämta instruktionen.",
     "locked_line": "Koppla din AI för att använda den här.",
-    "own_pill": "Skapad av dig",
-    "own_group": "Egen",
     "own_desc": "Skapad av dig. Din AI hämtar alltid den senaste versionen.",
     "edit_answers": "Ändra svar",
     "delete": "Ta bort",
@@ -10238,14 +10236,6 @@
     "retry": "Försök igen",
     "save_failed": "Kunde inte spara skillen. Försök igen.",
     "viewer_note": "Du har läsbehörighet i företaget och kan inte skapa eller ta bort skills.",
-    "groups": {
-      "daily": "Dagligt",
-      "month": "Månad",
-      "vat": "Moms",
-      "payroll": "Lön",
-      "invoice": "Faktura",
-      "year": "År"
-    },
     "skills": {
       "bookkeep": {
         "name": "Bokför transaktioner",

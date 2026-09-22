@@ -21,7 +21,7 @@ import styles from './skills.module.css'
 type SkillSummary = Omit<CatalogSkill, 'body'>
 type OwnRow = { slug: string; name: string; summary: string; installationId: string }
 type PageState = 'loading' | 'locked' | 'waiting' | 'unlocking' | 'open'
-type Row = { key: string; name: string; desc: string; tag: string; own?: OwnRow; id?: RegistrySkillId }
+type Row = { key: string; name: string; desc: string; own?: OwnRow; id?: RegistrySkillId }
 
 /** Set once the unlock ("Gnistan fortsätter") has played in this browser. */
 const UNLOCK_SEEN_KEY = 'accounted.skills.unlock-seen'
@@ -310,8 +310,8 @@ function Registry({ companyId }: { companyId: string }) {
   // ── derived view ──
   const top = REGISTRY_SKILLS.slice(0, FREE_SKILLS)
   const rows: Row[] = [
-    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, tag: t('own_group'), own: row })),
-    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), tag: t(`groups.${skill.group}`), id: skill.id })),
+    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, own: row })),
+    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), id: skill.id })),
   ]
   useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
   const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
@@ -374,7 +374,6 @@ function Registry({ companyId }: { companyId: string }) {
                   data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
                 >
                   <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
-                  <span className={styles.tg}>{row.own ? t('own_pill') : row.tag}</span>
                   <button type="button" className={styles.rowMain} tabIndex={rowsLocked ? -1 : undefined} onClick={() => openRow(row)}>
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>

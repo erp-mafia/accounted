@@ -10228,8 +10228,6 @@
     "hide_full": "Hide the instruction",
     "body_failed": "Could not load the instruction.",
     "locked_line": "Connect your AI to use this one.",
-    "own_pill": "Created by you",
-    "own_group": "Own",
     "own_desc": "Created by you. Your AI always loads the latest version.",
     "edit_answers": "Change answers",
     "delete": "Delete",
@@ -10238,14 +10236,6 @@
     "retry": "Try again",
     "save_failed": "Could not save the skill. Try again.",
     "viewer_note": "You have read access in this company and cannot create or delete skills.",
-    "groups": {
-      "daily": "Daily",
-      "month": "Month",
-      "vat": "VAT",
-      "payroll": "Payroll",
-      "invoice": "Invoice",
-      "year": "Year"
-    },
     "skills": {
       "bookkeep": {
         "name": "Book transactions",
