@@ -262,17 +262,16 @@
  * redefined inside it so the buttons and text turn to their dark versions.
  */
 .pin {
-  --background: 197 46% 16%;
-  --foreground: 45 33% 97%;
+  --background: 200 10% 12%;
+  --foreground: 45 20% 96%;
   --primary: 0 0% 100%;
-  --primary-foreground: 197 46% 14%;
-  --secondary: 197 30% 24%;
-  --secondary-foreground: 45 33% 97%;
-  --border: 197 22% 30%;
-  --input: 197 20% 38%;
-  --muted-foreground: 42 14% 76%;
+  --primary-foreground: 200 10% 11%;
+  --secondary: 200 8% 20%;
+  --secondary-foreground: 45 20% 96%;
+  --border: 200 6% 26%;
+  --input: 200 6% 34%;
+  --muted-foreground: 40 8% 72%;
   position: relative;
-  isolation: isolate;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -284,12 +283,25 @@
   text-align: center;
   color: hsl(var(--foreground));
   background:
-    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, .10), rgba(255, 255, 255, 0) 60%),
-    linear-gradient(180deg, #1C3C49, var(--ground));
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, .08), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(180deg, #23282A, #181B1C);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, .16),
     0 6px 0 rgba(6, 14, 18, .92),
-    0 30px 70px -24px rgba(var(--g), .7);
+    0 30px 70px -24px rgba(0, 0, 0, .45);
+}
+/* Eld: the same wide white light the panel keys spill, wandering behind the sign */
+.pin::before {
+  content: "";
+  position: absolute;
+  inset: -14px;
+  z-index: -1;
+  border-radius: 22px;
+  pointer-events: none;
+  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(255, 255, 255, .95) 50%, transparent 72% 100%);
+  filter: blur(18px);
+  opacity: .45;
+  animation: spin 6s linear infinite;
 }
 .pin::after {
   content: "";
