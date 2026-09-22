@@ -256,8 +256,56 @@
   transition: opacity .6s, visibility .6s;
 }
 .plate[data-gone] { opacity: 0; visibility: hidden; }
-.pin { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; padding: 32px 40px; border-radius: 12px; border: 1px solid hsl(var(--border)); background: hsl(var(--background) / .96); box-shadow: 0 20px 60px hsl(var(--foreground) / .12); max-width: calc(100% - 32px); }
-.pin h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; text-wrap: balance; }
+/*
+ * The sign is a key from the panel: the same night ground, glass highlight,
+ * pressed edge and a white light wandering its border. The theme tokens are
+ * redefined inside it so the buttons and text turn to their dark versions.
+ */
+.pin {
+  --background: 197 46% 16%;
+  --foreground: 45 33% 97%;
+  --primary: 0 0% 100%;
+  --primary-foreground: 197 46% 14%;
+  --secondary: 197 30% 24%;
+  --secondary-foreground: 45 33% 97%;
+  --border: 197 22% 30%;
+  --input: 197 20% 38%;
+  --muted-foreground: 42 14% 76%;
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  max-width: calc(100% - 32px);
+  padding: 36px 44px 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  text-align: center;
+  color: hsl(var(--foreground));
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, .10), rgba(255, 255, 255, 0) 60%),
+    linear-gradient(180deg, #1C3C49, var(--ground));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, .16),
+    0 6px 0 rgba(6, 14, 18, .92),
+    0 30px 70px -24px rgba(var(--g), .7);
+}
+.pin::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  padding: 1px;
+  border-radius: inherit;
+  pointer-events: none;
+  background: conic-gradient(from var(--ang), transparent 0 30%, rgba(255, 255, 255, .85) 50%, transparent 70% 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  animation: spin 6s linear infinite;
+}
+.pin h2 { max-width: 460px; font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 36px; color: #FAF8F1; text-wrap: balance; }
 .pin p { color: hsl(var(--muted-foreground)); max-width: 380px; line-height: 20px; }
 .btns { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .waitled { width: 10px; height: 10px; border-radius: 99px; background: hsl(var(--foreground)); box-shadow: 0 0 0 5px hsl(var(--foreground) / .22); animation: breathe 1.4s ease-in-out infinite; }
