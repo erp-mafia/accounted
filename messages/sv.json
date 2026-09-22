@@ -10198,7 +10198,7 @@
     "title": "Skills",
     "help": "Skills är instruktioner som din AI hämtar från Accounted när den arbetar i ditt företag. Tre är fria från start. Resten tänds när du kopplar Claude, ChatGPT eller Grok. Din AI föreslår, du godkänner.",
     "create": "Skapa skill",
-    "hero_title": "Skills som gör din AI till en bokförare.",
+    "hero_title": "Agent Skills",
     "count_of": "av {total} tända",
     "sign_title": "Sju skills väntar på din AI.",
     "sign_body": "Koppla Claude, ChatGPT eller Grok så tänds de. Gratis, tar en minut.",
