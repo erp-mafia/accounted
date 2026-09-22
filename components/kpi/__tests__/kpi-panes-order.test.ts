@@ -7,6 +7,8 @@ describe('orderedVisibleKpiIds', () => {
     const preferences: KPIPreferences = {
       visibleKpis: ['netResult', 'cashPosition'],
       kpiOrder: ['cashPosition', 'netResult', 'vatLiability'],
+      accountOverrides: {},
+      showMonthlyTable: true,
     }
     expect(orderedVisibleKpiIds(preferences)).toEqual(['cashPosition', 'netResult'])
   })
@@ -15,6 +17,8 @@ describe('orderedVisibleKpiIds', () => {
     const preferences: KPIPreferences = {
       visibleKpis: ['cashPosition'],
       kpiOrder: ['netResult', 'cashPosition'],
+      accountOverrides: {},
+      showMonthlyTable: true,
     }
     expect(orderedVisibleKpiIds(preferences)).toEqual(['cashPosition'])
   })
