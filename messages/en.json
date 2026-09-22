@@ -1,52 +1,4 @@
 {
-  "skills_page": {
-    "close": "Close",
-    "title": "Skills",
-    "help": "Instructions your connected AI can fetch through MCP. Accounted's base accounting skills are always available. Add specialist skills for this company, or write private company or firm instructions. Sharing requires your confirmation and human review.",
-    "new": "New own skill",
-    "name": "Name",
-    "source": "Source",
-    "status": "Status",
-    "actions": "Actions",
-    "own": "Own",
-    "community": "Community",
-    "active": "Active",
-    "available": "Available",
-    "submitted": "Under review",
-    "published": "Published",
-    "withdrawn": "Withdrawn",
-    "team": "Firm",
-    "company": "Company",
-    "add": "Add",
-    "details": "Details",
-    "remove_scope": "Remove from {scope}",
-    "edit": "Edit",
-    "share": "Share",
-    "withdraw": "Withdraw sharing",
-    "load_failed": "Could not load the skills.",
-    "save_failed": "Could not save. Check your permissions and reload; submitted text cannot be edited.",
-    "retry": "Retry",
-    "empty": "No skills available",
-    "private_help": "Private instructions, visible only to this company or firm. They cannot override accounting safeguards.",
-    "submitted_help": "The text is frozen for review. It remains available to this company or firm; it is not yet published.",
-    "published_help": "A reviewed public copy has been published under the author handle you supplied. These instructions cannot override accounting safeguards.",
-    "withdrawn_help": "This skill no longer loads through your company. A reviewer removes any public copy. Instructions already copied into a chat cannot be recalled.",
-    "community_reviewed": "Reviewed at publication {date}. Not monitored for subsequent rule changes.",
-    "accounted_reviewed": "Checked against applicable rules {date}. Maintained by Accounted.",
-    "review_unknown": "No verified review date recorded.",
-    "editor_help": "Use plain Markdown, at most 32 KB. Describe working preferences and reference Accounted's calculators. Never instruct an AI to bypass approvals or accounting safeguards.",
-    "description": "Short description",
-    "body": "Instructions (Markdown)",
-    "bytes": "{bytes} / 32768 bytes",
-    "invalid_body": "Use plain Markdown without raw tags, expressions, imports or executable URLs. Close code fences and keep the text within 32 KB.",
-    "team_scope": "Apply to the whole firm (firm administrator required)",
-    "cancel": "Cancel",
-    "save": "Save",
-    "share_help": "This saves a review request in Accounted, not a public post. A reviewer checks the frozen text before proposing publication. You may withdraw it.",
-    "author_handle": "Public author handle (lowercase letters, digits and hyphens)",
-    "confirm_share": "I confirm that the name, description and text contain no personal or customer data. I agree to public publication of this skill under MIT with the author handle above.",
-    "submit": "Submit for review"
-  },
   "ai_handoff": {
     "do_with": "Do with {client}",
     "do_with_ai": "Do it with your AI",
@@ -10241,5 +10193,232 @@
     "error_title": "Could not reach VIES",
     "error_description": "Try again in a moment, or validate from the customer card.",
     "acknowledge_swedish_vat": "Invoice with Swedish VAT even though the customer is an EU business without a validated VAT number."
+  },
+  "skills_registry": {
+    "title": "Skills",
+    "help": "Skills are instructions your AI loads from Accounted when it works in your company. Three are free from the start. The rest light up when you connect Claude, ChatGPT or Grok. Your AI proposes, you approve.",
+    "create": "Create skill",
+    "hero_title": "Skills that turn your AI into a bookkeeper.",
+    "hero_sub_locked": "Three are lit from the start. Connect your AI and the rest light up.",
+    "hero_sub_open": "All are lit. Your AI always loads the latest version.",
+    "count_of": "of {total} lit",
+    "connected_line": "{client} is connected.",
+    "connected_rest": "All skills are lit.",
+    "sign_title": "Seven skills are waiting for your AI.",
+    "sign_body": "Connect Claude, ChatGPT or Grok and they light up. Free, takes a minute.",
+    "connect_client": "Connect {client}",
+    "wait_claude_title": "Continue in the Claude tab.",
+    "wait_claude_body": "Approve the connection there. When you come back here, your skills light up.",
+    "wait_title": "Continue in {client}.",
+    "open_client": "Open {client}",
+    "check_again": "I have connected",
+    "still_waiting": "No connection found yet. Approve it in {client} and try again.",
+    "copy": "Copy",
+    "copied": "Copied",
+    "copy_failed": "Could not copy. Select the text and copy it yourself.",
+    "server_address": "Server address",
+    "step_1": "Copy the address above.",
+    "step_2": "Open {client}, go to apps or connectors and paste it as a new MCP server.",
+    "step_3": "Approve it there. Then come back here and your skills light up.",
+    "cancel": "Cancel",
+    "close": "Close",
+    "say_label": "Tell your AI",
+    "prompt": "{say} Load the skill \"{skill}\" from Accounted (load_skill) and follow it.",
+    "own_prompt": "Load the skill \"{skill}\" from Accounted (load_skill) and follow it: {name}.",
+    "copy_open": "Copy and open {client}",
+    "copied_open": "Copied. Paste it into {client}.",
+    "show_full": "Show the full instruction",
+    "hide_full": "Hide the instruction",
+    "body_failed": "Could not load the instruction.",
+    "locked_line": "Connect your AI to use this one.",
+    "own_pill": "Created by you",
+    "own_group": "Own",
+    "own_desc": "Created by you. Your AI always loads the latest version.",
+    "edit_answers": "Change answers",
+    "delete": "Delete",
+    "delete_confirm": "Delete the skill? Your AI can no longer load it.",
+    "load_failed": "Could not load skills.",
+    "retry": "Try again",
+    "save_failed": "Could not save the skill. Try again.",
+    "viewer_note": "You have read access in this company and cannot create or delete skills.",
+    "groups": {
+      "daily": "Daily",
+      "month": "Month",
+      "vat": "VAT",
+      "payroll": "Payroll",
+      "invoice": "Invoice",
+      "year": "Year"
+    },
+    "skills": {
+      "bookkeep": {
+        "name": "Book transactions",
+        "short": "Proposes account and VAT. You approve.",
+        "desc": "Works through unbooked bank transactions, proposes account and VAT and waits for your approval.",
+        "steps": [
+          "Fetches your unbooked bank transactions",
+          "Looks for documents and how you booked similar ones before",
+          "Proposes account and VAT, and explains why",
+          "Asks when something is unclear, such as private or entertainment",
+          "Books only after you approve"
+        ],
+        "say": "Book my unbooked transactions."
+      },
+      "kvittojakten": {
+        "name": "Kvittojakten",
+        "short": "Finds missing receipts.",
+        "desc": "Finds the receipts and invoices missing from your books in your mail and links them to the right voucher.",
+        "steps": [
+          "Lists entries that lack a document",
+          "Searches your own mail for the receipt",
+          "Brings the document into Accounted",
+          "Proposes the link, you approve",
+          "Shows what is still missing"
+        ],
+        "say": "Find the missing receipts."
+      },
+      "reconcile-month": {
+        "name": "Reconcile the month",
+        "short": "Compares bank and books.",
+        "desc": "Compares bank and books account by account and shows what differs.",
+        "steps": [
+          "Compares bank and books, account by account",
+          "Points out entries that exist on one side only",
+          "Proposes how to correct the difference",
+          "Signs the account off once you approve"
+        ],
+        "say": "Reconcile last month for me."
+      },
+      "month-end-close": {
+        "name": "Month-end close",
+        "short": "Finishes the books and locks the month.",
+        "desc": "Finishes booking, reconciles, checks the voucher series and locks the period.",
+        "steps": [
+          "Checks that everything is booked and reconciled",
+          "Tells you if last month is still open",
+          "Checks the voucher series for gaps",
+          "Locks the period when you say so"
+        ],
+        "say": "Close last month."
+      },
+      "quarterly-vat-review": {
+        "name": "VAT return",
+        "short": "Reviews VAT box by box.",
+        "desc": "Reviews VAT box by box and prepares the return.",
+        "steps": [
+          "Finds out whether you file monthly, quarterly or yearly",
+          "Checks that the period is booked and reconciled",
+          "Computes VAT box by box and flags reverse charge",
+          "Prepares the return for your review"
+        ],
+        "say": "Prepare the VAT return."
+      },
+      "payroll-monthly": {
+        "name": "Payroll and AGI",
+        "short": "Salary, fees and AGI.",
+        "desc": "Computes salary, employer contributions and vacation liability, and produces the AGI.",
+        "steps": [
+          "Checks that employee details are complete",
+          "Computes salary, tax and employer contributions",
+          "Books the salary run once you approve",
+          "Produces the AGI data"
+        ],
+        "say": "Run this month's payroll."
+      },
+      "invoicing-rules": {
+        "name": "Invoice correctly",
+        "short": "Checks the invoice before it is sent.",
+        "desc": "Checks mandatory details, VAT and ROT/RUT before the invoice is sent.",
+        "steps": [
+          "Asks what was delivered, to whom and when",
+          "Checks the mandatory details",
+          "Picks the right VAT and ROT/RUT",
+          "Tells you before anything is sent"
+        ],
+        "say": "Help me create an invoice."
+      },
+      "kreditfaktura-process": {
+        "name": "Credit note",
+        "short": "Corrects a sent invoice the right way.",
+        "desc": "Picks the right path when a sent invoice must be corrected or credited.",
+        "steps": [
+          "Asks what is wrong and whether the customer has paid",
+          "Decides whether to credit or correct",
+          "Creates the credit note with the right reference",
+          "Follows up the refund"
+        ],
+        "say": "An invoice was wrong. Help me credit it."
+      },
+      "year-end-close": {
+        "name": "Year-end close",
+        "short": "Closes the year when everything is ready.",
+        "desc": "Closing entries, a check that everything is ready, and closing the year.",
+        "steps": [
+          "Checks that the year is ready to close",
+          "Proposes accruals and depreciation",
+          "Asks about the decisions only you can take",
+          "Closes the year once you approve"
+        ],
+        "say": "Do the year-end close."
+      },
+      "tax-planning": {
+        "name": "Tax planning",
+        "short": "Works out the options before year end.",
+        "desc": "Tax allocation reserve, salary or dividend: works out the options before year end.",
+        "steps": [
+          "Asks about the expected result and your plans",
+          "Works out a tax allocation reserve",
+          "Compares salary and dividend",
+          "Shows the tax effect before year end"
+        ],
+        "say": "Work out my tax before year end."
+      }
+    },
+    "creator": {
+      "gate_kick": "Before you create a skill",
+      "gate_title": "Connect your AI first.",
+      "gate_body": "A skill is an instruction your AI follows. Without a connected AI there is nobody to follow it.",
+      "question_of": "Question {n} of 3",
+      "back": "Back",
+      "next": "Next",
+      "forge": "Create skill",
+      "forge_kick": "Writing your skill",
+      "tick_1": "Reading your answers",
+      "tick_2": "Checking against the bookkeeping rules",
+      "tick_3": "Writing the instruction",
+      "q1": "What should your AI help with?",
+      "q1_options": [
+        "Booking purchases",
+        "Invoicing",
+        "Payroll",
+        "VAT",
+        "Reconciliation",
+        "Something else"
+      ],
+      "q2": "How do you work today?",
+      "q2_options": [
+        "Receipts are photographed in the app",
+        "Private expenses occur",
+        "We have projects or cost centres",
+        "Several payment cards"
+      ],
+      "q3": "What must your AI never do without asking?",
+      "q3_options": [
+        "Book more than 10 000 kr",
+        "Guess VAT on foreign purchases",
+        "Create new accounts"
+      ],
+      "q3_fixed": "Touch locked periods (always applies)",
+      "name": "{area} at our company",
+      "body_intro": "The company's own instructions, written in Accounted. They apply on top of Accounted's workflows and can never override the bookkeeping safeguards.",
+      "body_scope_heading": "Scope",
+      "body_scope": "Applies to {area} in this company.",
+      "body_context_heading": "How we work",
+      "body_no_context": "No particular routines given.",
+      "body_ask_heading": "Always ask first",
+      "body_ask": "Ask the user before you: {item}.",
+      "body_locked": "Never touch locked or closed periods.",
+      "body_rules_heading": "Rules",
+      "body_rules": "Follow Accounted's workflow skills and bookkeeping rules. Every write is proposed and approved by the user in Accounted."
+    }
   }
 }

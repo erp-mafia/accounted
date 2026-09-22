@@ -1,154 +1,428 @@
 'use client'
 
-import { useId, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import { BookOpen, Plus } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { useFormat } from '@/lib/hooks/use-format'
-import { SkillBodySchema } from '@/lib/agent-skills/validation'
+import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
-import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
+import { FREE_SKILLS, REGISTRY_SKILLS, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
-import { Skeleton } from '@/components/ui/skeleton'
-import { EmptyState } from '@/components/ui/empty-state'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
-import { SlideOver, SlideOverContent, SlideOverHeader, SlideOverBody } from '@/components/ui/slide-over'
+import { SkillSheet, type SheetTarget } from './SkillSheet'
+import { SkillCreator, type CreatorMode } from './SkillCreator'
+import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
+import styles from './skills.module.css'
 
 type SkillSummary = Omit<CatalogSkill, 'body'>
+type OwnRow = { slug: string; name: string; summary: string; installationId: string }
+type PageState = 'loading' | 'locked' | 'waiting' | 'unlocking' | 'open'
+type Row = { key: string; name: string; desc: string; tag: string; own?: OwnRow; id?: RegistrySkillId }
 
-async function readData<T>(url: string): Promise<T> {
+/** Set once the unlock ("Gnistan fortsätter") has played in this browser. */
+const UNLOCK_SEEN_KEY = 'accounted.skills.unlock-seen'
+
+function readSeen(): boolean {
+  try { return window.localStorage.getItem(UNLOCK_SEEN_KEY) === '1' } catch { return false }
+}
+function markSeen(): void {
+  try { window.localStorage.setItem(UNLOCK_SEEN_KEY, '1') } catch { /* private mode: the unlock simply plays again */ }
+}
+
+/** Null when the status is unavailable: a failed read never makes a connected client look disconnected. */
+async function fetchConnections(signal: AbortSignal): Promise<AiClient[] | null> {
+  try {
+    const response = await fetch('/api/ai/connections', { signal })
+    if (!response.ok) return null
+    return (await response.json()).data as AiClient[]
+  } catch {
+    return null
+  }
+}
+
+async function readCatalog(url: string): Promise<SkillSummary[]> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skills request failed')
-  return (await response.json()).data as T
+  return (await response.json()).data as SkillSummary[]
 }
 
 export function SkillsPage() {
   const { company } = useCompany()
-  return company ? <CompanySkills key={company.id} companyId={company.id} /> : null
+  return company ? <Registry key={company.id} companyId={company.id} /> : null
 }
 
-function CompanySkills({ companyId }: { companyId: string }) {
-  const t = useTranslations('skills_page')
-  const { formatDateLong } = useFormat()
+function Registry({ companyId }: { companyId: string }) {
+  const t = useTranslations('skills_registry')
   const { canWrite } = useCanWrite()
-  const { data, error, isLoading, mutate } = useSWR(['/api/skills', companyId], ([url]) => readData<SkillSummary[]>(url))
-  const [selected, setSelected] = useState<string | null>(null)
-  const [editor, setEditor] = useState<CatalogSkill | 'new' | null>(null)
-  const [sharing, setSharing] = useState<SkillSummary | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [failure, setFailure] = useState(false)
-  const detail = useSWR(selected ? ['/api/skills', companyId, selected] : null, ([url, , slug]) => readData<CatalogSkill>(`${url}?slug=${encodeURIComponent(slug)}`))
+  const { appName } = useBranding()
+  const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
+  const own: OwnRow[] = (catalog.data ?? [])
+    .filter((skill) => skill.tier === 'own' && skill.shareStatus !== 'withdrawn' && skill.installations[0])
+    .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id }))
 
-  async function change(url: string, method: string, body?: unknown): Promise<boolean> {
-    setBusy(true)
-    setFailure(false)
+  // ── connection: asked on load and whenever the user comes back to the tab ──
+  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [pending, setPending] = useState<AiClient | null>(null)
+  const [checkedOnce, setCheckedOnce] = useState(false)
+  const pollerRef = useRef<AiStatusPoller | null>(null)
+  useEffect(() => {
+    const poller = createAiStatusPoller({
+      fetchStatus: fetchConnections,
+      onStatus: setConnected,
+      isHidden: () => document.visibilityState === 'hidden',
+    })
+    pollerRef.current = poller
+    poller.check()
+    const onBack = () => { if (document.visibilityState === 'visible') poller.check() }
+    window.addEventListener('focus', onBack)
+    document.addEventListener('visibilitychange', onBack)
+    return () => {
+      window.removeEventListener('focus', onBack)
+      document.removeEventListener('visibilitychange', onBack)
+      poller.stop()
+      pollerRef.current = null
+    }
+  }, [])
+
+  // ── elements the spark hops between ──
+  const pageRef = useRef<HTMLDivElement>(null)
+  const heroRef = useRef<HTMLElement>(null)
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([])
+  const rowAnchors = useRef(new Map<string, HTMLSpanElement>())
+  const rowOrder = useRef<string[]>([])
+  const createRef = useRef<HTMLButtonElement>(null)
+  const createLedRef = useRef<HTMLSpanElement>(null)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+
+  // ── Gnista: every visit, the spark leaves the headline and lights the three keys ──
+  const [litKeys, setLitKeys] = useState(0)
+  const [ringKey, setRingKey] = useState<number | null>(null)
+  const loadIn = useRef<Promise<void> | null>(null)
+  useEffect(() => {
+    if (loadIn.current) return // Strict Mode runs effects twice in dev: one spark only.
+    const hero = heroRef.current
+    const title = titleRef.current
+    if (!hero || !title || prefersReducedMotion() || !hero.animate) {
+      setLitKeys(FREE_SKILLS)
+      loadIn.current = Promise.resolve()
+      return
+    }
+    const run = async () => {
+      const h = title.getBoundingClientRect()
+      const b = hero.getBoundingClientRect()
+      const spark = new Spark(hero, { x: h.left - b.left + 4, y: h.bottom - b.top + 8 }, styles.spark)
+      try {
+        await wait(450)
+        for (let i = 0; i < FREE_SKILLS; i++) {
+          const card = cardRefs.current[i]
+          if (!alive.current || !card) return
+          await spark.hop(card, 560, 54)
+          if (!alive.current) return
+          setLitKeys(i + 1)
+          setRingKey(i)
+          await wait(240)
+        }
+        await spark.fade()
+      } finally {
+        spark.remove()
+        if (alive.current) { setRingKey(null); setLitKeys(FREE_SKILLS) }
+      }
+    }
+    loadIn.current = run()
+  }, [])
+
+  // ── Gnistan fortsätter: the spark lights the list, once after connecting ──
+  const [unlocking, setUnlocking] = useState<number | null>(null)
+  const [createLit, setCreateLit] = useState(false)
+  const startedUnlock = useRef(false)
+  const shouldUnlock = (list: AiClient[] | null, waitingFor: AiClient | null) =>
+    !!list?.length && !startedUnlock.current && (waitingFor !== null || !readSeen())
+  const runUnlock = useCallback(async () => {
+    startedUnlock.current = true
+    setPending(null)
+    setUnlocking(0)
+    await loadIn.current
+    const page = pageRef.current
+    const from = cardRefs.current[FREE_SKILLS - 1]
+    const anchors = rowOrder.current.map((key) => rowAnchors.current.get(key)).filter((el): el is HTMLSpanElement => !!el)
+    if (!page || !from || prefersReducedMotion() || !page.animate) {
+      markSeen()
+      setUnlocking(null)
+      return
+    }
+    const start = centerIn(page, from)
+    const spark = new Spark(page, { x: start.x, y: start.y + from.getBoundingClientRect().height / 2 }, `${styles.spark} ${styles.sparkInk}`)
     try {
-      const response = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) })
-      if (!response.ok) throw new Error('Skill save failed')
-      await mutate()
-      await detail.mutate()
-      return true
-    } catch {
-      setFailure(true)
-      return false
+      await wait(250)
+      for (let i = 0; i < anchors.length; i++) {
+        if (!alive.current) return
+        await spark.hop(anchors[i], 300, 26)
+        setUnlocking(i + 1)
+        await wait(70)
+      }
+      if (createLedRef.current && alive.current) {
+        await spark.hop(createLedRef.current, 800, 60)
+        setCreateLit(true)
+        await wait(150)
+      }
+      await spark.fade()
     } finally {
-      setBusy(false)
+      spark.remove()
+      markSeen()
+      if (alive.current) { setCreateLit(false); setUnlocking(null) }
+    }
+  }, [])
+  useEffect(() => {
+    if (shouldUnlock(connected, pending)) void runUnlock()
+  }, [connected, pending, runUnlock])
+
+  const isConnected = (connected?.length ?? 0) > 0
+  const state: PageState = connected === null
+    ? 'loading'
+    : unlocking !== null || shouldUnlock(connected, pending)
+      ? 'unlocking'
+      : isConnected ? 'open' : pending ? 'waiting' : 'locked'
+  const client = pickConnectedAiClient(connected ?? [], pending ?? undefined) ?? pending ?? 'claude'
+  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
+
+  // ── connect ──
+  const [addressCopy, setAddressCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [creator, setCreator] = useState<CreatorMode | null>(null)
+  const connectAction = (target: AiClient) => aiConnectAction(target, { origin: window.location.origin, appName })
+  function connect(target: AiClient) {
+    setCreator(null)
+    setPending(target)
+    setAddressCopy('idle')
+    setCheckedOnce(false)
+    // Claude has an add-connector deep link. ChatGPT and Grok get the address to paste first.
+    if (target === 'claude') openAiConnector(connectAction(target).open)
+    pollerRef.current?.attempt(target)
+  }
+  function reopen(target: AiClient) {
+    openAiConnector(connectAction(target).open)
+    pollerRef.current?.attempt(target)
+  }
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address)
+      setAddressCopy('copied')
+    } catch {
+      setAddressCopy('failed')
     }
   }
 
-  return <div className="space-y-8">
-    <PageHeader title={t('title')} help={<HelpPopover><p>{t('help')}</p></HelpPopover>} action={<Button disabled={!canWrite} onClick={() => setEditor('new')}><Plus className="mr-2 h-4 w-4" aria-hidden />{t('new')}</Button>} />
-    {failure && !editor && !sharing && <p role="alert" className="text-sm text-destructive">{t('save_failed')}</p>}
-    {isLoading ? <Skeleton className="h-12 w-full" /> : error ? <div role="alert"><p>{t('load_failed')}</p><Button variant="outline" onClick={() => void mutate()}>{t('retry')}</Button></div> : !data?.length ? <EmptyState icon={BookOpen} title={t('empty')} description={t('help')} /> : <div className="overflow-x-auto stagger-enter">
-      <table className="w-full border-collapse text-[13px]">
-        <thead><tr><th className={TH_CLASS}>{t('name')}</th><th className={TH_CLASS}>{t('source')}</th><th className={TH_CLASS}>{t('status')}</th><th className={TH_CLASS}><span className="sr-only">{t('actions')}</span></th></tr></thead>
-        <tbody>{data.map((skill) => <tr key={skill.slug} className="border-b border-border hover:bg-secondary/35">
-          <td className={TD_CLASS}><button type="button" data-ph-mask className="text-left underline-offset-4 hover:underline focus-visible:underline" onClick={() => setSelected(skill.slug)}>{skill.name}</button></td>
-          <td className={TD_CLASS}>{skill.tier === 'own' || skill.tier === 'community' ? <Badge variant="outline">{t(skill.tier)}</Badge> : <span className="text-muted-foreground">Accounted</span>}</td>
-          <td className={TD_CLASS}><span className="text-muted-foreground">{skill.shareStatus && skill.shareStatus !== 'private' ? t(skill.shareStatus) : skill.active ? t('active') : t('available')}{skill.installations.some((row) => row.scope === 'team') ? ` · ${t('team')}` : ''}</span></td>
-          <td className={TD_CLASS}><div className="flex justify-end gap-2">
-            {!skill.active && skill.tier !== 'own' && <Button variant="outline" size="sm" disabled={!canWrite || busy} onClick={() => void change('/api/skills', 'POST', { kind: 'catalog', atom_id: skill.slug })}>{t('add')}</Button>}
-            <Button variant="ghost" size="sm" onClick={() => setSelected(skill.slug)}>{t('details')}</Button>
-          </div></td>
-        </tr>)}</tbody>
-      </table>
-    </div>}
-    <SlideOver open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null) }}>
-      <SlideOverContent aria-describedby={undefined} data-ph-mask>
-        <SlideOverHeader title={detail.data?.name ?? t('details')} closeLabel={t('close')} />
-        <SlideOverBody className="space-y-4">
-          {detail.error ? <p role="alert">{t('load_failed')}</p> : !detail.data ? <Skeleton className="h-12 w-full" /> : <>
-            <p className="text-sm">{detail.data.summary}</p>
-            <p className="text-xs text-muted-foreground">{detail.data.tier === 'own' ? t(`${detail.data.shareStatus ?? 'private'}_help`) : detail.data.reviewedAt ? t(detail.data.tier === 'community' ? 'community_reviewed' : 'accounted_reviewed', { date: formatDateLong(detail.data.reviewedAt) }) : t('review_unknown')}</p>
-            <div className="flex flex-wrap gap-2">
-              <HandoffButton disabled={detail.data.shareStatus === 'withdrawn'} task={{ kind: `skill:${detail.data.slug}` }} />
-              {detail.data.tier === 'own' && detail.data.shareStatus === 'private' && <>
-                <Button variant="outline" disabled={!canWrite || busy} onClick={() => setEditor(detail.data!)}>{t('edit')}</Button>
-                <Button variant="outline" disabled={!canWrite || busy} onClick={() => setSharing(detail.data!)}>{t('share')}</Button>
-              </>}
-              {detail.data.installations.map((row) => !detail.data?.shareStatus || detail.data.shareStatus === 'private' ? <Button key={row.installation_id} variant="outline" disabled={!canWrite || busy} onClick={async () => { if (await change(`/api/skills/${row.installation_id}`, 'DELETE')) setSelected(null) }}>{t('remove_scope', { scope: t(row.scope) })}</Button> : null)}
-              {['submitted', 'published'].includes(detail.data.shareStatus ?? '') && <Button variant="outline" disabled={!canWrite || busy} onClick={async () => { if (await change(`/api/skills/${detail.data!.installations[0].installation_id}`, 'PATCH', { action: 'withdraw' })) setSelected(null) }}>{t('withdraw')}</Button>}
-            </div>
-            <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed" data-ph-mask>{detail.data.body}</pre>
-          </>}
-        </SlideOverBody>
-      </SlideOverContent>
-    </SlideOver>
-    {editor && <SkillEditor key={editor === 'new' ? 'new' : editor.slug} skill={editor === 'new' ? null : editor} busy={busy} failure={failure} onClose={() => { setEditor(null); setFailure(false) }} onSave={async (values) => {
-      const saved = await change(editor === 'new' ? '/api/skills' : `/api/skills/${editor.installations[0].installation_id}`, editor === 'new' ? 'POST' : 'PATCH', { ...values, ...(editor === 'new' ? { kind: 'own' } : { action: 'edit' }) })
-      if (saved) setEditor(null)
-    }} />}
-    {sharing && <ShareDialog busy={busy} failure={failure} onClose={() => { setSharing(null); setFailure(false) }} onSubmit={async (handle) => { if (await change(`/api/skills/${sharing.installations[0].installation_id}`, 'PATCH', { action: 'submit', confirmed_no_customer_data: true, author_handle: handle })) setSharing(null) }} />}
-  </div>
-}
+  // ── sheet, creator, and the forged key landing in the list ──
+  const [sheet, setSheet] = useState<SheetTarget | null>(null)
+  const [landing, setLanding] = useState<string | null>(null)
+  const [hitRow, setHitRow] = useState<string | null>(null)
 
-function SkillEditor({ skill, busy, failure, onClose, onSave }: {
-  skill: CatalogSkill | null; busy: boolean; failure: boolean; onClose: () => void
-  onSave: (values: { name: string; description: string; body: string; scope?: 'company' | 'team' }) => Promise<void>
-}) {
-  const t = useTranslations('skills_page')
-  const id = useId()
-  const [name, setName] = useState(skill?.name ?? '')
-  const [description, setDescription] = useState(skill?.summary ?? '')
-  const [body, setBody] = useState(skill?.body ?? '')
-  const [team, setTeam] = useState(false)
-  const valid = SkillBodySchema.safeParse(body).success
-  function save(event: FormEvent) {
-    event.preventDefault()
-    if (valid) void onSave({ name, description, body, ...(!skill ? { scope: team ? 'team' as const : 'company' as const } : {}) })
+  async function saveOwn(skill: { name: string; description: string; body: string }, mode: CreatorMode): Promise<string | null> {
+    try {
+      const edit = mode.kind === 'edit'
+      const response = await fetch(edit ? `/api/skills/${mode.installationId}` : '/api/skills', {
+        method: edit ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(edit ? { action: 'edit', ...skill } : { kind: 'own', scope: 'company', ...skill }),
+      })
+      if (!response.ok) return null
+      if (edit) return mode.installationId
+      return ((await response.json()).data as { id: string }).id
+    } catch {
+      return null
+    }
   }
-  return <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose() }}><DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
-    <DialogHeader><DialogTitle>{t(skill ? 'edit' : 'new')}</DialogTitle><DialogDescription>{t('editor_help')}</DialogDescription></DialogHeader>
-    <form onSubmit={save} className="space-y-4" data-ph-mask>
-      <div className="space-y-2"><Label htmlFor={`${id}-name`}>{t('name')}</Label><Input id={`${id}-name`} value={name} onChange={(event) => setName(event.target.value)} maxLength={120} required /></div>
-      <div className="space-y-2"><Label htmlFor={`${id}-description`}>{t('description')}</Label><Input id={`${id}-description`} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} required /></div>
-      <div className="space-y-2"><Label htmlFor={`${id}-body`}>{t('body')}</Label><Textarea id={`${id}-body`} value={body} onChange={(event) => setBody(event.target.value)} rows={12} required /><p className="text-xs text-muted-foreground">{t('bytes', { bytes: new TextEncoder().encode(body).length })}</p>{body && !valid && <p role="alert" className="text-sm text-destructive">{t('invalid_body')}</p>}</div>
-      {!skill && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={team} onChange={(event) => setTeam(event.target.checked)} />{t('team_scope')}</label>}
-      {failure && <p role="alert" className="text-sm text-destructive">{t('save_failed')}</p>}
-      <DialogFooter><Button type="button" variant="outline" disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button type="submit" disabled={busy || !valid || !name.trim() || !description.trim()}>{t('save')}</Button></DialogFooter>
-    </form>
-  </DialogContent></Dialog>
-}
+  async function deleteOwn(target: Extract<SheetTarget, { kind: 'own' }>): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/skills/${target.installationId}`, { method: 'DELETE' })
+      if (!response.ok) return false
+      setSheet(null)
+      await catalog.mutate()
+      return true
+    } catch {
+      return false
+    }
+  }
+  function onSaved(installationId: string) {
+    setCreator(null)
+    setSheet(null)
+    setLanding(installationId)
+    void catalog.mutate()
+  }
+  const landingSlug = landing ? own.find((row) => row.installationId === landing)?.slug : undefined
+  useEffect(() => {
+    if (!landingSlug) return
+    setLanding(null)
+    const page = pageRef.current
+    const anchor = rowAnchors.current.get(landingSlug)
+    const button = createRef.current
+    if (!page || !anchor || !button || prefersReducedMotion() || !page.animate) { setHitRow(landingSlug); return }
+    const spark = new Spark(page, centerIn(page, button), `${styles.spark} ${styles.sparkInk}`)
+    void (async () => {
+      try {
+        await wait(450)
+        if (!alive.current) return
+        await spark.hop(anchor, 900, 40)
+        if (alive.current) setHitRow(landingSlug)
+        await spark.fade()
+      } finally {
+        spark.remove()
+      }
+    })()
+  }, [landingSlug])
 
-function ShareDialog({ busy, failure, onClose, onSubmit }: { busy: boolean; failure: boolean; onClose: () => void; onSubmit: (handle: string) => Promise<void> }) {
-  const t = useTranslations('skills_page')
-  const id = useId()
-  const [handle, setHandle] = useState('')
-  const [confirmed, setConfirmed] = useState(false)
-  return <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose() }}><DialogContent>
-    <DialogHeader><DialogTitle>{t('share')}</DialogTitle><DialogDescription>{t('share_help')}</DialogDescription></DialogHeader>
-    <Label htmlFor={id}>{t('author_handle')}</Label><Input id={id} data-ph-mask value={handle} onChange={(event) => setHandle(event.target.value)} maxLength={39} />
-    <label className="flex items-start gap-2 text-sm"><input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />{t('confirm_share')}</label>
-    {failure && <p role="alert" className="text-sm text-destructive">{t('save_failed')}</p>}
-    <DialogFooter><Button variant="outline" disabled={busy} onClick={onClose}>{t('cancel')}</Button><Button disabled={busy || !confirmed || !/^[a-z0-9][a-z0-9-]{0,38}$/.test(handle)} onClick={() => void onSubmit(handle)}>{t('submit')}</Button></DialogFooter>
-  </DialogContent></Dialog>
+  // ── derived view ──
+  const top = REGISTRY_SKILLS.slice(0, FREE_SKILLS)
+  const rows: Row[] = [
+    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, tag: t('own_group'), own: row })),
+    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), tag: t(`groups.${skill.group}`), id: skill.id })),
+  ]
+  useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
+  const total = REGISTRY_SKILLS.length + own.length
+  const litCount = state === 'open' ? total : state === 'unlocking' ? FREE_SKILLS + (unlocking ?? 0) : FREE_SKILLS
+  const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
+  const sheetKey = sheet?.kind === 'registry' ? sheet.id : null
+  const pendingName = pending ? AI_CLIENTS.find((c) => c.id === pending)!.name : ''
+  const address = pending && pending !== 'claude' ? connectAction(pending).copy : null
+
+  return (
+    <div ref={pageRef} className={styles.page} data-state={state}>
+      <PageHeader
+        title={t('title')}
+        help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
+        action={
+          <span className={styles.createWrap} data-burn={state === 'open' ? '' : undefined}>
+            <Button ref={createRef} disabled={!canWrite} onClick={() => setCreator(isConnected ? { kind: 'create' } : { kind: 'gate' })}>
+              <span ref={createLedRef} className={styles.cled} data-on={createLit || state === 'open' ? '' : undefined} aria-hidden />
+              {t('create')}
+            </Button>
+          </span>
+        }
+      />
+
+      <section ref={heroRef} className={styles.hero} data-anim="">
+        <div className={styles.intro}>
+          <h2 ref={titleRef}>{t('hero_title')}</h2>
+          <p className={styles.sub}>{t(state === 'open' ? 'hero_sub_open' : 'hero_sub_locked')}</p>
+        </div>
+        <div className={styles.cards}>
+          {top.map((skill, i) => (
+            <div
+              key={skill.id}
+              ref={(el) => { cardRefs.current[i] = el }}
+              className={styles.card}
+              style={{ '--i': i } as CSSProperties}
+              data-lit={litKeys > i ? '' : undefined}
+              data-ring={ringKey === i ? '' : undefined}
+              data-down={sheetKey === skill.id ? '' : undefined}
+            >
+              <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: false })}>
+                <span className={styles.led} aria-hidden />
+                <h3>{t(`skills.${skill.id}.name`)}</h3>
+                <p>{t(`skills.${skill.id}.short`)}</p>
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className={styles.lower} aria-label={t('title')}>
+        <div className={styles.ihead}>
+          <div className={styles.count} aria-live="polite">
+            <span className={styles.num}>{litCount}</span>
+            <span className={styles.of}>{t('count_of', { total })}</span>
+          </div>
+          {state === 'open' && <div className={styles.okline}><span><b>{t('connected_line', { client: clientName })}</b> {t('connected_rest')}</span></div>}
+        </div>
+        {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
+        {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
+        <div className={styles.veilwrap}>
+          <ul className={styles.rows} aria-hidden={rowsLocked || undefined}>
+            {rows.map((row, i) => (
+              <li key={row.key}>
+                <button
+                  type="button"
+                  className={styles.row}
+                  style={{ '--i': i } as CSSProperties}
+                  tabIndex={rowsLocked ? -1 : undefined}
+                  data-own={row.own ? '' : undefined}
+                  data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
+                  onClick={() => setSheet(row.own
+                    ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId }
+                    : { kind: 'registry', id: row.id!, locked: rowsLocked })}
+                >
+                  <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
+                  <span className={styles.nm}>
+                    <span className={styles.nmText} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
+                    {row.own && <span className={styles.ownpill}>{t('own_pill')}</span>}
+                  </span>
+                  <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  <span className={styles.tg}>{row.tag}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          <div className={styles.plate} data-gone={state === 'locked' || state === 'waiting' ? undefined : ''}>
+            {state === 'locked' && (
+              <div className={styles.pin}>
+                <h2>{t('sign_title')}</h2>
+                <p>{t('sign_body')}</p>
+                <div className={styles.btns}>
+                  {AI_CLIENTS.map((c, i) => (
+                    <Button key={c.id} variant={i === 0 ? 'default' : 'outline'} onClick={() => connect(c.id)}>
+                      {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {state === 'waiting' && pending && (
+              <div className={styles.pin}>
+                <span className={styles.waitled} aria-hidden />
+                <h2>{pending === 'claude' ? t('wait_claude_title') : t('wait_title', { client: pendingName })}</h2>
+                {pending === 'claude' ? <p>{t('wait_claude_body')}</p> : (
+                  <>
+                    {address && (
+                      <div className={styles.addr}>
+                        <code aria-label={t('server_address')}>{address}</code>
+                        <Button size="sm" onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
+                      </div>
+                    )}
+                    {addressCopy === 'failed' && <p role="status">{t('copy_failed')}</p>}
+                    <ol className={styles.stepsl}>
+                      <li>{t('step_1')}</li>
+                      <li>{t('step_2', { client: pendingName })}</li>
+                      <li>{t('step_3')}</li>
+                    </ol>
+                  </>
+                )}
+                <div className={styles.btns}>
+                  <Button variant="outline" onClick={() => reopen(pending)}>{t('open_client', { client: pendingName })}</Button>
+                  <Button onClick={() => { setCheckedOnce(true); pollerRef.current?.check() }}>{t('check_again')}</Button>
+                </div>
+                {checkedOnce && <p role="status">{t('still_waiting', { client: pendingName })}</p>}
+                <button type="button" className="text-xs text-muted-foreground underline underline-offset-4" onClick={() => setPending(null)}>{t('cancel')}</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <SkillSheet
+        target={sheet}
+        companyId={companyId}
+        client={client}
+        canWrite={canWrite}
+        onClose={() => setSheet(null)}
+        onEdit={(target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) }}
+        onDelete={deleteOwn}
+      />
+      <SkillCreator mode={creator} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />
+    </div>
+  )
 }

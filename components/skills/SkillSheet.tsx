@@ -1,0 +1,121 @@
+'use client'
+
+import { useState } from 'react'
+import { useTranslations } from 'next-intl'
+import useSWR from 'swr'
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { Lock, X } from 'lucide-react'
+import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
+import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
+import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
+import { registrySkillHasBody, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import styles from './skills.module.css'
+
+export type SheetTarget =
+  | { kind: 'registry'; id: RegistrySkillId; locked: boolean }
+  | { kind: 'own'; slug: string; name: string; installationId: string }
+
+async function readBody(url: string): Promise<string> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Skill body request failed')
+  return ((await response.json()).data as { body: string }).body
+}
+
+/**
+ * The opened skill: a dark, still sheet from the right ("Stilla"). It shows
+ * what the skill does and the sentence to say to the AI. "Kopiera och öppna"
+ * copies the prompt and opens an empty chat: the prompt names a skill and
+ * nothing else, but it still travels by clipboard, never in the chat URL.
+ */
+export function SkillSheet({ target, companyId, client, canWrite, onClose, onEdit, onDelete }: {
+  target: SheetTarget | null
+  companyId: string
+  client: AiClient
+  canWrite: boolean
+  onClose: () => void
+  onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
+  onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
+}) {
+  return (
+    <SlideOver open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
+      <SlideOverContent aria-describedby={undefined} className={styles.sheet}>
+        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} onEdit={onEdit} onDelete={onDelete} />}
+      </SlideOverContent>
+    </SlideOver>
+  )
+}
+
+function SheetBody({ target, companyId, client, canWrite, onEdit, onDelete }: {
+  target: SheetTarget
+  companyId: string
+  client: AiClient
+  canWrite: boolean
+  onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
+  onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
+}) {
+  const t = useTranslations('skills_registry')
+  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [showFull, setShowFull] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleteFailed, setDeleteFailed] = useState(false)
+
+  const own = target.kind === 'own' ? target : null
+  const id = target.kind === 'registry' ? target.id : null
+  const slug = own ? own.slug : registrySkillSlug(id!, client)
+  const title = own ? own.name : t(`skills.${id}.name`)
+  const say = own ? t('own_prompt', { skill: own.slug, name: own.name }) : t(`skills.${id}.say`)
+  const prompt = own ? say : t('prompt', { say, skill: slug })
+  const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : []
+  const hasBody = own ? true : registrySkillHasBody(id!)
+  const locked = target.kind === 'registry' && target.locked
+  const body = useSWR(showFull ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
+
+  function copyAndOpen() {
+    // Open synchronously inside the click so the popup is not blocked.
+    const copying = navigator.clipboard?.writeText(prompt) ?? Promise.reject(new Error('No clipboard'))
+    openAiConnector(aiChatLink(client))
+    copying.then(() => setCopyState('copied'), () => setCopyState('failed'))
+  }
+
+  return (
+    <div className={styles.sheetBody}>
+      <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
+      <span className={styles.dtLed} aria-hidden />
+      <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
+      <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
+      {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
+      <div className={styles.promptbox}>
+        <span>{t('say_label')}</span>
+        <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
+      </div>
+      {locked ? (
+        <div className={styles.lockedline}><Lock className="h-3.5 w-3.5" aria-hidden />{t('locked_line')}</div>
+      ) : (
+        <div className="flex flex-col gap-2">
+          <div className={styles.nightBtns}>
+            <button type="button" className={styles.pill} onClick={copyAndOpen}>{t('copy_open', { client: clientName })}</button>
+            {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} aria-expanded={showFull} onClick={() => setShowFull((v) => !v)}>{t(showFull ? 'hide_full' : 'show_full')}</button>}
+            {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
+            {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
+          </div>
+          {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
+          {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
+          {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+        </div>
+      )}
+      {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <pre className={styles.fullText} data-ph-mask={own ? '' : undefined}>{body.data ?? ''}</pre>)}
+      {own && (
+        <DestructiveConfirmDialog
+          open={confirmDelete}
+          onOpenChange={setConfirmDelete}
+          title={t('delete')}
+          description={t('delete_confirm')}
+          confirmLabel={t('delete')}
+          cancelLabel={t('cancel')}
+          onConfirm={async () => { setDeleteFailed(!(await onDelete(own))) }}
+        />
+      )}
+    </div>
+  )
+}

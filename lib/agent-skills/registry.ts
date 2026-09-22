@@ -1,0 +1,45 @@
+import { kvittojaktenSkillSlug, type AiClient } from '@/lib/onboarding/ai-clients'
+
+/**
+ * The ten skills the Skills page shows, in display order. The first three
+ * are free and lit from the start; the other seven light up once an AI
+ * client is connected. The swedish-* rule packs and the other workflow
+ * skills stay background knowledge the agent loads on its own.
+ *
+ * Browser-safe on purpose: the page imports this file. Names, descriptions
+ * and steps are UI strings in messages/*.json under skills_registry.skills.
+ */
+export const REGISTRY_SKILLS = [
+  { id: 'bookkeep', group: 'daily' },
+  { id: 'kvittojakten', group: 'daily' },
+  { id: 'reconcile-month', group: 'month' },
+  { id: 'month-end-close', group: 'month' },
+  { id: 'quarterly-vat-review', group: 'vat' },
+  { id: 'payroll-monthly', group: 'payroll' },
+  { id: 'invoicing-rules', group: 'invoice' },
+  { id: 'kreditfaktura-process', group: 'invoice' },
+  { id: 'year-end-close', group: 'year' },
+  { id: 'tax-planning', group: 'year' },
+] as const
+
+export type RegistrySkillId = (typeof REGISTRY_SKILLS)[number]['id']
+
+/** How many skills are free before an AI is connected. */
+export const FREE_SKILLS = 3
+
+/**
+ * The slug the agent loads. Kvittojakten has one body per client (the
+ * harness block differs), every other skill has a single slug.
+ */
+export function registrySkillSlug(id: RegistrySkillId, client: AiClient): string {
+  return id === 'kvittojakten' ? kvittojaktenSkillSlug(client) : id
+}
+
+/**
+ * Whether the page can show the full instruction text. Kvittojakten lives in
+ * the MCP extension, which core must not import, so /api/skills cannot
+ * resolve it: the page shows its steps only.
+ */
+export function registrySkillHasBody(id: RegistrySkillId): boolean {
+  return id !== 'kvittojakten'
+}
