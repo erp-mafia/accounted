@@ -10220,8 +10220,6 @@
     "prompt": "{say} Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den.",
     "own_prompt": "Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den: {name}.",
     "run_client": "Gör det med {client}",
-    "run_copied": "Kopierat, klistra in",
-    "copy_open": "Kopiera och öppna {client}",
     "copied_open": "Kopierat. Klistra in i {client}.",
     "show_full": "Visa hela instruktionen",
     "hide_full": "Dölj instruktionen",

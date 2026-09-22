@@ -230,19 +230,15 @@
   50% { box-shadow: 0 0 6px 2px rgba(var(--rf), .9); }
 }
 .run {
-  position: relative;
-  z-index: 1;
-  align-self: flex-start;
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 26px;
-  margin-top: 12px;
-  padding: 0 11px 0 9px;
+  height: 36px;
+  padding: 0 16px 0 14px;
   border: 1px solid hsl(var(--border));
   border-radius: 99px;
   background: hsl(var(--background));
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
   line-height: 1;
   white-space: nowrap;
@@ -257,7 +253,6 @@
   border-radius: 99px;
   background: var(--rbd);
   animation: rundot 2.6s ease-in-out infinite;
-  animation-delay: calc(var(--i) * -.4s);
 }
 .run:hover { background: hsl(var(--foreground)); border-color: hsl(var(--foreground)); color: hsl(var(--background)); }
 .run:hover::before { background: var(--rb); }
@@ -372,7 +367,7 @@
 
 /* ── the sheet: still, on the page background. It renders in a portal
       outside .page, so it uses only global tokens ── */
-.sheet { background: hsl(var(--background)) !important; color: hsl(var(--foreground)); }
+.sheet { --rf: 176, 198, 228; --rb: #B8CAE4; --rbd: #8FA9CF; background: hsl(var(--background)) !important; color: hsl(var(--foreground)); }
 .sheetBody { flex: 1; overflow-y: auto; padding: 20px 28px 28px; display: flex; flex-direction: column; gap: 24px; }
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
@@ -526,7 +521,7 @@
 }
 @media (max-width: 480px) { .rows { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) {
-  .page *, .page *::before, .page *::after, .full *, .full *::before, .full *::after, .full, .sheet { animation: none !important; transition: none !important; }
+  .page *, .page *::before, .page *::after, .full *, .full *::before, .full *::after, .full, .sheet, .sheet *, .sheet *::before { animation: none !important; transition: none !important; }
   .face { opacity: 1; }
   .card[data-lit]::before { opacity: .35; }
   .leds i { background: #fff; }

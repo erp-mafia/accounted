@@ -10220,8 +10220,6 @@
     "prompt": "{say} Load the skill \"{skill}\" from Accounted (load_skill) and follow it.",
     "own_prompt": "Load the skill \"{skill}\" from Accounted (load_skill) and follow it: {name}.",
     "run_client": "Do it with {client}",
-    "run_copied": "Copied, paste it",
-    "copy_open": "Copy and open {client}",
     "copied_open": "Copied. Paste it into {client}.",
     "show_full": "Show the full instruction",
     "hide_full": "Hide the instruction",

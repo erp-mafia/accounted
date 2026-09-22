@@ -7,13 +7,13 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
-import { FREE_SKILLS, REGISTRY_SKILLS, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { FREE_SKILLS, REGISTRY_SKILLS, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { SkillSheet, copyPromptAndOpen, type SheetTarget } from './SkillSheet'
+import { SkillSheet, type SheetTarget } from './SkillSheet'
 import { SkillCreator, type CreatorMode } from './SkillCreator'
 import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
 import styles from './skills.module.css'
@@ -264,22 +264,6 @@ function Registry({ companyId }: { companyId: string }) {
     setLanding(installationId)
     void catalog.mutate()
   }
-  // "Kör i Claude" straight from a row: the same prompt the sheet copies
-  const [ran, setRan] = useState<string | null>(null)
-  useEffect(() => {
-    if (!ran) return
-    const timer = window.setTimeout(() => setRan(null), 2500)
-    return () => window.clearTimeout(timer)
-  }, [ran])
-  function runRow(row: Row) {
-    const prompt = row.own
-      ? t('own_prompt', { skill: row.own.slug, name: row.own.name })
-      : t('prompt', { say: t(`skills.${row.id}.say`), skill: registrySkillSlug(row.id!, client) })
-    void copyPromptAndOpen(prompt, client).then((ok) => {
-      if (ok) setRan(row.key)
-      else openRow(row)
-    })
-  }
   function openRow(row: Row) {
     setSheet(row.own
       ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId }
@@ -316,7 +300,6 @@ function Registry({ companyId }: { companyId: string }) {
   useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
   const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
   const sheetKey = sheet?.kind === 'registry' ? sheet.id : null
-  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const pendingName = pending ? AI_CLIENTS.find((c) => c.id === pending)!.name : ''
   const address = pending && pending !== 'claude' ? connectAction(pending).copy : null
 
@@ -378,11 +361,6 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
-                  {state === 'open' && (
-                    <button type="button" className={styles.run} onClick={() => runRow(row)}>
-                      <span role={ran === row.key ? 'status' : undefined}>{ran === row.key ? t('run_copied') : t('run_client', { client: clientName })}</span>
-                    </button>
-                  )}
                 </div>
               </li>
             ))}

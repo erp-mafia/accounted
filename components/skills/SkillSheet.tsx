@@ -112,7 +112,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
       ) : (
         <div className="flex flex-col gap-2">
           <div className={styles.nightBtns}>
-            <button type="button" className={styles.pill} onClick={copyAndOpen}>{t('copy_open', { client: clientName })}</button>
+            <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
             {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} aria-expanded={showFull} onClick={() => setShowFull((v) => !v)}>{t(showFull ? 'hide_full' : 'show_full')}</button>}
             {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
             {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
