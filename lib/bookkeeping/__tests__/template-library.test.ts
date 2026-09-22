@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
+import { mergeDimensionBags } from '../dimension-resolver'
 import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFromBooking, getTemplateScope, LIBRARY_TEMPLATE_PREFIX } from '../template-library'
+import { BookingTemplateLineSchema } from '../booking-template-schemas'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
@@ -22,6 +24,23 @@ function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Par
 }
 
 describe('applyTemplate', () => {
+  it('copies dimensions onto business lines only', () => {
+    const lines: BookingTemplateLibraryLine[] = [
+      {
+        account: '5410',
+        label: 'Förbrukning',
+        side: 'debit',
+        type: 'business',
+        ratio: 1,
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      { account: '1930', label: 'Bank', side: 'credit', type: 'settlement', ratio: 1 },
+    ]
+    const result = applyTemplate(lines, 1000)
+    expect(result[0].dimensions).toEqual({ '1': 'KS01', '6': 'P001' })
+    expect(result[1].dimensions).toBeUndefined()
+  })
+
   it('creates simple two-line debit/credit entries', () => {
     const lines: BookingTemplateLibraryLine[] = [
       { account: '1630', label: 'Skattekonto', side: 'debit', type: 'business', ratio: 1.0 },
@@ -149,6 +168,23 @@ describe('applyTemplate', () => {
 })
 
 describe('deriveTemplateLinesFromBooking', () => {
+  it('preserves dimensions on derived business lines only', () => {
+    const lines = deriveTemplateLinesFromBooking([
+      {
+        account_number: '5420',
+        debit_amount: '385.40',
+        credit_amount: '',
+        dimensions: { '1': 'KS01', '6': 'P001' },
+      },
+      { account_number: '2893', debit_amount: '', credit_amount: '385.40' },
+    ])
+    expect(lines.find((l) => l.account === '5420')!.dimensions).toEqual({
+      '1': 'KS01',
+      '6': 'P001',
+    })
+    expect(lines.find((l) => l.account === '2893')!.dimensions).toBeUndefined()
+  })
+
   it('classifies cost + input VAT + settlement (the Bokför direkt shape)', () => {
     // Mirrors the screenshot: 2641 D 96.40, 5420 D 385.40, 2893 K 481.80.
     const lines = deriveTemplateLinesFromBooking(
@@ -377,6 +413,26 @@ describe('applyTemplate on shapes the converter rejects', () => {
     expect(result).toHaveLength(2)
     expect(result[0].debit_amount).toBe('250.00')
     expect(result[1].credit_amount).toBe('250.00')
+  })
+})
+
+describe('BookingTemplateLineSchema', () => {
+  it('accepts optional dimensions on template lines', () => {
+    const parsed = BookingTemplateLineSchema.safeParse({
+      account: '5410',
+      label: 'Förbrukning',
+      side: 'debit',
+      type: 'business',
+      dimensions: { '1': 'KS01', '6': 'P001' },
+    })
+    expect(parsed.success).toBe(true)
+  })
+})
+
+describe('bulk-book dimension merge', () => {
+  it('lets per-line template values override the batch header default', () => {
+    expect(mergeDimensionBags({ '1': 'HDR' }, { '6': 'P001' })).toEqual({ '1': 'HDR', '6': 'P001' })
+    expect(mergeDimensionBags({ '1': 'HDR' }, { '1': 'LINE' })).toEqual({ '1': 'LINE' })
   })
 })
 

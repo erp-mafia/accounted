@@ -2229,6 +2229,8 @@ export interface BookingTemplateLibraryLine {
   type: 'business' | 'vat' | 'settlement'
   ratio?: number
   vat_rate?: number
+  /** SIE dimension map on cost/revenue lines only, e.g. {"1":"KS01","6":"P001"}. */
+  dimensions?: Record<string, string>
 }
 
 // Booking template library entry (system, team, or company-scoped)

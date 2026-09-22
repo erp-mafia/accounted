@@ -1,6 +1,7 @@
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { roundOre } from '@/lib/money'
 
@@ -52,12 +53,19 @@ export function applyTemplate(
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     }
 
-    result.push({
+    const formLine: FormLine = {
       account_number: line.account,
       debit_amount: line.side === 'debit' ? amount.toFixed(2) : '',
       credit_amount: line.side === 'credit' ? amount.toFixed(2) : '',
       line_description: line.label,
-    })
+    }
+    if (line.type === 'business' && line.dimensions) {
+      const bag = normalizeLineDimensions({ dimensions: line.dimensions })
+      if (Object.keys(bag).length > 0) {
+        formLine.dimensions = bag
+      }
+    }
+    result.push(formLine)
   }
 
   return result
@@ -174,6 +182,7 @@ export interface BookingRowInput {
   account_number: string
   debit_amount: string
   credit_amount: string
+  dimensions?: Record<string, string>
 }
 
 /** Standard Swedish VAT rates a template line can carry (matches the rate
@@ -230,7 +239,11 @@ export function deriveTemplateLinesFromBooking(
       const debit = Math.abs(parseFloat(row.debit_amount) || 0)
       const credit = Math.abs(parseFloat(row.credit_amount) || 0)
       const side: 'debit' | 'credit' = debit >= credit ? 'debit' : 'credit'
-      return { account, side, amount: Math.max(debit, credit) }
+      const dimensions =
+        row.dimensions && Object.keys(normalizeLineDimensions({ dimensions: row.dimensions })).length > 0
+          ? normalizeLineDimensions({ dimensions: row.dimensions })
+          : undefined
+      return { account, side, amount: Math.max(debit, credit), dimensions }
     })
     .filter((row) => /^\d{4}$/.test(row.account) && row.amount > 0)
 
@@ -284,6 +297,7 @@ export function deriveTemplateLinesFromBooking(
       side: row.side,
       type: 'business',
       ratio: Math.round((row.amount / total) * 10000) / 10000,
+      ...(row.dimensions ? { dimensions: row.dimensions } : {}),
     }
   })
 }

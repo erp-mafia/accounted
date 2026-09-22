@@ -2739,6 +2739,7 @@
     "unconvertible_badge": "Journal entries only",
     "ratio_label": "Share",
     "ratio_help": "Share of the total amount booked on this line. The shares should sum to 1.0.",
+    "line_dimensions_help": "Optional project and cost center on the cost/revenue line. Applied to the voucher when you use the template.",
     "ratio_sum_warning": "The shares for cost lines do not sum to 1.0.",
     "preview_label": "Preview for 1,000 kr",
     "edit": "Edit",

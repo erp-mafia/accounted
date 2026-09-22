@@ -13,8 +13,10 @@ import { Loader2, Trash2, Plus } from 'lucide-react'
 import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { formatCurrency } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { useSettings } from '@/components/settings/useSettings'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -41,6 +43,8 @@ export function TemplateForm({
 }) {
   const t = useTranslations('settings_booking_templates')
   const { toast } = useToast()
+  const { settings: companySettings } = useSettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [isSubmitting, setIsSubmitting] = useState(false)
   // When customizing a system template (mode 'duplicate') we suggest a distinct
   // "(anpassad)" name so the company copy doesn't read as the standard one.
@@ -68,6 +72,23 @@ export function TemplateForm({
     setLines((prev) => {
       const updated = [...prev]
       updated[index] = { ...updated[index], [field]: value }
+      return updated
+    })
+  }
+
+  function updateLineDimensions(index: number, sieDimNo: string, code: string | null) {
+    setLines((prev) => {
+      const updated = [...prev]
+      const current = { ...(updated[index].dimensions ?? {}) }
+      if (code === null) {
+        delete current[sieDimNo]
+      } else {
+        current[sieDimNo] = code
+      }
+      updated[index] = {
+        ...updated[index],
+        dimensions: Object.keys(current).length > 0 ? current : undefined,
+      }
       return updated
     })
   }
@@ -303,6 +324,18 @@ export function TemplateForm({
                   </div>
                 )}
               </div>
+              {dimensionsEnabled && line.type === 'business' && (
+                <div className="pt-1">
+                  <p className="text-xs text-muted-foreground mb-1">{t('line_dimensions_help')}</p>
+                  <LineDimensionFields
+                    dimensions={line.dimensions}
+                    onChange={(sieDimNo, code) => updateLineDimensions(i, sieDimNo, code)}
+                    disabled={isSubmitting}
+                    stacked
+                    inputClassName="h-8"
+                  />
+                </div>
+              )}
             </div>
           )})}
           <Button type="button" variant="outline" size="sm" onClick={addLine}>

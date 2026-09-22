@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { PACK_CATEGORIES, PACK_ENTITY_TYPES } from '@/lib/packs/schema'
 
 /**
@@ -17,6 +18,7 @@ export const BookingTemplateLineSchema = z.object({
   type: z.enum(['business', 'vat', 'settlement']),
   ratio: z.number().min(0).max(10).optional(),
   vat_rate: z.number().min(0).max(1).optional(),
+  dimensions: DimensionsBagSchema.optional(),
 })
 
 export const BookingTemplateCategorySchema = z.enum(PACK_CATEGORIES)
