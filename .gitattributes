@@ -3,7 +3,7 @@
 # a `#!/bin/sh\r` shebang).
 *.sh text eol=lf
 Dockerfile text eol=lf
-docker-entrypoint.sh text eol=lf
+docker/docker-entrypoint.sh text eol=lf
 docker/Caddyfile text eol=lf
 docker/crontab.* text eol=lf
 

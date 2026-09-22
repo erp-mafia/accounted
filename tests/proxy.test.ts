@@ -14,7 +14,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ error: loggerErrorMock }),
 }))
 
-import { config, proxy } from './proxy'
+import { config, proxy } from '../proxy'
 
 const STAGING_URL = 'https://metjnjrhvujscngnpzdv.supabase.co'
 const PRODUCTION_URL = 'https://pwxtzglxptnnvjrpixpg.supabase.co'

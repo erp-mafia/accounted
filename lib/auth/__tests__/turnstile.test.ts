@@ -106,7 +106,7 @@ describe('Turnstile integration contract', () => {
     const envExample = readRepoFile('.env.example')
     const dockerEnvExample = readRepoFile('.env.docker.example')
     const dockerfile = readRepoFile('Dockerfile')
-    const entrypoint = readRepoFile('docker-entrypoint.sh')
+    const entrypoint = readRepoFile('docker/docker-entrypoint.sh')
     const nextConfig = readRepoFile('next.config.ts')
 
     expect(envExample).toContain('NEXT_PUBLIC_TURNSTILE_SITE_KEY=')

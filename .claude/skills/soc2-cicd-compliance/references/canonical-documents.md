@@ -32,11 +32,11 @@ The agentic auditor reasons over the repository's policy artifacts to extract co
     └── tsc_to_controls.yaml              # criterion to internal control IDs
 ```
 
-Repository-root artifacts (CC2.3, CC1.1):
+Repository community artifacts (CC2.3, CC1.1):
 
 ```
-SECURITY.md           # responsible disclosure
-CODE_OF_CONDUCT.md    # tone-at-the-top
+SECURITY.md                   # responsible disclosure
+.github/CODE_OF_CONDUCT.md    # tone-at-the-top
 ```
 
 ## Document-to-criterion mapping

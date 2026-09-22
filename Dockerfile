@@ -111,7 +111,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/public /opt/gnubok-template/publi
 RUN mkdir -p /app/.next/cache /app/public && \
     chown nextjs:nodejs /app /app/.next /app/.next/cache /app/public
 
-COPY --chmod=755 --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
+COPY --chmod=755 --chown=nextjs:nodejs docker/docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
 

@@ -117,4 +117,4 @@ Don't duplicate these here; they auto-load when you touch matching paths:
 
 ## Decision Log
 
-When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), append one line of at most 300 characters to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision>: <why>`; the detail belongs in the PR body. Check that file before re-litigating a past decision (entries before 2026-08-01 are archived in git history, see its header).
+When you make a non-obvious choice (picked approach A over B, declined a dependency, stopped because a rule here forbade something), append one line of at most 300 characters to `DECISIONS.md` (repo root): `[YYYY-MM-DD] <decision>: <why>`; the detail belongs in the PR body. Check that file before re-litigating a past decision (completed months are archived under `docs/decisions/`; entries before 2026-08-01 are in git history, see its header).

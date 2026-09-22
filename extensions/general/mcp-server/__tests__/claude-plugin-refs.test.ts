@@ -7,15 +7,15 @@ import { toCanonicalToolName } from '../tool-namespace'
 import { discoverAtoms } from '@/scripts/lib/atom-discovery'
 
 /**
- * The Claude Code plugin (claude-plugin/) ships thin wrapper skills whose value
+ * The Claude Code plugin (packages/claude-plugin/) ships thin wrapper skills whose value
  * is that every slug, resource URI, and tool name they mention resolves against
  * this MCP server. A rename on the server side must fail here, not in a user's
  * chat session.
  */
 
 const repoRoot = join(__dirname, '..', '..', '..', '..')
-const skillsDir = join(repoRoot, 'claude-plugin', 'skills')
-const commandsDir = join(repoRoot, 'claude-plugin', 'commands')
+const skillsDir = join(repoRoot, 'packages', 'claude-plugin', 'skills')
+const commandsDir = join(repoRoot, 'packages', 'claude-plugin', 'commands')
 
 function readPluginSkills(): { file: string; body: string }[] {
   return readdirSync(skillsDir).map((dir) => {

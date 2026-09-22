@@ -10,7 +10,7 @@ Organizational integrity, ethical values, board oversight, structural standards.
 
 ### CC1.1 - Tone at the top, integrity, ethical values
 
-* **Deterministic**: presence of `CODE_OF_CONDUCT.md`; presence of an employee handbook acknowledgment registry in the compliance directory.
+* **Deterministic**: presence of `.github/CODE_OF_CONDUCT.md`; presence of an employee handbook acknowledgment registry in the compliance directory.
 * **Agentic**: parse the Code of Conduct to ensure it explicitly addresses contractor and vendor conduct (2022 points-of-focus update).
 * **Out of repo**: actual ethical conduct in board meetings, day-to-day management behavior.
 

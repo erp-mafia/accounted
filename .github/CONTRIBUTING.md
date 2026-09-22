@@ -43,7 +43,7 @@ npm run build
 
 ## DCO Sign-Off
 
-All commits must include a `Signed-off-by` line certifying that you have the right to submit the contribution under the project's license. This is the [Developer Certificate of Origin](https://developercertificate.org/) (DCO).
+All commits must include a `Signed-off-by` line certifying that you have the right to submit the contribution under the project's license. This is the [Developer Certificate of Origin](../DCO) (DCO).
 
 Add the sign-off automatically with `git commit -s`:
 
@@ -64,7 +64,7 @@ If you forget, you can amend: `git commit --amend -s`.
 
 ## Extension Development
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) and [docs/EXTENSIONS.md](docs/EXTENSIONS.md) for the full extension architecture. Quick start:
+See the [architecture guide](../docs/architecture.md) and [extension guide](../docs/EXTENSIONS.md) for the full extension architecture. Quick start:
 
 ```bash
 npx tsx scripts/create-extension.ts --name my-ext --sector general --category operations --description "..."
@@ -79,7 +79,7 @@ Constraints:
 
 ## Community Registry
 
-The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/registry) (skills, MCP servers, workflows and apps built on Accounted) is sourced from the [`registry/`](registry/) directory in this repo. To list something you built, add an MDX entry there by PR; see [registry/README.md](registry/README.md) for the format and run `npm run validate:registry` for the local check. No code changes needed.
+The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/registry) (skills, MCP servers, workflows and apps built on Accounted) is sourced from the [`registry/`](../registry/) directory in this repo. To list something you built, add an MDX entry there by PR; see [registry/README.md](../registry/README.md) for the format and run `npm run validate:registry` for the local check. No code changes needed.
 
 ## What Not to Do
 
@@ -98,4 +98,4 @@ The registry at [gnubok.se/community/registry](https://www.gnubok.se/community/r
 
 ## Questions?
 
-Open a discussion or issue on GitHub. For security vulnerabilities, see [SECURITY.md](SECURITY.md).
+Open a discussion or issue on GitHub. For security vulnerabilities, see [SECURITY.md](../SECURITY.md).

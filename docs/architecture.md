@@ -3,7 +3,7 @@
 Accounted is a multi-tenant double-entry bookkeeping system built for Swedish
 accounting law. This document explains how the system is put together and why
 some parts are deliberately rigid. For contribution workflow, see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](../.github/CONTRIBUTING.md).
 
 ## Overview
 
@@ -11,7 +11,7 @@ some parts are deliberately rigid. For contribution workflow, see
 - **Database**: Supabase (PostgreSQL with Row Level Security), which also
   provides auth (email/password plus TOTP MFA).
 - **Deployment**: Vercel-hosted is the primary target; a Docker self-hosted
-  setup is fully supported (see [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md)).
+  setup is fully supported (see [docs/SELF-HOSTING.md](SELF-HOSTING.md)).
 - **UI**: Tailwind CSS with shadcn/ui components. User-facing product language
   is Swedish and English (`messages/sv.json`, `messages/en.json`).
 
@@ -110,7 +110,7 @@ The boundary is strict and CI-enforced:
 Licensing follows the same boundary: the project is AGPL-3.0, with an
 extension exception that allows third-party extensions using only the
 documented Extension API to be licensed under any terms. See
-[LICENSE](LICENSE) and [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
+[LICENSE](../LICENSE) and [docs/EXTENSIONS.md](EXTENSIONS.md).
 
 ## Agent surface (MCP)
 
@@ -150,7 +150,7 @@ to core activity without core knowing about them.
 | `supabase/migrations/` | Database schema, RLS policies, enforcement triggers |
 | `packages/accounted-mcp` | Published stdio MCP bridge for new installs (`accounted_*` tool namespace) |
 | `packages/gnubok-mcp` | Compatibility MCP bridge for existing installs (kept on purpose) |
-| `claude-plugin/` | Claude Code plugin: OAuth connector plus approval-gated workflow skills |
+| `packages/claude-plugin/` | Claude Code plugin: OAuth connector plus approval-gated workflow skills |
 | `messages/` | Swedish and English UI strings |
 | `tests/` | Shared test helpers and fixtures |
 | `docs/` | Self-hosting, Docker, extensions, white-label guides |
