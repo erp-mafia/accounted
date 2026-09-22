@@ -44,6 +44,16 @@ async function fetchConnections(signal: AbortSignal): Promise<AiClient[] | null>
   }
 }
 
+/**
+ * Local development only: /skills?ai=claude (or chatgpt, grok) shows the page
+ * as connected without a real MCP connection. Compiled out of production.
+ */
+function simulatedClient(): AiClient | null {
+  if (process.env.NODE_ENV !== 'development') return null
+  const value = new URLSearchParams(window.location.search).get('ai')
+  return AI_CLIENTS.find((c) => c.id === value)?.id ?? null
+}
+
 async function readCatalog(url: string): Promise<SkillSummary[]> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skills request failed')
@@ -70,8 +80,9 @@ function Registry({ companyId }: { companyId: string }) {
   const [checkedOnce, setCheckedOnce] = useState(false)
   const pollerRef = useRef<AiStatusPoller | null>(null)
   useEffect(() => {
+    const simulated = simulatedClient()
     const poller = createAiStatusPoller({
-      fetchStatus: fetchConnections,
+      fetchStatus: simulated ? async () => [simulated] : fetchConnections,
       onStatus: setConnected,
       isHidden: () => document.visibilityState === 'hidden',
     })
@@ -373,10 +384,12 @@ function Registry({ companyId }: { companyId: string }) {
                 <h2>{t('sign_title')}</h2>
                 <p>{t('sign_body')}</p>
                 <div className={styles.btns}>
-                  {AI_CLIENTS.map((c, i) => (
-                    <Button key={c.id} variant={i === 0 ? 'default' : 'outline'} onClick={() => connect(c.id)}>
-                      {i === 0 ? t('connect_client', { client: c.name }) : c.name}
-                    </Button>
+                  {AI_CLIENTS.map((c, i) => i === 0 ? (
+                    <span key={c.id} className={styles.cta}>
+                      <Button onClick={() => connect(c.id)}>{t('connect_client', { client: c.name })}</Button>
+                    </span>
+                  ) : (
+                    <Button key={c.id} variant="outline" className="h-11 px-6" onClick={() => connect(c.id)}>{c.name}</Button>
                   ))}
                 </div>
               </div>
