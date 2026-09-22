@@ -44,7 +44,8 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
-import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { createServiceClient } from '@/lib/supabase/server'
+import { attachSharedBankSession, disconnectBankConnection, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -224,75 +225,22 @@ export const enableBankingExtension: Extension = {
         })
         if (!rl.ok) return rl.response!
 
-        const { connection_id } = await request.json()
-        if (!connection_id) {
-          return NextResponse.json({ error: 'connection_id is required' }, { status: 400 })
-        }
+        const parsed = z.object({ connection_id: z.uuid() }).safeParse(await request.json().catch(() => null))
+        if (!parsed.success) return errorResponse(parsed.error, log)
+        const { connection_id } = parsed.data
 
         try {
-          // Re-derive the offer server-side rather than trusting the posted id.
-          // findReusableSessions re-checks ownership (same user), that the
-          // source is a DIFFERENT company, that its session is active with a
-          // live consent, and which accounts are genuinely unclaimed.
-          const sessions = await findReusableSessions(supabase, user.id, companyId)
-          const source = sessions.find(s => s.connectionId === connection_id)
-          if (!source) {
-            return NextResponse.json(
-              { error: 'No reusable session available for this connection' },
-              { status: 404 }
-            )
-          }
-
-          // A company already syncing this bank must go through reconnect, not
-          // attach: a second live row for the same provider would sync the same
-          // accounts twice into one set of books.
-          const { data: existingForCompany } = await supabase
-            .from('bank_connections')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('provider', source.provider)
-            .in('status', ['active', 'pending_selection'])
-            .limit(1)
-            .maybeSingle()
-
-          if (existingForCompany) {
-            return NextResponse.json(
-              { error: 'This company is already connected to that bank' },
-              { status: 409 }
-            )
-          }
-
-          const { data: created, error: insertError } = await supabase
-            .from('bank_connections')
-            .insert({
-              user_id: user.id,
-              company_id: companyId,
-              provider: source.provider,
-              bank_name: source.bankName,
-              session_id: source.sessionId,
-              psu_type: source.psuType,
-              consent_expires: source.consentExpires,
-              accounts_data: source.availableAccounts,
-              status: 'pending_selection',
-            })
-            .select('id')
-            .single()
-
-          if (insertError || !created) {
-            log.error('[enable-banking] Failed to attach shared session', {
-              message: insertError?.message,
-              sourceConnectionId: source.connectionId,
-              companyId,
-            })
-            return NextResponse.json({ error: 'Failed to reuse connection' }, { status: 500 })
-          }
+          // The service-only RPC validates both memberships, source ownership,
+          // live consent and every visible company claim under ordered locks.
+          // Its receipt contains no upstream session identifier.
+          const created = await attachSharedBankSession(await createServiceClient(), companyId, user.id, connection_id)
 
           log.info('[enable-banking] Attached company to an existing PSD2 session', {
-            connectionId: created.id,
-            sourceConnectionId: source.connectionId,
+            connectionId: created.connection_id,
+            sourceConnectionId: connection_id,
             companyId,
-            bankName: source.bankName,
-            accountCount: source.availableAccounts.length,
+            bankName: created.bank_name,
+            accountCount: created.account_count,
           })
 
           // This company gains access to bank data, so it is a consent grant
@@ -303,10 +251,10 @@ export const enableBankingExtension: Extension = {
             await emit({
               type: 'bank_connection.consent_granted',
               payload: {
-                connectionId: created.id,
-                bankName: source.bankName ?? null,
-                accountCount: source.availableAccounts.length,
-                consentExpiresAt: source.consentExpires ?? null,
+                connectionId: created.connection_id,
+                bankName: created.bank_name ?? null,
+                accountCount: created.account_count,
+                consentExpiresAt: created.consent_expires ?? null,
                 userId: user.id,
                 companyId,
               },
@@ -316,12 +264,11 @@ export const enableBankingExtension: Extension = {
           }
 
           return NextResponse.json({
-            connection_id: created.id,
-            account_count: source.availableAccounts.length,
+            connection_id: created.connection_id,
+            account_count: created.account_count,
           })
         } catch (error) {
-          log.error('[enable-banking] Attach failed', error)
-          return NextResponse.json({ error: 'Failed to reuse connection' }, { status: 500 })
+          return errorResponse(error, log)
         }
       },
     },

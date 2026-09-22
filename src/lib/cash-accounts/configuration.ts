@@ -134,3 +134,20 @@ export async function finalizeBankCallback<T extends { uid: string; currency: st
   }
   return data as BankCallbackReceipt<T>
 }
+
+
+/** Re-evaluate reusable consent and account claims inside the insertion. */
+export async function attachSharedBankSession(
+  supabase: SupabaseClient, companyId: string, userId: string, sourceConnectionId: string,
+): Promise<{ connection_id: string; account_count: number; bank_name: string | null; consent_expires: string | null }> {
+  const { data, error } = await supabase.rpc('attach_shared_bank_session', {
+    p_company_id: companyId, p_user_id: userId, p_source_connection_id: sourceConnectionId,
+  })
+  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  if (typeof data?.connection_id !== 'string' || !Number.isInteger(data.account_count) || data.account_count < 1
+    || (data.bank_name !== null && typeof data.bank_name !== 'string')
+    || (data.consent_expires !== null && typeof data.consent_expires !== 'string')) {
+    throw new Error('Bank session attachment receipt missing')
+  }
+  return data
+}
