@@ -279,8 +279,7 @@
 }
 .plate[data-gone] { opacity: 0; visibility: hidden; }
 /*
- * The sign is a white key with drawn strata (no image): the app's own light
- * tokens, the panel keys' pressed edge and a Himmel light wandering behind it.
+ * The sign is a plain white key: the app's own light tokens, the panel keys' pressed edge and a Himmel light wandering behind it.
  */
 .pin {
   position: relative;
@@ -294,9 +293,7 @@
   border: 1px solid hsl(var(--border));
   text-align: center;
   color: hsl(var(--foreground));
-  background:
-    url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 320' preserveAspectRatio='none'%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3C/svg%3E") center / 100% 100% no-repeat,
-    hsl(var(--background));
+  background: hsl(var(--background));
   box-shadow:
     0 4px 0 hsl(var(--border)),
     0 30px 70px -24px rgba(var(--g), .35);
