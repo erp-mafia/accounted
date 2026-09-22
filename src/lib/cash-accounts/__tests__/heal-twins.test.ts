@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { describe, expect, it, vi } from 'vitest'
-import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair } from '../heal-twins'
+import { getTwinRepairReceipt, healTwinCashAccounts, verifyTwinRepair, reportHistoricalTwinRepairs } from '../heal-twins'
 
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn() }))
 const companyId = '123e4567-e89b-12d3-a456-426614174000'
@@ -89,5 +89,41 @@ describe('verifyTwinRepair', () => {
     const rpc = vi.fn().mockResolvedValue({ data, error: null })
     await expect(verifyTwinRepair({ rpc } as unknown as SupabaseClient, companyId, operationId))
       .rejects.toThrow('missing or invalid acknowledgement')
+  })
+})
+
+describe('historical recovery reports', () => {
+  const report = { companyId, startedEventId: operationId, startedAt: '2026-09-01T00:00:00Z', observedAt: '2026-09-22T00:00:00Z',
+    classification: 'partial', completionRecords: [], limitations: ['original-transaction-ids-and-bindings-not-recorded'],
+    issues: [{ kind: 'retirement-incomplete' }], retired: [], route: {} }
+  it('inventories started-only events without querying twin discovery or writing history', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [report], error: null }); const from = vi.fn()
+    expect(await reportHistoricalTwinRepairs({ rpc, from } as unknown as SupabaseClient)).toEqual([report])
+    expect(rpc).toHaveBeenCalledExactlyOnceWith('report_historical_cash_twin_repairs', { p_company_id: null, p_started_event_id: null })
+    expect(from).not.toHaveBeenCalled()
+  })
+  it.each(['consistent-with-completion','partial','contradictory','insufficient-evidence'])('preserves %s classification and its limitations', async classification => {
+    const rpc = vi.fn().mockResolvedValue({ data: [{ ...report, classification }], error: null })
+    const result = await reportHistoricalTwinRepairs({ rpc } as unknown as SupabaseClient, companyId, operationId)
+    expect(result[0]).toEqual({ ...report, classification })
+    expect(rpc).toHaveBeenCalledWith('report_historical_cash_twin_repairs', { p_company_id: companyId, p_started_event_id: operationId })
+  })
+  it('accepts an empty inventory when there are no started-only events', async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: [], error: null })
+    expect(await reportHistoricalTwinRepairs({ rpc } as unknown as SupabaseClient, companyId)).toEqual([])
+  })
+  it('requires company scope when inspecting one historical event', async () => {
+    const rpc = vi.fn()
+    await expect(reportHistoricalTwinRepairs({ rpc } as unknown as SupabaseClient, null, operationId)).rejects.toThrow('requires a company')
+    expect(rpc).not.toHaveBeenCalled()
+  })
+  it.each(['P0002','42501'])('propagates %s without any writes', async code => {
+    const rpc = vi.fn().mockResolvedValue({ data: null, error: { code, message: 'Refused' } })
+    await expect(reportHistoricalTwinRepairs({ rpc } as unknown as SupabaseClient, companyId, operationId)).rejects.toMatchObject({ code })
+  })
+  it.each([null, [], [{ ...report, companyId: 'other' }], [{ ...report, startedEventId: 'other' }],
+    [{ ...report, classification: 'completed' }], [{ ...report, limitations: undefined }]])('refuses invalid or unscoped report %j', async data => {
+    const rpc = vi.fn().mockResolvedValue({ data, error: null })
+    await expect(reportHistoricalTwinRepairs({ rpc } as unknown as SupabaseClient, companyId, operationId)).rejects.toThrow('missing or invalid report')
   })
 })
