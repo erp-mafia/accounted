@@ -350,7 +350,7 @@ function Registry({ companyId }: { companyId: string }) {
               data-ring={ringKey === i ? '' : undefined}
               data-down={sheetKey === skill.id ? '' : undefined}
             >
-              <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: false })}>
+              <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
                 <span className={styles.led} aria-hidden />
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
@@ -440,6 +440,7 @@ function Registry({ companyId }: { companyId: string }) {
         client={client}
         canWrite={canWrite}
         onClose={() => setSheet(null)}
+        onConnect={(target) => { setSheet(null); connect(target) }}
         onEdit={(target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) }}
         onDelete={deleteOwn}
       />

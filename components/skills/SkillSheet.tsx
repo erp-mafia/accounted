@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { Lock, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -37,29 +37,31 @@ async function readBody(url: string): Promise<string> {
  * copies the prompt and opens an empty chat: the prompt names a skill and
  * nothing else, but it still travels by clipboard, never in the chat URL.
  */
-export function SkillSheet({ target, companyId, client, canWrite, onClose, onEdit, onDelete }: {
+export function SkillSheet({ target, companyId, client, canWrite, onClose, onConnect, onEdit, onDelete }: {
   target: SheetTarget | null
   companyId: string
   client: AiClient
   canWrite: boolean
   onClose: () => void
+  onConnect: (client: AiClient) => void
   onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   return (
     <SlideOver open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SlideOverContent aria-describedby={undefined} className={styles.sheet}>
-        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} onEdit={onEdit} onDelete={onDelete} />}
+        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
       </SlideOverContent>
     </SlideOver>
   )
 }
 
-function SheetBody({ target, companyId, client, canWrite, onEdit, onDelete }: {
+function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onDelete }: {
   target: SheetTarget
   companyId: string
   client: AiClient
   canWrite: boolean
+  onConnect: (client: AiClient) => void
   onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
@@ -97,7 +99,16 @@ function SheetBody({ target, companyId, client, canWrite, onEdit, onDelete }: {
         <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
       </div>
       {locked ? (
-        <div className={styles.lockedline}><Lock className="h-3.5 w-3.5" aria-hidden />{t('locked_line')}</div>
+        <div className="flex flex-col gap-3">
+          <p className={styles.lockedline}>{t('locked_line')}</p>
+          <div className={styles.nightBtns}>
+            {AI_CLIENTS.map((c, i) => (
+              <button key={c.id} type="button" className={i === 0 ? styles.pill : `${styles.pill} ${styles.pillGhost}`} onClick={() => onConnect(c.id)}>
+                {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+              </button>
+            ))}
+          </div>
+        </div>
       ) : (
         <div className="flex flex-col gap-2">
           <div className={styles.nightBtns}>
