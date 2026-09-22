@@ -6,6 +6,7 @@ import {
   ensureFiscalPeriod,
   precheckFiscalPeriod,
   importVouchers,
+  buildSIEOpeningBalanceEntry,
   summarizeUnmappedSkips,
   computeVoucherNumberRanges,
   linkOpeningBalanceEntryToPeriod,
@@ -272,6 +273,35 @@ describe('validateIBBalance', () => {
     expect(result.fileImbalance).toBe(0.5)
   })
 
+  it('books a difference of exactly one öre instead of dropping it', () => {
+    // Production: debit 1092065.44 vs credit 1092065.43 passed preparation
+    // with no balancing line and import_sie_chunk rejected the IB voucher.
+    const parsed = makeParsedFile({
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 1092065.44 },
+        { yearIndex: 0, account: '2081', amount: -1092065.43 },
+      ],
+    })
+    const accountMap = new Map([['1930', '1930'], ['2081', '2081']])
+    const result = validateIBBalance(parsed, accountMap)
+
+    expect(result.roundingAdjustment).toBe(0.01)
+    expect(result.fileImbalance).toBe(0.01)
+  })
+
+  it('books a one öre difference on the credit side too', () => {
+    const parsed = makeParsedFile({
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 2318713.0 },
+        { yearIndex: 0, account: '2081', amount: -2318713.01 },
+      ],
+    })
+    const accountMap = new Map([['1930', '1930'], ['2081', '2081']])
+    const result = validateIBBalance(parsed, accountMap)
+
+    expect(result.roundingAdjustment).toBe(-0.01)
+  })
+
   it('returns large adjustment for file-level imbalance (unallocated årets resultat)', () => {
     // Simulates a Fortnox export where previous year result hasn't been allocated
     // to equity: BS accounts don't balance because årets resultat is implicit
@@ -326,6 +356,29 @@ describe('validateIBBalance', () => {
 
     expect(result.roundingAdjustment).toBe(0)
     expect(result.lines).toHaveLength(2)
+  })
+})
+
+describe('buildSIEOpeningBalanceEntry with a one öre difference', () => {
+  it('adds the balancing line so the IB voucher balances', () => {
+    const parsed = makeParsedFile({
+      openingBalances: [
+        { yearIndex: 0, account: '1930', amount: 1092065.44 },
+        { yearIndex: 0, account: '2081', amount: -1092065.43 },
+      ],
+    })
+    const accountMap = new Map([['1930', '1930'], ['2081', '2081']])
+    const { roundingAdjustment } = validateIBBalance(parsed, accountMap)
+    const entry = buildSIEOpeningBalanceEntry('fp-1', parsed, accountMap, roundingAdjustment, 'IB', '2099')
+
+    expect(entry).not.toBeNull()
+    expect(entry!.lines).toHaveLength(3)
+    const adjustment = entry!.lines[2]
+    expect(adjustment.account_number).toBe('2099')
+    expect(adjustment.credit_amount).toBe(0.01)
+    const debit = Math.round(entry!.lines.reduce((s, l) => s + l.debit_amount, 0) * 100) / 100
+    const credit = Math.round(entry!.lines.reduce((s, l) => s + l.credit_amount, 0) * 100) / 100
+    expect(debit).toBe(credit)
   })
 })
 

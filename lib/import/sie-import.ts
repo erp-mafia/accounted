@@ -901,9 +901,13 @@ export function validateIBBalance(
   const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
   const mappedDiff = Math.round((totalDebit - totalCredit) * 100) / 100
 
+  // Already rounded to öre, so anything left is real and gets booked, one
+  // öre included: import_sie_chunk rejects any nonzero difference at two
+  // decimals, and a stricter threshold here let a 1 öre file pass
+  // preparation and fail at commit. Consumers test `!== 0`, never a tolerance.
   return {
     lines,
-    roundingAdjustment: Math.abs(mappedDiff) > 0.01 ? mappedDiff : 0,
+    roundingAdjustment: Math.abs(mappedDiff) >= 0.01 ? mappedDiff : 0,
     fileImbalance,
     excludedAccountsTotal: Math.round(excludedTotal * 100) / 100,
   }
@@ -963,8 +967,8 @@ export function buildSIEOpeningBalanceEntry(
     return null
   }
 
-  // Add explicit rounding adjustment if needed (pre-validated by caller, <= 1 SEK)
-  if (Math.abs(roundingAdjustment) > 0.01) {
+  // Book the adjustment validateIBBalance found, however small.
+  if (roundingAdjustment !== 0) {
     if (roundingAdjustment > 0) {
       lines.push({
         account_number: differenceAccount,
@@ -2874,7 +2878,7 @@ export async function executeSIEImport(
                   roundOre(prev + line.debit_amount - line.credit_amount)
                 )
               }
-              if (Math.abs(expected.roundingAdjustment) > 0.01) {
+              if (expected.roundingAdjustment !== 0) {
                 // createOpeningBalanceEntry books the adjustment on the
                 // form's result-closing account with the opposite sign of
                 // the mapped diff.
@@ -2958,7 +2962,7 @@ export async function executeSIEImport(
           const absAdj = Math.abs(ibValidation.roundingAdjustment)
           const { closing: differenceAccount, closingName } = await differenceAccounts()
 
-          if (absAdj > 0.01) {
+          if (absAdj > 0) {
             ibRoundingAdjustment = ibValidation.roundingAdjustment
             ibDifferenceAccount = differenceAccount
 
