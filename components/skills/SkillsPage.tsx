@@ -7,8 +7,8 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
-import { Archive, ArrowUpRight, CalendarCheck, Check, FileText, Percent, Receipt, Sparkles, Users, type LucideIcon } from 'lucide-react'
-import { FREE_SKILLS, REGISTRY_SKILLS, registrySkillSlug, type RegistrySkillGroup, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { ArrowRight, Check } from 'lucide-react'
+import { FREE_SKILLS, REGISTRY_SKILLS, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
@@ -22,9 +22,7 @@ import styles from './skills.module.css'
 type SkillSummary = Omit<CatalogSkill, 'body'>
 type OwnRow = { slug: string; name: string; summary: string; installationId: string }
 type PageState = 'loading' | 'locked' | 'waiting' | 'unlocking' | 'open'
-type Row = { key: string; name: string; desc: string; tag: string; icon: LucideIcon; own?: OwnRow; id?: RegistrySkillId }
-
-const GROUP_ICONS: Record<RegistrySkillGroup, LucideIcon> = { daily: Receipt, month: CalendarCheck, vat: Percent, payroll: Users, invoice: FileText, year: Archive }
+type Row = { key: string; name: string; desc: string; tag: string; own?: OwnRow; id?: RegistrySkillId }
 
 /** Set once the unlock ("Gnistan fortsätter") has played in this browser. */
 const UNLOCK_SEEN_KEY = 'accounted.skills.unlock-seen'
@@ -313,8 +311,8 @@ function Registry({ companyId }: { companyId: string }) {
   // ── derived view ──
   const top = REGISTRY_SKILLS.slice(0, FREE_SKILLS)
   const rows: Row[] = [
-    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, tag: t('own_group'), icon: Sparkles, own: row })),
-    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), tag: t(`groups.${skill.group}`), icon: GROUP_ICONS[skill.group], id: skill.id })),
+    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, tag: t('own_group'), own: row })),
+    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), tag: t(`groups.${skill.group}`), id: skill.id })),
   ]
   useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
   const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
@@ -377,21 +375,18 @@ function Registry({ companyId }: { companyId: string }) {
                   data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
                 >
                   <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
+                  <span className={styles.rowTop}>
+                    <span className={styles.tg}>{row.own ? t('own_pill') : row.tag}</span>
+                    <span className={styles.rled} aria-hidden />
+                  </span>
                   <button type="button" className={styles.rowMain} tabIndex={rowsLocked ? -1 : undefined} onClick={() => openRow(row)}>
-                    <span className={styles.ico} aria-hidden><row.icon className="h-[18px] w-[18px]" strokeWidth={1.6} /></span>
-                    <span className={styles.txt}>
-                      <span className={styles.nm}>
-                        <span className={styles.nmText} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
-                        {row.own && <span className={styles.ownpill}>{t('own_pill')}</span>}
-                      </span>
-                      <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
-                    </span>
+                    <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
-                  <span className={styles.tg}>{row.tag}</span>
+                  <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
                   {state === 'open' && (
                     <button type="button" className={styles.run} onClick={() => runRow(row)}>
-                      {ran === row.key ? <Check className="h-3.5 w-3.5" aria-hidden /> : <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />}
                       <span role={ran === row.key ? 'status' : undefined}>{ran === row.key ? t('run_copied') : t('run_client', { client: clientName })}</span>
+                      {ran === row.key ? <Check className="h-3.5 w-3.5" aria-hidden /> : <ArrowRight className={`h-3.5 w-3.5 ${styles.runArrow}`} aria-hidden />}
                     </button>
                   )}
                 </div>
