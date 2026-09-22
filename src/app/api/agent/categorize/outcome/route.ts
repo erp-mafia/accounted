@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
-import { isDataAnalysisOptedIn } from '@/lib/company/data-analysis'
 import { guardSandbox } from '@/lib/sandbox/guard'
 
 /**
@@ -15,10 +14,15 @@ import { guardSandbox } from '@/lib/sandbox/guard'
  *
  * Telemetry only: it never posts anything and is gated on auth + membership.
  * Sandbox bookings run on seed data, so they are silently skipped (a 204) to
- * keep the corpus clean. The corpus is read across companies, so it only
- * collects from companies that opted in to data analysis
- * (company_settings.data_analysis_opt_in, #1346): everyone else gets the same
- * silent 204 and no row.
+ * keep the corpus clean.
+ *
+ * The row that lands is anonymous: no company_id, no amount, no free text,
+ * just the model's score, the two BAS account numbers and whether they
+ * matched. company_id used to be stored and used to gate collection on a
+ * per-company consent flag; since the fit job reads only confidence and
+ * was_correct, dropping the identifier removed the reason for the gate
+ * (20260922173222). company_id is still resolved here because membership and
+ * the sandbox skip are checked against it; it is simply never written.
  */
 
 const Schema = z.object({
@@ -29,7 +33,6 @@ const Schema = z.object({
   agreement: z.number().min(0).max(1).nullable().optional(),
   model_confidence: z.enum(['high', 'medium', 'low']).nullable().optional(),
   source: z.string().max(40).nullable().optional(),
-  amount: z.number().nullable().optional(),
 })
 
 const noContent = () => new Response(null, { status: 204 })
@@ -62,16 +65,11 @@ export async function POST(request: Request): Promise<Response> {
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return noContent()
 
-  // Consent gate: the corpus is analysed across companies, so a company that
-  // has not opted in contributes nothing (default false, no grandfathering).
-  if (!(await isDataAnalysisOptedIn(supabase, companyId))) return noContent()
-
   const proposed = parsed.data.proposed_account ?? null
 
   // Best-effort: a failed telemetry insert must never surface to the user.
   try {
     await supabase.from('categorize_calibration_samples').insert({
-      company_id: companyId,
       confidence: parsed.data.confidence,
       agreement: parsed.data.agreement ?? null,
       model_confidence: parsed.data.model_confidence ?? null,
@@ -79,7 +77,6 @@ export async function POST(request: Request): Promise<Response> {
       proposed_account: proposed,
       booked_account: parsed.data.booked_account,
       was_correct: proposed !== null && proposed === parsed.data.booked_account,
-      amount: parsed.data.amount ?? null,
     })
   } catch {
     // swallow

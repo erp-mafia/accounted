@@ -11,18 +11,14 @@ vi.mock('@/lib/sandbox/guard', () => ({ guardSandbox: () => guardSandbox() }))
 import { POST } from '../route'
 
 const inserts: Record<string, unknown>[] = []
-// company_settings.maybeSingle() feeds the consent gate; company_members
-// feeds the membership check. Default: a member of an opted-in company.
-function makeSupabase(membership: unknown = { user_id: 'user-1' }, optedIn = true) {
+// company_members.maybeSingle() feeds the membership check. Default: a member.
+function makeSupabase(membership: unknown = { user_id: 'user-1' }) {
   return {
     from(table: string) {
       const chain = {
         select: () => chain,
         eq: () => chain,
-        maybeSingle: async () =>
-          table === 'company_settings'
-            ? { data: { data_analysis_opt_in: optedIn }, error: null }
-            : { data: membership, error: null },
+        maybeSingle: async () => ({ data: membership, error: null }),
         insert: async (payload: Record<string, unknown>) => {
           if (table === 'categorize_calibration_samples') inserts.push(payload)
           return { error: null }
@@ -66,33 +62,34 @@ describe('POST /api/agent/categorize/outcome', () => {
     expect(inserts).toHaveLength(0)
   })
 
-  it('skips companies that have not opted in to data analysis (204, no sample)', async () => {
-    requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: makeSupabase({ user_id: 'user-1' }, false), error: null })
-    const res = await POST(
-      createMockRequest('/x', { method: 'POST', body: body({ proposed_account: '5410', booked_account: '5410' }) }),
-    )
-    expect(res.status).toBe(204)
-    expect(inserts).toHaveLength(0)
-  })
-
-  it('logs was_correct=true when the proposed account was booked (opted-in company)', async () => {
+  it('logs was_correct=true when the proposed account was booked', async () => {
     const res = await POST(
       createMockRequest('/x', {
         method: 'POST',
-        body: body({ proposed_account: '5410', booked_account: '5410', confidence: 0.86, source: 'counterparty_template', amount: 499 }),
+        body: body({ proposed_account: '5410', booked_account: '5410', confidence: 0.86, source: 'counterparty_template' }),
       }),
     )
     expect(res.status).toBe(204)
     expect(inserts).toHaveLength(1)
     expect(inserts[0]).toMatchObject({
-      company_id: 'company-1',
       confidence: 0.86,
       proposed_account: '5410',
       booked_account: '5410',
       was_correct: true,
       source: 'counterparty_template',
-      amount: 499,
     })
+  })
+
+  it('writes an anonymous row: no company_id and no amount', async () => {
+    await POST(
+      createMockRequest('/x', {
+        method: 'POST',
+        body: body({ proposed_account: '5410', booked_account: '5410', amount: 499 }),
+      }),
+    )
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]).not.toHaveProperty('company_id')
+    expect(inserts[0]).not.toHaveProperty('amount')
   })
 
   it('logs was_correct=false when the user booked a different account', async () => {

@@ -2770,10 +2770,6 @@ export const UpdateSettingsSchema = z.object({
   proforma_enabled: z.boolean().optional(),
   recurring_invoices_enabled: z.boolean().optional(),
   self_billing_enabled: z.boolean().optional(),
-  // Data analysis consent (#1346): gates cross-company analysis of this
-  // company's bookkeeping outcomes. Flipped by a human in the settings UI
-  // only; deliberately absent from the v1 REST / MCP settings pick lists.
-  data_analysis_opt_in: z.boolean().optional(),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
   // Salary settings (migration 20260703190000). Day of month salaries are

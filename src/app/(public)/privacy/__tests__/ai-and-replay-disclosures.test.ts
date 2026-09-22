@@ -28,6 +28,13 @@ function read(rel: string): string {
   return fs.readFileSync(path.resolve(ROOT, rel), 'utf8')
 }
 
+/** ROOT is src/; migrations and scripts live above it at the repo root. */
+const REPO_ROOT = path.resolve(ROOT, '..')
+
+function readRepo(rel: string): string {
+  return fs.readFileSync(path.resolve(REPO_ROOT, rel), 'utf8')
+}
+
 /** Source with comment lines dropped, so prose about a pattern is never mistaken for the pattern. */
 function code(src: string): string {
   return src
@@ -142,5 +149,40 @@ describe('session replay disclosure matches the masking config', () => {
     // The failure mode for untagged new UI is over-masking, never leakage
     // (lib/analytics/replay-masking.ts).
     expect(normalized).toContain('övermaskering')
+  })
+})
+
+/**
+ * The anonymised-statistics disclosure (§ 5) makes three factual promises
+ * about what the calibration corpus contains. Each is only true as long as
+ * the write path stays as narrow as the prose says, so pin them to it:
+ * re-adding company_id, an amount or any free text to the insert must fail
+ * here rather than quietly turn the published page into a false statement.
+ */
+describe('anonymised statistics disclosure', () => {
+  const OUTCOME_ROUTE = code(read('app/api/agent/categorize/outcome/route.ts'))
+
+  it('the page claims the row carries no company_id, amount or free text', () => {
+    expect(PRIVACY).toContain('Anonymiserad statistik')
+    expect(PRIVACY).toContain('varken företags-ID, belopp eller fritext')
+  })
+
+  it('the outcome route writes no company_id and no amount', () => {
+    const insert = OUTCOME_ROUTE.slice(OUTCOME_ROUTE.indexOf('categorize_calibration_samples'))
+    expect(insert).not.toMatch(/company_id\s*:/)
+    expect(insert).not.toMatch(/amount\s*:/)
+  })
+
+  it('the corpus columns stay the anonymous set the page describes', () => {
+    const migration = readRepo('supabase/migrations/20260922173222_calibration_samples_anonymous.sql')
+    expect(migration).toMatch(/DROP COLUMN company_id/)
+    expect(migration).toMatch(/DROP COLUMN amount/)
+    expect(migration).toMatch(/DROP COLUMN data_analysis_opt_in/)
+  })
+
+  it('evaluation runs never default to live customer books', () => {
+    const backtest = code(readRepo('scripts/backtest-categorize.ts'))
+    expect(backtest).toContain('BACKTEST_COMPANY_IDS')
+    expect(backtest).toContain('is_sandbox')
   })
 })

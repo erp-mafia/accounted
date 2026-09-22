@@ -456,7 +456,6 @@ export default function QuickReviewDialog({
             source: aiProposal.source,
             proposed_account: aiProposal.account,
             booked_account: businessAccount(proposal),
-            amount: Math.abs(sekAmount),
           }),
         }).catch(() => {})
       }

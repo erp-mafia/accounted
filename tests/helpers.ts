@@ -559,7 +559,6 @@ export function makeCompanySettings(
     proforma_enabled: true,
     recurring_invoices_enabled: true,
     self_billing_enabled: true,
-    data_analysis_opt_in: false,
     preferred_payment_format: 'pain001',
     salary_pay_day: 25,
     salary_default_bank: null,

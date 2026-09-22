@@ -226,7 +226,49 @@ export default function PrivacyPolicyPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>5. Tredjelandsöverföring</CardTitle>
+            <CardTitle>5. Anonymiserad statistik</CardTitle>
+          </CardHeader>
+          <CardContent className="prose prose-sm dark:prose-invert max-w-none">
+            <p>
+              Vi tar fram anonymiserad statistik ur hur tjänsten används, och
+              använder den för att utvärdera och förbättra den automatiska
+              konteringen. Konkret gäller det två saker.
+            </p>
+            <p className="mt-4">
+              <strong>Konteringsutfall.</strong> När du bokför ett AI-förslag
+              sparar vi vilket konto som föreslogs, vilket konto som bokfördes,
+              om de stämde överens, och hur säker modellen var. Raden innehåller
+              varken företags-ID, belopp eller fritext: den består av BAS-kontonummer
+              och ett mått mellan 0 och 1. Den går alltså inte att knyta till er
+              eller till någon person, och den lämnas aldrig ut.
+            </p>
+            <p className="mt-4">
+              <strong>Sammanslagna mönster.</strong> Vi kan räkna fram generella
+              samband, till exempel att en viss leverantör normalt bokförs på ett
+              visst konto. Sådan statistik tas bara fram när samma mönster
+              förekommer hos ett tillräckligt antal företag för att inget enskilt
+              företags bokföring ska kunna utläsas ur resultatet.
+            </p>
+            <p className="mt-4">
+              Eftersom resultatet är anonymt är det inte längre personuppgifter
+              och omfattas då inte av GDPR. Själva anonymiseringen är däremot en
+              behandling, och den sker med stöd av berättigat intresse (art. 6.1f):
+              vårt intresse av att kunna mäta och förbättra konteringen, vägt mot
+              att inget identifierbart innehåll ingår i resultatet. Statistiken
+              används aldrig för marknadsföring, säljs inte, och lämnas inte till
+              någon utanför Accounted.
+            </p>
+            <p className="mt-4">
+              Er egen bokföring: transaktionstexter, motpartsnamn, kvitton och
+              fakturor, används inte i utvärderingskörningar utan ett skriftligt
+              avtal med er om just det.
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>6. Tredjelandsöverföring</CardTitle>
           </CardHeader>
           <CardContent className="prose prose-sm dark:prose-invert max-w-none">
             <p>
@@ -241,7 +283,7 @@ export default function PrivacyPolicyPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>6. Lagringstid</CardTitle>
+            <CardTitle>7. Lagringstid</CardTitle>
           </CardHeader>
           <CardContent className="prose prose-sm dark:prose-invert max-w-none">
             <ul>
@@ -276,7 +318,7 @@ export default function PrivacyPolicyPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>7. Dina rättigheter</CardTitle>
+            <CardTitle>8. Dina rättigheter</CardTitle>
           </CardHeader>
           <CardContent className="prose prose-sm dark:prose-invert max-w-none">
             <p>Du har följande rättigheter enligt GDPR:</p>
@@ -300,7 +342,7 @@ export default function PrivacyPolicyPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>8. Kontaktuppgifter</CardTitle>
+            <CardTitle>9. Kontaktuppgifter</CardTitle>
           </CardHeader>
           <CardContent className="prose prose-sm dark:prose-invert max-w-none">
             <p>

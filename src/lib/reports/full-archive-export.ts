@@ -1270,7 +1270,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   booking_template_usage: 'usage telemetry',
   calendar_feeds: 'feed tokens (secrets)',
   capability_grants: 'entitlement state',
-  categorize_calibration_samples: 'auto-booking confidence telemetry, not räkenskapsinformation',
+  categorize_calibration_samples: 'anonymous auto-booking confidence telemetry; no company_id since 20260922173222, so nothing company-scoped to archive',
   transaction_assistant_reads: "the assistant's proposal for an unbooked transaction, recomputed on demand; no bookkeeping content",
   chat_messages: 'AI assistant state, not räkenskapsinformation',
   chat_sessions: 'AI assistant state, not räkenskapsinformation',

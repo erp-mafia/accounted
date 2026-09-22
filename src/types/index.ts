@@ -605,12 +605,6 @@ export interface CompanySettings {
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 
-  // Data analysis consent (migration 20260828120000): when true, the
-  // company's bookkeeping outcomes may be read across companies to evaluate
-  // and improve automatic booking. Default false, enforced server-side
-  // (lib/company/data-analysis.ts); the UI only mirrors it.
-  data_analysis_opt_in: boolean
-
   // Salary payments (migration 20260508120000 + 20260703190000).
   // preferred_payment_format defaults to 'pain001' — Bankgirot Lön is
   // retired by the banks during 2026.

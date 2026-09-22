@@ -7,13 +7,12 @@ import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyMembersSection } from '@/components/settings/CompanyMembersSection'
 import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
-import { DataAnalysisToggle } from '@/components/settings/DataAnalysisToggle'
 import { FiscalPeriodEditor } from '@/components/settings/FiscalPeriodEditor'
 import { LogoUpload } from '@/components/settings/LogoUpload'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { SettingsGroup, SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { ShareCapitalForm } from '@/components/settings/ShareCapitalForm'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
@@ -22,7 +21,6 @@ export function CompanySettingsContent() {
   const router = useRouter()
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
-  const tData = useTranslations('data_analysis')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
 
   // Deep-link target for "Medlemmar och roller" (/settings/company#members):
@@ -103,10 +101,6 @@ export function CompanySettingsContent() {
       <FiscalPeriodEditor />
 
       <CompanyProfileSection />
-
-      <SettingsGroup label={tData('group_label')}>
-        <DataAnalysisToggle />
-      </SettingsGroup>
 
       <div id="archive-start-fresh" ref={scrollToArchive}>
         <CompanyDangerZone />
