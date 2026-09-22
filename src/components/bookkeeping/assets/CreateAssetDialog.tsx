@@ -19,11 +19,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Loader2, Plus, X } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { formatCurrency } from '@/lib/utils'
 import type { AssetCategory, K3Component } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
+import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
 
 interface CreateAssetDialogProps {
   open: boolean
@@ -75,6 +78,7 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
 // could never mirror it. The hint below just tells the user where it lands.
 
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
+  const t = useTranslations('assets')
   const { toast } = useToast()
   // useCompanyOptional so the dialog still works in tests / storyboards
   // that don't wrap it in CompanyProvider. K3 features simply hide.
@@ -88,6 +92,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   )
   const [acquisitionCost, setAcquisitionCost] = useState('')
   const [usefulLifeYears, setUsefulLifeYears] = useState('5')
+  // Opening accumulated depreciation for an asset that arrives partly
+  // depreciated from a previous system. Registered only, never posted.
+  const [openingAmount, setOpeningAmount] = useState('')
+  const [openingDate, setOpeningDate] = useState('')
   // K3 component depreciation. `useComponents` toggles the advanced section;
   // null when disabled, an array (possibly empty during editing) when enabled.
   const [useComponents, setUseComponents] = useState(false)
@@ -109,6 +117,13 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   }, [componentRows])
 
   const parsedAcquisitionCost = parseFloat(acquisitionCost)
+  const parsedOpeningAmount = openingAmount.trim() === '' ? 0 : parseFloat(openingAmount)
+  const remainingAfterOpening =
+    Number.isFinite(parsedAcquisitionCost) &&
+    Number.isFinite(parsedOpeningAmount) &&
+    parsedOpeningAmount > 0
+      ? roundOre(parsedAcquisitionCost - parsedOpeningAmount)
+      : null
   const componentMismatch =
     useComponents
     && componentRows.length > 0
@@ -193,6 +208,19 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       componentsPayload = parsed
     }
 
+    const opening = openingAmount.trim() === '' ? 0 : parseFloat(openingAmount)
+    const openingIssues = validateOpeningDepreciation({
+      acquisition_cost: cost,
+      acquisition_date: acquisitionDate,
+      opening_accumulated_depreciation: Number.isFinite(opening) ? opening : -1,
+      opening_depreciation_date: openingDate || null,
+      k3_components: componentsPayload,
+    })
+    if (openingIssues.length > 0) {
+      setError(t(`opening.error_${openingIssues[0].kind}`))
+      return
+    }
+
     setSubmitting(true)
     try {
       const res = await fetch('/api/assets', {
@@ -205,6 +233,12 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
           acquisition_cost: cost,
           useful_life_months: years * 12,
           ...(componentsPayload !== null ? { k3_components: componentsPayload } : {}),
+          ...(opening > 0
+            ? {
+                opening_accumulated_depreciation: roundOre(opening),
+                opening_depreciation_date: openingDate,
+              }
+            : {}),
         }),
       })
       const body = await res.json()
@@ -216,6 +250,8 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
+      setOpeningAmount('')
+      setOpeningDate('')
       setUseComponents(false)
       setComponentRows([])
       onCreated()
@@ -311,6 +347,40 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år.
               För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
             </p>
+          </div>
+          <div className="space-y-3 rounded-lg border border-border p-4">
+            <p className="text-sm font-medium">{t('opening.title')}</p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="asset-opening-amount">{t('opening.amount_label')}</Label>
+                <Input
+                  id="asset-opening-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={openingAmount}
+                  onChange={(e) => setOpeningAmount(e.target.value)}
+                  placeholder="0"
+                  className="tabular-nums"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="asset-opening-date">{t('opening.date_label')}</Label>
+                <Input
+                  id="asset-opening-date"
+                  type="date"
+                  value={openingDate}
+                  onChange={(e) => setOpeningDate(e.target.value)}
+                  className="tabular-nums"
+                />
+              </div>
+            </div>
+            {remainingAfterOpening !== null && (
+              <p className="text-xs tabular-nums text-foreground">
+                {t('opening.remaining', { amount: formatCurrency(remainingAfterOpening) })}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">{t('opening.hint')}</p>
           </div>
           {isK3 && (
             <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">

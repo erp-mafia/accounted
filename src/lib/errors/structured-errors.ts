@@ -4780,6 +4780,13 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The asset cannot be deleted because it has reached the books: depreciation is posted or the asset is disposed. The register row is then accounting information (BFL ch. 7). Dispose it, or reverse the voucher with storno first.',
   },
+  INVALID_OPENING_DEPRECIATION: {
+    httpStatus: 400,
+    message_sv:
+      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
+    message_en:
+      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
+  },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,
     message_sv:

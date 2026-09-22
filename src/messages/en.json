@@ -1110,6 +1110,20 @@
     "category_computer": "Computer",
     "category_other_tangible": "Other tangible",
     "count_footer": "{count, plural, one {1 asset} other {# assets}}",
+    "opening": {
+      "title": "Already depreciated (moving from another system)",
+      "amount_label": "Accumulated depreciation (SEK)",
+      "date_label": "As of",
+      "hint": "Only fill this in if the asset was already depreciated in a previous accounting system, for example after moving from Bokio. Enter the asset's accumulated depreciation (the balance on the 12x9 account) as of the date, preferably the last day of a fiscal year. No voucher is created: the amount is already in the imported books. The rest is depreciated on a straight-line basis over the remaining useful life.",
+      "remaining": "Left to depreciate: {amount}",
+      "locked": "The already-depreciated amount is locked because depreciation has been posted in Accounted. Reverse it (storno) first to change it.",
+      "error_negative": "The already-depreciated amount cannot be negative.",
+      "error_exceeds_cost": "The already-depreciated amount cannot exceed the acquisition cost.",
+      "error_date_required": "Enter the date the already-depreciated amount refers to.",
+      "error_date_future": "The date of the already-depreciated amount cannot be later than today.",
+      "error_date_before_acquisition": "The date of the already-depreciated amount cannot be before the acquisition date.",
+      "error_components": "The already-depreciated amount cannot be combined with a component breakdown. Turn off the component breakdown or leave the field empty."
+    },
     "disposal": {
       "title": "Dispose of asset",
       "load_failed_title": "Could not load the disposal",

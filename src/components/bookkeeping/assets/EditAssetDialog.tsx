@@ -23,6 +23,9 @@ import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
+import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
 import type { Asset, AssetCategory } from '@/types'
 
 /** The list route annotates each asset with whether any depreciation has been
@@ -73,8 +76,21 @@ export function EditAssetDialog({
   const [usefulLifeYears, setUsefulLifeYears] = useState(
     String(Math.round(asset.useful_life_months / 12)),
   )
+  const storedOpeningAmount = roundOre(Number(asset.opening_accumulated_depreciation ?? 0) || 0)
+  const storedOpeningDate = asset.opening_depreciation_date ?? ''
+  const [openingAmount, setOpeningAmount] = useState(
+    storedOpeningAmount > 0 ? String(storedOpeningAmount) : '',
+  )
+  const [openingDate, setOpeningDate] = useState(storedOpeningDate)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const parsedCost = parseFloat(acquisitionCost)
+  const parsedOpening = openingAmount.trim() === '' ? 0 : parseFloat(openingAmount)
+  const remainingAfterOpening =
+    Number.isFinite(parsedCost) && Number.isFinite(parsedOpening) && parsedOpening > 0
+      ? roundOre(parsedCost - parsedOpening)
+      : null
 
   const handleSubmit = async () => {
     setError(null)
@@ -100,6 +116,31 @@ export function EditAssetDialog({
         return
       }
       if (cost !== Number(asset.acquisition_cost)) patch.acquisition_cost = cost
+
+      // Opening accumulated depreciation: part of the depreciation basis, so
+      // it locks together with date/cost/category. Judged against the values
+      // the row will end up with; the server repeats the check.
+      const opening = openingAmount.trim() === '' ? 0 : parseFloat(openingAmount)
+      const issues = validateOpeningDepreciation({
+        acquisition_cost: cost,
+        acquisition_date: acquisitionDate,
+        opening_accumulated_depreciation: Number.isFinite(opening) ? opening : -1,
+        opening_depreciation_date: openingDate || null,
+        k3_components: asset.k3_components,
+      })
+      if (issues.length > 0) {
+        setError(t(`opening.error_${issues[0].kind}`))
+        return
+      }
+      const nextOpening = roundOre(opening)
+      const nextOpeningDate = nextOpening > 0 ? openingDate : null
+      if (
+        nextOpening !== storedOpeningAmount ||
+        (nextOpeningDate ?? '') !== (storedOpeningDate || '')
+      ) {
+        patch.opening_accumulated_depreciation = nextOpening
+        patch.opening_depreciation_date = nextOpeningDate
+      }
     }
 
     const years = parseInt(usefulLifeYears, 10)
@@ -211,6 +252,45 @@ export function EditAssetDialog({
               </span>
             </div>
           )}
+
+          <div className="space-y-3 rounded-lg border border-border p-4">
+            <p className="text-sm font-medium">{t('opening.title')}</p>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-asset-opening-amount">{t('opening.amount_label')}</Label>
+                <Input
+                  id="edit-asset-opening-amount"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={openingAmount}
+                  onChange={(e) => setOpeningAmount(e.target.value)}
+                  disabled={basisLocked}
+                  placeholder="0"
+                  className="tabular-nums"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit-asset-opening-date">{t('opening.date_label')}</Label>
+                <Input
+                  id="edit-asset-opening-date"
+                  type="date"
+                  value={openingDate}
+                  onChange={(e) => setOpeningDate(e.target.value)}
+                  disabled={basisLocked}
+                  className="tabular-nums"
+                />
+              </div>
+            </div>
+            {remainingAfterOpening !== null && (
+              <p className="text-xs tabular-nums text-foreground">
+                {t('opening.remaining', { amount: formatCurrency(remainingAfterOpening) })}
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              {basisLocked ? t('opening.locked') : t('opening.hint')}
+            </p>
+          </div>
 
           <div className="space-y-1.5">
             <Label htmlFor="edit-asset-life">Avskrivningstid (år)</Label>

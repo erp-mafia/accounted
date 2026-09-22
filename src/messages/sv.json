@@ -1110,6 +1110,20 @@
     "category_computer": "Dator",
     "category_other_tangible": "Övriga materiella",
     "count_footer": "{count, plural, one {1 tillgång} other {# tillgångar}}",
+    "opening": {
+      "title": "Redan avskrivet (flytt från annat system)",
+      "amount_label": "Ackumulerad avskrivning (kr)",
+      "date_label": "Per datum",
+      "hint": "Fyll bara i om tillgången redan har skrivits av i ett tidigare bokföringssystem, till exempel efter en flytt från Bokio. Ange tillgångens ackumulerade avskrivning (saldot på 12x9-kontot) per datumet, helst sista dagen i ett räkenskapsår. Ingen verifikation skapas: beloppet finns redan i den importerade bokföringen. Det som återstår skrivs av linjärt under resterande avskrivningstid.",
+      "remaining": "Kvar att skriva av: {amount}",
+      "locked": "Redan avskrivet belopp är låst eftersom avskrivningar har bokförts i Accounted. Återför dem (storno) först för att ändra det.",
+      "error_negative": "Redan avskrivet belopp får inte vara negativt.",
+      "error_exceeds_cost": "Redan avskrivet belopp får inte överstiga anskaffningsvärdet.",
+      "error_date_required": "Ange datumet som redan avskrivet belopp avser.",
+      "error_date_future": "Datumet för redan avskrivet belopp får inte vara senare än i dag.",
+      "error_date_before_acquisition": "Datumet för redan avskrivet belopp får inte vara före anskaffningsdatumet.",
+      "error_components": "Redan avskrivet belopp kan inte kombineras med komponentuppdelning. Stäng av komponentuppdelningen eller lämna fältet tomt."
+    },
     "disposal": {
       "title": "Avyttra tillgång",
       "load_failed_title": "Kunde inte ladda avyttringen",

@@ -512,3 +512,95 @@ describe('assets: disposal VAT + jämkning constraints', () => {
     expect(Number(rows[0]?.jamkning_original_input_vat)).toBe(20_000)
   })
 })
+
+// 20260922214924_asset_opening_accumulated_depreciation.sql: depreciation
+// booked in a previous system before the asset entered Accounted.
+describe('assets: opening accumulated depreciation', () => {
+  it('stores a valid opening pair and defaults to (0, NULL)', async () => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    const before = await getPool().query(
+      `SELECT opening_accumulated_depreciation, opening_depreciation_date
+         FROM public.assets WHERE id = $1`,
+      [assetId],
+    )
+    expect(Number(before.rows[0]?.opening_accumulated_depreciation)).toBe(0)
+    expect(before.rows[0]?.opening_depreciation_date).toBeNull()
+
+    await getPool().query(
+      `UPDATE public.assets
+          SET opening_accumulated_depreciation = 24000.55,
+              opening_depreciation_date = '2026-12-31'
+        WHERE id = $1`,
+      [assetId],
+    )
+    const { rows } = await getPool().query(
+      `SELECT opening_accumulated_depreciation::text AS amount,
+              opening_depreciation_date::text AS date
+         FROM public.assets WHERE id = $1`,
+      [assetId],
+    )
+    expect(rows[0]).toEqual({ amount: '24000.55', date: '2026-12-31' })
+  })
+
+  it.each([
+    ['above the acquisition cost', `60000.01, '2026-12-31'`],
+    ['negative', `-1, '2026-12-31'`],
+    ['without a date', `1000, NULL`],
+    ['with a date but no amount', `0, '2026-12-31'`],
+    ['dated before the acquisition', `1000, '2024-12-31'`],
+  ])('CHECK rejects an opening pair %s', async (_label, values) => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    await expect(
+      getPool().query(
+        `UPDATE public.assets
+            SET (opening_accumulated_depreciation, opening_depreciation_date) = (${values})
+          WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/assets_opening_depreciation_check/)
+  })
+
+  it('CHECK rejects lowering the cost below a stored opening amount', async () => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    await getPool().query(
+      `UPDATE public.assets
+          SET opening_accumulated_depreciation = 30000, opening_depreciation_date = '2026-12-31'
+        WHERE id = $1`,
+      [assetId],
+    )
+    await expect(
+      getPool().query(`UPDATE public.assets SET acquisition_cost = 29999 WHERE id = $1`, [assetId]),
+    ).rejects.toThrow(/assets_opening_depreciation_check/)
+  })
+
+  it('freezes the opening pair once the asset is disposed', async () => {
+    const assetId = await insertAsset({
+      userId: companyA.userId,
+      companyId: companyA.companyId,
+      disposedAt: '2025-12-31',
+      disposedProceeds: 0,
+    })
+    await expect(
+      getPool().query(
+        `UPDATE public.assets
+            SET opening_accumulated_depreciation = 12000, opening_depreciation_date = '2025-06-30'
+          WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/disposed asset/i)
+  })
+
+  it('RLS: company B cannot set the opening amount on company A assets', async () => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    const updated = await withUserContext(companyB.userId, async (client) => {
+      const res = await client.query(
+        `UPDATE public.assets
+            SET opening_accumulated_depreciation = 1000, opening_depreciation_date = '2025-06-30'
+          WHERE id = $1`,
+        [assetId],
+      )
+      return res.rowCount
+    })
+    expect(updated).toBe(0)
+  })
+})

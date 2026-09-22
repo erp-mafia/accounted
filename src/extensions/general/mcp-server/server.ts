@@ -3825,6 +3825,14 @@ const ASSET_WRITE_PROPERTIES = {
       required: ['name', 'cost', 'useful_life_months'],
     },
   },
+  opening_accumulated_depreciation: {
+    type: 'number',
+    description: 'Ackumulerad avskrivning already booked in a previous system (migration), SEK, 0 to acquisition_cost. No voucher is posted: it is already in the imported 12x9 balance. Not with k3_components.',
+  },
+  opening_depreciation_date: {
+    type: ['string', 'null'],
+    description: 'yyyy-MM-dd the opening amount is stated per; required when the amount is above 0, not after today',
+  },
   notes: { type: 'string' },
 } as const
 
@@ -22037,7 +22045,10 @@ export const tools: McpTool[] = [
           depreciation_method: body.depreciation_method ?? 'linear',
           accounts,
           k3_component_count: body.k3_components?.length ?? 0,
-          will: 'add the asset to the anläggningsregister; no voucher is posted (the purchase is already booked)',
+          opening_accumulated_depreciation: roundOre(body.opening_accumulated_depreciation ?? 0),
+          opening_depreciation_date:
+            (body.opening_accumulated_depreciation ?? 0) > 0 ? body.opening_depreciation_date ?? null : null,
+          will: 'add the asset to the anläggningsregister; no voucher is posted (the purchase and any opening accumulated depreciation are already booked)',
         },
         actor,
         undefined,
