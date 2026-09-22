@@ -483,6 +483,49 @@ describe('executeSIEImport: orphan-IB guard (issue #1882)', () => {
     expect(result.success).toBe(true)
   })
 
+  it('calls out a surviving IB that differs from the file by exactly one öre', async () => {
+    // Production amounts: 2318713 vs 2318713.01. The float difference is
+    // 0.00999999977, so a strict `> 0.01` comparison called these equal
+    // and relinked the stale voucher without a warning.
+    const queues = standardQueues()
+    queues.journal_entries = [
+      { count: 0 },
+      { data: [{ id: 'orphan-ib-1' }] },
+    ]
+    queues.journal_entry_lines = [
+      {
+        data: [
+          { account_number: '1930', debit_amount: 2318713, credit_amount: 0 },
+          { account_number: '2010', debit_amount: 0, credit_amount: 2318713 },
+        ],
+      },
+    ]
+    queues.fiscal_periods = [
+      { data: { id: 'fp-1' } },
+      { data: { opening_balances_set: false, opening_balance_entry_id: null } },
+      {}, // relink update: ok
+    ]
+
+    const result = await executeSIEImport(
+      buildRoutingSupabase(queues),
+      'company-1',
+      'user-1',
+      makeParsedFile({
+        openingBalances: [
+          { yearIndex: 0, account: '1930', amount: 2318713.01 },
+          { yearIndex: 0, account: '2010', amount: -2318713.01 },
+        ],
+      }),
+      standardMappings,
+      standardOptions,
+    )
+
+    expect(createJournalEntry).not.toHaveBeenCalled()
+    const warnings = result.warnings.join(' ')
+    expect(warnings).toMatch(/skiljer sig från filens ingående balanser/)
+    expect(result.success).toBe(true)
+  })
+
   it('skips without relinking when several posted IB vouchers exist', async () => {
     const queues = standardQueues()
     queues.journal_entries = [

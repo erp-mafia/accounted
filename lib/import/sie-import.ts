@@ -2903,8 +2903,11 @@ export async function executeSIEImport(
                 )
               }
               for (const account of new Set([...expectedNet.keys(), ...orphanNet.keys()])) {
-                const diff = (expectedNet.get(account) ?? 0) - (orphanNet.get(account) ?? 0)
-                if (Math.abs(diff) > 0.01) {
+                // Both nets are öre-rounded, so round the difference too and
+                // treat any öre as a difference: a strict tolerance here hid
+                // exactly the one öre the IB fix above now books.
+                const diff = roundOre((expectedNet.get(account) ?? 0) - (orphanNet.get(account) ?? 0))
+                if (diff !== 0) {
                   amountsDiffer = true
                   break
                 }
