@@ -4,6 +4,7 @@ import { applyTemplate, convertLibraryToBookingTemplate, deriveTemplateLinesFrom
 import { BookingTemplateLineSchema } from '../booking-template-schemas'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 
+/** Minimal booking_template_library row for applyTemplate / converter tests. */
 function makeLibraryTemplate(lines: BookingTemplateLibraryLine[], overrides: Partial<BookingTemplateLibrary> = {}): BookingTemplateLibrary {
   return {
     id: 'tpl-1',

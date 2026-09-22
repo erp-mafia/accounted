@@ -27,6 +27,7 @@ export function isLibraryTemplateId(id: string): boolean { return id.startsWith(
  *      Ruta 30-32 and Ruta 48 by rate/(1+rate) (25% became 20%).
  *   3. Settlement lines: amount = totalAmount (the full payment)
  *   4. Business lines: amount = totalAmount × ratio (cost/revenue net of VAT handled separately)
+ *   5. Business lines: optional SIE dimension bag copied onto the form line when set
  *
  * For simple two-line templates (no VAT), the ratio is typically 1.0
  * on both sides and totalAmount is used directly.
@@ -178,10 +179,12 @@ export function convertLibraryToBookingTemplate(
 /** A single concrete booking row, as produced by the manual-booking forms
  *  (BookDirectlyDialog / JournalEntryForm). Amounts are strings straight from
  *  the inputs; either debit or credit is set, not both. */
+/** One journal row passed into {@link deriveTemplateLinesFromBooking}. */
 export interface BookingRowInput {
   account_number: string
   debit_amount: string
   credit_amount: string
+  /** Optional SIE dimension bag; kept on derived business lines only. */
   dimensions?: Record<string, string>
 }
 

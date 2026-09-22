@@ -68,6 +68,7 @@ export function TemplateForm({
         ],
   )
 
+  /** Updates one scalar field on a template line row. */
   function updateLine(index: number, field: keyof BookingTemplateLibraryLine, value: string | number) {
     setLines((prev) => {
       const updated = [...prev]
@@ -76,6 +77,7 @@ export function TemplateForm({
     })
   }
 
+  /** Sets or clears one SIE dimension code on a business line (kostnadsställe/projekt). */
   function updateLineDimensions(index: number, sieDimNo: string, code: string | null) {
     setLines((prev) => {
       const updated = [...prev]
@@ -93,11 +95,15 @@ export function TemplateForm({
     })
   }
 
+  /** Re-tags a line as business, VAT, or settlement and drops dimensions on non-business legs. */
   function updateLineType(index: number, newType: BookingTemplateLibraryLine['type']) {
     setLines((prev) => {
       const updated = [...prev]
       const current = updated[index]
       const next: BookingTemplateLibraryLine = { ...current, type: newType }
+      if (newType !== 'business') {
+        delete next.dimensions
+      }
       // Auto-pick a sensible default for the type-specific field so the
       // converter (and applyTemplate) sees a complete line shape.
       if (newType === 'vat' && next.vat_rate === undefined) {
