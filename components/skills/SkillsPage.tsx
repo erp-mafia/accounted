@@ -7,7 +7,6 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
-import { ArrowRight, Check } from 'lucide-react'
 import { FREE_SKILLS, REGISTRY_SKILLS, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
@@ -375,10 +374,7 @@ function Registry({ companyId }: { companyId: string }) {
                   data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
                 >
                   <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
-                  <span className={styles.rowTop}>
-                    <span className={styles.tg}>{row.own ? t('own_pill') : row.tag}</span>
-                    <span className={styles.rled} aria-hidden />
-                  </span>
+                  <span className={styles.tg}>{row.own ? t('own_pill') : row.tag}</span>
                   <button type="button" className={styles.rowMain} tabIndex={rowsLocked ? -1 : undefined} onClick={() => openRow(row)}>
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
@@ -386,7 +382,6 @@ function Registry({ companyId }: { companyId: string }) {
                   {state === 'open' && (
                     <button type="button" className={styles.run} onClick={() => runRow(row)}>
                       <span role={ran === row.key ? 'status' : undefined}>{ran === row.key ? t('run_copied') : t('run_client', { client: clientName })}</span>
-                      {ran === row.key ? <Check className="h-3.5 w-3.5" aria-hidden /> : <ArrowRight className={`h-3.5 w-3.5 ${styles.runArrow}`} aria-hidden />}
                     </button>
                   )}
                 </div>

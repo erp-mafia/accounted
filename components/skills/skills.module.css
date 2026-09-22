@@ -172,32 +172,30 @@
 /* ── the list below ── */
 .lower { display: flex; flex-direction: column; gap: 24px; }
 .veilwrap { position: relative; }
-.rows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; margin: 0; padding: 0; list-style: none; }
+.rows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
 .rows > li { display: flex; }
 
 /*
- * The rest of the skills as light keys: the same object as the keys in the
- * panel, printed on paper. White face, a hairline, a real bottom edge that
- * gives when pressed. The Himmel light only runs the edge on hover.
+ * The rest of the skills as small light keys: the object from the panel,
+ * printed on paper. A hairline, a 2px bottom edge that gives when pressed,
+ * and the Himmel light on the edge only while hovered.
  */
 .row {
   position: relative;
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-height: 164px;
-  padding: 16px 20px 18px;
+  gap: 4px;
+  padding: 14px 16px 16px;
   border: 1px solid hsl(var(--border));
-  border-radius: 10px;
-  background: linear-gradient(180deg, hsl(var(--background)) 55%, hsl(var(--frame)));
-  box-shadow: inset 0 1px 0 hsl(var(--background)), 0 3px 0 hsl(var(--border)), 0 14px 24px -18px rgba(var(--g), .45);
-  transition: transform .12s cubic-bezier(.2, .7, .2, 1), box-shadow .2s, border-color .3s;
+  border-radius: 8px;
+  background: hsl(var(--background));
+  box-shadow: 0 2px 0 hsl(var(--border));
+  transition: transform .12s cubic-bezier(.2, .7, .2, 1), box-shadow .12s, border-color .3s;
 }
-.row:hover { transform: translateY(-1px); border-color: rgba(var(--rf), .9); box-shadow: inset 0 1px 0 hsl(var(--background)), 0 4px 0 hsl(var(--border)), 0 18px 30px -18px rgba(var(--g), .5); }
-.row:has(.rowMain:active) { transform: translateY(2px); box-shadow: inset 0 1px 0 hsl(var(--background)), 0 1px 0 hsl(var(--border)), 0 6px 12px -10px rgba(var(--g), .4); }
+.row:hover { border-color: rgba(var(--rf), 1); }
+.row:has(.rowMain:active) { transform: translateY(2px); box-shadow: 0 0 0 hsl(var(--border)); }
 .row:has(.rowMain:focus-visible) { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
-/* Himmel on the edge: a thin light wandering the border, only while hovered */
 .row::after {
   content: "";
   position: absolute;
@@ -217,41 +215,34 @@
 }
 .row:hover::after { opacity: 1; }
 .row[data-hit] { animation: hitflare .8s ease-out; }
-.rowTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
-.row .tg { font-family: var(--font-mono); font-size: 11px; line-height: 16px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
+.row .tg { margin-bottom: 6px; font-family: var(--font-mono); font-size: 10px; line-height: 16px; letter-spacing: .08em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .row[data-own] .tg { color: hsl(var(--foreground)); }
-/* the key's LED: an ink bar in the same place as the white one in the panel */
-.rled { width: 20px; height: 3px; border-radius: 2px; background: hsl(var(--border)); transition: background .4s, box-shadow .4s; }
-.page[data-state='open'] .rled, .row[data-hit] .rled { background: hsl(var(--foreground)); box-shadow: 0 0 8px rgba(var(--rf), 1); }
 /* the name is the button; its ::after stretches the click over the whole key */
 .rowMain { all: unset; cursor: pointer; }
 .rowMain::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
-.row .nm { display: block; font-weight: 500; font-size: 15px; line-height: 22px; color: hsl(var(--foreground)); text-wrap: balance; }
-.row .ds { flex: 1; font-size: 13px; line-height: 20px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.row .nm { display: block; font-weight: 500; font-size: 14px; line-height: 20px; color: hsl(var(--foreground)); }
+.row .ds { flex: 1; font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .run {
   position: relative;
   z-index: 1;
   align-self: flex-start;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 12px;
+  margin-top: 10px;
   padding: 0;
   border: 0;
   background: none;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  line-height: 20px;
+  line-height: 18px;
   color: hsl(var(--foreground));
+  text-decoration: underline;
+  text-decoration-color: hsl(var(--border));
+  text-underline-offset: 4px;
   cursor: pointer;
-  animation: rise .4s cubic-bezier(.2, .7, .2, 1) both;
-  animation-delay: calc(var(--i) * 40ms);
+  transition: text-decoration-color .2s;
 }
-.runArrow { transition: transform .18s cubic-bezier(.2, .7, .2, 1); }
-.run:hover .runArrow { transform: translateX(3px); }
-.run:hover span { text-decoration: underline; text-underline-offset: 4px; }
+.run:hover { text-decoration-color: currentColor; }
 .run:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; border-radius: 4px; }
-.anchor { position: absolute; left: 20px; top: 20px; width: 0; height: 0; }
+.anchor { position: absolute; left: 16px; top: 16px; width: 0; height: 0; }
 .row[data-own] { animation: rise .5s cubic-bezier(.2, .7, .2, 1); }
 
 /* Genomskin: before an AI is connected the rows burn behind a thin veil */
