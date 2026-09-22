@@ -20,7 +20,7 @@ const __dirname = path.dirname(__filename)
 const ROOT = path.resolve(__dirname, '..')
 const CONFIG_PATH = path.join(ROOT, 'extensions.config.json')
 const EXTENSIONS_DIR = path.join(ROOT, 'extensions')
-const OUTPUT_DIR = path.join(ROOT, 'lib', 'extensions', '_generated')
+const OUTPUT_DIR = path.join(ROOT, 'src', 'lib', 'extensions', '_generated')
 
 // ── Types ────────────────────────────────────────────────────
 

@@ -73,7 +73,7 @@ See [contributing guide](.github/CONTRIBUTING.md) for the full development workf
 | Path | Purpose |
 | --- | --- |
 | [`app/`](app/), [`components/`](components/) | Application routes, API endpoints, and interface components |
-| [`lib/`](lib/) | Accounting engine, domain services, and integrations |
+| [`src/lib/`](src/lib/) | Accounting engine, domain services, and integrations |
 | [`extensions/`](extensions/) | Opt-in product extensions |
 | [`packages/`](packages/) | MCP bridges, connector contract, and Claude Code plugin |
 | [`supabase/`](supabase/) | Database configuration and migration history |

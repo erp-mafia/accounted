@@ -26,9 +26,9 @@ function fixture(files: Record<string, string>) {
 }
 
 describe('client-node-builtin guard', () => {
-  it('flags a client component whose lib import chain reaches crypto, with the chain', () => {
+  it.each(['lib', 'src/lib'])('flags a client component whose %s import chain reaches crypto, with the chain', (libDir) => {
     const root = fixture({
-      'lib/auth/hashing.ts': `import crypto from 'crypto'\nexport const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex')\nexport const isEnabled = () => true\n`,
+      [`${libDir}/auth/hashing.ts`]: `import crypto from 'crypto'\nexport const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex')\nexport const isEnabled = () => true\n`,
       'components/Login.tsx': `'use client'\nimport { isEnabled } from '@/lib/auth/hashing'\nexport default function Login() { return isEnabled() ? null : null }\n`,
     })
     const findings = findClientNodeBuiltins(root)

@@ -35,10 +35,10 @@ const CONCURRENCY = 4
 async function main() {
   const { createClient } = await import('@supabase/supabase-js')
   // Import after dotenv so lib/ai resolves the provider/model from .env.local.
-  const { gatherCandidates } = await import('../lib/agent/categorize/candidates')
-  const { gatherUnderlag } = await import('../lib/agent/categorize/underlag')
-  const { selectAccount } = await import('../lib/agent/categorize/select-account')
-  const { chunkCompanyIds, listDataAnalysisOptedInCompanyIds } = await import('../lib/company/data-analysis')
+  const { gatherCandidates } = await import('../src/lib/agent/categorize/candidates')
+  const { gatherUnderlag } = await import('../src/lib/agent/categorize/underlag')
+  const { selectAccount } = await import('../src/lib/agent/categorize/select-account')
+  const { chunkCompanyIds, listDataAnalysisOptedInCompanyIds } = await import('../src/lib/company/data-analysis')
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!

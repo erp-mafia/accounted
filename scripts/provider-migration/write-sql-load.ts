@@ -5,8 +5,8 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { writeFileSync } from 'node:fs'
-import { mapVismaToSalesInvoice } from '../../lib/providers/visma/mapper'
-import { mapBokioToSalesInvoice } from '../../lib/providers/bokio/mapper'
+import { mapVismaToSalesInvoice } from '../../src/lib/providers/visma/mapper'
+import { mapBokioToSalesInvoice } from '../../src/lib/providers/bokio/mapper'
 import { mapCustomer, mapSalesInvoice } from '../../extensions/general/arcim-migration/lib/entity-mapper'
 import { invoiceFixture, type LoadProvider } from './fixtures'
 

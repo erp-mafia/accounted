@@ -26,9 +26,9 @@
  */
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadPacks, sortPacks, type LoadedPack } from '../lib/packs/load'
-import { applyTemplate } from '../lib/bookkeeping/template-library'
-import { getBASReference } from '../lib/bookkeeping/bas-reference'
+import { loadPacks, sortPacks, type LoadedPack } from '../src/lib/packs/load'
+import { applyTemplate } from '../src/lib/bookkeeping/template-library'
+import { getBASReference } from '../src/lib/bookkeeping/bas-reference'
 import type { BookingTemplateLibraryLine } from '../types'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')

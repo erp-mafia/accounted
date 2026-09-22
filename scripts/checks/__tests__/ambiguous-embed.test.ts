@@ -366,7 +366,7 @@ describe('ambiguous-embed: pair derivation from the migration history', () => {
 })
 
 describe('ambiguous-embed: file scan', () => {
-  it('reports offenders relative to the root and skips test files', () => {
+  it.each(['lib', 'src/lib'])('reports offenders in %s and skips test files', (libDir) => {
     const root = tempRoot('ambiguous-embed-')
     write(
       root,
@@ -382,15 +382,18 @@ describe('ambiguous-embed: file scan', () => {
     )
     const bad = `supabase.from('journal_entries').select('id, fiscal_period:fiscal_periods(is_closed)')`
     const good = `supabase.from('journal_entries').select('id, fiscal_periods!journal_entries_fiscal_period_id_fkey(is_closed)')`
-    write(root, 'lib/bad.ts', bad)
-    write(root, 'lib/good.ts', good)
-    write(root, 'lib/__tests__/bad.test.ts', bad)
-    write(root, 'lib/bad.test.ts', bad)
+    write(root, `${libDir}/bad.ts`, bad)
+    write(root, `${libDir}/good.ts`, good)
+    write(root, `${libDir}/__tests__/bad.test.ts`, bad)
+    write(root, `${libDir}/bad.test.ts`, bad)
     write(root, 'app/api/x/route.ts', `${good}\n${bad}`)
+
+    write(root, 'scripts/bad.ts', bad)
 
     expect(findAmbiguousEmbeds(root)).toEqual([
       { where: 'app/api/x/route.ts:2', from: 'journal_entries', target: 'fiscal_periods' },
       { where: 'lib/bad.ts:1', from: 'journal_entries', target: 'fiscal_periods' },
+      { where: 'scripts/bad.ts:1', from: 'journal_entries', target: 'fiscal_periods' },
     ])
   })
 

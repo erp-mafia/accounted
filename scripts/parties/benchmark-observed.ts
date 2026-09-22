@@ -83,8 +83,8 @@ async function main() {
     report.parity = parity
     await db.query('ROLLBACK')
     if (process.argv.includes('--flows')) {
-      const { getRegister } = await import('../../lib/parties/register')
-      const { suggestPartiesForCompany } = await import('../../lib/parties/suggest')
+      const { getRegister } = await import('../../src/lib/parties/register')
+      const { suggestPartiesForCompany } = await import('../../src/lib/parties/suggest')
       const started = performance.now()
       report.refresh = await suggestPartiesForCompany(api, fixture.company, fixture.user)
       report.refreshMs = Math.round(performance.now() - started)

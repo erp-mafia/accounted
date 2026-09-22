@@ -20,6 +20,7 @@
     ],
     "paths": {
       "@/*": ["./*"],
+      "@/lib/*": ["./src/lib/*"],
       "@accounted/connect-contract": ["./packages/connect-contract/src/index.ts"]
     },
     "types": ["vitest/globals"]

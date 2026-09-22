@@ -62,6 +62,7 @@ const COMP_BASE_XSD_ENTRY =
 
 const OUT_PATH = join(
   ROOT,
+  'src',
   'lib',
   'bokslut',
   'ixbrl',

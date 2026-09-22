@@ -51,7 +51,7 @@ vi.mock('@/lib/currency/riksbanken', () => ({
   convertToSEK: vi.fn((amount: number, rate: number) => Math.round(amount * rate * 100) / 100),
 }))
 
-import { POST } from '../../commit/route'
+import { POST } from '../route'
 
 describe('POST /api/pending-operations/:id/commit', () => {
   const mockUser = { id: 'user-1', email: 'test@test.se' }

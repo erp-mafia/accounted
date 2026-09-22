@@ -1,3 +1,4 @@
+import { sourcePath } from '@/scripts/checks/source-paths.mjs'
 import { describe, it, expect } from 'vitest'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -25,7 +26,7 @@ import path from 'node:path'
 const ROOT = path.resolve(__dirname, '../../../..')
 
 function read(rel: string): string {
-  return fs.readFileSync(path.resolve(ROOT, rel), 'utf8')
+  return fs.readFileSync(sourcePath(ROOT, rel), 'utf8')
 }
 
 /** Source with comment lines dropped, so prose about a pattern is never mistaken for the pattern. */

@@ -22,11 +22,11 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   })
   const { fetchProviderSieFiles } = await import('../../extensions/general/arcim-migration/lib/sie-fetcher')
-  const { detectEncoding, decodeBuffer } = await import('../../lib/import/sie-parser')
-  const { readSIEIntakeFile } = await import('../../lib/import/sie-intake')
-  const { submitSIEJob } = await import('../../lib/import/sie-jobs')
-  const { runSIEWorker } = await import('../../lib/import/sie-job-worker')
-  const { getOpeningBalances } = await import('../../lib/reports/opening-balances')
+  const { detectEncoding, decodeBuffer } = await import('../../src/lib/import/sie-parser')
+  const { readSIEIntakeFile } = await import('../../src/lib/import/sie-intake')
+  const { submitSIEJob } = await import('../../src/lib/import/sie-jobs')
+  const { runSIEWorker } = await import('../../src/lib/import/sie-job-worker')
+  const { getOpeningBalances } = await import('../../src/lib/reports/opening-balances')
   const results: Array<Record<string, unknown>> = []
   const originalFetch = globalThis.fetch
   function source(program: string, year: number) {

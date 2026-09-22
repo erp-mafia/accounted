@@ -201,7 +201,7 @@ export const FALLBACK_TAX_TABLE_YEARS: ReadonlySet<number> = new Set([${year}])
 function main() {
   const { year } = parseArgs()
   const inputPath = resolve(process.cwd(), `data/tax-tables/${year}/allmanna-tabeller-manad.txt`)
-  const outputPath = resolve(process.cwd(), 'lib/salary/tax-tables-fallback.ts')
+  const outputPath = resolve(process.cwd(), 'src/lib/salary/tax-tables-fallback.ts')
 
   console.log(`Reading ${inputPath}`)
   const tables = parseFile(inputPath)

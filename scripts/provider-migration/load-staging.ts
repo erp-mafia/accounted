@@ -5,7 +5,7 @@ import { resolve, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import dotenv from 'dotenv'
-import { createServiceRoleClient } from '../../lib/supabase/service-client'
+import { createServiceRoleClient } from '../../src/lib/supabase/service-client'
 import { invoiceFixture, providerPage, type LoadProvider } from './fixtures'
 
 const PROJECT = 'metjnjrhvujscngnpzdv'

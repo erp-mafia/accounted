@@ -715,7 +715,7 @@ describe('event_log persistence registration', () => {
     // of the events from the list trips the test.
     const fs = await import('node:fs/promises')
     const path = await import('node:path')
-    const handlerPath = path.resolve(__dirname, '..', '..', '..', '..', 'lib', 'events', 'handlers', 'event-log-handler.ts')
+    const handlerPath = path.resolve(__dirname, '..', '..', '..', '..', 'src', 'lib', 'events', 'handlers', 'event-log-handler.ts')
     const text = await fs.readFile(handlerPath, 'utf-8')
     expect(text).toMatch(/'mcp\.tool_called'/)
     expect(text).toMatch(/'mcp\.tools_list_called'/)

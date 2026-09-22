@@ -248,7 +248,7 @@ beforeAll(() => {
   scan = scanColumnRefs(
     listSourceFiles([
       path.join(ROOT, 'app'),
-      path.join(ROOT, 'lib'),
+      path.join(ROOT, 'src', 'lib'),
       path.join(ROOT, 'components'),
       path.join(ROOT, 'extensions'),
       path.join(ROOT, 'hooks'),

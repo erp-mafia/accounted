@@ -1,14 +1,14 @@
 ---
 paths:
-  - "lib/company/**"
-  - "lib/company-lookup/**"
-  - "lib/bookkeeping/booking-templates.ts"
-  - "lib/bookkeeping/category-mapping.ts"
-  - "lib/packs/**"
-  - "lib/reports/catalog.ts"
-  - "lib/tax/deadline-config.ts"
-  - "lib/bokslut/**"
-  - "lib/import/**"
+  - "src/lib/company/**"
+  - "src/lib/company-lookup/**"
+  - "src/lib/bookkeeping/booking-templates.ts"
+  - "src/lib/bookkeeping/category-mapping.ts"
+  - "src/lib/packs/**"
+  - "src/lib/reports/catalog.ts"
+  - "src/lib/tax/deadline-config.ts"
+  - "src/lib/bokslut/**"
+  - "src/lib/import/**"
   - "components/onboarding/**"
   - "components/bookkeeping/year-end/**"
 ---

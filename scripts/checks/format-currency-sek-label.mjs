@@ -48,6 +48,7 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
+import { sourcePath, sourceRelative } from './source-paths.mjs'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
@@ -242,10 +243,10 @@ export function findSekLabelledFxAmountsInSource(relPath, text) {
 
 /** Findings across `SCAN_DIRS` under `root`, sorted and de-duplicated. */
 export function findSekLabelledFxAmounts(root) {
-  const files = SCAN_DIRS.flatMap((dir) => walk(path.join(root, dir)))
+  const files = SCAN_DIRS.flatMap((dir) => walk(sourcePath(root, dir)))
   const findings = []
   for (const file of files) {
-    const relPath = path.relative(root, file).split(path.sep).join('/')
+    const relPath = sourceRelative(root, file)
     findings.push(...findSekLabelledFxAmountsInSource(relPath, fs.readFileSync(file, 'utf8')))
   }
   const seen = new Set()

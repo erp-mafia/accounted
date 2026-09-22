@@ -24,7 +24,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
-import { POST } from '../../reject/route'
+import { POST } from '../route'
 
 describe('POST /api/pending-operations/:id/reject', () => {
   const routeParams = createMockRouteParams({ id: 'op-1' })

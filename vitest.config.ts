@@ -2,6 +2,7 @@ import { defineConfig } from 'vitest/config'
 import path from 'path'
 
 const alias = {
+  '@/lib': path.resolve(__dirname, 'src/lib'),
   '@': path.resolve(__dirname, '.'),
   // The connect contract is consumed from source in-repo (published separately).
   '@accounted/connect-contract': path.resolve(__dirname, 'packages/connect-contract/src/index.ts'),

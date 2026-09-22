@@ -123,7 +123,7 @@ existing rows: [CREATE INDEX](https://www.postgresql.org/docs/17/sql-createindex
 Use explicit staging credentials in ignored `.env.sie.*.local` files:
 
 ```sh
-node scripts/sie-import/test-staging.mjs lib/import/__tests__/sie-job.pg.test.ts tests/pg/sie-report-lease-concurrency.pg.test.ts tests/pg/sie-sandbox-cleanup.pg.test.ts
+node scripts/sie-import/test-staging.mjs src/lib/import/__tests__/sie-job.pg.test.ts tests/pg/sie-report-lease-concurrency.pg.test.ts tests/pg/sie-sandbox-cleanup.pg.test.ts
 node scripts/sie-import/test-staging.mjs tests/pg/sie-duplicate-repair.pg.test.ts tests/pg/sie-repair-race.pg.test.ts
 node --import tsx scripts/sie-import/acceptance-providers-staging.ts
 node --import tsx scripts/sie-import/acceptance-staging.ts

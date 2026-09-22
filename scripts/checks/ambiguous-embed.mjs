@@ -60,6 +60,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { sourcePath, sourceRelative } from './source-paths.mjs'
 import ts from 'typescript'
 
 const SCAN_DIRS = ['app', 'components', 'contexts', 'extensions', 'lib', 'scripts']
@@ -328,15 +329,15 @@ function walk(dir, out) {
 
 /** Findings across the repo, as `{ where, from, target }`, sorted. */
 export function findAmbiguousEmbeds(root) {
-  const ambiguousPairs = deriveAmbiguousPairs(path.join(root, 'supabase', 'migrations'))
+  const ambiguousPairs = deriveAmbiguousPairs(sourcePath(root, 'supabase', 'migrations'))
   if (ambiguousPairs.size === 0) return []
 
   const findings = []
   for (const dir of SCAN_DIRS) {
-    for (const file of walk(path.join(root, dir), [])) {
+    for (const file of walk(sourcePath(root, dir), [])) {
       const sourceText = fs.readFileSync(file, 'utf8')
       if (!sourceText.includes('.select(')) continue
-      const relPath = path.relative(root, file).split(path.sep).join('/')
+      const relPath = sourceRelative(root, file)
       for (const finding of findAmbiguousEmbedsInSource(sourceText, file, ambiguousPairs)) {
         findings.push({
           where: `${relPath}:${finding.line}`,

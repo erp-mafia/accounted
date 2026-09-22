@@ -33,5 +33,5 @@ The files below are the shared source of truth for path-specific guidance. Claud
 - `.claude/rules/api-routes.md`: `withRouteContext` route pattern, endpoint map (`app/api/**`)
 - `.claude/rules/database.md`: migration rules, key tables/RPCs/triggers, pg-real (`supabase/migrations/**`)
 - `.claude/rules/mcp-server.md`: MCP tool authoring, staged-operation pattern, OAuth 2.1 connector auth
-- `.claude/rules/bookkeeping.md`: BAS accounts, VAT treatments/rutor, `lib/core/` services
-- `.claude/rules/legal-forms.md`: capability profiles, never `=== 'aktiebolag'` at call sites; contract in `docs/LEGAL-FORMS.md` (`lib/company/**`, templates, year-end, import)
+- `.claude/rules/bookkeeping.md`: BAS accounts, VAT treatments/rutor, `src/lib/core/` services
+- `.claude/rules/legal-forms.md`: capability profiles, never `=== 'aktiebolag'` at call sites; contract in `docs/LEGAL-FORMS.md` (`src/lib/company/**`, templates, year-end, import)

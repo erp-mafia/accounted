@@ -38,7 +38,7 @@ import { readFile } from 'node:fs/promises'
 import { basename, extname } from 'node:path'
 import { promisify } from 'node:util'
 
-type AiModule = typeof import('../lib/ai')
+type AiModule = typeof import('../src/lib/ai')
 type ExtractionModule = typeof import('../extensions/general/invoice-inbox/lib/extract-invoice-fields')
 
 let failures = 0
@@ -75,7 +75,7 @@ async function probeRasterizer(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const ai: AiModule = await import('../lib/ai')
+  const ai: AiModule = await import('../src/lib/ai')
   const status = ai.getAiStatus()
 
   console.log(`Provider:     ${status.provider}`)

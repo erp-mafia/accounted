@@ -33,6 +33,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { sourcePath, sourceRelative } from './source-paths.mjs'
 
 /** Keep in sync with ENTITY_TYPES in lib/company/entity-type.ts. */
 export const LEGAL_FORM_CODES = ['enskild_firma', 'aktiebolag', 'ideell_forening']
@@ -94,8 +95,8 @@ function walk(dir, out) {
 export function findLiteralLegalForms(root) {
   const findings = []
   for (const dir of SCAN_DIRS) {
-    for (const file of walk(path.join(root, dir), [])) {
-      const relPath = path.relative(root, file).split(path.sep).join('/')
+    for (const file of walk(sourcePath(root, dir), [])) {
+      const relPath = sourceRelative(root, file)
       if (isExempt(relPath)) continue
       for (const f of findLiteralLegalFormsInSource(fs.readFileSync(file, 'utf8'))) {
         findings.push({ file: relPath, ...f })

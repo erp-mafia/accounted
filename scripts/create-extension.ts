@@ -333,10 +333,10 @@ Done! Next steps:
   3. Add API routes if needed in api-routes.ts:
      extensions/${sector}/${name}/api-routes.ts
 
-  4. Add a static import to FIRST_PARTY_EXTENSIONS in lib/extensions/loader.ts:
+  4. Add a static import to FIRST_PARTY_EXTENSIONS in src/lib/extensions/loader.ts:
      import { ${exportName} } from '@/extensions/${sector}/${name}'
 
-  5. Add extension metadata to the sector registry in lib/extensions/sectors.ts
+  5. Add extension metadata to the sector registry in src/lib/extensions/sectors.ts
 
   6. Enable the extension in extensions.config.json:
      Add "${name}" to the extensions array

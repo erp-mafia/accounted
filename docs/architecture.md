@@ -17,7 +17,7 @@ some parts are deliberately rigid. For contribution workflow, see
 
 ## The bookkeeping engine
 
-All accounting writes flow through one engine: `lib/bookkeeping/engine.ts`.
+All accounting writes flow through one engine: `src/lib/bookkeeping/engine.ts`.
 
 The journal entry lifecycle is draft, then commit:
 
@@ -33,7 +33,7 @@ Two invariants hold for every entry:
 - Once committed, an entry is never silently edited or deleted. BFL 5 kap.
   5 § allows two correction paths, and the code has exactly those two:
   - Storno: `reverseEntry()` cancels a voucher with a reversal entry and
-    `correctEntry()` replaces it (`lib/core/bookkeeping/storno-service.ts`).
+    `correctEntry()` replaces it (`src/lib/core/bookkeeping/storno-service.ts`).
     Always allowed.
   - Inline rättelse (founder-approved 2026-07-23): the
     `correct_entry_metadata` and `correct_entry_lines_inline` RPCs
@@ -132,7 +132,7 @@ declarations.
 
 ## Events
 
-`lib/events/bus.ts` is a module-level singleton event bus. Domain events (for
+`src/lib/events/bus.ts` is a module-level singleton event bus. Domain events (for
 example "invoice created" or "transaction imported") are how extensions react
 to core activity without core knowing about them.
 
@@ -141,10 +141,10 @@ to core activity without core knowing about them.
 | Path | Contents |
 |---|---|
 | `app/` | Next.js App Router pages and API routes |
-| `lib/bookkeeping/` | Engine, entry generators, account mapping, BAS chart data |
-| `lib/core/` | Periods, year-end, storno, tax codes, audit, documents |
-| `lib/reports/` | Balance sheet, income statement, VAT, SIE, tax reports |
-| `lib/` (other) | Invoices, transactions, imports, salary, reconciliation, tax, providers |
+| `src/lib/bookkeeping/` | Engine, entry generators, account mapping, BAS chart data |
+| `src/lib/core/` | Periods, year-end, storno, tax codes, audit, documents |
+| `src/lib/reports/` | Balance sheet, income statement, VAT, SIE, tax reports |
+| `src/lib/` (other) | Invoices, transactions, imports, salary, reconciliation, tax, providers |
 | `components/` | React components (shadcn/ui based) |
 | `extensions/` | Opt-in extension plugins |
 | `supabase/migrations/` | Database schema, RLS policies, enforcement triggers |

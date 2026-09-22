@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
-import { LEGACY_HOST_REDIRECT_EXCLUSIONS } from "./lib/domains/legacy-redirect";
+import { LEGACY_HOST_REDIRECT_EXCLUSIONS } from "./src/lib/domains/legacy-redirect";
 
 const withNextIntl = createNextIntlPlugin("./i18n/request.ts");
 

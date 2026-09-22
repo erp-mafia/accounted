@@ -34,9 +34,9 @@ const eslintConfig = defineConfig([
   // app/api/log/route.ts are the two intentional exemptions because they ARE
   // the logger plumbing.
   {
-    files: ["lib/**/*.ts", "lib/**/*.tsx", "app/api/**/*.ts", "app/api/**/*.tsx"],
+    files: ["src/lib/**/*.ts", "src/lib/**/*.tsx", "app/api/**/*.ts", "app/api/**/*.tsx"],
     ignores: [
-      "lib/logger.ts",
+      "src/lib/logger.ts",
       "app/api/log/route.ts",
       // Test files have legitimate console use for assertions / debugging.
       "**/__tests__/**",
