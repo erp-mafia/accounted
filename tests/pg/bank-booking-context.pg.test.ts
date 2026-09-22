@@ -253,7 +253,17 @@ describe('booking and account promotion concurrency', () => {
       await client.query('BEGIN'); await other.query('BEGIN')
       const pid = (await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
       if (ordering === 'edit-first') { await edit(client); pending = commit(other) }
-      else { await commit(); pending = edit(other) }
+      else {
+        await commit()
+        // A line writer already owns its line row when the trigger runs.
+        // Refuse an inverted company/journal wait while posting is in flight.
+        await expect(edit(other)).rejects.toMatchObject({ code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' })
+        await other.query('ROLLBACK')
+        await client.query('COMMIT')
+        await other.query('BEGIN')
+        await expect(edit(other)).rejects.toThrow(/Cannot UPDATE lines of a posted journal entry/)
+        return
+      }
       void pending.catch(() => {})
       await waitForBlock(pid)
       await client.query('COMMIT')

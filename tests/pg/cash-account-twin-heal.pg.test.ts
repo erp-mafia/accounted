@@ -300,10 +300,16 @@ describe('company twin plan and atomic receipt', () => {
       VALUES ($1, '1930', 'SEK', $2, false), ($1, '1931', 'SEK', $2, true)`, [historical.companyId, iban])
     let report = (await client.query('SELECT plan_cash_account_twins($1) AS p', [historical.companyId])).rows[0].p
     expect(report.groups[0].keeper.ledger_account).toBe('1930')
-    await insertPostedJournalEntry({ ...historical, entryDate: '2026-01-02', lines: [
-      { accountNumber: '1931', debitAmount: 25, creditAmount: 0 },
-      { accountNumber: '2999', debitAmount: 0, creditAmount: 25 },
-    ] })
+    // Keep this write in the transaction that configured the cash accounts;
+    // an independent session must refuse that uncommitted routing change.
+    const second = randomUUID()
+    await client.query(`INSERT INTO journal_entries(id, company_id, user_id, fiscal_period_id,
+      entry_date, description, source_type, status, voucher_number)
+      VALUES ($1, $2, $3, $4, '2026-01-02', 'PG split history', 'manual', 'draft', 0)`,
+    [second, historical.companyId, historical.userId, historical.fiscalPeriodId])
+    await client.query(`INSERT INTO journal_entry_lines(journal_entry_id, account_number, debit_amount, credit_amount)
+      VALUES ($1, '1931', 25, 0), ($1, '2999', 0, 25)`, [second])
+    await client.query('SELECT * FROM commit_journal_entry($1, $2)', [historical.companyId, second])
     report = (await client.query('SELECT plan_cash_account_twins($1) AS p', [historical.companyId])).rows[0].p
     expect(report.groups[0]).toMatchObject({ keeper: null, skipped: 'split-ledgers', postedLedgers: ['1930', '1931'] })
   })
