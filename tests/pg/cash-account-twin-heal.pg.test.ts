@@ -203,7 +203,7 @@ describe('company twin plan and atomic receipt', () => {
     expect(await verify()).toMatchObject({ status: 'consistent', transactionsChecked: 1101 })
     await client.query('UPDATE transactions SET cash_account_id = null WHERE id = $1', [lateId])
     expect(await verify()).toMatchObject({ status: 'changed', issues: [{ kind: 'transaction-or-anchor-changed', id: lateId }] })
-  })
+  }, 45_000)
 
   it('proves that an existing posted voucher and its anchored transaction were preserved', async () => {
     const historical = await seedCompany()

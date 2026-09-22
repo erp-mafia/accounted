@@ -213,6 +213,48 @@ describe('atomic PSD2 promotion', () => {
     expect(await promote()).toMatchObject({ cashAccountId: keeperId })
   })
 
+  it('preserves a junction anchor hidden by caller RLS during authenticated promotion', async () => {
+    const anchored = await transaction()
+    const movable = await transaction()
+    await client.query(`INSERT INTO transaction_voucher_links(company_id, user_id, transaction_id, journal_entry_id, allocated_amount)
+      VALUES ($1, $2, $3, $4, -25)`, [owner.companyId, owner.userId, anchored, voucherId])
+    // The restrictive policy exists only inside this rolled-back transaction.
+    // Integrity must hold even if a table's SELECT policy hides an anchor.
+    await client.query(`CREATE POLICY cash_promotion_hidden_anchor_probe ON public.transaction_voucher_links
+      AS RESTRICTIVE FOR SELECT TO authenticated USING (false)`)
+    await client.query("SELECT set_config('request.jwt.claim.sub', $1, true), set_config('request.jwt.claims', $2, true)",
+      [owner.userId, JSON.stringify({ sub: owner.userId, role: 'authenticated' })])
+    await client.query('SET LOCAL ROLE authenticated')
+    expect((await client.query('SELECT id FROM transaction_voucher_links WHERE transaction_id = $1', [anchored])).rows).toEqual([])
+    expect((await client.query('SELECT cash_transaction_is_movable($1, $2) AS movable', [owner.companyId, anchored])).rows[0].movable).toBe(false)
+    expect((await client.query('SELECT cash_transaction_is_movable($1, $2) AS movable', [owner.companyId, movable])).rows[0].movable).toBe(true)
+    expect(await promote()).toMatchObject({ moved: 1, retired: [{ id: twinId, outcome: 'demoted-to-manual' }] })
+    expect((await state()).tx).toEqual(expect.arrayContaining([
+      { id: anchored, cash_account_id: twinId, journal_entry_id: null },
+      { id: movable, cash_account_id: keeperId, journal_entry_id: null },
+    ]))
+  })
+
+  it.each(['anon', 'unrelated', 'missing-subject', 'viewer'])('denies %s direct movability probes', async caller => {
+    const tx = await transaction()
+    if (caller === 'viewer') await client.query("UPDATE company_members SET role = 'viewer' WHERE company_id = $1 AND user_id = $2",
+      [owner.companyId, owner.userId])
+    const sub = caller === 'viewer' ? owner.userId : caller === 'unrelated' ? randomUUID() : ''
+    await client.query("SELECT set_config('request.jwt.claim.sub', $1, true), set_config('request.jwt.claims', $2, true)",
+      [sub, caller === 'missing-subject' ? '{}' : JSON.stringify({ ...(sub ? { sub } : {}), role: caller === 'anon' ? 'anon' : 'authenticated' })])
+    await client.query(caller === 'anon' ? 'SET LOCAL ROLE anon' : 'SET LOCAL ROLE authenticated')
+    await expect(client.query('SELECT cash_transaction_is_movable($1, $2)', [owner.companyId, tx])).rejects.toMatchObject({ code: '42501' })
+  })
+
+  it('allows the service role to inspect anchors without JWT claims', async () => {
+    const anchored = await transaction(voucherId)
+    const movable = await transaction()
+    await client.query("SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '{}', true)")
+    await client.query('SET LOCAL ROLE service_role')
+    expect((await client.query('SELECT cash_transaction_is_movable($1, $2) AS movable', [owner.companyId, anchored])).rows[0].movable).toBe(false)
+    expect((await client.query('SELECT cash_transaction_is_movable($1, $2) AS movable', [owner.companyId, movable])).rows[0].movable).toBe(true)
+  })
+
   it('denies anonymous and unrelated-company callers', async () => {
     await client.query('SAVEPOINT anonymous')
     await client.query('SET LOCAL ROLE anon')
