@@ -2739,7 +2739,7 @@
     "unconvertible_badge": "Endast i verifikat",
     "ratio_label": "Andel",
     "ratio_help": "Andel av totalbeloppet som bokförs på raden. Summan av andelarna ska bli 1,0.",
-    "line_dimensions_help": "Valfritt projekt och kostnadsställe på kostnadsraden. Fylls i på verifikatet när mallen används.",
+    "line_dimensions_help": "Valfritt projekt och kostnadsställe på kostnads-/intäktsraden. Används på verifikatet när mallen används.",
     "ratio_sum_warning": "Andelarna för kostnadsrader summerar inte till 1,0.",
     "preview_label": "Förhandsvisning för 1 000 kr",
     "edit": "Redigera",
