@@ -10202,8 +10202,6 @@
     "hero_sub_locked": "Three are lit from the start. Connect your AI and the rest light up.",
     "hero_sub_open": "All are lit. Your AI always loads the latest version.",
     "count_of": "of {total} lit",
-    "connected_line": "{client} is connected.",
-    "connected_rest": "All skills are lit.",
     "sign_title": "Seven skills are waiting for your AI.",
     "sign_body": "Connect Claude, ChatGPT or Grok and they light up. Free, takes a minute.",
     "connect_client": "Connect {client}",

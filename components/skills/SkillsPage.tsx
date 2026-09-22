@@ -200,7 +200,6 @@ function Registry({ companyId }: { companyId: string }) {
       ? 'unlocking'
       : isConnected ? 'open' : pending ? 'waiting' : 'locked'
   const client = pickConnectedAiClient(connected ?? [], pending ?? undefined) ?? pending ?? 'claude'
-  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
 
   // ── connect ──
   const [addressCopy, setAddressCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -348,7 +347,6 @@ function Registry({ companyId }: { companyId: string }) {
             <span className={styles.num}>{litCount}</span>
             <span className={styles.of}>{t('count_of', { total })}</span>
           </div>
-          {state === 'open' && <div className={styles.okline}><span><b>{t('connected_line', { client: clientName })}</b> {t('connected_rest')}</span></div>}
         </div>
         {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
         {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}

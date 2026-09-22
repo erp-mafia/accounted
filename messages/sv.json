@@ -10202,8 +10202,6 @@
     "hero_sub_locked": "Tre är tända från start. Koppla din AI så tänds resten.",
     "hero_sub_open": "Alla är tända. Din AI hämtar alltid den senaste versionen.",
     "count_of": "av {total} tända",
-    "connected_line": "{client} är kopplad.",
-    "connected_rest": "Alla skills är tända.",
     "sign_title": "Sju skills väntar på din AI.",
     "sign_body": "Koppla Claude, ChatGPT eller Grok så tänds de. Gratis, tar en minut.",
     "connect_client": "Koppla {client}",
