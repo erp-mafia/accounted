@@ -391,7 +391,6 @@ function Registry({ companyId }: { companyId: string }) {
             {state === 'locked' && (
               <div className={styles.pin}>
                 <h2>{t('sign_title')}</h2>
-                <p>{t('sign_body')}</p>
                 <div className={styles.btns}>
                   {AI_CLIENTS.map((c, i) => i === 0 ? (
                     <span key={c.id} className={styles.cta}>
