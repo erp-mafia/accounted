@@ -187,6 +187,19 @@ describe('bank source validation before voucher posting', () => {
     expect((await commit()).rows[0].voucher_number).toBe(1)
   })
 
+  it('refuses a viewer posting a manual draft before consuming a voucher number', async () => {
+    await client.query("UPDATE journal_entries SET source_type = 'manual', source_id = null, bank_booking_context = '[]' WHERE id = $1", [entryId])
+    await client.query("UPDATE company_members SET role = 'viewer' WHERE company_id = $1 AND user_id = $2", [owner.companyId, owner.userId])
+    await client.query("SELECT set_config('request.jwt.claim.sub', $1, true), set_config('request.jwt.claims', $2, true)", [owner.userId, JSON.stringify({ sub: owner.userId, role: 'authenticated' })])
+    await client.query('SET LOCAL ROLE authenticated')
+    await client.query('SAVEPOINT denied_manual')
+    await expect(commit()).rejects.toMatchObject({ code: '42501' })
+    await client.query('ROLLBACK TO SAVEPOINT denied_manual')
+    await client.query('RESET ROLE')
+    expect((await client.query('SELECT status, voucher_number FROM journal_entries WHERE id = $1', [entryId])).rows[0]).toMatchObject({ status: 'draft', voucher_number: 0 })
+    expect((await client.query('SELECT count(*)::int n FROM voucher_sequences WHERE company_id = $1', [owner.companyId])).rows[0].n).toBe(0)
+  })
+
   it.each(['anon', 'viewer', 'other-company'])('denies %s company locking and posting', async role => {
     if (role === 'viewer') await client.query("UPDATE company_members SET role = 'viewer' WHERE company_id = $1 AND user_id = $2", [owner.companyId, owner.userId])
     const sub = role === 'other-company' ? randomUUID() : owner.userId
