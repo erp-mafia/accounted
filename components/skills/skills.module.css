@@ -257,20 +257,21 @@
 }
 .plate[data-gone] { opacity: 0; visibility: hidden; }
 /*
- * The sign is a key from the panel: the same night ground, glass highlight,
- * pressed edge and a white light wandering its border. The theme tokens are
+ * The sign is a key in the app's dark theme, with the panel keys' pressed
+ * edge and wandering white light. The theme tokens are
  * redefined inside it so the buttons and text turn to their dark versions.
  */
 .pin {
-  --background: 200 7% 19%;
-  --foreground: 45 20% 96%;
-  --primary: 0 0% 100%;
-  --primary-foreground: 200 7% 17%;
-  --secondary: 200 8% 20%;
-  --secondary-foreground: 45 20% 96%;
-  --border: 200 6% 26%;
-  --input: 200 6% 34%;
-  --muted-foreground: 40 8% 72%;
+  /* the app's own dark theme (app/globals.css .dark) */
+  --background: 0 0% 11%;
+  --foreground: 0 0% 87%;
+  --primary: 0 0% 87%;
+  --primary-foreground: 0 0% 7%;
+  --secondary: 0 0% 14%;
+  --secondary-foreground: 0 0% 87%;
+  --border: 45 4% 18%;
+  --input: 45 4% 18%;
+  --muted-foreground: 0 0% 50%;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -279,15 +280,13 @@
   max-width: calc(100% - 32px);
   padding: 36px 44px 40px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, .14);
+  border: 1px solid hsl(var(--border));
   text-align: center;
   color: hsl(var(--foreground));
-  background:
-    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, .08), rgba(255, 255, 255, 0) 60%),
-    linear-gradient(180deg, #343A3D, #262B2D);
+  background: hsl(var(--background));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .16),
-    0 6px 0 rgba(6, 14, 18, .92),
+    inset 0 1px 0 rgba(255, 255, 255, .06),
+    0 6px 0 hsl(0 0% 5%),
     0 30px 70px -24px rgba(0, 0, 0, .45);
 }
 /* Eld: the same wide white light the panel keys spill, wandering behind the sign */
@@ -317,7 +316,7 @@
   mask-composite: exclude;
   animation: spin 6s linear infinite;
 }
-.pin h2 { max-width: 460px; font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 36px; color: #FAF8F1; text-wrap: balance; }
+.pin h2 { max-width: 460px; font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 36px; color: hsl(var(--foreground)); text-wrap: balance; }
 .pin p { color: hsl(var(--muted-foreground)); max-width: 380px; line-height: 20px; }
 .btns { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .waitled { width: 10px; height: 10px; border-radius: 99px; background: hsl(var(--foreground)); box-shadow: 0 0 0 5px hsl(var(--foreground) / .22); animation: breathe 1.4s ease-in-out infinite; }
