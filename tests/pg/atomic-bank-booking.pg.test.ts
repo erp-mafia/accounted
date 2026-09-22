@@ -264,7 +264,7 @@ describe('atomic bank booking and promotion races', () => {
     }
   })
 
-  it.each(['customer', 'supplier'])('takes the company lock before the %s voucher-link invoice lock', async kind => {
+  it.each(['customer', 'supplier', 'supplier-evidence', 'sie-relink'])('takes the company lock before the %s voucher-link invoice lock', async kind => {
     await client.query('COMMIT')
     const other = await getClient()
     let pending: Promise<unknown> | undefined
@@ -273,18 +273,41 @@ describe('atomic bank booking and promotion races', () => {
       const pid = (await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid
       await client.query('SELECT lock_cash_account_company($1)', [owner.companyId])
       const customer = kind === 'customer'
+      const voucherId = randomUUID()
       const sql = customer
         ? 'SELECT link_invoice_to_voucher($1, $2, $3, $4, NULL) AS result'
-        : 'SELECT link_supplier_invoice_to_voucher($1, $2, $3, $4, NULL) AS result'
-      pending = other.query(sql, [customer ? customerInvoiceId : supplierInvoiceId, randomUUID(), owner.userId, owner.companyId])
+        : kind === 'supplier-evidence'
+          ? 'SELECT attach_supplier_invoice_settlement_voucher($1, $2, $3, $4, NULL, false) AS result'
+          : 'SELECT link_supplier_invoice_to_voucher($1, $2, $3, $4, NULL) AS result'
+      pending = kind === 'sie-relink'
+        ? other.query('SELECT * FROM relink_stranded_transactions($1, false, false, $2, $3)',
+          [owner.companyId, JSON.stringify({ type: 'user', id: owner.userId }), randomUUID()])
+        : other.query(sql, [customer ? customerInvoiceId : supplierInvoiceId, voucherId, owner.userId, owner.companyId])
       void pending.catch(() => {})
       await waitForBlock(pid)
       await client.query('SELECT id FROM invoices WHERE id = $1 FOR UPDATE NOWAIT', [customerInvoiceId])
       await client.query('SELECT id FROM supplier_invoices WHERE id = $1 FOR UPDATE NOWAIT', [supplierInvoiceId])
+      await client.query('SELECT id FROM transactions WHERE id = $1 FOR UPDATE NOWAIT', [txId])
+      // Company comes before the voucher advisory lock as well as row locks.
+      expect((await client.query(`SELECT pg_try_advisory_xact_lock(
+        hashtextextended('si-settlement-voucher:' || $1::text, 0)) AS acquired`, [voucherId])).rows[0].acquired).toBe(true)
       await client.query('COMMIT')
-      expect(await pending).toMatchObject({ rows: [{ result: { ok: false } }] })
+      expect(await pending).toMatchObject({ rows: kind === 'sie-relink' ? [] : [{ result: { ok: false } }] })
     } finally {
       await client.query('ROLLBACK'); await pending?.catch(() => {}); await other.query('ROLLBACK'); other.release()
+    }
+  })
+
+  it('does not wait on the company repair lock for a SIE relink dry run', async () => {
+    await client.query('COMMIT')
+    const other = await getClient()
+    try {
+      await client.query('BEGIN'); await other.query('BEGIN')
+      await client.query('SELECT lock_cash_account_company($1)', [owner.companyId])
+      await other.query("SET LOCAL lock_timeout = '1s'")
+      expect((await other.query('SELECT * FROM relink_stranded_transactions($1)', [owner.companyId])).rows).toEqual([])
+    } finally {
+      await client.query('ROLLBACK'); await other.query('ROLLBACK'); other.release()
     }
   })
 
