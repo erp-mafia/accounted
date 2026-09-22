@@ -23,6 +23,7 @@ export const REGISTRY_SKILLS = [
 ] as const
 
 export type RegistrySkillId = (typeof REGISTRY_SKILLS)[number]['id']
+export type RegistrySkillGroup = (typeof REGISTRY_SKILLS)[number]['group']
 
 /** How many skills are free before an AI is connected. */
 export const FREE_SKILLS = 3

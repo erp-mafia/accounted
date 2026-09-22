@@ -10196,7 +10196,7 @@
   },
   "skills_registry": {
     "title": "Skills",
-    "help": "Skills are instructions your AI loads from Accounted when it works in your company. Three are free from the start. The rest light up when you connect Claude, ChatGPT or Grok. Your AI proposes, you approve.",
+    "help": "Connect your agent to get full access.",
     "create": "Create skill",
     "hero_title": "Agent Skills",
     "sign_title": "Seven skills are waiting for your AI.",
@@ -10220,6 +10220,8 @@
     "say_label": "Tell your AI",
     "prompt": "{say} Load the skill \"{skill}\" from Accounted (load_skill) and follow it.",
     "own_prompt": "Load the skill \"{skill}\" from Accounted (load_skill) and follow it: {name}.",
+    "run_client": "Run in {client}",
+    "run_copied": "Copied, paste it",
     "copy_open": "Copy and open {client}",
     "copied_open": "Copied. Paste it into {client}.",
     "show_full": "Show the full instruction",

@@ -15,6 +15,16 @@ export type SheetTarget =
   | { kind: 'registry'; id: RegistrySkillId; locked: boolean }
   | { kind: 'own'; slug: string; name: string; installationId: string }
 
+/**
+ * Copies the prompt and opens an empty chat. The chat opens synchronously so
+ * the popup is not blocked; the prompt travels by clipboard, never in the URL.
+ */
+export function copyPromptAndOpen(prompt: string, client: AiClient): Promise<boolean> {
+  const copying = navigator.clipboard?.writeText(prompt) ?? Promise.reject(new Error('No clipboard'))
+  openAiConnector(aiChatLink(client))
+  return copying.then(() => true, () => false)
+}
+
 async function readBody(url: string): Promise<string> {
   const response = await fetch(url)
   if (!response.ok) throw new Error('Skill body request failed')
@@ -72,10 +82,7 @@ function SheetBody({ target, companyId, client, canWrite, onEdit, onDelete }: {
   const body = useSWR(showFull ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
 
   function copyAndOpen() {
-    // Open synchronously inside the click so the popup is not blocked.
-    const copying = navigator.clipboard?.writeText(prompt) ?? Promise.reject(new Error('No clipboard'))
-    openAiConnector(aiChatLink(client))
-    copying.then(() => setCopyState('copied'), () => setCopyState('failed'))
+    void copyPromptAndOpen(prompt, client).then((ok) => setCopyState(ok ? 'copied' : 'failed'))
   }
 
   return (
