@@ -2,6 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { BankIngestRoute } from '@/types'
 import { dbError } from '@/lib/errors/db-error'
 
+/** A changed route must be reloaded without marking the bank consent broken. */
+export function isBankRoutingConflict(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'PT409'
+}
+
 /** Resolve before the provider fetch; inserts validate the same token under locks. */
 export async function resolveBankIngestRoute(
   supabase: SupabaseClient,

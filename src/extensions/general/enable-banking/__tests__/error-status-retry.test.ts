@@ -119,6 +119,15 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     vi.clearAllMocks()
   })
 
+  it.each(['active', 'error'])('returns a reloadable conflict without changing %s connection state', async status => {
+    vi.mocked(syncAccountTransactions).mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    const updateSpy = vi.fn()
+    const response = await syncRoute.handler(makeRequest(), makeContext(makeConnection({ status }), updateSpy))
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { code: 'CONFLICT' } })
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
   it('allows sync from status=error and restores active + clears error_message on success', async () => {
     // Regression: a transient ASPSP failure parked the connection in 'error',
     // but the old status gate rejected everything but 'active', so the UI's

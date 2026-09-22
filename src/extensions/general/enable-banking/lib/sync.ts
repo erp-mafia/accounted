@@ -205,7 +205,7 @@ export async function syncAccountTransactions(
 ): Promise<SyncResult> {
   const bankRoute = await resolveBankIngestRoute(supabase, companyId, connectionId, account.uid, account.currency)
   if (account.ledger_account && account.ledger_account !== bankRoute.ledgerAccount) {
-    throw new Error('Bank account configuration changed before sync; reload the connection')
+    throw Object.assign(new Error('Bank account configuration changed before sync; reload the connection'), { code: 'PT409' })
   }
   console.log('[enable-banking] syncAccountTransactions starting', {
     connectionId,
@@ -433,7 +433,9 @@ export async function syncAccountTransactions(
   if (ingestResult.errors > 0) {
     // Keep the previous cursor so a retry fetches the incomplete batch again.
     // Successfully inserted rows already have dedup keys and are not rebooked.
-    throw new Error(`Bank transaction persistence failed: ${ingestResult.first_error?.message ?? `${ingestResult.errors} rows rejected`}`)
+    throw Object.assign(new Error(`Bank transaction persistence failed: ${ingestResult.first_error?.message ?? `${ingestResult.errors} rows rejected`}`), {
+      code: ingestResult.first_error?.code,
+    })
   }
 
   // Update account balance, but only when the stored one has gone stale:

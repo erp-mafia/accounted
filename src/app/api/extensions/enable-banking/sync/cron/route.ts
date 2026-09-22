@@ -23,6 +23,7 @@ import { withCronContext } from '@/lib/api/with-cron-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError, type BankSyncInitialResult } from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import {
   INCREMENTAL_LOOKBACK_DAYS,
@@ -371,7 +372,7 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
       // (four canary companies on 2026-09-04). The probe below still checks
       // the session, so a dead one is caught anyway.
       const isTransient = error instanceof AspspUnavailableError || error instanceof ConnectorSyncError
-        || error instanceof BankSyncResultObsoleteError
+        || error instanceof BankSyncResultObsoleteError || isBankRoutingConflict(error)
       const failureStatus = isSessionDead ? 'expired' : 'error'
       // A 429 holds the lease of every connection on the session for hours:
       // retrying next run would only spend another refused call.

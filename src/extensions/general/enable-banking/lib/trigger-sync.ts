@@ -36,6 +36,7 @@ import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
 import { retryAfterSeconds } from './rate-limit-message'
 import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -351,7 +352,7 @@ export async function triggerConnectionSync(
       message: error instanceof Error ? error.message : String(error),
       name: error instanceof Error ? error.name : undefined,
     })
-    if (connection.status === 'error' && !(error instanceof BankSyncResultObsoleteError)) {
+    if (connection.status === 'error' && !(error instanceof BankSyncResultObsoleteError) && !isBankRoutingConflict(error)) {
       await persistBankSyncFailure(supabase, {
         companyId,
         connectionId: connection.id as string,

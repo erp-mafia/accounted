@@ -144,6 +144,14 @@ describe('triggerConnectionSync', () => {
     mocks.emit.mockResolvedValue(undefined)
   })
 
+  it.each(['active', 'error'])('leaves %s connection state and cursor intact on a routing conflict', async status => {
+    state.connection = connection({ status, error_message: 'existing message' })
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status })
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(state.updates.every(update => Object.keys(update).join() === 'sync_lease_until')).toBe(true)
+  })
+
   it('syncs only the enabled accounts over the gap-aware window and stamps last_synced_at', async () => {
     const result = await run()
     expect(result.ok).toBe(true)

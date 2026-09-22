@@ -55,11 +55,20 @@ describe('syncAccountTransactions', () => {
     expect(mockIngest).not.toHaveBeenCalled()
   })
 
+  it('rejects a changed destination before provider or persistence calls with a reloadable conflict', async () => {
+    await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
+      makeAccount({ ledger_account: '1931' }), '2024-01-01', '2024-12-31', mockIngest))
+      .rejects.toMatchObject({ code: 'PT409' })
+    expect(mockGetAllTransactionsWithRaw).not.toHaveBeenCalled()
+    expect(mockUploadDocument).not.toHaveBeenCalled()
+    expect(mockIngest).not.toHaveBeenCalled()
+  })
+
   it('rejects a partially persisted batch after archiving it, so callers cannot advance the cursor', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: ['{"transactions":[]}'] })
     mockIngest.mockResolvedValue({ imported: 1, duplicates: 0, errors: 1, first_error: { code: 'PT409', message: 'route changed' } })
     await expect(syncAccountTransactions({} as never, COMPANY_ID, USER_ID, CONNECTION_ID,
-      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toThrow('route changed')
+      makeAccount(), '2024-01-01', '2024-12-31', mockIngest)).rejects.toMatchObject({ code: 'PT409', message: expect.stringContaining('route changed') })
     expect(mockUploadDocument).toHaveBeenCalledTimes(1)
     expect(mockGetAccountBalance).not.toHaveBeenCalled()
   })

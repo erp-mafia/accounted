@@ -542,6 +542,17 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
 })
 
 describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave the row alone', () => {
+  it('keeps a routing conflict eligible for the next run without changing its cursor or consent status', async () => {
+    const lastSyncedAt = hoursAgo(24)
+    state.active = [connection({ last_synced_at: lastSyncedAt })]
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    const response = await GET(cronRequest())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
+    expect(state.updates).toEqual([])
+    expect(state.active[0]).toMatchObject({ status: 'active', last_synced_at: lastSyncedAt, error_message: null })
+  })
+
   // 2026-09-04: a connector contract mismatch parked four canary companies in
   // 'error' with "förnya anslutningen", and users re-authorized consents that
   // were fine. Neither a connector-hop failure nor a bank refusing right now
