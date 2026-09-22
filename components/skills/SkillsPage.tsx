@@ -318,7 +318,6 @@ function Registry({ companyId }: { companyId: string }) {
       <section ref={heroRef} className={styles.hero} data-anim="">
         <div className={styles.intro}>
           <h2 ref={titleRef}>{t('hero_title')}</h2>
-          <p className={styles.sub}>{t(state === 'open' ? 'hero_sub_open' : 'hero_sub_locked')}</p>
         </div>
         <div className={styles.cards}>
           {top.map((skill, i) => (
