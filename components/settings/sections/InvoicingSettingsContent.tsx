@@ -19,6 +19,7 @@ import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
+/** Invoicing settings section: customer invoices, Peppol, and supplier-invoice policy. */
 export function InvoicingSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')

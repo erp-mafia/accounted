@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { shouldAutoApproveSupplierInvoice } from '../auto-approve'
 
+/** Dashboard policy for POST /approve after supplier-invoice register. */
 describe('shouldAutoApproveSupplierInvoice', () => {
   it('always auto-approves enskild firma', () => {
     expect(shouldAutoApproveSupplierInvoice(true, false)).toBe(true)

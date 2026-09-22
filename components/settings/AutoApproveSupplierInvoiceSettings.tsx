@@ -35,6 +35,7 @@ export function AutoApproveSupplierInvoiceSettings({
   // (same pattern as BookkeepingSettingsContent).
   const isEF = (company?.entity_type ?? settings.entity_type) === 'enskild_firma'
 
+  /** Persists auto_approve_supplier_invoices via PUT /api/settings. */
   const saveToggle = useCallback(async (value: boolean) => {
     setIsSaving(true)
     try {

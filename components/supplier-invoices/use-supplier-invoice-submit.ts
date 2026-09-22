@@ -77,7 +77,8 @@ interface UseSupplierInvoiceSubmitParams {
  * Submit orchestration for the supplier-invoice editor: endpoint chooser
  * (plain create vs inbox convert), the three submit paths (EF/private direct,
  * AB review, register-and-match), duplicate-number conflict recovery and the
- * best-effort inbox field sync-back. Extracted verbatim from
+ * best-effort inbox field sync-back. EF and opt-in AB auto-approve via
+ * tryAutoApprove after register. Extracted verbatim from
  * NewSupplierInvoiceForm; both endpoints validate CreateSupplierInvoiceSchema
  * and return the canonical error envelope.
  */
@@ -334,9 +335,10 @@ export function useSupplierInvoiceSubmit({
     }
   }
 
-  // EF (and AB with auto-approve): create + auto-approve, no review dialog.
-  // Privately-paid invoices land here too and skip auto-approve since they're
-  // already in status='paid'.
+  /**
+   * EF and person-payer direct create, plus AB when review is skipped.
+   * Runs tryAutoApprove after register unless the invoice is a person-paid utlägg.
+   */
   async function handleDirectSubmit(data: SupplierInvoiceFormData) {
     setIsSubmitting(true)
     await patchInboxFieldsIfChanged(data)
@@ -391,10 +393,10 @@ export function useSupplierInvoiceSubmit({
     setIsSubmitting(false)
   }
 
-  // AB: create after review dialog. If a bank transaction was picked first
-  // (register-and-match flow), also match the new invoice to it.
-  // When auto_approve_supplier_invoices is on, approve before match so the
-  // invoice is ready for payment without a separate Godkänn step.
+  /**
+   * AB create after the review dialog. Auto-approves when enabled, then matches
+   * a bank transaction when register-and-match was chosen first.
+   */
   async function handleConfirm() {
     if (!pendingData) return
     setIsSubmitting(true)
@@ -481,6 +483,7 @@ export function useSupplierInvoiceSubmit({
     })
   }
 
+  /** Uncredits the conflicting invoice and retries create, including auto-approve when due. */
   async function handleUncreditAndRetry() {
     if (!conflict?.existing) return
     const existingId = conflict.existing.id
@@ -541,10 +544,10 @@ export function useSupplierInvoiceSubmit({
     setTimeout(() => invoiceNumberInputRef.current?.focus(), 0)
   }
 
-  // Match-on-create: register the invoice, then match the picked transaction.
-  // EF goes straight through (auto-approve included). AB stores the picked
-  // transaction and routes through the same review dialog as the plain
-  // register flow: handleConfirm picks up the match step on confirmation.
+  /**
+   * Register-and-match from the bank picker. EF registers, auto-approves, and
+   * matches; AB defers to handleConfirm with pendingTransactionId set.
+   */
   async function handlePickTransaction(transactionId: string) {
     if (!pendingData) return
     setShowBankPicker(false)
