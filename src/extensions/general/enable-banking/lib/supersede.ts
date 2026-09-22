@@ -43,6 +43,16 @@ export async function supersedeSiblingConnections(
     throw new Error('Bank supersession receipt missing')
   }
   const superseded = data.superseded as Array<{ id: string; session_id: string | null }>
+  await finishBankSupersession(supabase, { ...input, bankName: snapshot.connection.bank_name }, superseded)
+  return { supersededIds: superseded.map(row => row.id), accounts: data.accounts }
+}
+
+/** External effects belong after the caller's entire transaction commits. */
+export async function finishBankSupersession(
+  supabase: SupabaseClient,
+  input: Pick<SupersedeInput, 'companyId' | 'userId' | 'newConnectionId' | 'bankName' | 'newSessionId'>,
+  superseded: Array<{ id: string; session_id: string | null }>,
+): Promise<void> {
   const sessions = new Set(superseded.flatMap(row => row.session_id && row.session_id !== input.newSessionId ? [row.session_id] : []))
   for (const sessionId of sessions) {
     try {
@@ -56,12 +66,11 @@ export async function supersedeSiblingConnections(
   for (const sibling of superseded) {
     try {
       await eventBus.emit({ type: 'bank_connection.superseded', payload: {
-        connectionId: sibling.id, supersededById: input.newConnectionId, bankName: snapshot.connection.bank_name,
+        connectionId: sibling.id, supersededById: input.newConnectionId, bankName: input.bankName,
         userId: input.userId, companyId: input.companyId,
       } })
     } catch (error) {
       log.error('failed to emit bank_connection.superseded', error as Error, { siblingId: sibling.id })
     }
   }
-  return { supersededIds: superseded.map(row => row.id), accounts: data.accounts }
 }
