@@ -40,6 +40,32 @@ BEGIN
     '[{"sort_order":0,"description":"Purchase","quantity":1,"unit":"st","unit_price":1000,"line_total":1000,"vat_rate":0.25,"vat_amount":250,"account_number":"4000"}]'::jsonb,
     'voucher_id',entry,'voucher_kind','cash_purchase','clear_fabricated_date',true);
   SELECT jsonb_build_object('updated_at',updated_at,'total',total,'supplier_id',supplier_id) INTO expected FROM supplier_invoices WHERE id=invoice;
+  -- Import mode is an authorized provenance follow-up, not a way to submit
+  -- header, item or date repairs without the completion lease.
+  PERFORM set_config('request.jwt.claims',jsonb_build_object('sub',u,'role','authenticated')::text,true);
+  PERFORM set_config('request.jwt.claim.sub',u::text,true);
+  PERFORM set_config('request.jwt.claim.role','authenticated',true);
+  SET LOCAL ROLE authenticated;
+  FOREACH k IN ARRAY ARRAY['header','items','clear_fabricated_date'] LOOP
+    malformed:=jsonb_build_object('origin','import',k,plan->k);
+    BEGIN
+      PERFORM complete_bokio_supplier_invoice(company,consent,invoice,run,s,expected,malformed,false);
+      RAISE EXCEPTION 'TEST: import mode accepted a repair field: %',k;
+    EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'BOKIO_IMPORT_PLAN_INVALID' THEN RAISE; END IF; END;
+  END LOOP;
+  BEGIN
+    PERFORM complete_bokio_supplier_invoice(company,consent,invoice,run,s,expected,plan,false);
+    RAISE EXCEPTION 'TEST: authenticated repair bypassed the lease';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'BOKIO_COMPLETION_LEASE_LOST' THEN RAISE; END IF; END;
+  BEGIN
+    PERFORM complete_bokio_supplier_invoice(company,consent,invoice,run,s,expected,'{"origin":"import"}',false);
+    RAISE EXCEPTION 'TEST: fabricated import accepted an old unmapped invoice';
+  EXCEPTION WHEN OTHERS THEN IF SQLERRM<>'BOKIO_IMPORT_NOT_FRESH' THEN RAISE; END IF; END;
+  RESET ROLE;
+  ASSERT NOT EXISTS(SELECT 1 FROM migration_source_records WHERE target_id=invoice),'rejected import wrote provenance';
+  ASSERT NOT EXISTS(SELECT 1 FROM processing_history WHERE aggregate_id=invoice),'rejected import wrote history';
+  ASSERT NOT EXISTS(SELECT 1 FROM bokio_supplier_completion_work WHERE company_id=company),'rejected import enrolled a company';
+  PERFORM set_config('request.jwt.claim.sub','',true);
   PERFORM set_config('request.jwt.claims','{"role":"service_role"}',true);
   PERFORM set_config('request.jwt.claim.role','service_role',true);
   SET LOCAL ROLE service_role;
@@ -157,6 +183,10 @@ BEGIN
   BEGIN
     PERFORM complete_bokio_supplier_invoice(company,consent,invoice,other_run,s,expected,plan,true);
     RAISE EXCEPTION 'TEST: foreign company write accepted';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    PERFORM complete_bokio_supplier_invoice(company,consent,invoice,other_run,s,expected,'{"origin":"import"}',false);
+    RAISE EXCEPTION 'TEST: import mode bypassed company membership';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   ASSERT NOT has_function_privilege('anon','public.complete_bokio_supplier_invoice(uuid,uuid,uuid,uuid,jsonb,jsonb,jsonb,boolean)','EXECUTE'),'anonymous RPC enabled';
   RESET ROLE;
