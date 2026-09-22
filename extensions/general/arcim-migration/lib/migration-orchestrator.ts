@@ -1599,13 +1599,6 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           companyId,
           invoices: registrationLinkInputs,
         })
-        const bokioRecords = [...bokioSources].map(([invoiceId, source]) => ({
-          invoice_id: invoiceId, source,
-          voucher_id: links.reports.find(row => row.invoiceId === invoiceId && row.linkType === 'settlement')?.journalEntryId,
-        }))
-        for (const batch of chunk(bokioRecords, 100)) {
-          await recordBokioSupplierSources(supabase, companyId, consentId, batch)
-        }
         results.registrationLinks = {
           scanned: links.scanned,
           linked: links.linked,
@@ -1615,6 +1608,13 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ambiguous: links.ambiguous,
           amountMismatch: links.amountMismatch,
           alreadyLinked: links.alreadyLinked,
+        }
+        const bokioRecords = [...bokioSources].map(([invoiceId, source]) => ({
+          invoice_id: invoiceId, source,
+          voucher_id: links.reports.find(row => row.invoiceId === invoiceId && row.linkType === 'settlement')?.journalEntryId,
+        }))
+        for (const batch of chunk(bokioRecords, 100)) {
+          await recordBokioSupplierSources(supabase, companyId, consentId, batch)
         }
         console.log(
           `[migration] Registration vouchers: ${links.linked} linked, ${links.noRef} without ref, ${links.refNotFetched} ref not fetched, ${links.unresolved} unresolved, `

@@ -397,7 +397,9 @@ export async function linkMigratedRegistrationVouchers(
       continue
     }
     if (entry.status !== 'posted' || entry.reversed_by_id) {
-      report(input, 'unresolved', `verifikat is ${entry.status}, not posted`)
+      report(input, 'unresolved', entry.reversed_by_id
+        ? 'verifikat has been reversed (storno)'
+        : `verifikat is ${entry.status}, not posted`)
       continue
     }
 

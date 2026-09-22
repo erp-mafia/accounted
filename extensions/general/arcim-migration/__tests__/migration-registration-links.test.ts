@@ -37,6 +37,11 @@ vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({
   linkMigratedRegistrationVouchers: vi.fn(),
 }))
 
+vi.mock('../lib/bokio-supplier-source', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../lib/bokio-supplier-source')>(),
+  recordBokioSupplierSources: vi.fn(),
+}))
+
 vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: vi.fn().mockResolvedValue([]),
 }))
@@ -63,9 +68,12 @@ import {
   hydrateSupplierInvoices,
 } from '@/lib/providers/provider-data-fetcher'
 import { linkMigratedRegistrationVouchers } from '@/lib/invoices/link-migrated-registration-vouchers'
+import { resolveConsent } from '@/lib/providers/resolve-consent'
+import { recordBokioSupplierSources } from '../lib/bokio-supplier-source'
 import type { SalesInvoiceDto, SupplierInvoiceDto } from '@/lib/providers/dto'
 
 const mLink = linkMigratedRegistrationVouchers as Mock
+const mConsent = resolveConsent as Mock
 
 const HYDRATION = { needed: 0, hydrated: 0, failed: 0, skippedForBudget: 0 }
 
@@ -153,6 +161,7 @@ describe('executeMigration: registration voucher links', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mLink.mockResolvedValue(LINK_COUNTS)
+    vi.mocked(recordBokioSupplierSources).mockResolvedValue(undefined)
   })
 
   it('hands every inserted invoice, with its provider voucher ref, to the linker once and reports the counts', async () => {
@@ -262,5 +271,35 @@ describe('executeMigration: registration voucher links', () => {
     expect(results.stepErrors).toEqual([
       expect.objectContaining({ step: 'registrationLinks' }),
     ])
+  })
+
+  it('keeps committed link counts and reports a subsequent Bokio provenance failure', async () => {
+    mConsent.mockResolvedValueOnce({
+      consent: { provider: 'bokio' }, accessToken: 'tok', providerCompanyId: null,
+    })
+    listAndHydrate(
+      fetchSupplierInvoicesDirect as Mock,
+      hydrateSupplierInvoices as Mock,
+      [supplierDto({
+        invoiceNumber: 'L-77', sourceVoucher: { series: 'B', number: 5 },
+        supplierEvidence: {
+          version: 1, voucherKind: 'registration', vatSource: 'voucher',
+          vatReason: 'corroborated', itemsComplete: false,
+        },
+      })],
+      HYDRATION,
+      new Set(),
+    )
+    vi.mocked(recordBokioSupplierSources).mockRejectedValueOnce(new Error('BOKIO_IMPORT_PROVENANCE_DEFERRED'))
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    expect(recordBokioSupplierSources).toHaveBeenCalledTimes(1)
+    expect(results.supplierInvoices?.imported).toBe(1)
+    expect(results.registrationLinks).toEqual({
+      scanned: 2, linked: 1, noRef: 1, refNotFetched: 0, unresolved: 0,
+      ambiguous: 0, amountMismatch: 0, alreadyLinked: 0,
+    })
+    expect(results.stepErrors).toEqual([expect.objectContaining({ step: 'registrationLinks' })])
   })
 })

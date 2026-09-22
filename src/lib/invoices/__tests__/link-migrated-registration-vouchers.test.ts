@@ -548,6 +548,23 @@ describe('linkMigratedRegistrationVouchers', () => {
     expect(result.reports[0].reason).toContain('reversed')
   })
 
+  it('reports a reversal even when the original voucher still has posted status', async () => {
+    queue({
+      vouchers: [voucher({ id: 'je-1' })],
+      entries: [{ id: 'je-1', status: 'posted', reversed_by_id: 'storno-1' }],
+      lines: supplierLines('je-1'),
+      supplierRefs: [],
+      customerRefs: [],
+    })
+
+    const result = await run([input({ invoiceId: 'si-1' })])
+
+    expect(result.reports[0]).toMatchObject({
+      outcome: 'unresolved', reason: 'verifikat has been reversed (storno)',
+    })
+    expect(updateCalls('supplier_invoices')).toHaveLength(0)
+  })
+
   it('dry run decides without writing', async () => {
     queue({
       vouchers: [voucher({ id: 'je-1' })],
