@@ -41,7 +41,7 @@ $helper$;
   END IF;
   SELECT md5(prosrc) INTO v_source_hash FROM pg_proc
     WHERE oid = 'public.link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text)'::regprocedure;
-  IF v_source_hash NOT IN ('1203247910b44f50730f3df5d71f5aed','890ec0fb8aa5f7dc42b3f5add2185131','a88a72a1e83d2f0fdecd44f405f9dbc9') THEN
+  IF v_source_hash NOT IN ('1203247910b44f50730f3df5d71f5aed','890ec0fb8aa5f7dc42b3f5add2185131','a88a72a1e83d2f0fdecd44f405f9dbc9','fa6eb705b2ce31e1610b1c74a2258bca') THEN
     RAISE EXCEPTION 'Unexpected supplier linker definition; review before applying cash coordination';
   END IF;
   EXECUTE $supplier$
