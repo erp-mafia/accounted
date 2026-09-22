@@ -279,21 +279,10 @@
 }
 .plate[data-gone] { opacity: 0; visibility: hidden; }
 /*
- * The sign is a night-blue key: drawn strata (no image), the panel keys'
- * pressed edge and wandering white light. The theme tokens are
- * redefined inside it so the buttons and text turn to their dark versions.
+ * The sign is a white key with drawn strata (no image): the app's own light
+ * tokens, the panel keys' pressed edge and a Himmel light wandering behind it.
  */
 .pin {
-  /* a night blue, so buttons and text match the strata behind them */
-  --background: 215 50% 20%;
-  --foreground: 45 33% 97%;
-  --primary: 45 33% 97%;
-  --primary-foreground: 215 50% 16%;
-  --secondary: 215 36% 28%;
-  --secondary-foreground: 45 33% 97%;
-  --border: 215 26% 38%;
-  --input: 215 24% 48%;
-  --muted-foreground: 215 24% 82%;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -302,19 +291,16 @@
   max-width: calc(100% - 32px);
   padding: 36px 44px 40px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, .16);
+  border: 1px solid hsl(var(--border));
   text-align: center;
   color: hsl(var(--foreground));
   background:
-    radial-gradient(120% 80% at 50% 0%, rgba(184, 202, 228, .16), rgba(184, 202, 228, 0) 60%),
-    url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 320' preserveAspectRatio='none'%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304 L600 320 L0 320Z' fill='%230A1626' fill-opacity='.2'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304' fill='none' stroke='%23B8CAE4' stroke-opacity='.18' stroke-width='1'/%3E%3C/svg%3E") center / 100% 100% no-repeat,
-    linear-gradient(180deg, #24406A, #172B47);
+    url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 600 320' preserveAspectRatio='none'%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 70 C140 44 260 92 380 66 S540 50 600 76' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 125 C140 99 260 147 380 121 S540 105 600 131' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 175 C140 149 260 197 380 171 S540 155 600 181' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 220 C140 194 260 242 380 216 S540 200 600 226' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 262 C140 236 260 284 380 258 S540 242 600 268' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304 L600 320 L0 320Z' fill='%238FA9CF' fill-opacity='.07'/%3E%3Cpath d='M0 298 C140 272 260 320 380 294 S540 278 600 304' fill='none' stroke='%238FA9CF' stroke-opacity='.45' stroke-width='1'/%3E%3C/svg%3E") center / 100% 100% no-repeat,
+    hsl(var(--background));
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, .16),
-    0 6px 0 #0B1626,
-    0 30px 70px -24px rgba(23, 43, 71, .7);
+    0 4px 0 hsl(var(--border)),
+    0 30px 70px -24px rgba(var(--g), .35);
 }
-/* Eld: the same wide white light the panel keys spill, wandering behind the sign */
 .pin::before {
   content: "";
   position: absolute;
@@ -322,9 +308,9 @@
   z-index: -1;
   border-radius: 22px;
   pointer-events: none;
-  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(255, 255, 255, .95) 50%, transparent 72% 100%);
+  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(var(--rf), 1) 50%, transparent 72% 100%);
   filter: blur(18px);
-  opacity: .45;
+  opacity: .7;
   animation: spin 6s linear infinite;
 }
 .pin::after {
@@ -334,7 +320,7 @@
   padding: 1px;
   border-radius: inherit;
   pointer-events: none;
-  background: conic-gradient(from var(--ang), transparent 0 30%, rgba(255, 255, 255, .85) 50%, transparent 70% 100%);
+  background: conic-gradient(from var(--ang), transparent 0 30%, var(--rbd) 50%, transparent 70% 100%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
