@@ -52,6 +52,16 @@ describe('bank consent erasure configuration boundary', () => {
     expect((await state()).status).toBe('active')
   })
 
+  it('rejects the revoke path without erasure privilege even when the role bypasses RLS', async () => {
+    await afterMembershipRemoval()
+    const before = await state()
+    await client.query('SAVEPOINT unauthorized_revoke')
+    await client.query('SET LOCAL ROLE service_role')
+    await expect(revoke()).rejects.toMatchObject({ code: '42501' })
+    await client.query('ROLLBACK TO SAVEPOINT unauthorized_revoke')
+    expect(await state()).toEqual(before)
+  })
+
   it.each(["bank_name='changed'", "last_synced_at=now()", "provider='changed'"])('does not permit unrelated changes during erasure: %s', async extra => {
     await afterMembershipRemoval()
     await expect(client.query(`UPDATE bank_connections SET status='revoked',session_id=NULL,authorization_id=NULL,
