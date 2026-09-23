@@ -299,8 +299,20 @@ export function applySourceChartCsv(
  * file would report zero codes applied while the first one's treatments stayed.
  * Clearing it lands the row in the state enrichAccountMappingsWithVat produces
  * when the company chart answers, which a later chart may still correct.
+ *
+ * The premise is checked, not assumed: the second argument is a
+ * NothingToOverwrite proof, which only nothingToOverwrite() can mint and only
+ * when the company chart carries no VAT treatment at all. A caller outside a
+ * first import (a re-import, a second pass through onboarding, any surface
+ * where a human may already have set a treatment) cannot obtain one and so
+ * cannot reach the auto-accept; it gets the reviewed mapping step instead.
  */
-export function acceptSourceChartWithoutReview(mappings: AccountMapping[]): AccountMapping[] {
+export function acceptSourceChartWithoutReview(
+  mappings: AccountMapping[],
+  proof: NothingToOverwrite,
+): AccountMapping[] {
+  // Runtime half of the type guard, for a caller that casts its way past it.
+  if (proof !== NOTHING_TO_OVERWRITE) return mappings
   return mappings.map((mapping) =>
     mapping.providerVatCode && mapping.providerVatTreatment
       ? {
@@ -311,4 +323,29 @@ export function acceptSourceChartWithoutReview(mappings: AccountMapping[]): Acco
         }
       : mapping,
   )
+}
+
+declare const nothingToOverwriteBrand: unique symbol
+
+/**
+ * Proof that a source chart may be accepted without review: the company chart
+ * carries no default VAT treatment on any account, so no treatment a human set
+ * in Accounted can be overwritten. Minted only by nothingToOverwrite().
+ */
+export type NothingToOverwrite = { readonly [nothingToOverwriteBrand]: true }
+
+const NOTHING_TO_OVERWRITE = Object.freeze({}) as NothingToOverwrite
+
+/**
+ * The proof acceptSourceChartWithoutReview requires, or null when the company
+ * chart already carries a VAT treatment (not a first import). Pass the whole
+ * chart, inactive accounts included: a treatment on an inactive account is
+ * still one the import could overwrite.
+ */
+export function nothingToOverwrite(
+  companyAccounts: readonly Pick<BASAccount, 'default_vat_treatment'>[],
+): NothingToOverwrite | null {
+  return companyAccounts.some((account) => account.default_vat_treatment)
+    ? null
+    : NOTHING_TO_OVERWRITE
 }

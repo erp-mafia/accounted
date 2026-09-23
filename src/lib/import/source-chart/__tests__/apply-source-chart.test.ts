@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { acceptSourceChartWithoutReview, applySourceChartCsv } from '../apply-source-chart'
+import {
+  acceptSourceChartWithoutReview,
+  applySourceChartCsv,
+  nothingToOverwrite,
+  type NothingToOverwrite,
+} from '../apply-source-chart'
 import {
   applyVatTreatmentReview,
   enrichAccountMappingsWithVat,
@@ -23,6 +28,9 @@ function mapping(account: string, name: string, target = account): AccountMappin
 function csv(...rows: string[]): string {
   return '﻿' + ['IsActive;AccountNumber;AccountName;VatCodeAndPercent', ...rows].join('\r\n') + '\r\n'
 }
+
+/** A first import: the company chart carries no VAT treatment yet. */
+const FIRST = nothingToOverwrite([]) as NothingToOverwrite
 
 describe('applySourceChartCsv', () => {
   it('puts the source system momskod on the mapping as a reviewable suggestion', () => {
@@ -491,6 +499,27 @@ describe('applySourceChartCsv', () => {
     expect(noCodes.mappings[0].providerVatCode).toBe('35-0%')
   })
 
+  it('grants the no-review accept only while the company chart has no VAT treatment', () => {
+    expect(nothingToOverwrite([])).not.toBeNull()
+    expect(
+      nothingToOverwrite([{ default_vat_treatment: null }, { default_vat_treatment: null }]),
+    ).not.toBeNull()
+    // One treatment anywhere in the chart means this is not a first import:
+    // a human may have set it, and an unseen chart must not overwrite it.
+    expect(
+      nothingToOverwrite([{ default_vat_treatment: null }, { default_vat_treatment: 'standard_25' }]),
+    ).toBeNull()
+  })
+
+  it('leaves the mappings untouched for a forged proof', () => {
+    const { mappings } = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+    )
+    const forged = {} as NothingToOverwrite
+    expect(acceptSourceChartWithoutReview(mappings, forged)).toBe(mappings)
+  })
+
   it('accepts a translated code without review, and only a translated one', () => {
     // Onboarding writes the chart in the same breath as the import, so there
     // is nothing to overwrite and nothing to confirm against. buildSIEVatDefaults
@@ -503,7 +532,7 @@ describe('applySourceChartCsv', () => {
       ],
       csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3051;Försäljning inrikes;05'),
     )
-    const accepted = acceptSourceChartWithoutReview(mappings)
+    const accepted = acceptSourceChartWithoutReview(mappings, FIRST)
 
     // Translated: settled, so the import writes it.
     expect(accepted[0]).toMatchObject({
@@ -528,6 +557,7 @@ describe('applySourceChartCsv', () => {
         [mapping('3058', 'Försäljn varor EG momsfri')],
         csv('True;3058;Försäljn varor EG momsfri;35-0%'),
       ).mappings,
+      FIRST,
     )
     expect(accepted[0].providerVatCode).toBe('35-0%')
 
@@ -553,6 +583,7 @@ describe('applySourceChartCsv', () => {
         [mapping('3541', 'Faktureringsavgifter, EU-land')],
         csv('True;3541;Faktureringsavgifter, export;36-0%'),
       ).mappings,
+      FIRST,
     )
     expect(wrongYear[0].defaultVatTreatment).toBe('export_goods')
 
@@ -574,6 +605,7 @@ describe('applySourceChartCsv', () => {
           [mapping('3058', 'Försäljn varor EG momsfri')],
           csv('True;3058;Försäljn varor EG momsfri;35-0%'),
         ).mappings,
+        FIRST,
       ),
       '3058',
       'oss',

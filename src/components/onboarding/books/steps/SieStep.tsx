@@ -5,12 +5,15 @@ import { useLocale, useTranslations } from 'next-intl'
 import {
   acceptSourceChartWithoutReview,
   applySourceChartCsv,
+  nothingToOverwrite,
 } from '@/lib/import/source-chart/apply-source-chart'
 import { sourceChartFormatForProvider } from '@/lib/import/source-chart/formats'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { waitForSIEJob } from '@/lib/import/sie-job-client'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { useAccounts } from '@/lib/reference-data/hooks'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
 import { SIE_FIRST_PROVIDERS } from '@/lib/onboarding-books/reducer'
@@ -167,7 +170,23 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
    * exports a chart this project has a translator for, and offering the
    * picker to the other is a promise the parser cannot keep.
    */
-  const chartFormat = sourceChartFormatForProvider(state.provider)
+  const providerChartFormat = sourceChartFormatForProvider(state.provider)
+  /**
+   * The chart is accepted without review (see applyChart), which is only safe
+   * while there is nothing to overwrite: a company chart with no VAT treatment
+   * on any account. Anything else (a re-import, a second pass through the
+   * act, a treatment set on Importresultat) cannot mint the proof, and the
+   * picker is not offered; the guided import's reviewed mapping step is the
+   * place for a chart then. Inactive accounts count too, hence active=false.
+   * While the chart is loading, failed to load, or has no company to load
+   * for (the hook then returns an empty list, not an answer), the answer is no.
+   */
+  const hasCompany = Boolean(useCompanyOptional()?.company?.id)
+  const companyChart = useAccounts(false)
+  const firstImport = !hasCompany || companyChart.isLoading || companyChart.error
+    ? null
+    : nothingToOverwrite(companyChart.accounts)
+  const chartFormat = firstImport ? providerChartFormat : null
 
   /* ── parse ───────────────────────────────────────────────────────── */
   const parseOne = useCallback(async (file: File, id: string) => {
@@ -216,6 +235,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
       setFiles((prev) => prev.map((f) => {
         if (f.id !== fileId) return f
         if (!f.parsed) return settled(f)
+        // The picker is hidden without the proof, but a chart can still be
+        // mid-read when the company chart reloads; drop the pick rather than
+        // accept it unreviewed.
+        if (!firstImport) return settled({ ...f, chartRejected: { name: file.name, why: null } })
         const result = applySourceChartCsv(f.parsed.mappings, csv, [])
         if (!result.applied) {
           // The mappings are untouched, so whatever chart was in force still
@@ -224,7 +247,7 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
         }
         return settled({
           ...f,
-          parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings) },
+          parsed: { ...f.parsed, mappings: acceptSourceChartWithoutReview(result.mappings, firstImport) },
           chart: {
             name: file.name,
             treatments: result.summary.treatmentsApplied,
