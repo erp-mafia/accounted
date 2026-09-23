@@ -382,10 +382,12 @@
 .sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; text-wrap: balance; }
 .dtD { font-size: 14px; line-height: 21px; color: hsl(var(--muted-foreground)); max-width: 52ch; }
 /* the steps run down a line, each number a small key */
-.steps { position: relative; margin: 0; padding: 0 0 0 36px; list-style: none; display: flex; flex-direction: column; gap: 16px; counter-reset: s; }
-.steps::before { content: ""; position: absolute; left: 11px; top: 12px; bottom: 12px; width: 1px; background: hsl(var(--border)); }
-.steps li { position: relative; padding-top: 2px; line-height: 20px; counter-increment: s; }
-.steps li::before { content: counter(s); position: absolute; left: -36px; top: 0; width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 2px 2px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; }
+.steps { position: relative; margin: 0; padding: 0 0 0 42px; list-style: none; display: flex; flex-direction: column; gap: 22px; counter-reset: s; }
+.steps::before { content: ""; position: absolute; left: 13px; top: 14px; bottom: 14px; width: 1px; background: hsl(var(--border)); }
+.steps li { position: relative; padding-top: 3px; font-size: 15px; line-height: 22px; counter-increment: s; }
+.steps li::before { content: counter(s); position: absolute; left: -42px; top: 0; width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 2px 2px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; }
+/* the phrase and the buttons sit at the foot of the sheet */
+.sheetBody .promptbox { margin-top: auto; }
 .promptbox { border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: hsl(var(--frame)); }
 .promptbox span { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .promptbox p { font-family: var(--font-display); font-size: 18px; line-height: 25px; }
