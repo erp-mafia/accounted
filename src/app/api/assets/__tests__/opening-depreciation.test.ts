@@ -63,7 +63,9 @@ beforeEach(() => {
 })
 
 function post(body: Record<string, unknown>) {
-  return POST(createMockRequest('/api/assets', { method: 'POST', body }))
+  return POST(createMockRequest('/api/assets', { method: 'POST', body }), {
+    params: Promise.resolve({}),
+  })
 }
 
 describe('POST /api/assets: opening accumulated depreciation', () => {
