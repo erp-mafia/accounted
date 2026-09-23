@@ -382,6 +382,47 @@ processing_activities:
       - rls_company_scoped
       - tls_to_bedrock
 
+  - id: calibration.anonymous_statistics
+    name: Anonymiserad statistik för automatisk kontering
+    purpose: >-
+      Mäta och förbättra den automatiska konteringen. Två utflöden: (1)
+      konteringsutfall (modellens säkerhet, föreslaget och bokfört BAS-konto,
+      om de stämde överens) som skrivs av POST /api/agent/categorize/outcome
+      och läses av scripts/fit-categorize-calibration.ts; (2) sammanslagna
+      mönster över flera företag, framtagna först när samma mönster finns hos
+      ett tillräckligt antal företag för att inget enskilt företags bokföring
+      ska kunna utläsas. Resultatet i båda fallen är anonymt.
+    lawful_basis: art_6_1_f   # the anonymisation step; the output is not personal data
+    special_category_basis: null
+    controller: accounted
+    processor: null
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.financial                # BAS account numbers only, no amounts, no free text
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Lagras i samma EU-region som övrig data (eu-north-1, Stockholm) och
+        lämnar aldrig Accounted.
+    retention:
+      duration: indefinite
+      basis: anonymous_after_write
+      stored_in:
+        - categorize_calibration_samples
+    security_measures:
+      - no_company_id_stored          # 20260922173222 dropped company_id and amount
+      - no_free_text_stored
+      - append_only_no_update_delete
+      - service_role_read_only        # no RLS SELECT policy for tenants
+      - k_threshold_on_aggregates     # pooled patterns require several companies
+      - never_used_for_marketing
+
   - id: mcp.telemetry
     name: MCP/agent-telemetri i event_log
     purpose: >-

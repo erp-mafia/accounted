@@ -19,7 +19,9 @@
  *     blocked on the first transaction's row lock, fails for the second
  *   - the legacy consequence of NOT VALID: a row stored incomplete before the
  *     constraint is refused on its next edit, related or not, until the
- *     beslut is completed or cleared
+ *     beslut is completed or cleared; deactivation (is_active = false) is
+ *     one such edit, which is why the DELETE route must map the refusal
+ *     instead of reporting "not found" (#2697)
  *   - the error is SQLSTATE 23514 naming the constraint, which is what the
  *     application keys on (jamkningIssueFromDbError)
  */
@@ -337,6 +339,23 @@ describe('legacy incomplete rows (stored before the constraint, NOT VALID)', () 
     )
     expectConstraintRejection(err)
     expect(await readJamkning(id)).toMatchObject({ first_name: 'Test', percentage: 15, from: '2026-01-01', to: null })
+  })
+
+  it('is refused on deactivation too (UPDATE ... SET is_active = false), the #2697 shape', async () => {
+    // The employee detail page's "Inaktivera" is this statement. The row stays
+    // active, and the application must say why rather than answer 404.
+    const seed = await seedCompany()
+    const id = await insertLegacyIncompleteEmployee(seed)
+
+    const err = await captureError(
+      getPool().query(`UPDATE public.employees SET is_active = false WHERE id = $1`, [id]),
+    )
+    expectConstraintRejection(err)
+    const res = await getPool().query<{ is_active: boolean }>(
+      `SELECT is_active FROM public.employees WHERE id = $1`,
+      [id],
+    )
+    expect(res.rows[0].is_active).toBe(true)
   })
 
   it('can be completed by supplying the missing end date, and is then freely editable', async () => {

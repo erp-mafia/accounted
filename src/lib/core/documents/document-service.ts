@@ -1,0 +1,1359 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { after } from 'next/server'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+import { dbError } from '@/lib/errors/db-error'
+import { eventBus } from '@/lib/events'
+import type { CoreEvent, DocumentExtractionOwner } from '@/lib/events/types'
+import { createLogger } from '@/lib/logger'
+import type { DocumentAttachment, DocumentUploadSource } from '@/types'
+
+const log = createLogger('document-service')
+
+/**
+ * Document Service - WORM-style document archive
+ *
+ * Handles document upload with SHA-256 integrity, version chains,
+ * and linking to journal entries. Deletion is blocked by DB triggers
+ * for documents linked to committed entries.
+ */
+
+/**
+ * Sanitize a filename for use in Supabase Storage keys.
+ * Replaces spaces and non-ASCII characters with underscores,
+ * collapses consecutive underscores, and truncates to avoid
+ * exceeding Supabase Storage path length limits.
+ */
+function sanitizeFileName(name: string): string {
+  const dotIndex = name.lastIndexOf('.')
+  const ext = dotIndex > 0 ? name.slice(dotIndex) : ''
+  const base = dotIndex > 0 ? name.slice(0, dotIndex) : name
+
+  const sanitizedBase = base
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 100) || 'file'
+  const sanitizedExt = ext.replace(/[^a-zA-Z0-9.]/g, '_')
+
+  return sanitizedBase + sanitizedExt
+}
+
+/**
+ * Storage key layout for the `documents` bucket.
+ *
+ * NEW (company-scoped, written since 20260726092000):
+ *   documents/{companyId}/{userId}/{timestamp}_{filename}
+ *
+ * LEGACY (uploader-scoped, written before that migration):
+ *   documents/{userId}/{timestamp}_{filename}
+ *
+ * The legacy layout carried no company_id, so the storage RLS policy could
+ * only scope on auth.uid(): an ex-member kept direct Storage access to every
+ * document they had uploaded even after their company_members row was
+ * deleted. The company-scoped layout lets the policy check
+ * public.user_company_ids() instead.
+ *
+ * Both layouts coexist until the Phase B backfill
+ * (scripts/backfill-document-storage-paths.ts) has re-homed every legacy
+ * object. Read paths must therefore tolerate both: use
+ * documentStoragePathCandidates() (or the downloadDocumentObject /
+ * createDocumentSignedUrl helpers below) rather than trusting the stored
+ * pointer to be the only key that resolves.
+ */
+export const DOCUMENTS_BUCKET = 'documents'
+const DOCUMENTS_PATH_ROOT = 'documents'
+export const SIGNED_DOCUMENT_UPLOAD_TTL_MS = 2 * 60 * 60 * 1000
+export const PENDING_DOCUMENT_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000
+const PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT = 100
+
+/** Build a company-scoped storage key for a new upload. */
+export function buildDocumentStoragePath(
+  companyId: string,
+  userId: string,
+  fileName: string,
+  timestamp: number = Date.now()
+): string {
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${timestamp}_${sanitizeFileName(fileName)}`
+}
+
+/** Build the temporary key targeted by a signed, model-free upload. */
+export function buildPendingDocumentStoragePath(
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string
+): string {
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending/${uploadId}_${sanitizeFileName(fileName)}`
+}
+
+/** Build the permanent WORM key for a completed signed upload. */
+export function buildReservedDocumentStoragePath(
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string
+): string {
+  return `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/${uploadId}_${sanitizeFileName(fileName)}`
+}
+
+/** True when the key already sits under the company-scoped prefix. */
+export function isCompanyScopedDocumentPath(storagePath: string, companyId: string): boolean {
+  return storagePath.startsWith(`${DOCUMENTS_PATH_ROOT}/${companyId}/`)
+}
+
+/**
+ * Translate a legacy `documents/{userId}/...` key into its company-scoped
+ * equivalent. Returns null when the key is not in the legacy layout (already
+ * company-scoped, or one of the non-document shapes the bucket also holds,
+ * e.g. the MCP audit-package `{userId}/audit-packages/...` keys).
+ */
+export function companyScopedDocumentPath(
+  storagePath: string,
+  companyId: string
+): string | null {
+  if (isCompanyScopedDocumentPath(storagePath, companyId)) return null
+  const prefix = `${DOCUMENTS_PATH_ROOT}/`
+  if (!storagePath.startsWith(prefix)) return null
+  return `${prefix}${companyId}/${storagePath.slice(prefix.length)}`
+}
+
+/**
+ * Translate a company-scoped key back into its legacy `documents/{userId}/...`
+ * equivalent. Returns null when the key is not company-scoped.
+ */
+export function legacyDocumentPath(storagePath: string, companyId: string): string | null {
+  const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/`
+  if (!storagePath.startsWith(prefix)) return null
+  return `${DOCUMENTS_PATH_ROOT}/${storagePath.slice(prefix.length)}`
+}
+
+/**
+ * Every key that could hold the bytes for a document row, most likely first.
+ * The stored pointer always wins; the alternate layout is the fallback for
+ * the window in which the Phase B backfill has moved (or not yet moved) an
+ * object relative to the DB pointer.
+ */
+export function documentStoragePathCandidates(
+  storagePath: string,
+  companyId: string | null | undefined
+): string[] {
+  const candidates = [storagePath]
+  if (companyId) {
+    const alternate =
+      companyScopedDocumentPath(storagePath, companyId) ??
+      legacyDocumentPath(storagePath, companyId)
+    if (alternate && alternate !== storagePath) candidates.push(alternate)
+  }
+  return candidates
+}
+
+type StorageErrorLike = { message?: string } | null
+
+/**
+ * Download a document object, tolerating both key layouts.
+ *
+ * Returns the resolved key alongside the blob so callers can log or repair
+ * a stale `document_attachments.storage_path` pointer. When every candidate
+ * fails, the FIRST error is returned: it refers to the stored pointer, which
+ * is the actionable one.
+ */
+export async function downloadDocumentObject(
+  supabase: SupabaseClient,
+  storagePath: string,
+  companyId: string | null | undefined
+): Promise<{ blob: Blob | null; error: StorageErrorLike; resolvedPath: string | null }> {
+  let firstError: StorageErrorLike = null
+  for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
+    const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).download(candidate)
+    if (!error && data) {
+      return { blob: data as Blob, error: null, resolvedPath: candidate }
+    }
+    firstError ??= (error as StorageErrorLike) ?? { message: 'download returned no data' }
+  }
+  return { blob: null, error: firstError, resolvedPath: null }
+}
+
+/**
+ * Create a signed URL for a document object, tolerating both key layouts.
+ * Same fallback contract as downloadDocumentObject().
+ */
+export async function createDocumentSignedUrl(
+  supabase: SupabaseClient,
+  storagePath: string,
+  companyId: string | null | undefined,
+  expiresInSeconds: number
+): Promise<{ signedUrl: string | null; error: StorageErrorLike; resolvedPath: string | null }> {
+  let firstError: StorageErrorLike = null
+  for (const candidate of documentStoragePathCandidates(storagePath, companyId)) {
+    const { data, error } = await supabase.storage
+      .from(DOCUMENTS_BUCKET)
+      .createSignedUrl(candidate, expiresInSeconds)
+    if (!error && data?.signedUrl) {
+      return { signedUrl: data.signedUrl, error: null, resolvedPath: candidate }
+    }
+    firstError ??= (error as StorageErrorLike) ?? { message: 'createSignedUrl returned no data' }
+  }
+  return { signedUrl: null, error: firstError, resolvedPath: null }
+}
+
+export const MAX_DOCUMENT_SIZE = 10 * 1024 * 1024 // 10 MB
+/**
+ * Office, OpenDocument, RTF and CSV documents (agreements, minutes, statements
+ * arriving as files rather than PDFs). Read by the Arkiv reading layer
+ * (lib/documents/read). Kept here, not imported from there, so this module
+ * stays free of the reader's dependencies.
+ */
+export const OFFICE_DOCUMENT_TYPES = [
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/msword',
+  'application/vnd.ms-excel',
+  'application/vnd.ms-powerpoint',
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+  'application/rtf',
+  'text/rtf',
+  'text/csv',
+]
+export const ALLOWED_DOCUMENT_TYPES = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  ...OFFICE_DOCUMENT_TYPES,
+]
+
+/**
+ * Validate file size and MIME type before upload.
+ * Returns an error string or null if valid.
+ */
+export function validateDocumentFile(file: { size: number; type?: string }): string | null {
+  if (file.size === 0) {
+    return 'Filen är tom'
+  }
+  if (file.size > MAX_DOCUMENT_SIZE) {
+    return `Filen är för stor (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`
+  }
+  if (!file.type || !ALLOWED_DOCUMENT_TYPES.includes(file.type)) {
+    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP, Word, Excel, PowerPoint, OpenDocument, RTF, CSV.'
+  }
+  return null
+}
+
+/**
+ * Inspect the first bytes of a buffer to identify the actual file format.
+ * Defends against callers (typically MCP agents) that base64-encode a text
+ * placeholder or summary instead of the real binary file: those uploads
+ * succeed at the storage layer but the bytes are unreadable as a PDF/image.
+ */
+export function detectFileMagic(bytes: Uint8Array): string | null {
+  if (bytes.length < 4) return null
+  // Fixed-position image signatures take precedence over a PDF marker
+  // embedded in image metadata. This is format detection, not decoding.
+  // PNG: 89 50 4E 47
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) return 'image/png'
+  // ZIP container: OOXML (docx/xlsx/pptx) and OpenDocument both live here; the
+  // declared type is held against the container's own manifest below.
+  if (bytes[0] === 0x50 && bytes[1] === 0x4B && bytes[2] === 0x03 && bytes[3] === 0x04) return 'application/zip'
+  // OLE compound file: the legacy .doc/.xls/.ppt container.
+  if (bytes[0] === 0xD0 && bytes[1] === 0xCF && bytes[2] === 0x11 && bytes[3] === 0xE0) return 'application/x-ole-storage'
+  // RTF is plain text with a fixed header.
+  if (bytes[0] === 0x7B && bytes[1] === 0x5C && bytes[2] === 0x72 && bytes[3] === 0x74 && bytes[4] === 0x66) return 'application/rtf'
+  // JPEG: FF D8 FF
+  if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) return 'image/jpeg'
+  // WebP: RIFF<4-byte size>WEBP
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) return 'image/webp'
+  // HEIC/HEIF (ISO-BMFF): bytes 4-7 spell 'ftyp'; the brand at bytes 8-11
+  // names the container flavor. Brands outside the two image families
+  // (mp4, mov, ...) stay undetected on purpose.
+  if (
+    bytes.length >= 12 &&
+    bytes[4] === 0x66 && bytes[5] === 0x74 && bytes[6] === 0x79 && bytes[7] === 0x70
+  ) {
+    const brand = String.fromCharCode(bytes[8], bytes[9], bytes[10], bytes[11])
+    if (HEIC_BRANDS.has(brand)) return 'image/heic'
+    if (HEIF_BRANDS.has(brand)) return 'image/heif'
+  }
+  // Preserve PDF preamble tolerance after checking the image signatures.
+  // Invoice PDFs can arrive with leading newlines or other preamble bytes.
+  const pdfScanEnd = Math.min(bytes.length - 5, 1024)
+  for (let i = 0; i <= pdfScanEnd; i++) {
+    if (
+      bytes[i] === 0x25 &&
+      bytes[i + 1] === 0x50 &&
+      bytes[i + 2] === 0x44 &&
+      bytes[i + 3] === 0x46 &&
+      bytes[i + 4] === 0x2D
+    ) return 'application/pdf'
+  }
+  return null
+}
+
+// ISO-BMFF ftyp brands for still images. The HEVC-coded variants (single
+// image, image sequence, and their extended forms) all read as image/heic;
+// the codec-agnostic MIAF brands read as image/heif. iOS labels the same
+// capture with either declared type, so validateDocumentMagicBytes accepts
+// the two families interchangeably.
+const HEIC_BRANDS = new Set(['heic', 'heix', 'heim', 'heis', 'hevc', 'hevx', 'hevm', 'hevs'])
+const HEIF_BRANDS = new Set(['mif1', 'msf1'])
+const HEIC_FAMILY = new Set(['image/heic', 'image/heif'])
+const RECEIPT_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+
+const OOXML_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+])
+const ODF_TYPES = new Set([
+  'application/vnd.oasis.opendocument.text',
+  'application/vnd.oasis.opendocument.spreadsheet',
+  'application/vnd.oasis.opendocument.presentation',
+])
+const OLE_TYPES = new Set(['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint'])
+const RTF_TYPES = new Set(['application/rtf', 'text/rtf'])
+
+/**
+ * A ZIP that is really the declared Office document. OOXML archives carry
+ * "[Content_Types].xml" and a top-level word/, xl/ or ppt/ folder; ODF
+ * archives start with an uncompressed "mimetype" entry naming the type.
+ * Only the first 64 KB is inspected: the manifest entries sit at the front.
+ */
+function zipMatchesDeclaredType(bytes: Uint8Array, declaredMimeType: string): boolean {
+  const head = Buffer.from(bytes.subarray(0, 65536)).toString('latin1')
+  if (ODF_TYPES.has(declaredMimeType)) return head.includes('mimetype' + declaredMimeType)
+  if (!OOXML_TYPES.has(declaredMimeType) || !head.includes('[Content_Types].xml')) return false
+  if (declaredMimeType.includes('wordprocessingml')) return head.includes('word/')
+  if (declaredMimeType.includes('spreadsheetml')) return head.includes('xl/')
+  return head.includes('ppt/')
+}
+
+/** CSV has no signature: text without NUL bytes, with at least one separator on the first line. */
+function looksLikeCsv(bytes: Uint8Array): boolean {
+  const head = Buffer.from(bytes.subarray(0, 4096)).toString('utf8')
+  if (head.includes('\u0000')) return false
+  const firstLine = head.split(/\r?\n/, 1)[0] ?? ''
+  return /[,;\t]/.test(firstLine)
+}
+
+/**
+ * XHTML/XML has no binary magic number. For the declared type
+ * application/xhtml+xml (system-generated iXBRL årsredovisningar) we instead
+ * require the content to start with an XML declaration, an HTML doctype, or
+ * an <html> root element (after an optional UTF-8 BOM and leading
+ * whitespace). This branch is consulted ONLY for that declared type: it
+ * never loosens detection for PDF/PNG/JPEG/WEBP uploads.
+ */
+function looksLikeXhtml(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  const head = Buffer.from(bytes.slice(offset, offset + 256))
+    .toString('utf8')
+    .replace(/^[\s﻿]+/, '')
+    .toLowerCase()
+  return head.startsWith('<?xml') || head.startsWith('<!doctype html') || head.startsWith('<html')
+}
+
+/** UBL and other XML payloads: an XML declaration or an element root after an optional BOM. */
+function looksLikeXml(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  const head = Buffer.from(bytes.slice(offset, offset + 256))
+    .toString('utf8')
+    .replace(/^[\s\uFEFF]+/, '')
+  return head.startsWith('<?xml') || /^<[A-Za-z_][\w.:-]*/.test(head)
+}
+
+/**
+ * JSON has no binary magic number either. For the declared type
+ * application/json (raw PSD2 responses archived as räkenskapsinformation per
+ * BFL 7 kap) the content must parse as JSON with an object or array root — a
+ * prose placeholder is not valid JSON, and a bare quoted string still fails
+ * the root check, so the anti-placeholder defense stays intact. Consulted
+ * ONLY for that declared type.
+ */
+function looksLikeJson(bytes: Uint8Array): boolean {
+  const offset = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0
+  try {
+    const parsed = JSON.parse(Buffer.from(bytes.slice(offset)).toString('utf8'))
+    return typeof parsed === 'object' && parsed !== null
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Verify the buffer actually contains a file of the declared type.
+ * Returns an error string or null if valid. HEIC/HEIF are verified through
+ * the ISO-BMFF ftyp brand (detectFileMagic): a declared image/heic or
+ * image/heif accepts a detected member of either family, because iOS labels
+ * the same capture with either type. Archive ingestion opts into accepting
+ * mislabeled JPEG/PNG/WebP uploads and then persists the detected type.
+ * Other callers (integrity checks, support attachments) stay strict.
+ */
+export function validateDocumentMagicBytes(
+  buffer: ArrayBuffer,
+  declaredMimeType: string,
+  options: { allowImageTypeMismatch?: boolean } = {},
+): string | null {
+  if (declaredMimeType === 'application/xhtml+xml') {
+    if (looksLikeXhtml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XHTML/XML-dokument.`
+  }
+  // Received Peppol e-invoices are archived as the exact UBL XML (the
+  // räkenskapsinformation is the XML itself). Same shape check as XHTML: an
+  // XML declaration or an element root, never loosened for binary types.
+  if (declaredMimeType === 'application/xml' || declaredMimeType === 'text/xml') {
+    if (looksLikeXml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett XML-dokument.`
+  }
+  // HTML mail underlag from the invoice-inbox inbound pipeline. Same
+  // doctype/root-element check as XHTML: the pipeline wraps fragment-shaped
+  // mail bodies in a full document shell before upload.
+  if (declaredMimeType === 'text/html') {
+    if (looksLikeXhtml(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett HTML-dokument.`
+  }
+  if (declaredMimeType === 'application/json') {
+    if (looksLikeJson(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara ett giltigt JSON-dokument.`
+  }
+  if (declaredMimeType === 'text/csv') {
+    if (looksLikeCsv(new Uint8Array(buffer))) return null
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar inte vara en CSV-fil.`
+  }
+  const detected = detectFileMagic(new Uint8Array(buffer))
+  if (detected === 'application/zip') {
+    if (zipMatchesDeclaredType(new Uint8Array(buffer), declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett ZIP-arkiv utan det formatets innehåll).`
+  }
+  if (detected === 'application/x-ole-storage') {
+    if (OLE_TYPES.has(declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett äldre Office-dokument).`
+  }
+  if (detected === 'application/rtf') {
+    if (RTF_TYPES.has(declaredMimeType)) return null
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade RTF).`
+  }
+  if (!detected) {
+    return `Filinnehållet kunde inte verifieras som ${declaredMimeType}. Filen verkar vara skadad eller inte en riktig binärfil: vid uppladdning via API, kontrollera att file_content_base64 är base64-kodade råbytes, inte en textrepresentation.`
+  }
+  if (!sameStoredMimeType(detected, declaredMimeType, options.allowImageTypeMismatch)) {
+    return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ${detected}).`
+  }
+  return null
+}
+
+/**
+ * Declared types validateDocumentMagicBytes checks by content shape rather
+ * than by signature. They have no magic number, so the declared type is the
+ * only type there is once the shape check has passed.
+ */
+const SHAPE_CHECKED_TYPES = new Set([
+  'application/xhtml+xml',
+  'application/xml',
+  'text/xml',
+  'text/html',
+  'application/json',
+])
+
+/**
+ * The mime type to persist on the document row and stamp on the storage
+ * object: what the bytes are, never what the client declared. Call after
+ * validateDocumentMagicBytes has accepted the buffer for `declaredMimeType`.
+ *
+ * Binary formats take the sniffed type (an iOS capture declared image/heif
+ * but branded heic lands as image/heic). The shape-checked text formats keep
+ * their declared type, which the validator has already held against the
+ * content. With no declared type the sniffed type is stored when there is
+ * one, else null: a serving route treats null as unknown and serves it
+ * opaque, whereas an unverified client string could name an active type.
+ */
+export function resolveStoredMimeType(
+  buffer: ArrayBuffer,
+  declaredMimeType: string | undefined,
+): string | null {
+  if (declaredMimeType && SHAPE_CHECKED_TYPES.has(declaredMimeType)) return declaredMimeType
+  // Container formats resolve to the declared Office type the validator held
+  // the container against; the container's own type says nothing useful.
+  if (declaredMimeType && (OOXML_TYPES.has(declaredMimeType) || ODF_TYPES.has(declaredMimeType) || OLE_TYPES.has(declaredMimeType) || RTF_TYPES.has(declaredMimeType) || declaredMimeType === 'text/csv')) return declaredMimeType
+  return detectFileMagic(new Uint8Array(buffer))
+}
+
+/**
+ * True when a stored type and a declared type name the same content. The
+ * stored type is the validated one (resolveStoredMimeType). Upload acceptance
+ * and completion retries share the same narrow image-metadata allowance.
+ */
+function sameStoredMimeType(
+  stored: string | null,
+  declared: string,
+  allowImageTypeMismatch = false,
+): boolean {
+  if (stored === declared) return true
+  if (stored === null) return false
+  return (HEIC_FAMILY.has(stored) && HEIC_FAMILY.has(declared)) ||
+    (allowImageTypeMismatch && RECEIPT_IMAGE_TYPES.has(stored) && RECEIPT_IMAGE_TYPES.has(declared))
+}
+
+let bucketVerified = false
+
+/** @internal Reset bucket verification flag: for testing only */
+export function _resetBucketVerified() {
+  bucketVerified = false
+}
+
+/**
+ * Ensure the 'documents' storage bucket exists, creating it if missing.
+ * Runs once per process lifetime (same pattern as ensureInitialized).
+ *
+ * Uses a cookieless service-role client for bucket admin operations
+ * (getBucket/createBucket require service-role). This avoids the cookie
+ * dependency that hangs in API-key auth contexts (e.g. MCP server).
+ */
+async function ensureDocumentsBucket(): Promise<void> {
+  if (bucketVerified) return
+
+  const serviceClient = createServiceClientNoCookies()
+  const { data: bucket } = await serviceClient.storage.getBucket('documents')
+
+  if (!bucket) {
+    await serviceClient.storage.createBucket('documents', {
+      public: false,
+      fileSizeLimit: 52428800, // 50 MB
+    })
+  }
+
+  bucketVerified = true
+}
+
+/**
+ * Remove a bounded batch of abandoned signed-upload objects. Pending objects
+ * are not accounting records and have no document_attachments row. Completed
+ * documents are copied to permanent keys with validated metadata; pending
+ * bytes are removed after the immutable row is created.
+ */
+export async function cleanupExpiredPendingDocumentUploads(
+  companyId: string,
+  userId: string,
+  now: number = Date.now()
+): Promise<number> {
+  const serviceClient = createServiceClientNoCookies()
+  const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`
+  const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  const { data, error } = await storage.list(prefix, {
+    limit: PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT,
+    offset: 0,
+    sortBy: { column: 'created_at', order: 'asc' },
+  })
+  if (error || !data) return 0
+
+  const cutoff = now - PENDING_DOCUMENT_UPLOAD_RETENTION_MS
+  const expiredPaths = data
+    .filter((item) => {
+      if (!item.id || !item.created_at) return false
+      const createdAt = Date.parse(item.created_at)
+      return Number.isFinite(createdAt) && createdAt < cutoff
+    })
+    .map((item) => `${prefix}/${item.name}`)
+
+  if (expiredPaths.length === 0) return 0
+  const { error: removeError } = await storage.remove(expiredPaths)
+  return removeError ? 0 : expiredPaths.length
+}
+
+export interface PendingDocumentUploadReservation {
+  uploadId: string
+  signedUrl: string
+  expiresAt: string
+}
+
+/**
+ * Reserve a company-scoped object key and create a short-lived upload URL.
+ * The returned URL accepts the raw file bytes via PUT without authentication.
+ */
+export async function createPendingDocumentUpload(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string,
+  now: number = Date.now()
+): Promise<PendingDocumentUploadReservation> {
+  await ensureDocumentsBucket()
+  await cleanupExpiredPendingDocumentUploads(companyId, userId, now)
+
+  const storagePath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
+  const { data, error } = await supabase.storage
+    .from(DOCUMENTS_BUCKET)
+    .createSignedUploadUrl(storagePath, { upsert: false })
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Failed to create document upload URL: ${error?.message ?? 'no URL returned'}`)
+  }
+
+  return {
+    uploadId,
+    signedUrl: data.signedUrl,
+    expiresAt: new Date(now + SIGNED_DOCUMENT_UPLOAD_TTL_MS).toISOString(),
+  }
+}
+
+export interface CompletedPendingDocumentUpload {
+  /** `deduplicated` is set only when the caller opted into content dedupe
+   *  and the company had already archived these exact bytes. */
+  document: DocumentAttachment & { deduplicated?: boolean }
+  buffer: ArrayBuffer
+}
+
+export interface CompletePendingDocumentUploadOptions {
+  extractionOwner?: DocumentExtractionOwner
+  /**
+   * Provenance stamped on the document row. Default 'api': the signed-URL
+   * primitives were built for MCP agents. The browser direct-to-storage path
+   * (files too large for a hosted function body) passes 'file_upload' so the
+   * archive tells the same story as the multipart route it replaces.
+   */
+  uploadSource?: Extract<DocumentUploadSource, 'api' | 'file_upload'>
+  /**
+   * Content dedupe, same contract as uploadDocument({ dedupeByContent }):
+   * after hashing, a current-version document in the same company with the
+   * same SHA-256 wins, the pending object is removed and the existing row is
+   * returned with `deduplicated: true`. Opt-in (default false) because the
+   * MCP tools key their idempotency on document id === upload id: a dedupe
+   * hit would return a different id and trip their collision guard.
+   */
+  dedupeByContent?: boolean
+}
+
+async function findReservedDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string
+): Promise<DocumentAttachment | null> {
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .select('*')
+    .eq('id', uploadId)
+    .eq('company_id', companyId)
+    .eq('user_id', userId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to check document upload: ${error.message}`)
+  return data as DocumentAttachment | null
+}
+
+function validateReservedDocumentMetadata(
+  document: DocumentAttachment,
+  fileName: string,
+  mimeType: string
+): void {
+  if (document.file_name !== fileName || !sameStoredMimeType(document.mime_type, mimeType, true)) {
+    throw new Error('Upload ID was already completed with different file metadata')
+  }
+}
+
+/**
+ * Each verdict carries a registry code (structured-errors.ts) so a REST
+ * caller can answer with the right status and copy instead of a generic
+ * failure. The magic-byte sentence is authored Swedish user copy naming the
+ * expected and detected types: it rides along as `messageSv` so the route
+ * can show it without forwarding a raw error message.
+ */
+async function validatePendingDocumentBytes(
+  buffer: ArrayBuffer,
+  mimeType: string
+): Promise<string> {
+  if (buffer.byteLength === 0) {
+    throw Object.assign(new Error('Uploaded file is empty'), { code: 'DOC_UPLOAD_EMPTY' })
+  }
+  if (buffer.byteLength > MAX_DOCUMENT_SIZE) {
+    throw Object.assign(new Error(`File too large (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`), {
+      code: 'DOC_UPLOAD_TOO_LARGE',
+    })
+  }
+  const magicError = validateDocumentMagicBytes(buffer, mimeType, { allowImageTypeMismatch: true })
+  if (magicError) {
+    throw Object.assign(new Error(magicError), {
+      code: 'DOC_UPLOAD_INVALID_CONTENT',
+      messageSv: magicError,
+    })
+  }
+  return computeSHA256(buffer)
+}
+
+/**
+ * Adopt bytes uploaded through a signed URL into the WORM document archive.
+ * The reserved UUID becomes the document id, making retries and concurrent
+ * completion calls converge on the same immutable row.
+ */
+export async function completePendingDocumentUpload(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string,
+  fileName: string,
+  mimeType: string,
+  now: number = Date.now(),
+  options: CompletePendingDocumentUploadOptions = {}
+): Promise<CompletedPendingDocumentUpload> {
+  const serviceClient = createServiceClientNoCookies()
+  const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  const pendingPath = buildPendingDocumentStoragePath(companyId, userId, uploadId, fileName)
+  const permanentPath = buildReservedDocumentStoragePath(companyId, userId, uploadId, fileName)
+
+  const existing = await findReservedDocument(supabase, companyId, userId, uploadId)
+  if (existing) {
+    validateReservedDocumentMetadata(existing, fileName, mimeType)
+    const { data, error } = await storage.download(existing.storage_path)
+    if (error || !data) {
+      throw new Error(`Failed to read completed document upload: ${error?.message ?? 'no data returned'}`)
+    }
+    const buffer = await data.arrayBuffer()
+    const hash = await validatePendingDocumentBytes(buffer, mimeType)
+    if (hash !== existing.sha256_hash) throw new Error('Completed document failed its integrity check')
+    await storage.remove([pendingPath])
+    return { document: existing, buffer }
+  }
+
+  await cleanupExpiredPendingDocumentUploads(companyId, userId, now)
+
+  let sourcePath = pendingPath
+  let { data: blob, error: downloadError } = await storage.download(pendingPath)
+  if (downloadError || !blob) {
+    const permanentDownload = await storage.download(permanentPath)
+    blob = permanentDownload.data
+    downloadError = permanentDownload.error
+    sourcePath = permanentPath
+  }
+  if (downloadError || !blob) {
+    // Coded so REST callers can answer 404 with the registry copy: the
+    // browser PUT never landed, or the reservation outlived its TTL.
+    throw Object.assign(
+      new Error('Document upload was not found or has expired. Create a new upload URL and try again.'),
+      { code: 'DOCUMENT_UPLOAD_NOT_FOUND' },
+    )
+  }
+
+  const buffer = await blob.arrayBuffer()
+  let sha256Hash: string
+  try {
+    sha256Hash = await validatePendingDocumentBytes(buffer, mimeType)
+  } catch (error) {
+    // The permanent key is shared with concurrent completion calls and may
+    // already be archived. A bad retry must never delete their document.
+    if (sourcePath === pendingPath) await storage.remove([pendingPath])
+    throw error
+  }
+  // Use the validated type in both the row and the permanent object: some
+  // downloads go straight to Storage, without the app's header correction.
+  const storedMimeType = resolveStoredMimeType(buffer, mimeType)
+  const contentType = storedMimeType ?? 'application/octet-stream'
+
+  if (options.dedupeByContent) {
+    // Same lookup as uploadDocument: oldest current-version match wins, and
+    // a broken lookup fails closed rather than archiving the duplicate.
+    const { data: existingByContent, error: dedupeError } = await supabase
+      .from('document_attachments')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('sha256_hash', sha256Hash)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (dedupeError) throw dbError(dedupeError, 'Content dedupe lookup failed')
+    const hit = (existingByContent as DocumentAttachment[] | null)?.[0]
+    if (hit) {
+      await storage.remove([pendingPath])
+      return { document: { ...hit, deduplicated: true }, buffer }
+    }
+  }
+
+  let finalizedBlob = sourcePath === permanentPath ? blob : null
+  if (sourcePath === pendingPath) {
+    // Store exactly the validated bytes, with canonical Content-Type. Moving
+    // the pending object would keep its untrusted PUT metadata. Never upsert:
+    // a concurrent completion may already have archived this permanent key.
+    const { error: uploadError } = await storage.upload(permanentPath, buffer, {
+      contentType,
+      upsert: false,
+    })
+    if (uploadError) {
+      const permanentDownload = await storage.download(permanentPath)
+      if (permanentDownload.error || !permanentDownload.data) {
+        throw new Error(`Failed to finalize document upload: ${uploadError.message}`)
+      }
+      finalizedBlob = permanentDownload.data
+    }
+  }
+  if (finalizedBlob) {
+    // Reconcile a lost upload response or another completion's object only
+    // after checking both bytes and serving metadata. Existence is not proof.
+    if (await computeSHA256(await finalizedBlob.arrayBuffer()) !== sha256Hash) {
+      throw new Error('Upload ID was finalized with different file content')
+    }
+    if (finalizedBlob.type !== contentType) {
+      throw new Error('Upload ID was finalized with a different content type')
+    }
+  }
+
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .insert({
+      id: uploadId,
+      user_id: userId,
+      company_id: companyId,
+      storage_path: permanentPath,
+      file_name: fileName,
+      file_size_bytes: buffer.byteLength,
+      mime_type: storedMimeType,
+      sha256_hash: sha256Hash,
+      version: 1,
+      is_current_version: true,
+      uploaded_by: userId,
+      upload_source: options.uploadSource ?? 'api',
+      digitization_date: new Date(now).toISOString(),
+      journal_entry_id: null,
+      journal_entry_line_id: null,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    const concurrent = await findReservedDocument(supabase, companyId, userId, uploadId)
+    if (concurrent) {
+      validateReservedDocumentMetadata(concurrent, fileName, mimeType)
+      if (concurrent.sha256_hash !== sha256Hash) {
+        throw new Error('Upload ID was completed with different file content')
+      }
+      await storage.remove([pendingPath])
+      return { document: concurrent, buffer }
+    }
+    // Keep the shared permanent key for retry. A failed insert cannot prove
+    // that another request is not about to commit a row referencing it.
+    // dbError keeps the SQLSTATE on the thrown error: a viewer-role member
+    // passes the storage policy (membership only) but not the
+    // document_attachments insert policy (writers only), and 42501 is what
+    // lets the caller answer "no permission" in Swedish instead of a generic
+    // failure.
+    throw dbError(error, 'Failed to create document record')
+  }
+
+  const document = data as DocumentAttachment
+  await storage.remove([pendingPath])
+  await eventBus.emit({
+    type: 'document.uploaded',
+    payload: {
+      document,
+      userId,
+      companyId,
+      ...(options.extractionOwner ? { extractionOwner: options.extractionOwner } : {}),
+    },
+  })
+
+  return { document, buffer }
+}
+
+/**
+ * Compute SHA-256 hash of a file buffer
+ */
+export async function computeSHA256(buffer: ArrayBuffer): Promise<string> {
+  const hashBuffer = await crypto.subtle.digest('SHA-256', buffer)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+async function deterministicDocumentId(
+  companyId: string,
+  idempotencyKey: string,
+  sha256Hash: string,
+): Promise<string> {
+  const input = new TextEncoder().encode(`${companyId}\u0000${idempotencyKey}\u0000${sha256Hash}`)
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  const bytes = digest.slice(0, 16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x50
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+type DocumentUploadedEvent = Extract<CoreEvent, { type: 'document.uploaded' }>
+
+/**
+ * Announce a stored document, either inside the caller's await (default) or
+ * after the HTTP response.
+ *
+ * Everything a document.uploaded subscriber does is work ABOUT a document
+ * that is already durable: bytes stored, row written, hash recorded. One
+ * subscriber (document-extraction) makes a paid model call that measured
+ * p50 14 s / p90 21 s on production, and the bus awaits every handler, so an
+ * awaited emit put that whole call between a person and "uploaded".
+ *
+ * Deferral is per call site, not a new default: bulk callers (bank sync,
+ * provider underlag import) emit thousands of times in one request and rely
+ * on the await to pace them. Deferring those would release every handler at
+ * once when the response ends.
+ *
+ * Same after() idiom as lib/webhooks/dispatch-kick.ts: after() keeps the
+ * serverless instance alive until the handlers settle; outside a request
+ * scope (tests, scripts, a plain node server) it throws and the work runs as
+ * a floating promise instead. The bus already logs each rejected handler;
+ * the catch here covers the emit itself so deferred work can never surface
+ * as an unhandled rejection on a request that has already answered.
+ */
+async function announceDocumentUploaded(
+  event: DocumentUploadedEvent,
+  defer: boolean,
+): Promise<void> {
+  if (!defer) {
+    await eventBus.emit(event)
+    return
+  }
+
+  const run = async (): Promise<void> => {
+    try {
+      await eventBus.emit(event)
+    } catch (err) {
+      log.error('deferred document.uploaded emit failed', err, {
+        documentId: event.payload.document.id,
+        companyId: event.payload.companyId,
+      })
+    }
+  }
+
+  try {
+    after(() => run())
+  } catch {
+    queueMicrotask(() => void run())
+  }
+}
+
+/**
+ * Upload a document and create a record with SHA-256 integrity hash
+ */
+export async function uploadDocument(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  file: { name: string; buffer: ArrayBuffer; type?: string },
+  metadata: {
+    upload_source?: DocumentUploadSource
+    journal_entry_id?: string
+    journal_entry_line_id?: string
+    idempotency_key?: string
+    /**
+     * Content dedupe for intake channels: before storing, look for a
+     * current-version document in the same company with the same SHA-256 and
+     * return it (marked `deduplicated`) instead of archiving a copy. Opt-in,
+     * because archival callers (sent invoices, filings, bank exports) must
+     * store what they produced even when the bytes repeat. SELECT-then-insert
+     * leaves a small concurrent-upload race, accepted exactly as in the
+     * WhatsApp intake precedent: the loser stores a copy, nothing corrupts.
+     */
+    dedupeByContent?: boolean
+    /**
+     * Who runs AI extraction on this document. The invoice inbox extracts
+     * the documents it ingests itself (and mirrors the result onto the
+     * document row), so it declares ownership here and the
+     * document-extraction extension yields. 'none' opts out entirely (the
+     * caller already knows the booking). Default: the extension extracts.
+     */
+    extractionOwner?: DocumentExtractionOwner
+    /**
+     * Run document.uploaded subscribers after the HTTP response instead of
+     * inside this call. For doors where a person (or API client) waits on
+     * the upload and nothing in the response depends on a subscriber: see
+     * announceDocumentUploaded. Default false: the emit is awaited.
+     */
+    deferUploadedEvent?: boolean
+  } = {}
+): Promise<DocumentAttachment & { deduplicated?: boolean }> {
+  await ensureDocumentsBucket()
+
+  // Reject corrupt uploads at the boundary: see validateDocumentMagicBytes.
+  if (file.type) {
+    const magicError = validateDocumentMagicBytes(file.buffer, file.type, { allowImageTypeMismatch: true })
+    if (magicError) throw new Error(magicError)
+  }
+  // Stored and stamped type is the validated one, never the raw client type.
+  const storedMimeType = resolveStoredMimeType(file.buffer, file.type)
+
+  // Compute SHA-256 hash
+  const sha256Hash = await computeSHA256(file.buffer)
+
+  if (metadata.dedupeByContent) {
+    // Oldest current-version match wins so repeated deliveries keep
+    // converging on the same archived original. Pre-dedupe data can hold
+    // several identical documents, hence limit(1) rather than maybeSingle.
+    const { data: existing, error: dedupeError } = await supabase
+      .from('document_attachments')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('sha256_hash', sha256Hash)
+      .eq('is_current_version', true)
+      .order('created_at', { ascending: true })
+      .limit(1)
+    if (dedupeError) {
+      // Fail closed: treating a broken lookup as "no match" would archive
+      // the duplicate this flag exists to prevent, silently, on every
+      // transient DB error. Intake callers (webhooks, sweeps) retry.
+      throw new Error(`Content dedupe lookup failed: ${dedupeError.message}`)
+    }
+    const hit = (existing as DocumentAttachment[] | null)?.[0]
+    if (hit) return { ...hit, deduplicated: true }
+  }
+
+  // Callers importing immutable third-party records can provide a stable
+  // scope. The resulting row UUID makes the database primary key the atomic
+  // claim for (company, scope, content), so concurrent serverless requests
+  // converge without requiring a process-local lock.
+  const reservedDocumentId = metadata.idempotency_key
+    ? await deterministicDocumentId(companyId, metadata.idempotency_key, sha256Hash)
+    : null
+
+  // Company-scoped storage key: the tenant id must be IN the key so the
+  // storage RLS policy can revoke access when a membership is removed.
+  // Idempotent calls use a unique object key per attempt. Their deterministic
+  // document row, not Storage, arbitrates the race; the losing object is then
+  // removed with the service role before this function returns.
+  const storagePath = reservedDocumentId
+    ? buildReservedDocumentStoragePath(companyId, userId, crypto.randomUUID(), file.name)
+    : buildDocumentStoragePath(companyId, userId, file.name)
+
+  // Upload to Supabase Storage
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(storagePath, file.buffer, {
+      contentType: storedMimeType ?? 'application/octet-stream',
+      upsert: false,
+    })
+
+  if (uploadError) {
+    throw new Error(`Failed to upload document: ${uploadError.message}`)
+  }
+
+  // Create document record
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .insert({
+      id: reservedDocumentId ?? crypto.randomUUID(),
+      user_id: userId,
+      company_id: companyId,
+      storage_path: storagePath,
+      file_name: file.name,
+      file_size_bytes: file.buffer.byteLength,
+      mime_type: storedMimeType,
+      sha256_hash: sha256Hash,
+      version: 1,
+      is_current_version: true,
+      uploaded_by: userId,
+      upload_source: metadata.upload_source || 'file_upload',
+      digitization_date: new Date().toISOString(),
+      journal_entry_id: metadata.journal_entry_id || null,
+      journal_entry_line_id: metadata.journal_entry_line_id || null,
+    })
+    .select()
+    .single()
+
+  if (error) {
+    if (reservedDocumentId && error.code === '23505') {
+      // The column list mirrors the DocumentAttachment interface one for one,
+      // so the row this returns is the stored row and nothing else.
+      // last_integrity_check_at stays in it even though it is now legacy
+      // (migration 20260901130000 moved the verification stamp to
+      // document_integrity_checks, and nothing writes this column any more):
+      // this branch re-reads a row a concurrent request inserted seconds ago,
+      // where the column is NULL by construction, and no caller interprets the
+      // value. Dropping it would leave the returned object short of a key the
+      // type declares; joining the new ledger for it would fetch a check that
+      // cannot exist yet. Whoever wants "when was this document last verified"
+      // reads document_integrity_checks, never this field.
+      const { data: concurrent, error: concurrentError } = await supabase
+        .from('document_attachments')
+        .select('id, user_id, company_id, storage_path, file_name, file_size_bytes, mime_type, sha256_hash, version, original_id, superseded_by_id, is_current_version, uploaded_by, upload_source, digitization_date, journal_entry_id, journal_entry_line_id, prev_version_hash, last_integrity_check_at, created_at, updated_at')
+        .eq('id', reservedDocumentId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (!concurrentError && concurrent) {
+        const existing = concurrent as DocumentAttachment
+        await createServiceClientNoCookies()
+          .storage.from(DOCUMENTS_BUCKET)
+          .remove([storagePath])
+        if (
+          existing.sha256_hash !== sha256Hash ||
+          existing.journal_entry_id !== (metadata.journal_entry_id || null)
+        ) {
+          throw new Error('Idempotency key was already used for different document metadata')
+        }
+
+        return existing
+      }
+    }
+
+    // Clean up the just-uploaded object on record creation failure. The
+    // documents bucket is WORM by design: storage.objects has NO DELETE
+    // policy, so remove() on the caller's cookie-bound client is silently
+    // blocked by RLS (it reports success without deleting anything) and the
+    // object would linger as an orphan. Only the service role can actually
+    // remove it. Authorization: the key was built by this very call for the
+    // caller's own failed upload, and no DB row references it.
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
+      .remove([storagePath])
+    throw new Error(`Failed to create document record: ${error.message}`)
+  }
+
+  const result = data as DocumentAttachment
+
+  await announceDocumentUploaded(
+    {
+      type: 'document.uploaded',
+      payload: {
+        document: result,
+        userId,
+        companyId,
+        ...(metadata.extractionOwner ? { extractionOwner: metadata.extractionOwner } : {}),
+      },
+    },
+    metadata.deferUploadedEvent === true,
+  )
+
+  return result
+}
+
+/**
+ * Create a new version of an existing document (WORM: old version is superseded)
+ *
+ * Uses the create_document_version RPC for atomic versioning with:
+ * - Row-level locking (prevents concurrent versioning race condition)
+ * - Cryptographic hash chain (prev_version_hash links to previous version)
+ * - Single transaction (insert new + mark old superseded)
+ */
+export async function createNewVersion(
+  supabase: SupabaseClient,
+  userId: string,
+  originalId: string,
+  file: { name: string; buffer: ArrayBuffer; type?: string }
+): Promise<DocumentAttachment> {
+  await ensureDocumentsBucket()
+
+  if (file.type) {
+    const magicError = validateDocumentMagicBytes(file.buffer, file.type, { allowImageTypeMismatch: true })
+    if (magicError) throw new Error(magicError)
+  }
+  const storedMimeType = resolveStoredMimeType(file.buffer, file.type)
+
+  // Compute SHA-256 hash
+  const sha256Hash = await computeSHA256(file.buffer)
+
+  // The new version must land under the SAME company prefix as the document
+  // it supersedes. The caller (POST /api/documents/:id/versions) does not
+  // pass a companyId, so resolve it from the original row: the read goes
+  // through the user-scoped client, so RLS already blocks a cross-tenant id,
+  // and create_document_version re-checks membership server-side.
+  const { data: original, error: originalError } = await supabase
+    .from('document_attachments')
+    .select('company_id')
+    .eq('id', originalId)
+    .maybeSingle()
+
+  if (originalError || !original?.company_id) {
+    throw new Error('Failed to create new version: original document not found')
+  }
+
+  // Upload new file to Storage
+  const storagePath = buildDocumentStoragePath(
+    original.company_id as string,
+    userId,
+    file.name
+  )
+
+  const { error: uploadError } = await supabase.storage
+    .from('documents')
+    .upload(storagePath, file.buffer, {
+      contentType: storedMimeType ?? 'application/octet-stream',
+      upsert: false,
+    })
+
+  if (uploadError) {
+    throw new Error(`Failed to upload new version: ${uploadError.message}`)
+  }
+
+  // Atomic version creation via RPC (row lock + hash chain + supersede in one tx)
+  const { data: newDocId, error: rpcError } = await supabase.rpc('create_document_version', {
+    p_user_id: userId,
+    p_original_doc_id: originalId,
+    p_storage_path: storagePath,
+    p_file_name: file.name,
+    p_file_size_bytes: file.buffer.byteLength,
+    p_mime_type: storedMimeType,
+    p_sha256_hash: sha256Hash,
+  })
+
+  if (rpcError) {
+    // Clean up the uploaded file on RPC failure. Service-role client for the
+    // same reason as in uploadDocument: the WORM bucket has no DELETE policy,
+    // so a caller-bound remove() is silently blocked by RLS and the object
+    // would be orphaned. The original-document fetch above (user-scoped, RLS)
+    // plus the failed RPC are the authorization context; the key was created
+    // by this call and nothing references it.
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
+      .remove([storagePath])
+    throw new Error(`Failed to create new version: ${rpcError.message}`)
+  }
+
+  // Fetch the complete new version record
+  const { data: newDoc, error: fetchError } = await supabase
+    .from('document_attachments')
+    .select('*')
+    .eq('id', newDocId)
+    .single()
+
+  if (fetchError || !newDoc) {
+    throw new Error('Failed to fetch new version record')
+  }
+
+  return newDoc as DocumentAttachment
+}
+
+/**
+ * Link an existing document to a journal entry
+ */
+export async function linkToJournalEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  journalEntryId: string,
+  journalEntryLineId?: string
+): Promise<DocumentAttachment> {
+  // The document is company-filtered below, but the journal entry id arrives
+  // from the client and the FK only requires existence: verify it belongs to
+  // the same company so a crafted id can't anchor a document to another
+  // tenant's verifikation. (RLS hides foreign rows either way; this makes the
+  // rejection explicit instead of a confusing downstream state.)
+  const { data: entry, error: entryError } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('id', journalEntryId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (entryError || !entry) {
+    throw new Error('Failed to link document: journal entry not found')
+  }
+
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .update({
+      journal_entry_id: journalEntryId,
+      journal_entry_line_id: journalEntryLineId || null,
+    })
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .select()
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to link document: ${error.message}`)
+  }
+
+  return data as DocumentAttachment
+}
+
+export type DeleteDocumentResult =
+  | { ok: true; document: Pick<DocumentAttachment, 'id' | 'file_name'> }
+  | { ok: false; reason: 'not_found' | 'linked_to_entry'; status: number; message: string }
+
+/**
+ * Delete a document if and only if it is not yet linked to a journal entry.
+ *
+ * BFL 7 kap 2§: once a document is attached to a verifikation it becomes
+ * räkenskapsinformation and may not be deleted within the 7-year retention
+ * window. Linked docs must be superseded via createNewVersion() instead.
+ * The block_document_deletion() trigger is the DB-level backstop.
+ */
+export async function deleteDocument(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string
+): Promise<DeleteDocumentResult> {
+  const { data: doc, error: fetchError } = await supabase
+    .from('document_attachments')
+    .select('id, file_name, storage_path, journal_entry_id, user_id')
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+
+  if (fetchError || !doc) {
+    return {
+      ok: false,
+      reason: 'not_found',
+      status: 404,
+      message: 'Underlaget hittades inte.',
+    }
+  }
+
+  if (doc.journal_entry_id) {
+    return {
+      ok: false,
+      reason: 'linked_to_entry',
+      status: 409,
+      message:
+        'Underlaget är knutet till en verifikation och utgör räkenskapsinformation enligt Bokföringslagen 7 kap 2§. Räkenskapsinformation ska bevaras i minst 7 år och får inte raderas. Använd "Ersätt med ny version" om underlaget behöver korrigeras.',
+    }
+  }
+
+  const { error: deleteError } = await supabase
+    .from('document_attachments')
+    .delete()
+    .eq('id', documentId)
+    .eq('company_id', companyId)
+
+  if (deleteError) {
+    const msg = (deleteError as { message?: string }).message ?? ''
+    if (msg.includes('Bokföringslagen') || msg.includes('retention')) {
+      return {
+        ok: false,
+        reason: 'linked_to_entry',
+        status: 409,
+        message:
+          'Underlaget kan inte tas bort på grund av Bokföringslagens bevarandekrav (7 kap 2§).',
+      }
+    }
+    throw new Error(`Failed to delete document: ${msg}`)
+  }
+
+  if (doc.storage_path) {
+    // Remove BOTH key layouts. During the Phase B backfill a document can
+    // briefly exist under the legacy and the company-scoped key at once;
+    // removing only the stored pointer would leave a readable orphan copy of
+    // a document the user asked to erase.
+    //
+    // The removal runs on the service-role client: the documents bucket is
+    // WORM by design (storage.objects has no DELETE policy), so the caller's
+    // cookie-bound client is silently blocked by RLS and remove() reports
+    // success while both objects survive, readable by every company member
+    // under the company-scoped SELECT policy. Authorization already happened
+    // above: the company-filtered row fetch plus the row delete that just
+    // succeeded (with block_document_deletion() as the DB-level backstop).
+    await createServiceClientNoCookies()
+      .storage.from(DOCUMENTS_BUCKET)
+      .remove(documentStoragePathCandidates(doc.storage_path, companyId))
+  }
+
+  await eventBus.emit({
+    type: 'document.deleted',
+    payload: {
+      document: { id: doc.id, file_name: doc.file_name },
+      userId: doc.user_id,
+      companyId,
+    },
+  })
+
+  return { ok: true, document: { id: doc.id, file_name: doc.file_name } }
+}

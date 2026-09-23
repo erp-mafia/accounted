@@ -38,7 +38,7 @@ as follows:
 
 - If `auth.role() = 'service_role'`: the actor is
   `COALESCE(p_user_id, auth.uid())`. The service-role client is the cookieless
-  server client (`rpcClientForBulkDelete` in `lib/import/sie-import.ts`), used
+  server client (`rpcClientForBulkDelete` in `src/lib/import/sie-import.ts`), used
   to escape the authenticator role's 8s statement timeout. Inside it
   `auth.uid()` is NULL, so the application passes the human user it already
   authenticated as `p_user_id`.
@@ -90,8 +90,8 @@ gate plus the REVOKEs are what closed it.
 
 The contract is pinned by pg-real tests (run with `npm run test:pg`):
 
-- `lib/import/__tests__/sie-import.replace.pg.test.ts`
-- `lib/import/__tests__/undo-sie-import-actor.pg.test.ts` (spoofed
+- `src/lib/import/__tests__/sie-import.replace.pg.test.ts`
+- `src/lib/import/__tests__/undo-sie-import-actor.pg.test.ts` (spoofed
   `p_user_id` rejection, the 42501 errcode, and the tightened grants)
 
 Any change to either function's signature, gate, or grants must update these
@@ -204,7 +204,7 @@ in the runbook.
 The contract is pinned by:
 
 - `tests/pg/company-migration-reset.pg.test.ts`
-- `app/api/company/[id]/migration-reset/__tests__/route.test.ts`
+- `src/app/api/company/[id]/migration-reset/__tests__/route.test.ts`
 
 Any change to the owner gate, eligibility boundary, source-retention
 invariant, grants, or audit immutability must update those tests and this

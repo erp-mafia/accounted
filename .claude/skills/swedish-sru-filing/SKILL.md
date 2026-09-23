@@ -193,7 +193,7 @@ Reserved for post names. **Forbidden in all string data values.**
 #UPPGIFT 7012 20241231
 #UPPGIFT 7650 75000
 #UPPGIFT 7651 15000
-#UPPGIFT 8020 90000
+#UPPGIFT 7670 90000
 #BLANKETTSLUT
 #FIL_SLUT
 ```
@@ -233,7 +233,7 @@ The official mapping is maintained by BAS-kontogruppen + Skatteverket at `bas.se
 
 **The #1 mapping error**: BAS accounts 5000-6999 (övriga externa kostnader) must ALL aggregate into a single SRU code: **7513**. Do NOT create individual SRU codes per BAS account in this range.
 
-**INK2S codes are NOT auto-derived from BAS accounts.** They represent tax adjustments requiring manual calculation. The bookkeeping result flows from INK2R into INK2S field 7650/7750, then tax adjustments are applied to arrive at 8020/8021 (överskott/underskott).
+**INK2S codes are NOT auto-derived from BAS accounts.** They represent tax adjustments requiring manual calculation. The bookkeeping result flows from INK2R into INK2S field 7650/7750, then tax adjustments are applied to arrive at 7670/7770 (4.15 överskott / 4.16 underskott, which flow to INK2 7104/7114). 8020/8021 are 4.17/4.18, the accumulated värdeminskningsavdrag on buildings and land improvements, and are NOT the result fields.
 
 **For the complete SRU code tables and BAS mapping**, read `references/sru-codes.md`.
 

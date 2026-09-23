@@ -26,7 +26,7 @@ Files starting with `_` are templates and are ignored by validation and sync.
 3. Validate locally: `npm run validate:registry` (or
    `npx tsx scripts/validate-registry.ts` without installing everything).
 4. Open a PR. Commits need a DCO sign-off (`git commit -s`), same as the rest
-   of the repo; see [CONTRIBUTING.md](../CONTRIBUTING.md).
+   of the repo; see [CONTRIBUTING.md](../.github/CONTRIBUTING.md).
 
 A maintainer reviews the entry (does it work, does it describe itself
 honestly, is the content safe) and merges. After merge the website pulls the

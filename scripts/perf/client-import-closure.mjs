@@ -21,7 +21,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
 const SCAN_DIRS = ['app', 'components', 'contexts', 'extensions', 'lib', 'i18n']
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage', '__tests__'])
 const EXTS = ['.ts', '.tsx', '.js', '.mjs', '.jsx']
