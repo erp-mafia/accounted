@@ -74,6 +74,38 @@ export function SkillsPage() {
   return company ? <Registry key={company.id} companyId={company.id} /> : null
 }
 
+/** A copy of the finished key, pinned over the creator where the top plate was. */
+function spawnKey(key: KeyRect): HTMLDivElement {
+  const el = document.createElement('div')
+  el.className = styles.flykey
+  el.setAttribute('aria-hidden', 'true')
+  el.appendChild(key.face)
+  Object.assign(el.style, { width: `${key.width}px`, height: `${key.height}px`, transform: `translate(${key.left}px, ${key.top}px) scale(${key.scale})` })
+  document.body.appendChild(el)
+  return el
+}
+
+/**
+ * Flies the key into its row at one uniform scale (a stretched key squashes
+ * its text), then melts it into the row. Resolves as the row takes over.
+ */
+function flyKey(el: HTMLDivElement, row: Element): Promise<void> {
+  const box = row.getBoundingClientRect()
+  if (box.top < 0 || box.bottom > window.innerHeight) row.scrollIntoView({ block: 'center' })
+  const to = row.getBoundingClientRect()
+  const scale = to.height / el.offsetHeight
+  const target = `translate(${to.left}px, ${to.top + (to.height - el.offsetHeight * scale) / 2}px) scale(${scale})`
+  const move = el.animate([{ transform: el.style.transform }, { transform: target }], { duration: 900, easing: 'cubic-bezier(.65, 0, .25, 1)', fill: 'forwards' })
+  el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, delay: 760, easing: 'ease-out', fill: 'forwards' })
+  void move.finished.catch(() => undefined).finally(() => setTimeout(() => el.remove(), 300))
+  return wait(760)
+}
+
+function dropKey(el: HTMLDivElement) {
+  if (!el.animate) { el.remove(); return }
+  void el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }).finished.catch(() => undefined).finally(() => el.remove())
+}
+
 function Registry({ companyId }: { companyId: string }) {
   const t = useTranslations('skills_registry')
   const { canWrite } = useCanWrite()
@@ -270,13 +302,18 @@ function Registry({ companyId }: { companyId: string }) {
     }
   }
   // "Hem": the forged key leaves the closing creator and flies into its row.
-  const flyFrom = useRef<KeyRect | null>(null)
-  function onSaved(installationId: string, key: KeyRect | null) {
-    flyFrom.current = key
+  // It appears the moment the creator closes, so the journey fades out under
+  // it and the key waits there while the list learns about the new row.
+  const flying = useRef<HTMLDivElement | null>(null)
+  async function onSaved(installationId: string, key: KeyRect | null) {
+    const el = key ? spawnKey(key) : null
+    flying.current = el
     setCreator(null)
     setSheet(null)
+    await catalog.mutate().catch(() => undefined)
     setLanding(installationId)
-    void catalog.mutate()
+    // Nothing claimed the key (the row never showed up): let it fade where it is.
+    setTimeout(() => { if (el && flying.current === el) { flying.current = null; dropKey(el) } }, 1500)
   }
   function openRow(row: Row) {
     setSheet(row.own
@@ -290,30 +327,15 @@ function Registry({ companyId }: { companyId: string }) {
     const page = pageRef.current
     const anchor = rowAnchors.current.get(landingSlug)
     const button = createRef.current
-    const from = flyFrom.current
-    flyFrom.current = null
-    if (!page || !anchor || !button || prefersReducedMotion() || !page.animate) { setHitRow(landingSlug); return }
+    const key = flying.current
+    flying.current = null
+    if (!page || !anchor || !button || prefersReducedMotion() || !page.animate) { key?.remove(); setHitRow(landingSlug); return }
     const row = anchor.closest(`.${styles.row}`)
-    if (from && row) {
-      const to = row.getBoundingClientRect()
-      const key = document.createElement('div')
-      key.className = styles.flykey
-      key.setAttribute('aria-hidden', 'true')
-      key.textContent = from.name
-      Object.assign(key.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px` })
-      document.body.appendChild(key)
-      const dx = to.left - from.left, dy = to.top - from.top, sx = to.width / from.width, sy = to.height / from.height
-      const flight = key.animate([
-        { transform: 'none' },
-        { transform: `translate(${dx}px, ${dy - 60}px) scale(${sx}, ${sy})`, offset: 0.7 },
-        { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 1 },
-      ], { duration: 1100, easing: 'cubic-bezier(.6, 0, .2, 1)', fill: 'forwards' })
-      void flight.finished.catch(() => {}).finally(() => {
-        key.remove()
-        if (alive.current) setHitRow(landingSlug)
-      })
+    if (key && row) {
+      void flyKey(key, row).then(() => { if (alive.current) setHitRow(landingSlug) })
       return
     }
+    if (key) dropKey(key)
     const spark = new Spark(page, centerIn(page, button), `${styles.spark} ${styles.sparkInk}`)
     void (async () => {
       try {

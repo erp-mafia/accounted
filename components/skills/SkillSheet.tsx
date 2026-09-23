@@ -77,8 +77,8 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const id = target.kind === 'registry' ? target.id : null
   const slug = own ? own.slug : registrySkillSlug(id!, client)
   const title = own ? own.name : t(`skills.${id}.name`)
-  const say = own ? t('own_prompt', { skill: own.slug, name: own.name }) : t(`skills.${id}.say`)
-  const prompt = own ? say : t('prompt', { say, skill: slug })
+  const say = own ? t('own_say', { name: own.name }) : t(`skills.${id}.say`)
+  const prompt = t('prompt', { say, skill: slug })
   const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : []
   const locked = target.kind === 'registry' && target.locked
   // Fetched as the sheet opens, so the copy runs inside the click and the browser allows it.

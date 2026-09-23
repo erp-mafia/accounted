@@ -631,7 +631,7 @@
 .rig { position: absolute; left: 50%; top: 62%; width: 0; height: 0; transform-style: preserve-3d; transform: rotateX(58deg) rotateZ(-38deg); transition: transform 1.3s cubic-bezier(.6, 0, .2, 1); }
 .scene[data-orbit] .rig { transform: rotateX(56deg) rotateZ(-22deg); transition-duration: 4s; transition-timing-function: ease-in-out; }
 .scene[data-flat] .rig { transform: none; transition: transform 1.2s cubic-bezier(.6, 0, .2, 1.05); }
-.plate { --z: calc(var(--i) * 105px); position: absolute; left: -160px; top: -78px; width: 320px; height: 156px; border-radius: 12px; border: 1.5px solid var(--rb); background: rgba(22, 48, 59, .55); color: #EAF0F4; transform-style: preserve-3d; opacity: 0; transform: translateZ(calc(var(--z) + 520px)); transition: transform .65s cubic-bezier(.5, 0, .3, 1.35), opacity .25s, background-color .6s, border-color .6s, box-shadow .6s; }
+.plate { --z: calc(var(--i) * 105px); position: absolute; left: -160px; top: -78px; width: 320px; height: 156px; border-radius: 12px; border: 1.5px solid var(--rb); background: #1B3B49; color: #EAF0F4; transform-style: preserve-3d; backface-visibility: hidden; opacity: 0; transform: translateZ(calc(var(--z) + 520px)); transition: transform .65s cubic-bezier(.5, 0, .3, 1.35), opacity .25s, background-color .6s, border-color .6s, box-shadow .6s; }
 .plate::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--rf), .15), 0 18px 40px -14px rgba(0, 0, 0, .6); pointer-events: none; }
 .plate[data-in] { opacity: 1; transform: translateZ(var(--z)); }
 .scene[data-collapse] .plate { --z: calc(var(--i) * 9px); transition: transform .9s cubic-bezier(.7, 0, .2, 1.25), opacity .5s, background-color .6s, border-color .6s, box-shadow .6s; }
@@ -649,18 +649,12 @@
 .pleds i { width: 16px; height: 3px; border-radius: 2px; background: #3b5561; transition: background-color .3s, box-shadow .3s; }
 .pleds i:nth-child(2) { transition-delay: .2s; }
 .pleds i:nth-child(3) { transition-delay: .4s; }
-.ptop { border-color: #fff; background: rgba(36, 71, 90, .7); }
+.ptop { border-color: #fff; background: #24475A; }
 .ptop::before { content: ""; position: absolute; inset: -16px; z-index: -1; border-radius: 26px; background: conic-gradient(from var(--ang), transparent 0 26%, rgba(var(--rf), 1) 50%, transparent 74%); filter: blur(18px); opacity: 0; transition: opacity 1s; animation: spin 5s linear infinite; }
 .scene[data-flat] .ptop { background: linear-gradient(180deg, #24475a, #1a3644); border-color: rgba(255, 255, 255, .25); box-shadow: 0 7px 0 #0c1f28, 0 30px 60px -20px rgba(0, 0, 0, .7); }
 .scene[data-burn] .ptop::before { opacity: .9; }
 .scene[data-burn] .pleds i { background: #fff; box-shadow: 0 0 8px 1px #fff; }
 /* each plate's caption turns back to face the camera */
-.plbl { position: absolute; left: calc(100% + 18px); top: 50%; display: flex; align-items: center; gap: 10px; font-size: 12px; transform-origin: left center; transform: rotateZ(38deg) rotateX(-58deg); transition: opacity .4s, transform 4s ease-in-out; }
-.scene[data-orbit] .plbl { transform: rotateZ(22deg) rotateX(-56deg); }
-.plbl > i { flex: none; width: 36px; height: 1px; background: rgba(var(--rf), .6); }
-.plbl > span { max-width: 250px; line-height: 1.4; }
-.plbl b { display: block; font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 10px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: rgba(var(--rf), .85); }
-.scene[data-collapse] .plbl { opacity: 0; }
 
 /* Dörrarna: the page, split down the middle, slides apart */
 .doors { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
@@ -671,7 +665,11 @@
 .doors[data-open] .door[data-side="r"] { transform: translateX(52%); }
 
 /* Hem: the key flies from the closing creator into its row (appended to body, outside .page) */
-.flykey { --rf: 176, 198, 228; position: fixed; z-index: 60; transform-origin: 0 0; padding: 20px 22px; border-radius: 12px; background: linear-gradient(180deg, #24475a, #1a3644); color: #fff; border: 1px solid rgba(255, 255, 255, .25); box-shadow: 0 0 30px 6px rgba(var(--rf), .7); font-family: var(--font-display); font-size: 20px; line-height: 1.25; overflow: hidden; pointer-events: none; }
+.flykey { --rf: 176, 198, 228; position: fixed; z-index: 60; left: 0; top: 0; transform-origin: 0 0; will-change: transform, opacity; border-radius: 12px; background: linear-gradient(180deg, #24475a, #1a3644); color: #fff; border: 1px solid rgba(255, 255, 255, .25); box-shadow: 0 0 30px 6px rgba(var(--rf), .7); overflow: hidden; pointer-events: none; }
+.flykey .pleds i { background: #fff; box-shadow: 0 0 8px 1px #fff; }
+/* Radix waits for this before unmounting, so the journey fades away under the key instead of cutting. */
+.full[data-journey][data-state="closed"] { animation: jout .45s ease forwards; }
+@keyframes jout { to { opacity: 0; } }
 
 @media (max-width: 760px) {
   .jline { width: calc(100% - 96px); }

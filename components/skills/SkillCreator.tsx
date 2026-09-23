@@ -17,7 +17,8 @@ export type CreatorMode =
   | { kind: 'edit'; installationId: string }
 
 /** Where the finished key sits on screen as the creator closes, so the page can fly it into the list. */
-export type KeyRect = { left: number; top: number; width: number; height: number; name: string }
+/** The finished key as it leaves the creator: where it sits, at what scale, and a copy of its face. */
+export type KeyRect = { left: number; top: number; width: number; height: number; scale: number; face: HTMLElement }
 
 /**
  * "Resan": the creator is a ride along a blue line over Stockholm, one
@@ -195,8 +196,12 @@ function Journey({ mode, client, pageRef, onClose, onSave, onSaved }: {
       setFailed('save')
       return
     }
-    const r = topRef.current?.getBoundingClientRect()
-    onSaved(id, r && !reduced ? { left: r.left, top: r.top, width: r.width, height: r.height, name: skill.name } : null)
+    const plate = topRef.current
+    const face = plate?.firstElementChild
+    const r = plate?.getBoundingClientRect()
+    onSaved(id, plate && face && r && !reduced
+      ? { left: r.left, top: r.top, width: plate.offsetWidth, height: plate.offsetHeight, scale: r.width / plate.offsetWidth, face: face.cloneNode(true) as HTMLElement }
+      : null)
   }
 
   const sign = phase === 'summary'
@@ -252,7 +257,7 @@ function Journey({ mode, client, pageRef, onClose, onSave, onSaved }: {
         ) : null}
       </div>
 
-      {phase === 'build' && summary && <Build summary={summary} turns={turns} stage={stage} topRef={topRef} />}
+      {phase === 'build' && summary && <Build summary={summary} stage={stage} topRef={topRef} />}
       {phase === 'build' && failed === 'save' && (
         <div className={styles.jdone} role="alert">
           <p>{t('save_failed')}</p>
@@ -284,11 +289,11 @@ function Summary({ summary, extra, client, onBuild, onAdd }: { summary: CreatorS
 }
 
 /** The exploded view: four plates, one per answer; the top one becomes the key. */
-function Build({ summary, turns, stage, topRef }: { summary: CreatorSummary; turns: CreatorTurn[]; stage: Stage; topRef: RefObject<HTMLDivElement | null> }) {
+function Build({ summary, stage, topRef }: { summary: CreatorSummary; stage: Stage; topRef: RefObject<HTMLDivElement | null> }) {
   const t = useTranslations('skills_registry')
   const layers = [
-    { k: t('creator.layer_base'), cap: turns[0] ? t('creator.cap_answer', { answer: turns[0].answer }) : t('creator.cap_steps'), items: summary.facts },
-    { k: t('creator.layer_rules'), cap: turns.length > 1 ? t('creator.cap_answer', { answer: turns.slice(1).map((turn) => turn.answer).join(' · ') }) : t('creator.cap_steps'), items: summary.rules.length ? summary.rules.slice(0, 3) : [t('creator.rule_default')] },
+    { k: t('creator.layer_base'), items: summary.facts },
+    { k: t('creator.layer_rules'), items: summary.rules.length ? summary.rules.slice(0, 3) : [t('creator.rule_default')] },
   ]
   return (
     <div className={styles.scene} aria-hidden data-orbit={stage.orbit ? '' : undefined} data-collapse={stage.collapse ? '' : undefined} data-flat={stage.flat ? '' : undefined} data-burn={stage.burn ? '' : undefined}>
@@ -296,12 +301,10 @@ function Build({ summary, turns, stage, topRef }: { summary: CreatorSummary; tur
         {layers.map((l, i) => (
           <div key={l.k} className={styles.plate} style={{ '--i': i } as CSSProperties} data-in={stage.fallen > i ? '' : undefined}>
             <div className={styles.pface}><b>{l.k}</b><div className={styles.ptags}>{l.items.map((item) => <span key={item} data-ph-mask>{item}</span>)}</div></div>
-            <div className={styles.plbl}><i /><span><b>{l.k}</b><span data-ph-mask>{l.cap}</span></span></div>
           </div>
         ))}
         <div className={styles.plate} style={{ '--i': 2 } as CSSProperties} data-in={stage.fallen > 2 ? '' : undefined}>
           <div className={styles.pface}><b>{t('creator.layer_steps')}</b><ol className={styles.psteps}>{summary.steps.slice(0, 6).map((s, i) => <li key={i} data-ph-mask>{s}</li>)}</ol></div>
-          <div className={styles.plbl}><i /><span><b>{t('creator.layer_steps')}</b>{t('creator.cap_steps')}</span></div>
         </div>
         <div ref={topRef} className={`${styles.plate} ${styles.ptop}`} style={{ '--i': 3 } as CSSProperties} data-in={stage.fallen > 3 ? '' : undefined}>
           <div className={styles.pface}>
@@ -309,7 +312,6 @@ function Build({ summary, turns, stage, topRef }: { summary: CreatorSummary; tur
             <p data-ph-mask>{summary.facts.join(' · ')}</p>
             <div className={styles.pleds}><i /><i /><i /></div>
           </div>
-          <div className={styles.plbl}><i /><span><b>{t('creator.layer_name')}</b>{t('creator.cap_name')}</span></div>
         </div>
       </div>
     </div>
