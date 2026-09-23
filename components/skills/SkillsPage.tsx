@@ -159,7 +159,7 @@ function Registry({ companyId }: { companyId: string }) {
   const rowAnchors = useRef(new Map<string, HTMLSpanElement>())
   const rowOrder = useRef<string[]>([])
   const createRef = useRef<HTMLButtonElement>(null)
-  const createLedRef = useRef<HTMLSpanElement>(null)
+  const createPlusRef = useRef<HTMLSpanElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
@@ -229,8 +229,8 @@ function Registry({ companyId }: { companyId: string }) {
         setUnlocking(i + 1)
         await wait(70)
       }
-      if (createLedRef.current && alive.current) {
-        await spark.hop(createLedRef.current, 800, 60)
+      if (createPlusRef.current && alive.current) {
+        await spark.hop(createPlusRef.current, 800, 60)
         setCreateLit(true)
         await wait(150)
       }
@@ -385,14 +385,6 @@ function Registry({ companyId }: { companyId: string }) {
       <PageHeader
         title={t('title')}
         help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
-        action={
-          <span className={styles.createWrap} data-burn={state === 'open' ? '' : undefined}>
-            <Button ref={createRef} disabled={!canWrite} onClick={createSkill}>
-              <span ref={createLedRef} className={styles.cled} data-on={createLit || state === 'open' ? '' : undefined} aria-hidden />
-              {t('create')}
-            </Button>
-          </span>
-        }
       />
 
       <section ref={heroRef} className={styles.hero} data-anim="">
@@ -425,8 +417,8 @@ function Registry({ companyId }: { companyId: string }) {
           ))}
           {/* the invitation to make one's own, as big as the keys beside it */}
           <div className={`${styles.card} ${styles.createCard}`}>
-            <button type="button" className={styles.createFace} disabled={!canWrite} onClick={createSkill}>
-              <span className={styles.createPlus} aria-hidden><Plus className="h-4 w-4" /></span>
+            <button ref={createRef} type="button" className={styles.createFace} disabled={!canWrite} onClick={createSkill}>
+              <span ref={createPlusRef} className={styles.createPlus} data-lit={createLit ? '' : undefined} aria-hidden><Plus className="h-4 w-4" /></span>
               <h3>{t('create_card_title')}</h3>
               <p>{t('create_card_body', { client: clientName })}</p>
               <span className={styles.createCta}>{t('create_card_cta', { client: clientName })}<ArrowRight className="h-3.5 w-3.5" aria-hidden /></span>

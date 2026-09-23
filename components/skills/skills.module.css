@@ -169,6 +169,7 @@
 .createFace h3 { font-weight: 500; font-size: 16px; line-height: 22px; letter-spacing: -.01em; color: #fff; }
 .createFace p { font-size: 13px; line-height: 19px; color: rgba(255, 255, 255, .8); }
 .createPlus { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 99px; background: #fff; color: var(--ground); animation: plusglow 2.8s ease-in-out infinite; }
+.createPlus[data-lit] { animation: none; box-shadow: 0 0 22px 7px rgba(var(--rf), 1); transition: box-shadow .3s; }
 .createCta { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 99px; background: #fff; color: #171717; font-size: 13px; font-weight: 500; transition: gap .2s; }
 .createFace:hover:not(:disabled) .createCta { gap: 10px; }
 
@@ -346,41 +347,6 @@
 .stepsl li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: 12px 0; border-top: 1px solid hsl(var(--border)); line-height: 20px; counter-increment: s; }
 .stepsl li::before { content: counter(s, decimal-leading-zero); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; color: hsl(var(--muted-foreground)); padding-top: 3px; }
 .note { font-size: 12px; color: hsl(var(--muted-foreground)); }
-
-/* ── Skapa skill: a slight Himmel burn once connected ── */
-.createWrap { position: relative; display: inline-flex; isolation: isolate; border-radius: 99px; }
-.createWrap[data-burn]::before {
-  content: "";
-  position: absolute;
-  inset: -8px;
-  border-radius: 99px;
-  z-index: -1;
-  pointer-events: none;
-  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(var(--rf), 1) 50%, transparent 72% 100%);
-  filter: blur(9px);
-  opacity: .38;
-  animation: spin 5s linear infinite;
-  transition: opacity .4s, inset .4s;
-}
-.createWrap[data-burn]:hover::before { inset: -14px; opacity: .9; }
-.createWrap[data-burn]::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  padding: 1.5px;
-  border-radius: 99px;
-  z-index: -1;
-  pointer-events: none;
-  opacity: .8;
-  background: conic-gradient(from var(--ang), var(--rb) 0 28%, var(--rbd) 50%, var(--rb) 72% 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: spin 5s linear infinite;
-}
-.cled { width: 14px; height: 3px; border-radius: 2px; background: currentColor; opacity: .4; transition: opacity .4s, box-shadow .4s; }
-.cled[data-on] { opacity: 1; box-shadow: 0 0 10px 1px currentColor; }
 
 /* ── the sheet: still, on the page background. It renders in a portal
       outside .page, so it uses only global tokens ── */
@@ -560,7 +526,6 @@
 .sbtnGhost::before { content: none; }
 .sbtnGhost:hover { border-color: var(--rbd); box-shadow: 0 3px 0 hsl(var(--border)); }
 .sbtnGhost:active { box-shadow: 0 0 0 hsl(var(--border)); }
-.cled { margin-right: 2px; }
 
 /* The creator renders in a portal outside .page: give it the page's fire and muted tokens. */
 .full { --rf: 176, 198, 228; --rb: #B8CAE4; --rbd: #8FA9CF; --nmuted: #B5B2A9; }
