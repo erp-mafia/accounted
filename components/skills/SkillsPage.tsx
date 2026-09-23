@@ -464,15 +464,12 @@ function Registry({ companyId }: { companyId: string }) {
           <div className={styles.plate} data-gone={state === 'locked' || state === 'waiting' ? undefined : ''}>
             {state === 'locked' && (
               <div className={styles.gate}>
-                <span className={styles.gateKick}>{t('sign_kick')}</span>
                 <h2>{t('sign_title')}</h2>
-                <p>{t('sign_body')}</p>
                 <div className={styles.gateClients}>
                   {AI_CLIENTS.map((c, i) => (
                     <button key={c.id} type="button" className={styles.gateClient} data-first={i === 0 ? '' : undefined} onClick={() => connect(c.id)}>
-                      <span className={styles.gateLogo}><img src={c.logo} alt="" width={28} height={28} /></span>
-                      <span className={styles.gateName}>{c.name}</span>
-                      <span className={styles.gateGo}>{t('connect_short')}<ArrowRight className="h-3.5 w-3.5" aria-hidden /></span>
+                      <img src={c.logo} alt="" width={18} height={18} />
+                      {i === 0 ? t('connect_client', { client: c.name }) : c.name}
                     </button>
                   ))}
                 </div>
