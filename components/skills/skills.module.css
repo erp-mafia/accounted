@@ -162,9 +162,9 @@
 .createFace:hover:not(:disabled) .createCta { gap: 10px; }
 /* a soft Himmel light breathes behind the create key, and a sheen crosses it now and then */
 @keyframes createbreathe { 0%, 100% { opacity: .25; transform: scale(.97); } 50% { opacity: .6; transform: scale(1.02); } }
-@keyframes sheen { 0%, 70% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(260%) skewX(-18deg); } }
-.createCard::before { content: ""; position: absolute; inset: -12px; z-index: 0; border-radius: 18px; pointer-events: none; background: radial-gradient(closest-side, rgba(var(--rf), .9), rgba(var(--rf), 0)); filter: blur(14px); animation: createbreathe 4.2s ease-in-out infinite; }
-.createFace::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .16), transparent); animation: sheen 6s ease-in-out infinite; }
+@keyframes sheen { 0%, 45% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(260%) skewX(-18deg); } }
+.createCard::before { content: ""; position: absolute; inset: -12px; z-index: 0; border-radius: 18px; pointer-events: none; background: radial-gradient(closest-side, rgba(var(--rf), .9), rgba(var(--rf), 0)); filter: blur(14px); animation: createbreathe 2.8s ease-in-out infinite; }
+.createFace::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .16), transparent); animation: sheen 3s ease-in-out infinite; }
 
 .spark {
   position: absolute;
