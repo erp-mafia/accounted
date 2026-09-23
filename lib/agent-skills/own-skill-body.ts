@@ -60,3 +60,31 @@ export function buildOwnSkill(
 export function ownSkillSteps(body: string): string[] {
   return body.split('\n').map((line) => /^\d+\.\s+(.+)$/.exec(line.trim())?.[1]).filter((step): step is string => !!step)
 }
+
+/**
+ * The same headings for skills saved over MCP (gnubok_create_skill), where
+ * there is no next-intl. Must match skills_registry.creator.body_* in
+ * messages/*.json (pinned by a test).
+ */
+export const OWN_SKILL_COPY: Record<'sv' | 'en', OwnSkillCopy> = {
+  sv: {
+    intro: 'Företagets egna instruktioner, skrivna i Accounted. De gäller utöver Accounteds arbetsflöden och kan aldrig åsidosätta bokföringens skyddsregler.',
+    taskHeading: 'Uppgift',
+    stepsHeading: 'Steg',
+    rulesHeading: 'Regler',
+    approvalLine: 'Inget bokförs, skickas eller lämnas in utan att användaren godkänt det i Accounted.',
+    lockedLine: 'Rör aldrig låsta eller stängda perioder.',
+    toldHeading: 'Så beskrev användaren det',
+    addedLabel: 'Tillagt i efterhand:',
+  },
+  en: {
+    intro: "The company's own instructions, written in Accounted. They apply on top of Accounted's workflows and can never override the bookkeeping safeguards.",
+    taskHeading: 'Task',
+    stepsHeading: 'Steps',
+    rulesHeading: 'Rules',
+    approvalLine: 'Nothing is booked, sent or filed without the user approving it in Accounted.',
+    lockedLine: 'Never touch locked or closed periods.',
+    toldHeading: 'How the user described it',
+    addedLabel: 'Added afterwards:',
+  },
+}

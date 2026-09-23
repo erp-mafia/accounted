@@ -10198,6 +10198,7 @@
     "title": "Skills",
     "help": "Connect your agent to get full access.",
     "create": "Create skill",
+    "create_prompt": "Load the skill \"create-skill\" from Accounted (load_skill) and follow it. I want to create my own skill.",
     "hero_title": "Agent Skills",
     "sign_title": "Connect your agent to unlock all skills",
     "connect_client": "Connect {client}",

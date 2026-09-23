@@ -10,11 +10,12 @@ import { reconcileMonthSkill } from './reconcile-month'
 import { onboardingSkill } from './onboarding'
 import { bookkeepSkill } from './bookkeep'
 import { taxPlanningSkill } from './tax-planning'
+import { createSkillSkill } from './create-skill'
 import type { Skill } from '../types'
 
 export const workflowSkills: Skill[] = [
   bookkeepSkill, monthEndCloseSkill, quarterlyVatReviewSkill, yearEndCloseSkill,
   invoicingRulesSkill, payrollMonthlySkill, bankReconciliationSkill,
   kreditfakturaProcessSkill, customerOnboardingSkill, reconcileMonthSkill, onboardingSkill,
-  taxPlanningSkill,
+  taxPlanningSkill, createSkillSkill,
 ]

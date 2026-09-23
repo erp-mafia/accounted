@@ -9,7 +9,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
 import type { WorklistCategory } from '@/lib/worklist/types'
 import { FREE_SKILLS, REGISTRY_SKILLS, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
-import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { AI_CLIENTS, aiConnectAction, aiPrefilledChatLink, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -105,6 +105,14 @@ function dropKey(el: HTMLDivElement) {
   if (!el.animate) { el.remove(); return }
   void el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }).finished.catch(() => undefined).finally(() => el.remove())
 }
+
+/**
+ * The in-app creator ("Resan" journey and its build animation) is switched
+ * off: Skapa skill opens the connected AI with the create-skill workflow
+ * typed in, and the AI saves the skill over MCP. Set to true to bring the
+ * journey back.
+ */
+const IN_APP_CREATOR = false
 
 function Registry({ companyId }: { companyId: string }) {
   const t = useTranslations('skills_registry')
@@ -315,6 +323,11 @@ function Registry({ companyId }: { companyId: string }) {
     // Nothing claimed the key (the row never showed up): let it fade where it is.
     setTimeout(() => { if (el && flying.current === el) { flying.current = null; dropKey(el) } }, 1500)
   }
+  function createSkill() {
+    if (!isConnected) setCreator({ kind: 'gate' })
+    else if (IN_APP_CREATOR) setCreator({ kind: 'create' })
+    else openAiConnector(aiPrefilledChatLink(client, t('create_prompt')))
+  }
   function openRow(row: Row) {
     setSheet(row.own
       ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId }
@@ -369,7 +382,7 @@ function Registry({ companyId }: { companyId: string }) {
         help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
         action={
           <span className={styles.createWrap} data-burn={state === 'open' ? '' : undefined}>
-            <Button ref={createRef} disabled={!canWrite} onClick={() => setCreator(isConnected ? { kind: 'create' } : { kind: 'gate' })}>
+            <Button ref={createRef} disabled={!canWrite} onClick={createSkill}>
               <span ref={createLedRef} className={styles.cled} data-on={createLit || state === 'open' ? '' : undefined} aria-hidden />
               {t('create')}
             </Button>
@@ -486,7 +499,7 @@ function Registry({ companyId }: { companyId: string }) {
         canWrite={canWrite}
         onClose={() => setSheet(null)}
         onConnect={(target) => { setSheet(null); connect(target) }}
-        onEdit={(target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) }}
+        onEdit={IN_APP_CREATOR ? (target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) } : undefined}
         onDelete={deleteOwn}
       />
       <SkillCreator mode={creator} client={client} pageRef={pageRef} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />

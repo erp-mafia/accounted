@@ -35,7 +35,7 @@ export const API_KEY_SCOPES = {
   'compliance:read':    { label: 'Compliance: läs',     description: 'Pre-flight-kontroller: momsstängning, bokslutsberedskap, voucher-gap, IB/UB-kontinuitet; Skatteverket-status (moms + AGI)' },
   'skatteverket:write': { label: 'Skatteverket: skriv', description: 'Lämna momsdeklaration och arbetsgivardeklaration (AGI) till Skatteverket (stagas; signeras med BankID)' },
   'agent:read':         { label: 'Agent: läs',          description: 'Specialiserad bokföringsassistent: profil, laddade specialister/atomer, minnen (briefing + skill-katalog)' },
-  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact)' },
+  'agent:write':        { label: 'Agent: skriv',        description: 'Spara och ta bort agentens minnen om företaget (remember_fact, forget_fact) och spara egna skills (create_skill)' },
   'pending_operations:read':    { label: 'Stagade operationer: läs',     description: 'Lista pending_operations (staged writes awaiting approval)' },
   'pending_operations:approve': { label: 'Stagade operationer: godkänn', description: 'Godkänn eller avvisa stagade operationer via API/MCP: agenten ersätter web-UI:s granskning' },
   // Reconciliation (account-keyed: bank accounts + skattekonto). Reads cover
@@ -398,6 +398,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   // 20260619140000 migration so this does not regress them.
   gnubok_remember_fact:                   'agent:write',
   gnubok_forget_fact:                     'agent:write',
+  gnubok_create_skill:                    'agent:write',
   // Pending operations approval (mirrors the /pending web UI)
   gnubok_list_pending_operations:         'pending_operations:read',
   gnubok_approve_pending_operation:       'pending_operations:approve',

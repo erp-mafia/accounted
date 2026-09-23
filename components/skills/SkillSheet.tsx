@@ -46,7 +46,7 @@ export function SkillSheet({ target, companyId, client, canWrite, onClose, onCon
   canWrite: boolean
   onClose: () => void
   onConnect: (client: AiClient) => void
-  onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
+  onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   return (
@@ -64,7 +64,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   client: AiClient
   canWrite: boolean
   onConnect: (client: AiClient) => void
-  onEdit: (target: Extract<SheetTarget, { kind: 'own' }>) => void
+  onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   const t = useTranslations('skills_registry')
@@ -128,7 +128,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
               <div className={styles.nightBtns}>
                 <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
                 <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>
-                {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
+                {own && onEdit && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
                 {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
               </div>
               {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}

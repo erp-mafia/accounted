@@ -188,6 +188,8 @@ import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
+import { buildOwnSkill, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
+import { SkillBodySchema } from '@/lib/agent-skills/validation'
 import type { SkillTier } from './skills'
 import {
   RECOMMENDED_WORKFLOW_LOADOUTS,
@@ -599,6 +601,15 @@ interface McpToolAnnotations {
 // shared frozen object emits exactly the JSON an inline literal did; nothing
 // mutates a tool's annotations after registration. Tools whose hints need
 // a per-tool explanation keep an inline block with comments.
+const CreateSkillArgsSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(500),
+  steps: z.array(z.string().min(1).max(200)).min(1).max(12),
+  rules: z.array(z.string().min(1).max(200)).max(10).default([]),
+  told: z.string().max(4000).default(''),
+  language: z.enum(['sv', 'en']).default('sv'),
+}).strict()
+
 const ANNOTATIONS_READ_ONLY = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -5232,6 +5243,53 @@ export const tools: McpTool[] = [
         tier: skill.tier,
         body: skill.body,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_create_skill',
+    title: 'Create Own Skill',
+    description: 'Save the user\'s own skill to Accounted after they confirmed its summary (workflow: create-skill). Writes immediately: does not stage. Accounted adds the approval and locked-period rules itself.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        name: { type: 'string', description: 'A few words, at most 120 characters.' },
+        description: { type: 'string', description: 'One sentence on what the skill does.' },
+        steps: { type: 'array', items: { type: 'string' }, description: 'Three to eight short imperative steps, in order.' },
+        rules: { type: 'array', items: { type: 'string' }, description: 'What must always or never happen, as the user said it. May be empty.' },
+        told: { type: 'string', description: 'The user\'s own description and answers, in their words.' },
+        language: { type: 'string', enum: ['sv', 'en'], description: 'Language the skill is written in. Default sv.' },
+      },
+      required: ['name', 'description', 'steps'],
+    },
+    outputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        company_skill_id: { type: 'string' },
+        slug: { type: 'string', description: 'Load it later with gnubok_load_skill.' },
+        name: { type: 'string' },
+      },
+      required: ['company_skill_id', 'slug', 'name'],
+    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase) {
+      const input = CreateSkillArgsSchema.parse(args)
+      const skill = buildOwnSkill(
+        { kind: 'summary', name: input.name, lede: input.description, steps: input.steps, rules: input.rules, facts: [] },
+        { description: input.told, turns: [], extra: [] },
+        OWN_SKILL_COPY[input.language],
+      )
+      if (!skill.name || !skill.description) throw new Error('name and description are required')
+      SkillBodySchema.parse(skill.body)
+      const { data, error } = await supabase
+        .from('company_skills')
+        .insert({ company_id: companyId, team_id: null, created_by: userId, atom_id: null, name: skill.name, description: skill.description, body: skill.body })
+        .select('id')
+        .single()
+      if (error) throw error
+      return { company_skill_id: data.id, slug: `own/${data.id}`, name: skill.name }
     },
   },
 

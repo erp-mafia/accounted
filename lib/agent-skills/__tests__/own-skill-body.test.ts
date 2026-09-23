@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildOwnSkill, ownSkillSteps, type OwnSkillCopy } from '../own-skill-body'
+import { buildOwnSkill, ownSkillSteps, OWN_SKILL_COPY, type OwnSkillCopy } from '../own-skill-body'
+import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 import { SkillBodySchema } from '../validation'
 
 const copy: OwnSkillCopy = {
@@ -54,5 +56,15 @@ describe('ownSkillSteps', () => {
 
   it('returns nothing for a body without a numbered list', () => {
     expect(ownSkillSteps('# Namn\n\n- En regel.')).toEqual([])
+  })
+})
+
+describe('OWN_SKILL_COPY', () => {
+  it.each([['sv', sv], ['en', en]] as const)('matches the %s creator strings', (locale, messages) => {
+    const c = messages.skills_registry.creator
+    expect(OWN_SKILL_COPY[locale]).toEqual({
+      intro: c.body_intro, taskHeading: c.body_task_heading, stepsHeading: c.body_steps_heading, rulesHeading: c.body_rules_heading,
+      approvalLine: c.body_approval, lockedLine: c.body_locked, toldHeading: c.body_told_heading, addedLabel: c.body_added,
+    })
   })
 })

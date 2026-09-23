@@ -10198,6 +10198,7 @@
     "title": "Skills",
     "help": "Koppla din agent för att få full tillgång.",
     "create": "Skapa skill",
+    "create_prompt": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa en egen skill.",
     "hero_title": "Agent Skills",
     "sign_title": "Koppla din agent för att öppna alla skills",
     "connect_client": "Koppla {client}",

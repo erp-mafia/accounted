@@ -566,6 +566,47 @@ describe('gnubok_load_skill tool', () => {
   })
 })
 
+describe('gnubok_create_skill tool', () => {
+  const tool = () => tools.find((t) => t.name === 'gnubok_create_skill')!
+  function insertMock(id = 'skill-1') {
+    const single = vi.fn().mockResolvedValue({ data: { id }, error: null })
+    const insert = vi.fn(() => ({ select: vi.fn(() => ({ single })) }))
+    return { supabase: { from: vi.fn(() => ({ insert })) }, insert }
+  }
+  const args = { name: 'Månadens fakturor', description: 'Varje månad går AI:n igenom leverantörsfakturorna.', steps: ['Hämta fakturorna.', 'Kolla momsen.'], rules: ['Flagga fel moms.'], told: 'Gå igenom fakturorna varje månad.' }
+
+  it('is scoped to agent:write', async () => {
+    const { TOOL_SCOPE_MAP } = await import('@/lib/auth/scope-catalog')
+    expect(TOOL_SCOPE_MAP.gnubok_create_skill).toBe('agent:write')
+  })
+
+  it('saves a private company skill with the standing rules and returns its slug', async () => {
+    const { supabase, insert } = insertMock()
+    const result = await tool().execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    expect(result).toEqual({ company_skill_id: 'skill-1', slug: 'own/skill-1', name: 'Månadens fakturor' })
+    const row = (insert.mock.calls[0] as unknown[])[0] as Record<string, string | null>
+    expect(row).toMatchObject({ company_id: 'company-1', team_id: null, created_by: 'user-1', atom_id: null, name: 'Månadens fakturor' })
+    expect(row.body).toContain('1. Hämta fakturorna.\n2. Kolla momsen.')
+    expect(row.body).toContain('- Inget bokförs, skickas eller lämnas in utan att användaren godkänt det i Accounted.')
+  })
+
+  it('writes English headings when asked', async () => {
+    const { supabase, insert } = insertMock()
+    await tool().execute({ ...args, language: 'en' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    expect(((insert.mock.calls[0] as unknown[])[0] as { body: string }).body).toContain('## Steps')
+  })
+
+  it('rejects a skill without steps and writes nothing', async () => {
+    const { supabase, insert } = insertMock()
+    await expect(tool().execute({ ...args, steps: [] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })).rejects.toThrow()
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('is loadable as the create-skill workflow', async () => {
+    expect((await findSkill('create-skill'))?.body).toContain('gnubok_create_skill')
+  })
+})
+
 describe('Skills via MCP protocol', () => {
   beforeEach(() => {
     vi.clearAllMocks()
