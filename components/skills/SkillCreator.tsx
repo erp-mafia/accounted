@@ -108,7 +108,10 @@ function Journey({ mode, client, pageRef, onClose, onSave, onSaved }: {
   const topRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const alive = useRef(true)
-  useEffect(() => () => { alive.current = false }, [])
+  useEffect(() => {
+    alive.current = true
+    return () => { alive.current = false }
+  }, [])
 
   const station = phase === 'describe' ? 0 : phase === 'question' ? turns.length + 1 : 4
   const names = [t('creator.station_describe'), ...[0, 1, 2].map((i) => topics[i] ?? t('creator.station_question', { n: i + 1 })), t('creator.station_end')]
