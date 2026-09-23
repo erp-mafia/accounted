@@ -38,7 +38,7 @@ interface MakeSupabaseOpts {
   error?: { message: string } | null
   /** bank_connections rows for the status lookup. Missing ids = not revoked. */
   connections?: ConnRow[]
-  connectionsError?: { message: string } | null
+  connectionsError?: { message: string; code?: string } | null
   /** 19xx account numbers already present in the company's chart. */
   chart?: string[]
   chartError?: { message: string } | null
@@ -273,6 +273,16 @@ describe('allocatePsd2LedgerAccount', () => {
     const supabase = makeSupabase([], { error: { message: 'Identity lookup unavailable' } })
     await expect(resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { iban: 'SE1234', currency: 'SEK', prepareOnly: true }))
       .rejects.toThrow('Identity lookup unavailable')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it('does not choose an overflow ledger when connection status is unavailable during preparation', async () => {
+    const supabase = makeSupabase(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-revoked' }],
+      { connectionsError: { message: 'Status lookup unavailable', code: 'PT409' } },
+    )
+    await expect(resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true }))
+      .rejects.toMatchObject({ message: 'Status lookup unavailable', code: 'PT409' })
     expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
   })
 

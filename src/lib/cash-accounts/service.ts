@@ -724,12 +724,14 @@ export async function guardBookedCounterLines(
 
 /**
  * bank_connections.status for the given connection ids. Missing ids (and a
- * failed lookup, which returns an empty map) read as "status unknown".
+ * failed non-strict lookup) read as "status unknown". Strict preparation
+ * aborts on lookup failure so it cannot allocate from incomplete status data.
  */
 async function getConnectionStatuses(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
+  options: { strictReads?: boolean } = {},
 ): Promise<Map<string, string>> {
   if (connectionIds.length === 0) return new Map()
 
@@ -740,6 +742,7 @@ async function getConnectionStatuses(
     .in('id', [...connectionIds])
 
   if (error) {
+    if (options.strictReads) throw Object.assign(new Error(error.message), { code: error.code })
     log.warn('bank_connections status lookup failed', { companyId, error: error.message })
     return new Map()
   }
@@ -756,15 +759,16 @@ async function getConnectionStatuses(
  * upsertFromPsd2's promote-in-place path all treat those rows like manual
  * holders so a reconnect can land back on its original ledger account.
  *
- * On lookup failure this returns an empty set (treat every connection as
- * active): the conservative pre-fix behavior.
+ * On lookup failure non-strict callers get an empty set (treat every
+ * connection as active); strict preparation propagates the failure.
  */
 export async function getRevokedConnectionIds(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
+  options: { strictReads?: boolean } = {},
 ): Promise<Set<string>> {
-  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds, options)
   return new Set([...statuses.entries()].filter(([, status]) => status === 'revoked').map(([id]) => id))
 }
 
@@ -843,6 +847,7 @@ export async function findFreeLedgerAccount(
     supabase,
     companyId,
     [...new Set(typedRows.map(r => r.bank_connection_id).filter((id): id is string => id !== null))],
+    options,
   )
 
   const anyTaken = new Set<string>()
