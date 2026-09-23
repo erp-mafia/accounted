@@ -16,6 +16,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
 import { SkillSheet, type SheetTarget } from './SkillSheet'
 import { SkillCreator, type CreatorMode } from './SkillCreator'
+import { SkillMarks } from './SkillMarks'
 import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
 import styles from './skills.module.css'
 
@@ -350,6 +351,7 @@ function Registry({ companyId }: { companyId: string }) {
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
+                <SkillMarks id={skill.id} />
               </button>
             </div>
           ))}
@@ -375,6 +377,7 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  {row.id && <SkillMarks id={row.id} />}
                   {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_tag')}</span>}
                 </div>
               </li>
