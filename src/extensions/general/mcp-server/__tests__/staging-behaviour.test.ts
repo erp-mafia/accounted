@@ -293,6 +293,7 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     rows: { journal_entries: { status: 'posted' }, transactions: { journal_entry_id: null } },
   },
   gnubok_create_invoice_from_sales_order: { rows: { sales_orders: CONFIRMED_ORDER } },
+  gnubok_link_rot_rut_payout_voucher: { rows: { journal_entries: { status: 'posted' } } },
   gnubok_register_sales_order_delivery: {
     rows: { sales_orders: CONFIRMED_ORDER, sales_order_items: { sales_order_id: SOME_UUID, quantity: 5 } },
   },

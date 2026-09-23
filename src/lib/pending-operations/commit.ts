@@ -137,6 +137,7 @@ import {
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
+import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
@@ -480,6 +481,56 @@ async function commitSettleRotRutPayout(
       amount: outcome.amount,
       request_ids: outcome.requests.map((request) => request.id),
       request_statuses: outcome.requests.map((request) => request.status),
+    },
+  }
+}
+
+/**
+ * link_rot_rut_payout_voucher (gnubok_link_rot_rut_payout_voucher): attach a
+ * payout verifikat that already exists to its begäran. Books nothing; the
+ * RPC re-runs every check the stage previewed, under its own locks.
+ */
+async function commitLinkRotRutPayoutVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const requestIds = Array.isArray(params.request_ids)
+    ? (params.request_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+    : []
+  if (!journalEntryId || requestIds.length === 0) {
+    return { error: 'journal_entry_id and request_ids are required', status: 400 }
+  }
+
+  const outcome = await linkRotRutPayoutVoucher(supabase, companyId, { requestIds, journalEntryId })
+  if (!outcome.ok) {
+    if (outcome.kind === 'code') {
+      const entry = getErrorEntry(outcome.code)
+      return {
+        error: entry?.message_en ?? outcome.code,
+        errorCode: outcome.code,
+        status: entry?.httpStatus ?? 500,
+        data: outcome.details,
+      }
+    }
+    const message = outcome.error instanceof Error ? outcome.error.message : 'rot/rut payout voucher link failed'
+    return { error: message, status: 500 }
+  }
+
+  log.info('link_rot_rut_payout_voucher committed', {
+    companyId,
+    operationType: 'link_rot_rut_payout_voucher',
+    journalEntryId,
+    requestCount: requestIds.length,
+  })
+
+  return {
+    data: {
+      journal_entry_id: journalEntryId,
+      request_ids: requestIds,
+      already_linked: outcome.result.already_linked,
+      rounding: outcome.result.rounding ?? 0,
     },
   }
 }
@@ -7715,6 +7766,9 @@ async function commitPendingOperationInner(
         break
       case 'settle_rot_rut_payout':
         result = await commitSettleRotRutPayout(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'link_rot_rut_payout_voucher':
+        result = await commitLinkRotRutPayoutVoucher(supabase, companyId, pendingOp.params)
         break
       case 'link_invoice_voucher':
         result = await commitLinkInvoiceVoucher(supabase, userId, companyId, pendingOp.params)

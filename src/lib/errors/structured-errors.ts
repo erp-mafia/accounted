@@ -1024,6 +1024,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_en:
       'The request was already settled by another action. The voucher that was created could not be attached: check the bookkeeping on account 1513.',
   },
+  ROT_RUT_LINK_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet hittades inte i det här företaget.',
+    message_en: 'The voucher was not found in this company.',
+  },
+  ROT_RUT_LINK_VOUCHER_NOT_ELIGIBLE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikatet kan inte kopplas: det måste vara bokfört och får inte vara makulerat, en rättelse eller en ingående balans.',
+    message_en:
+      'The voucher cannot be linked: it must be posted and not reversed, a storno or an opening balance.',
+  },
+  ROT_RUT_LINK_ALREADY_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Begäran är redan kopplad till ett annat utbetalningsverifikat.',
+    message_en: 'The request is already linked to another payout voucher.',
+  },
+  ROT_RUT_LINK_VOUCHER_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är redan kopplat till en annan begäran.',
+    message_en: 'The voucher is already linked to another request.',
+  },
+  ROT_RUT_LINK_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet på konto 1513 i verifikatet stämmer inte med begäran. Välj verifikatet för just den här utbetalningen, eller alla begäran det betalade.',
+    message_en:
+      'The account 1513 amount on the voucher does not match the request. Pick the voucher for this payout, or every request it paid.',
+  },
   ROT_RUT_MATCH_NOT_INCOME: {
     httpStatus: 400,
     message_sv: 'Endast inbetalningar kan matchas mot en ROT/RUT-utbetalning från Skatteverket.',

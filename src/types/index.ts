@@ -2631,6 +2631,9 @@ export type PendingOperationType =
   // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
   // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
   | 'settle_rot_rut_payout'
+  // Link ROT/RUT begäran to a payout verifikat that already exists (booked by
+  // hand): no voucher, only the settlement pointer (gnubok_link_rot_rut_payout_voucher).
+  | 'link_rot_rut_payout_voucher'
   // Anläggningsregister (gnubok_create_asset / gnubok_update_asset /
   // gnubok_dispose_asset): the register rows are master data (no voucher),
   // the disposal posts the avyttring voucher via disposeAsset().
