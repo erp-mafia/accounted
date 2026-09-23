@@ -1,0 +1,1520 @@
+'use client'
+
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type KeyboardEvent } from 'react'
+import { useRouter } from 'next/navigation'
+import { useLocale, useTranslations } from 'next-intl'
+import { createCompanyFromOnboarding } from '@/lib/company/actions'
+import { computeFiscalPeriod } from '@/lib/company/compute-fiscal-period'
+import { deriveFirstYearDefaults } from '@/lib/company/first-year-defaults'
+import { parseStartMonthDay } from '@/lib/company/first-year-defaults'
+import {
+  fetchCompanyLookup,
+  fetchCompanySearch,
+  fetchCompanySuggestions,
+  type CompanyLookupOutcome,
+} from '@/lib/company-lookup/fetch-company-lookup'
+import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import {
+  COMPANY_SEARCH_MIN_CHARS,
+  type CompanyLookupResult,
+  type CompanySearchHit,
+  type CompanySuggestion,
+} from '@/lib/company-lookup/types'
+import { mapEntityType } from '@/lib/company-lookup/entity-type-map'
+import { formatOrgNumber } from '@/lib/utils'
+import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
+import { useBranding } from '@/lib/branding/brand-context'
+import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
+import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
+import {
+  initJourney,
+  journeyReducer,
+  stationOfStep,
+  type JourneyState,
+} from '@/lib/onboarding-journey/reducer'
+import {
+  abFirstYearEndOptions,
+  efFirstYearEndOptions,
+  type FirstYearEndOption,
+} from '@/lib/onboarding-journey/fiscal-options'
+import type { EntityType } from '@/types'
+import {
+  ENTITY_TYPE_LABELS_SV,
+  creatableEntityTypes,
+  fiscalYearLockedToCalendar,
+  isEntityType,
+  isEntityTypeCreatable,
+  plannedLegalForms,
+  usesPersonnummerAsOrgNumber,
+} from '@/lib/company/entity-type'
+import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
+import JourneyOrb, { type OrbState } from './JourneyOrb'
+
+/** The two chips every picker shows (AB first, as before). */
+const FORM_PICKER_FIRST: readonly EntityType[] = ['aktiebolag', 'enskild_firma']
+
+/**
+ * The picker stays two chips. Any other creatable form is reached through
+ * the quiet line under them, and becomes a chip only when the org number
+ * itself points at it (an 8-series number after every lookup missed): the
+ * lookup normally settles those forms before the picker is reached.
+ */
+function pickerForms(orgNumber: string | null | undefined): { chips: EntityType[]; viaLine: EntityType[] } {
+  const creatable = creatableEntityTypes()
+  const suggested = suggestedFormForOrgNumber(orgNumber)
+  const others = creatable.filter((form) => !FORM_PICKER_FIRST.includes(form))
+  return {
+    chips: [
+      ...FORM_PICKER_FIRST.filter((form) => creatable.includes(form)),
+      ...others.filter((form) => form === suggested),
+    ],
+    viaLine: others.filter((form) => form !== suggested),
+  }
+}
+
+/** i18n key per legal form for the picker chips and the summary card. */
+const FORM_LABEL_KEY: Record<EntityType, 'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening'> = {
+  aktiebolag: 'journey_form_ab',
+  enskild_firma: 'journey_form_ef',
+  ideell_forening: 'journey_form_forening',
+}
+
+/**
+ * Per-form sentence for the picker's info text, shown only while the form is
+ * creatable; null when the base text already covers the form.
+ */
+const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
+  aktiebolag: null,
+  enskild_firma: null,
+  ideell_forening: 'journey_form_info_forening',
+}
+
+/** Statutory label for a planned-form code the reducer stored, or null. */
+function plannedFormLabel(code: string | null | undefined): string | null {
+  if (!code) return null
+  if (isEntityType(code)) return ENTITY_TYPE_LABELS_SV[code]
+  return plannedLegalForms().find((planned) => planned.code === code)?.label ?? null
+}
+import JourneyTrack from './JourneyTrack'
+import Question from './Question'
+import ChipRow from './ChipRow'
+import YearBand from './YearBand'
+import JourneyDatePicker from './JourneyDatePicker'
+import AddressFields from './AddressFields'
+import { InkText } from './ink'
+import './journey.css'
+
+/**
+ * The journey onboarding flow. Renders the reducer's current step,
+ * performs the side effects, and collects the exact settings payload the
+ * wizard sends today.
+ *
+ * TIC budget: fetchCompanyLookup fires once per orgnr, cached for the
+ * session. A complete number is looked up while it is still in the field
+ * (the company inks in under it), and Enter, the auto-submitted BankID deep
+ * link or a picked suggestion reuse that answer instead of asking again.
+ * The search-as-you-type picker under the field is SCB (free), never TIC.
+ * The advisory dup check is an internal endpoint.
+ */
+
+const STATION_FRACS = [0.07, 0.285, 0.5, 0.715, 0.93]
+
+/** Keystroke-to-search delay for the SCB picker: long enough to skip the
+ *  middle of a word, short enough to feel live. */
+const SUGGEST_DEBOUNCE_MS = 300
+/** Pause after the last digit before a complete orgnr is looked up. */
+const PREVIEW_DEBOUNCE_MS = 350
+
+/** Digits, spaces and dashes only: the orgnr path, never a name search. */
+function looksLikeOrgNumber(raw: string): boolean {
+  return /^[\d\s-]+$/.test(raw.trim())
+}
+
+const LOG = '[onboarding-journey]'
+function logError(message: string, extra?: Record<string, unknown>) {
+  console.error(LOG, message, extra ?? '')
+  fetch('/api/log', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: `onboarding-journey: ${message}`, extra }),
+  }).catch(() => {})
+}
+
+interface OnboardingJourneyProps {
+  teamId: string
+  userId: string
+  mode?: 'first' | 'add'
+  initialOrgNumber?: string
+  initialEntityType?: EntityType
+  initialLegalName?: string
+  /** A pending invitation exists for this user's email: an invitee has
+   *  likely landed here by mistake (lost invite cookie), so the first
+   *  question carries a "join via the link in the email" hint. */
+  hasPendingInvite?: boolean
+  /** SCB credentials exist in this environment: the orgnr field suggests
+   *  companies while a name is typed. Off: the field is orgnr-or-Enter. */
+  companySearchEnabled?: boolean
+}
+
+export default function OnboardingJourney({
+  teamId,
+  userId,
+  mode = 'first',
+  initialOrgNumber,
+  initialEntityType,
+  initialLegalName,
+  hasPendingInvite = false,
+  companySearchEnabled = false,
+}: OnboardingJourneyProps) {
+  const router = useRouter()
+  const t = useTranslations('onboarding')
+  const { appName } = useBranding()
+  const locale = useLocale()
+  const ticEnabled = ENABLED_EXTENSION_IDS.has('tic')
+
+  const [state, dispatch] = useReducer(
+    journeyReducer,
+    { mode, initialOrgNumber, initialEntityType, initialLegalName },
+    initJourney,
+  )
+
+  const bandRef = useRef<HTMLDivElement | null>(null)
+  const [orgInput, setOrgInput] = useState(initialOrgNumber ?? '')
+  const draftState = useMemo(() => ({ journey: state, orgInput }), [state, orgInput])
+  const navigation = useOnboardingNavigation({
+    scope: `company:${userId}:${teamId}:${mode}:${initialOrgNumber ?? ''}`,
+    step: state.step,
+    state: draftState,
+    restore: (saved) => {
+      dispatch({ type: 'RESTORE', state: saved.journey })
+      setOrgInput(saved.orgInput)
+    },
+    beforeStep: preserveQuestionAnswers,
+    blocked: state.submitting || state.lookupPending,
+    complete: state.step === 'done',
+  })
+  const [orgShake, setOrgShake] = useState(false)
+  const [thinking, setThinking] = useState(false)
+  const [narration, setNarration] = useState<string | null>(null)
+  const [monogram, setMonogram] = useState<string | null>(null)
+  const [dupName, setDupName] = useState<string | null>(null)
+  // The SCB picker: rows for the current text, whether SCB cut the list,
+  // and the keyboard-highlighted row (-1: none, Enter runs the Enter path).
+  const [suggestions, setSuggestions] = useState<CompanySuggestion[]>([])
+  const [suggestTruncated, setSuggestTruncated] = useState(false)
+  const [suggestActive, setSuggestActive] = useState(-1)
+  // Set once the environment answers 503: stops every further call.
+  const suggestDisabled = useRef(!companySearchEnabled)
+  // The text the user last confirmed (Enter, or a picked row): the picker
+  // does not reopen for it, so the #2421 chip row or the nomatch note
+  // stands alone until the text changes.
+  const lastConfirmed = useRef<string | null>(null)
+  // One TIC call per orgnr: the answer is kept for the session so the
+  // preview under the field and the Enter that follows share it. A failed
+  // or aborted call is forgotten, so the next attempt asks again.
+  const lookupCache = useRef(new Map<string, Promise<CompanyLookupOutcome>>())
+  const [preview, setPreview] = useState<{ orgNumber: string; result: CompanyLookupResult } | null>(null)
+
+  const station = stationOfStep(state.step)
+  const entity = state.settings.entity_type
+  // Two capabilities drive every wording difference between the forms.
+  // personOwned: the org number is the owner's personnummer (enskild
+  // firma), so the company IS the person and the questions say "du" and
+  // "firman"; every juridisk person shares the form-neutral "företaget"
+  // copy. calendarOnly: BFL 3 kap 1 § binds a fysisk person to the
+  // calendar year, so the fiscal-year questions collapse to first-year-or-not.
+  const personOwned = isEntityType(entity) && usesPersonnummerAsOrgNumber(entity)
+  const calendarOnly = isEntityType(entity) && fiscalYearLockedToCalendar(entity)
+
+  const monthLong = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'long' })
+    return Array.from({ length: 12 }, (_, i) => fmt.format(new Date(2026, i, 1)))
+  }, [locale])
+  const monthShort = useMemo(() => {
+    const fmt = new Intl.DateTimeFormat(locale === 'en' ? 'en' : 'sv', { month: 'short' })
+    return Array.from({ length: 12 }, (_, i) => fmt.format(new Date(2026, i, 1)).replace('.', ''))
+  }, [locale])
+
+  const formatDayMonthYear = useCallback(
+    (isoDate: string) => {
+      const [y, m, d] = isoDate.split('-').map(Number)
+      return `${d} ${monthShort[(m ?? 1) - 1]} ${y}`
+    },
+    [monthShort],
+  )
+
+  /* ── side effects ─────────────────────────────────────────────── */
+
+  // One lookup per confirmed orgnr: fired from the submit handler, never
+  // from typing. The dup check (internal endpoint) rides along, advisory.
+  const shakeOrg = useCallback(() => {
+    setOrgShake(true)
+    window.setTimeout(() => setOrgShake(false), 400)
+  }, [])
+
+  const checkDuplicate = useCallback((orgNumber: string) => {
+    setDupName(null)
+    fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
+      .then(async (res) => {
+        if (!res.ok) return
+        const { data } = await res.json()
+        setDupName(data?.companies?.[0]?.name ?? null)
+      })
+      .catch(() => {})
+  }, [])
+
+  const lookupFor = useCallback(
+    (orgNumber: string): Promise<CompanyLookupOutcome> => {
+      const key = normalizeOrgNumber(orgNumber) ?? orgNumber
+      const cached = lookupCache.current.get(key)
+      if (cached) return cached
+      const p = fetchCompanyLookup(orgNumber, { ticEnabled }).then((outcome) => {
+        // Only a successful lookup is reusable. A miss may succeed on retry.
+        if (outcome.status !== 'found') lookupCache.current.delete(key)
+        return outcome
+      })
+      lookupCache.current.set(key, p)
+      return p
+    },
+    [ticEnabled],
+  )
+
+  // The one field takes either an orgnr or a company name. Digits (with
+  // dashes/spaces) are always the orgnr path, so a mistyped number shakes
+  // instead of turning into a name search; anything else is a name.
+  const submitOrg = useCallback(
+    (raw: string) => {
+      const trimmed = raw.trim()
+      const looksNumeric = /^[\d\s-]+$/.test(trimmed)
+      if (looksNumeric) {
+        if (normalizeOrgNumber(trimmed) === null) {
+          shakeOrg()
+          return
+        }
+        dispatch({ type: 'ORG_SUBMITTED', orgNumber: trimmed })
+        lookupFor(trimmed).then((outcome) => {
+          dispatch({ type: 'LOOKUP_RESULT', outcome })
+        })
+        checkDuplicate(trimmed)
+        return
+      }
+      if (!ticEnabled || trimmed.length < COMPANY_SEARCH_MIN_CHARS) {
+        shakeOrg()
+        return
+      }
+      // A previous orgnr's "you already have X" note must not sit above the
+      // chip row; the pick re-checks for the number it resolves to.
+      setDupName(null)
+      lastConfirmed.current = trimmed
+      dispatch({ type: 'SEARCH_SUBMITTED', query: trimmed })
+      fetchCompanySearch(trimmed, { ticEnabled }).then((outcome) => {
+        dispatch({ type: 'SEARCH_RESULT', outcome })
+        if (outcome.status === 'found' && outcome.hits.length === 1) {
+          checkDuplicate(outcome.hits[0].orgNumber)
+        }
+      })
+    },
+    [ticEnabled, shakeOrg, checkDuplicate, lookupFor],
+  )
+
+  // The field keeps the name the user typed: writing the picked number into
+  // it would print a sole trader's personnummer in plain text on Back, the
+  // one thing the chip row avoids. Back re-searches the name instead.
+  const pickSearchHit = useCallback(
+    (hit: CompanySearchHit) => {
+      dispatch({ type: 'SEARCH_HIT_PICKED', hit })
+      checkDuplicate(hit.orgNumber)
+    },
+    [checkDuplicate],
+  )
+
+  // Search-as-you-type: SCB per debounced keystroke while the text is a
+  // name of three or more characters. A newer keystroke aborts the request
+  // in flight, and a response for text the user has since left is dropped,
+  // so the list never lags behind the field. Costs no TIC. Quiet while the
+  // Enter path shows its chip row and for text already confirmed.
+  useEffect(() => {
+    const query = orgInput.trim()
+    if (
+      suggestDisabled.current ||
+      state.step !== 'orgnr' ||
+      state.lookupPending ||
+      state.searchHits.length > 0 ||
+      query === lastConfirmed.current
+    ) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    if (query.length < COMPANY_SEARCH_MIN_CHARS || looksLikeOrgNumber(query)) {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      return
+    }
+    const controller = new AbortController()
+    const timer = window.setTimeout(() => {
+      fetchCompanySuggestions(query, { signal: controller.signal }).then((outcome) => {
+        if (controller.signal.aborted) return
+        if (outcome.status === 'disabled') suggestDisabled.current = true
+        const rows = outcome.status === 'found' ? outcome.suggestions : []
+        setSuggestions(rows)
+        setSuggestTruncated(outcome.status === 'found' || outcome.status === 'empty' ? outcome.truncated : false)
+        setSuggestActive(-1)
+      })
+    }, SUGGEST_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [orgInput, state.step, state.lookupPending, state.searchHits.length])
+
+  // A picked suggestion is an orgnr the user confirmed: the same single TIC
+  // lookup as Enter on a typed number, plus the advisory dup check. The
+  // field shows the company's name, never its number (a sole trader's is
+  // their personnummer); on Back the name stands until the user edits it.
+  const pickSuggestion = useCallback(
+    (suggestion: CompanySuggestion) => {
+      setSuggestions([])
+      setSuggestTruncated(false)
+      setSuggestActive(-1)
+      lastConfirmed.current = suggestion.name.trim()
+      setOrgInput(suggestion.name)
+      setDupName(null)
+      dispatch({ type: 'SUGGESTION_PICKED', suggestion })
+      lookupFor(suggestion.orgNumber).then((outcome) => {
+        dispatch({ type: 'LOOKUP_RESULT', outcome })
+      })
+      checkDuplicate(suggestion.orgNumber)
+    },
+    [lookupFor, checkDuplicate],
+  )
+
+  // A complete orgnr is looked up while it is still in the field: the
+  // company inks in under it, and Enter only confirms what is already
+  // there. Same single TIC call as the Enter path, taken early.
+  useEffect(() => {
+    const raw = orgInput.trim()
+    const key = looksLikeOrgNumber(raw) ? normalizeOrgNumber(raw) : null
+    if (state.step !== 'orgnr' || state.lookupPending || !key) {
+      setPreview(null)
+      return
+    }
+    let live = true
+    const timer = window.setTimeout(() => {
+      lookupFor(raw).then((outcome) => {
+        if (!live) return
+        setPreview(outcome.status === 'found' ? { orgNumber: key, result: outcome.result } : null)
+      })
+    }, PREVIEW_DEBOUNCE_MS)
+    return () => {
+      live = false
+      window.clearTimeout(timer)
+    }
+  }, [orgInput, state.step, state.lookupPending, lookupFor])
+
+  const onOrgKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>) => {
+      if (state.lookupPending) return
+      const open = suggestions.length > 0
+      if (open && e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSuggestActive((i) => (i + 1) % suggestions.length)
+        return
+      }
+      if (open && e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSuggestActive((i) => (i <= 0 ? suggestions.length - 1 : i - 1))
+        return
+      }
+      if (open && e.key === 'Escape') {
+        e.preventDefault()
+        setSuggestions([])
+        setSuggestActive(-1)
+        return
+      }
+      if (e.key === 'Enter') {
+        const active = suggestActive >= 0 ? suggestions[suggestActive] : undefined
+        if (active) {
+          e.preventDefault()
+          pickSuggestion(active)
+          return
+        }
+        submitOrg(orgInput)
+      }
+    },
+    [state.lookupPending, suggestions, suggestActive, pickSuggestion, submitOrg, orgInput],
+  )
+
+  // BankID deep link: auto-submit the orgnr once on mount (the single
+  // lookup replaces the wizard's preverified suppression, per the plan
+  // addendum). Guarded against strict-mode double-invoke.
+  const autoRan = useRef(false)
+  useEffect(() => {
+    if (!navigation.ready || autoRan.current) return
+    autoRan.current = true
+    if (initialOrgNumber && state.step === 'orgnr' && state.history.length === 0) submitOrg(initialOrgNumber)
+  }, [navigation.ready, initialOrgNumber, state.step, state.history.length, submitOrg])
+
+  // A short thinking beat between questions.
+  const prevStep = useRef(state.step)
+  useEffect(() => {
+    if (prevStep.current === state.step) return
+    prevStep.current = state.step
+    if (state.step === 'done' || state.submitting) return
+    setThinking(true)
+    const timer = window.setTimeout(() => setThinking(false), 420)
+    return () => window.clearTimeout(timer)
+  }, [state.step, state.submitting])
+
+  // The finale: validate the period, narrate the real server steps while
+  // createCompanyFromOnboarding runs, then check + monogram.
+  const submitRan = useRef(false)
+  useEffect(() => {
+    if (!state.submitting || submitRan.current) return
+    submitRan.current = true
+
+    const s = state
+    const periodResult = computeFiscalPeriod(s.settings)
+    if (periodResult.error) {
+      logError('journey period validation failed', { error: periodResult.error })
+      submitRan.current = false
+      dispatch({ type: 'SUBMIT_FAILED', code: 'period_invalid' })
+      return
+    }
+
+    const msgs = [
+      t('journey_shaping_accounts'),
+      t('journey_shaping_period', { name: periodResult.periodName }),
+      s.settings.vat_registered ? t('journey_shaping_vat') : t('journey_shaping_deadlines'),
+    ]
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const timers: number[] = []
+    msgs.forEach((m, i) => {
+      timers.push(window.setTimeout(() => setNarration(m), reduced ? 0 : i * 850))
+    })
+
+    createCompanyFromOnboarding({
+      teamId,
+      settings: s.settings as Record<string, unknown>,
+      fiscalPeriod: {
+        startDate: periodResult.startStr,
+        endDate: periodResult.endStr,
+        name: periodResult.periodName,
+      },
+      ticLookup: s.ticLookup,
+      booksGate: mode === 'first',
+    })
+      .then((result) => {
+        timers.forEach((id) => window.clearTimeout(id))
+        setNarration(null)
+        submitRan.current = false
+        if (result.error || !result.companyId) {
+          logError('journey create company failed', { error: result.error })
+          dispatch({
+            type: 'SUBMIT_FAILED',
+            code: result.error === 'org_number_invalid' ? 'org_number_invalid' : 'generic',
+          })
+          return
+        }
+        dispatch({ type: 'SUBMIT_SUCCEEDED' })
+        const initial = (s.settings.company_name || 'A').trim().charAt(0).toUpperCase()
+        window.setTimeout(() => setMonogram(initial), reduced ? 0 : 1600)
+      })
+      .catch((err) => {
+        timers.forEach((id) => window.clearTimeout(id))
+        setNarration(null)
+        submitRan.current = false
+        logError('journey create company threw', {
+          error: err instanceof Error ? err.message : String(err),
+        })
+        dispatch({ type: 'SUBMIT_FAILED', code: 'generic' })
+      })
+  }, [state, t, teamId])
+
+  /* ── derived display ──────────────────────────────────────────── */
+
+  const orbState: OrbState = state.step === 'done'
+    ? 'check'
+    : state.submitting
+      ? narration === null
+        ? 'working'
+        : 'shaping'
+      : state.lookupPending
+        ? 'searching'
+        : thinking
+          ? 'thinking'
+          : 'listening'
+
+  const fyAnswer = useMemo(() => {
+    const s = state.settings
+    if (s.is_first_fiscal_year && s.first_year_start && s.first_year_end) {
+      return t('journey_ans_first', {
+        from: formatDayMonthYear(s.first_year_start),
+        to: formatDayMonthYear(s.first_year_end),
+      })
+    }
+    if (s.fiscal_year_start_month === undefined) return null
+    if (s.fiscal_year_start_month === 1) return t('journey_ans_calendar')
+    return t('journey_ans_broken', {
+      from: monthShort[s.fiscal_year_start_month - 1],
+      to: monthShort[(s.fiscal_year_start_month + 10) % 12],
+    })
+  }, [state.settings, t, monthShort, formatDayMonthYear])
+
+  const momsAnswer = state.settings.vat_registered === false
+    ? t('journey_ans_vat_none')
+    : state.settings.moms_period
+      ? t(`journey_ans_${state.settings.moms_period}`)
+      : null
+
+  const methodAnswer = state.settings.accounting_method
+    ? state.settings.accounting_method === 'accrual'
+      ? t('journey_method_accrual')
+      : t('journey_method_cash')
+    : null
+
+  const stations = [
+    { label: t('journey_station_company'), answer: station > 0 ? (state.settings.company_name ?? null) : null },
+    { label: t('journey_station_fiscal'), answer: station > 1 ? fyAnswer : null },
+    { label: t('journey_station_vat'), answer: station > 2 ? momsAnswer : null },
+    { label: t('journey_station_method'), answer: station > 3 ? methodAnswer : null },
+    { label: t('journey_station_done') },
+  ]
+
+  const lookupFacts = useMemo(() => {
+    const lk = state.ticLookup
+    if (!lk || station > 0) return []
+    const facts: { text: string; warn?: boolean }[] = []
+    if (entity) facts.push({ text: t(FORM_LABEL_KEY[entity]) })
+    if (lk.address?.city) facts.push({ text: lk.address.city })
+    if (lk.sniCodes[0]?.name) facts.push({ text: lk.sniCodes[0].name })
+    if (lk.registration.fTax) facts.push({ text: 'F-skatt' })
+    if (lk.registration.vat) facts.push({ text: t('journey_fact_vat') })
+    if (lk.isCeased) facts.push({ text: t('journey_fact_ceased'), warn: true })
+    return facts
+  }, [state.ticLookup, station, entity, t])
+
+  /* ── per-step question rendering ──────────────────────────────── */
+
+  const flyProps = { flyTargetRef: bandRef, flyTargetFrac: STATION_FRACS[station] }
+
+  // A form whose org number is the owner's personnummer (enskild firma)
+  // is identified by its form label in rows and previews, never by the
+  // number, which would print a personnummer in plain text.
+  function identFor(legalEntityType: string | null | undefined, orgNumber: string): string {
+    const mapped = mapEntityType(legalEntityType)
+    return mapped && usesPersonnummerAsOrgNumber(mapped)
+      ? t(FORM_LABEL_KEY[mapped])
+      : formatOrgNumber(orgNumber)
+  }
+
+  function renderStep() {
+    const s = state.settings
+    switch (state.step) {
+      case 'orgnr':
+        return (
+          <Question
+            title={companySearchEnabled || ticEnabled ? t('journey_company_title') : t('journey_orgnr_title')}
+            sub={hasPendingInvite ? t('journey_pending_invite_note') : undefined}
+            attn={
+              state.serverError === 'org_number_invalid'
+                ? t('journey_err_org_invalid')
+                : state.lookupNote === 'error'
+                  ? t('journey_lookup_error')
+                  : state.lookupNote === 'nomatch'
+                    ? t('journey_search_nomatch')
+                    : undefined
+            }
+          >
+            <div className={`jny-biginput${orgShake ? ' is-err' : ''}`} style={{ marginTop: 26 }}>
+              <input
+                value={orgInput}
+                inputMode="text"
+                placeholder={companySearchEnabled || ticEnabled ? t('journey_company_placeholder') : '556677-8899'}
+                aria-label={t('step2_org_number_label')}
+                autoComplete="off"
+                autoFocus
+                disabled={state.lookupPending}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={suggestions.length > 0}
+                aria-controls="jny-suggest-list"
+                aria-activedescendant={suggestActive >= 0 ? `jny-suggest-${suggestActive}` : undefined}
+                onChange={(e) => {
+                  // A highlight belongs to the rows for the previous text.
+                  setSuggestActive(-1)
+                  setOrgInput(e.target.value)
+                }}
+                onKeyDown={onOrgKeyDown}
+              />
+            </div>
+            {/* In flow, not floated: the step scrolls (overflow-y: auto), so an
+                absolutely positioned list would be clipped to the field. */}
+            {suggestions.length > 0 ? (
+              <>
+                <ul id="jny-suggest-list" role="listbox" aria-label={t('journey_suggest_label')} className="jny-suggest">
+                  {suggestions.map((s, i) => {
+                    const ident = identFor(s.legalEntityType, s.orgNumber)
+                    const sub = [ident, s.city, s.active ? null : t('journey_suggest_inactive')]
+                      .filter(Boolean)
+                      .join(' · ')
+                    return (
+                      <li
+                        key={s.orgNumber}
+                        id={`jny-suggest-${i}`}
+                        role="option"
+                        aria-selected={i === suggestActive}
+                        className={`${i === suggestActive ? 'is-active' : ''}${s.active ? '' : ' is-inactive'}`}
+                        onMouseEnter={() => setSuggestActive(i)}
+                        // mousedown, not click: the input's blur must not close the list first.
+                        onMouseDown={(e) => {
+                          e.preventDefault()
+                          pickSuggestion(s)
+                        }}
+                      >
+                        <span className="jny-sug-name">{s.name}</span>
+                        <span className="jny-sug-sub">{sub}</span>
+                      </li>
+                    )
+                  })}
+                </ul>
+                {suggestTruncated ? <p className="jny-enterhint">{t('journey_suggest_more')}</p> : null}
+              </>
+            ) : suggestTruncated ? (
+              // SCB counted a flood for a short prefix and sent no rows.
+              <p className="jny-enterhint">{t('journey_suggest_more')}</p>
+            ) : state.searchHits.length > 1 ? (
+              <>
+                <p className="jny-enterhint">{t('journey_search_pick')}</p>
+                <ChipRow
+                  options={state.searchHits.map((h) => {
+                    const ident = identFor(h.result.legalEntityType, h.orgNumber)
+                    const city = h.result.address?.city
+                    return {
+                      key: h.orgNumber,
+                      label: h.result.companyName || ident,
+                      rec: h.result.companyName ? `${ident}${city ? ` · ${city}` : ''}` : undefined,
+                    }
+                  })}
+                  onPick={(k) => {
+                    const hit = state.searchHits.find((h) => h.orgNumber === k)
+                    if (hit) pickSearchHit(hit)
+                  }}
+                  {...flyProps}
+                />
+              </>
+            ) : (
+              <>
+                {preview && normalizeOrgNumber(orgInput.trim()) === preview.orgNumber ? (
+                  <p className="jny-found" aria-live="polite">
+                    <InkText text={preview.result.companyName} step={40} />
+                    <span className="jny-found-sub">
+                      {[
+                        identFor(preview.result.legalEntityType, preview.orgNumber),
+                        preview.result.address?.city,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </span>
+                  </p>
+                ) : null}
+                <p className="jny-enterhint">
+                  {t('journey_press')} <b>Enter</b>
+                </p>
+              </>
+            )}
+          </Question>
+        )
+
+      case 'notfound':
+        return (
+          <Question title={t('journey_notfound_title')} sub={t('journey_notfound_sub')}>
+            <ChipRow
+              options={[
+                { key: 'continue', label: t('journey_notfound_continue') },
+                { key: 'edit', label: t('journey_notfound_edit') },
+              ]}
+              onPick={(k) =>
+                dispatch({ type: k === 'continue' ? 'NOTFOUND_CONTINUE' : 'NOTFOUND_EDIT' })
+              }
+              {...flyProps}
+            />
+          </Question>
+        )
+
+      case 'ceased':
+        return (
+          <Question title={t('journey_ceased_title')} sub={t('journey_ceased_sub')}>
+            <ChipRow
+              options={[
+                { key: 'continue', label: t('journey_ceased_continue') },
+                { key: 'edit', label: t('journey_notfound_edit') },
+              ]}
+              onPick={(k) =>
+                dispatch({ type: k === 'continue' ? 'CEASED_CONTINUE' : 'CEASED_EDIT' })
+              }
+              {...flyProps}
+            />
+          </Question>
+        )
+
+      case 'planned': {
+        // The registry named a form Accounted has scoped but cannot create
+        // yet: say so before the picker, so the nearest supported form is
+        // not picked by mistake. The picker stays one chip away.
+        const label = plannedFormLabel(state.plannedForm) ?? t('journey_form_planned_group')
+        return (
+          <Question title={t('journey_planned_title', { form: label })} sub={t('journey_planned_sub')}>
+            <ChipRow
+              options={[
+                { key: 'edit', label: t('journey_notfound_edit') },
+                { key: 'continue', label: t('journey_planned_continue') },
+              ]}
+              onPick={(k) => dispatch({ type: k === 'edit' ? 'PLANNED_EDIT' : 'PLANNED_CONTINUE' })}
+              {...flyProps}
+            />
+          </Question>
+        )
+      }
+
+      case 'form': {
+        const { chips, viaLine } = pickerForms(s.org_number)
+        const info = [
+          t('journey_form_info'),
+          ...chips.map((form) => FORM_INFO_KEY[form]).filter((key) => key !== null).map((key) => t(key)),
+          t('journey_form_info_tail'),
+        ].join(' ')
+        const plannedLabel = plannedFormLabel(state.plannedForm)
+        return (
+          <Question
+            title={t('journey_form_title')}
+            info={info}
+            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+          >
+            <ChipRow
+              options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}
+              onPick={(k) => dispatch({ type: 'ENTITY_PICKED', entityType: k as EntityType })}
+              {...flyProps}
+            />
+            {/* One quiet line: the forms the lookup normally settles on its
+                own stay reachable without a third chip; with none creatable
+                the line says they are coming. */}
+            {viaLine.length > 0 ? (
+              viaLine.map((form) => (
+                <p key={form} className="jny-more">
+                  {t('journey_form_more_pre', { form: t(FORM_LABEL_KEY[form]) })}{' '}
+                  <button
+                    type="button"
+                    className="jny-btn-quiet"
+                    onClick={() => dispatch({ type: 'ENTITY_PICKED', entityType: form })}
+                  >
+                    {t('journey_form_more_link', { form: t(FORM_LABEL_KEY[form]).toLowerCase() })}
+                  </button>
+                  .
+                </p>
+              ))
+            ) : chips.length === FORM_PICKER_FIRST.length ? (
+              <p className="jny-more">{t('journey_form_more_soon')}</p>
+            ) : null}
+          </Question>
+        )
+      }
+
+      case 'name': {
+        const suggested = s.company_name ?? ''
+        return (
+          <Question
+            title={personOwned ? t('journey_name_ef_title') : t('journey_name_ab_title')}
+            sub={personOwned ? t('journey_name_ef_sub') : t('journey_name_ab_sub')}
+          >
+            <NameInput
+              key={state.step}
+              initial={suggested}
+              placeholder={personOwned ? t('journey_name_ef_placeholder') : t('journey_name_ab_placeholder')}
+              hint={
+                <>
+                  {t('journey_press')} <b>Enter</b>
+                </>
+              }
+              onSubmit={(name) => dispatch({ type: 'NAME_SUBMITTED', name })}
+              onChange={(name) => dispatch({ type: 'DRAFT_SETTINGS', settings: { company_name: name } })}
+            />
+          </Question>
+        )
+      }
+
+      case 'address':
+        return (
+          <Question title={personOwned ? t('journey_addr_ef_title') : t('journey_addr_ab_title')}>
+            <AddressFields
+              initial={{ street: s.address_line1 ?? '', postalCode: s.postal_code ?? '', city: s.city ?? '' }}
+              onChange={(v) => dispatch({ type: 'DRAFT_SETTINGS', settings: { address_line1: v.street, postal_code: v.postalCode, city: v.city } })}
+              placeholders={{
+                street: t('step2_street_address'),
+                postalCode: t('step2_postal_code'),
+                city: t('step2_city'),
+              }}
+              enterHint={
+                <>
+                  {t('journey_press')} <b>Enter</b>
+                </>
+              }
+              skipLabel={t('journey_addr_skip')}
+              onSubmit={(v) => dispatch({ type: 'ADDRESS_SUBMITTED', ...v })}
+            />
+          </Question>
+        )
+
+      case 'fskatt':
+        return (
+          <Question
+            title={personOwned ? t('journey_fskatt_ef_title') : t('journey_fskatt_ab_title')}
+            info={t('journey_fskatt_info')}
+          >
+            <ChipRow
+              options={[
+                { key: 'yes', label: t('journey_yes') },
+                { key: 'no', label: t('journey_fskatt_no') },
+              ]}
+              onPick={(k) => dispatch({ type: 'FSKATT_ANSWERED', fskatt: k === 'yes' })}
+              {...flyProps}
+            />
+          </Question>
+        )
+
+      case 'fy': {
+        if (calendarOnly) {
+          return (
+            <Question
+              title={t('journey_fy_ef_title')}
+              sub={t('journey_fy_ef_sub')}
+              info={t('journey_fy_ef_info')}
+              attn={state.serverError === 'period_invalid' ? t('journey_err_period') : undefined}
+            >
+              <ChipRow
+                options={[
+                  { key: 'ongoing', label: t('journey_fy_ef_ongoing') },
+                  { key: 'first', label: t('journey_fy_ef_new') },
+                ]}
+                onPick={(k) =>
+                  dispatch({ type: k === 'ongoing' ? 'FY_CALENDAR_CONFIRMED' : 'FY_FIRST_SELECTED' })
+                }
+                {...flyProps}
+              />
+            </Question>
+          )
+        }
+        const startMonth = state.lookupRan
+          ? parseStartMonthDay(state.ticLookup?.fiscalYear?.startMonthDay)
+          : null
+        const firstYearSuggested = state.lookupRan
+          ? deriveFirstYearDefaults(state.ticLookup?.registrationDate, Date.now(), {
+              noClosedPeriod: state.ticLookup?.fiscalYear == null,
+            }).isFirstFiscalYear
+          : false
+        const confirmMode = startMonth !== null
+        const title = confirmMode ? t('journey_fy_confirm_title') : t('journey_fy_ask_title')
+        const sub = confirmMode
+          ? startMonth === 1
+            ? t('journey_fy_confirm_sub_calendar')
+            : t('journey_fy_confirm_sub_broken', {
+                from: monthLong[startMonth - 1],
+                to: monthLong[(startMonth + 10) % 12],
+              })
+          : t('journey_fy_ask_sub')
+        return (
+          <Question
+            title={title}
+            sub={sub}
+            info={t('journey_fy_info')}
+            attn={state.serverError === 'period_invalid' ? t('journey_err_period') : undefined}
+          >
+            <ChipRow
+              options={[
+                {
+                  key: 'confirm',
+                  label: confirmMode ? t('journey_fy_yes') : t('journey_fy_calendar'),
+                },
+                { key: 'other', label: t('journey_fy_other') },
+                {
+                  key: 'first',
+                  label: t('journey_fy_first'),
+                  rec: firstYearSuggested ? t('journey_suggested') : undefined,
+                },
+              ]}
+              onPick={(k) => {
+                if (k === 'other') dispatch({ type: 'FY_OTHER_SELECTED' })
+                else if (k === 'first') dispatch({ type: 'FY_FIRST_SELECTED' })
+                else if (confirmMode && startMonth !== null && startMonth !== 1)
+                  dispatch({ type: 'FY_END_MONTH_PICKED', endMonth: startMonth === 1 ? 12 : startMonth - 1 })
+                else dispatch({ type: 'FY_CALENDAR_CONFIRMED' })
+              }}
+              {...flyProps}
+            />
+          </Question>
+        )
+      }
+
+      case 'fymonth':
+        return (
+          <FyMonthStep
+            t={t}
+            monthShort={monthShort}
+            monthLong={monthLong}
+            onUse={(m) => dispatch({ type: 'FY_END_MONTH_PICKED', endMonth: m })}
+          />
+        )
+
+      case 'fystart': {
+        const regDate = state.lookupRan ? state.ticLookup?.registrationDate : null
+        const regIso = regDate
+          ? new Date(regDate).toISOString().slice(0, 10)
+          : null
+        return (
+          <Question
+            title={personOwned ? t('journey_fystart_ef_title') : t('journey_fystart_ab_title')}
+            sub={
+              regIso
+                ? t('journey_fystart_reg_sub', { date: formatDayMonthYear(regIso) })
+                : personOwned
+                  ? t('journey_fystart_ef_sub')
+                  : t('journey_fystart_ab_sub')
+            }
+          >
+            {regIso ? (
+              <FyStartWithSuggestion
+                regIso={regIso}
+                regLabel={formatDayMonthYear(regIso)}
+                otherLabel={t('journey_fystart_other')}
+                onPick={(d) => dispatch({ type: 'FY_START_PICKED', date: d })}
+                flyProps={flyProps}
+              />
+            ) : (
+              <JourneyDatePicker
+                years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+                onPick={(d) => dispatch({ type: 'FY_START_PICKED', date: d })}
+              />
+            )}
+          </Question>
+        )
+      }
+
+      case 'fyend':
+        return (
+          <FyEndStep
+            t={t}
+            calendarOnly={calendarOnly}
+            startDate={s.first_year_start ?? ''}
+            monthShort={monthShort}
+            formatDate={formatDayMonthYear}
+            onPick={(o) => dispatch({ type: 'FY_END_PICKED', date: o.date })}
+            flyProps={flyProps}
+          />
+        )
+
+      case 'momsyn':
+        return (
+          <Question
+            title={personOwned ? t('journey_momsyn_ef_title') : t('journey_momsyn_ab_title')}
+            info={t('journey_momsyn_info')}
+          >
+            <ChipRow
+              options={[
+                { key: 'yes', label: t('journey_yes') },
+                { key: 'no', label: t('journey_no') },
+              ]}
+              onPick={(k) => dispatch({ type: 'VAT_ANSWERED', registered: k === 'yes' })}
+              {...flyProps}
+            />
+          </Question>
+        )
+
+      case 'moms': {
+        let info = t('journey_moms_info')
+        if (s.vat_number) info += ' ' + t('journey_moms_info_vatnr', { vatNumber: s.vat_number })
+        return (
+          <Question
+            title={personOwned ? t('journey_moms_ef_title') : t('journey_moms_ab_title')}
+            sub={state.lookupRan && state.ticLookup?.registration.vat ? t('journey_moms_sub_registered') : undefined}
+            info={info}
+          >
+            <ChipRow
+              options={[
+                { key: 'quarterly', label: t('journey_moms_quarterly') },
+                { key: 'monthly', label: t('journey_moms_monthly') },
+                { key: 'yearly', label: t('journey_moms_yearly') },
+              ]}
+              onPick={(k) =>
+                dispatch({ type: 'MOMS_PERIOD_PICKED', period: k as 'monthly' | 'quarterly' | 'yearly' })
+              }
+              {...flyProps}
+            />
+          </Question>
+        )
+      }
+
+      case 'method':
+        return (
+          <Question
+            title={personOwned ? t('journey_method_ef_title') : t('journey_method_ab_title')}
+            info={t('journey_method_info')}
+            attn={state.serverError === 'generic' ? t('journey_err_generic') : undefined}
+          >
+            <ChipRow
+              options={[
+                { key: 'accrual', label: t('journey_method_accrual') },
+                { key: 'cash', label: t('journey_method_cash') },
+              ]}
+              onPick={(k) => dispatch({ type: 'METHOD_PICKED', method: k as 'accrual' | 'cash' })}
+              disabled={state.submitting}
+              {...flyProps}
+            />
+          </Question>
+        )
+
+      case 'done':
+        return (
+          <DoneStep
+            t={t}
+            state={state}
+            mode={mode}
+            fyAnswer={fyAnswer}
+            momsAnswer={momsAnswer}
+            methodAnswer={methodAnswer}
+            onOpen={() => router.push('/')}
+            // Act two (issue #2438): the books, the bank and Skatteverket
+            // continue inside the journey chrome under the dashboard layout.
+            onContinue={() => router.push(BOOKS_PATH)}
+          />
+        )
+    }
+  }
+
+  /* ── composition ──────────────────────────────────────────────── */
+
+  return (
+    <div className="jny jny-fixed" style={{ ['--jny-dawn' as string]: String(station / 4) }}>
+      <div className="jny-dawn" aria-hidden="true" />
+      <div className="jny-center">
+        <div ref={bandRef} style={{ width: '100%' }}>
+          <JourneyTrack
+            stations={stations}
+            active={station}
+            onJump={
+              state.submitting || state.step === 'done'
+                ? undefined
+                : (i) => navigation.backTo((saved) => stationOfStep(saved.journey.step) === i, () => dispatch({ type: 'STATION_JUMP', station: i as 0 | 1 | 2 | 3 }))
+            }
+            orbLabel={t(`journey_orb_${orbState}`)}
+          >
+            <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} morphChar={monogram} />
+          </JourneyTrack>
+        </div>
+
+        <div className={`jny-facts${station > 0 && !narration ? ' is-gone' : ''}`} aria-live="polite">
+          {narration ? (
+            <div className="jny-factname">
+              <InkText text={narration} step={40} />
+            </div>
+          ) : (
+            <>
+              <div className="jny-factname">
+                {state.ticLookup && station === 0 ? (
+                  <InkText text={state.ticLookup.companyName} step={90} />
+                ) : null}
+              </div>
+              <div className="jny-factmeta">
+                {lookupFacts.map((f, i) => (
+                  <span
+                    key={f.text}
+                    className={`jny-f is-on${f.warn ? ' is-warn' : ''}`}
+                    style={{ transitionDelay: `${i * 150}ms` }}
+                  >
+                    {i > 0 ? ' · ' : ''}
+                    {f.text}
+                  </span>
+                ))}
+                {dupName && station === 0 ? (
+                  <span className="jny-f is-on" style={{ transitionDelay: `${lookupFacts.length * 150}ms` }}>
+                    {lookupFacts.length > 0 ? ' · ' : ''}
+                    {t('journey_dup_note', { name: dupName, appName })}
+                  </span>
+                ) : null}
+              </div>
+            </>
+          )}
+        </div>
+
+        <div className="jny-qarea" key={state.step}>{navigation.ready ? renderStep() : null}</div>
+
+        <div className="jny-balance" aria-hidden="true" />
+        <div className="jny-backrow">
+            <button type="button" className="jny-btn-quiet" disabled={!navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? dispatch({ type: 'BACK' }) : mode === 'add' ? router.push('/') : router.back())}>
+              &lsaquo; {t('back')}
+            </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Keep the answer just entered when returning to its question. */
+function preserveQuestionAnswers(previous: { journey: JourneyState; orgInput: string }, current: { journey: JourneyState; orgInput: string }) {
+  return { ...previous, journey: { ...previous.journey, settings: current.journey.settings, submitting: false } }
+}
+
+/* ── small step components ─────────────────────────────────────── */
+
+type TFn = ReturnType<typeof useTranslations<'onboarding'>>
+
+function NameInput({
+  initial,
+  placeholder,
+  hint,
+  onSubmit,
+  onChange,
+}: {
+  initial: string
+  placeholder: string
+  hint: React.ReactNode
+  onSubmit: (name: string) => void
+  onChange: (name: string) => void
+}) {
+  const [value, setValue] = useState(initial)
+  return (
+    <>
+      <div className="jny-biginput">
+        <input
+          value={value}
+          placeholder={placeholder}
+          aria-label={placeholder}
+          autoComplete="off"
+          autoFocus
+          onChange={(e) => { setValue(e.target.value); onChange(e.target.value) }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && value.trim()) onSubmit(value)
+          }}
+        />
+      </div>
+      <p className="jny-enterhint">{hint}</p>
+    </>
+  )
+}
+
+function FyMonthStep({
+  t,
+  monthShort,
+  monthLong,
+  onUse,
+}: {
+  t: TFn
+  monthShort: string[]
+  monthLong: string[]
+  onUse: (endMonth: number) => void
+}) {
+  const [sel, setSel] = useState(0)
+  const [hover, setHover] = useState(0)
+  const m = hover || sel
+  const year0 = new Date().getFullYear()
+  const span: [number, number] | null = m ? (m === 12 ? [0, 11] : [m, m + 11]) : null
+  const label = m
+    ? m === 12
+      ? `1 ${monthLong[0]} – 31 ${monthLong[11]}`
+      : `1 ${monthLong[m % 12]} – ${monthLong[m - 1]}`
+    : ''
+  return (
+    <Question title={t('journey_fymonth_title')} sub={t('journey_fymonth_sub')} info={t('journey_fymonth_info')}>
+      <YearBand
+        cells={24}
+        year0={year0}
+        span={span}
+        label={label}
+        note={m ? (m === 12 ? t('journey_band_calendar_note') : t('journey_band_broken_note')) : undefined}
+      />
+      <div className="jny-mchips">
+        {monthShort.map((name, i) => (
+          <button
+            key={name}
+            type="button"
+            className={`jny-mchip${sel === i + 1 ? ' is-sel' : ''}`}
+            onMouseEnter={() => setHover(i + 1)}
+            onMouseLeave={() => setHover(0)}
+            onClick={() => setSel(i + 1)}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      {sel ? (
+        <div className="jny-qactions">
+          <button type="button" className="jny-btn" onClick={() => onUse(sel)}>
+            {t('journey_fymonth_use')}
+          </button>
+        </div>
+      ) : null}
+    </Question>
+  )
+}
+
+function FyStartWithSuggestion({
+  regIso,
+  regLabel,
+  otherLabel,
+  onPick,
+  flyProps,
+}: {
+  regIso: string
+  regLabel: string
+  otherLabel: string
+  onPick: (date: string) => void
+  flyProps: { flyTargetRef: React.RefObject<HTMLDivElement | null>; flyTargetFrac: number }
+}) {
+  const [manual, setManual] = useState(false)
+  if (manual) {
+    return (
+      <JourneyDatePicker
+        years={[new Date().getFullYear() - 1, new Date().getFullYear()]}
+        onPick={onPick}
+      />
+    )
+  }
+  return (
+    <ChipRow
+      options={[
+        { key: 'reg', label: regLabel },
+        { key: 'other', label: otherLabel },
+      ]}
+      onPick={(k) => {
+        if (k === 'reg') onPick(regIso)
+        else setManual(true)
+      }}
+      {...flyProps}
+    />
+  )
+}
+
+function FyEndStep({
+  t,
+  calendarOnly,
+  startDate,
+  monthShort,
+  formatDate,
+  onPick,
+  flyProps,
+}: {
+  t: TFn
+  /** BFL 3 kap 1 §: the first year must end 31 December, so no other end month is offered. */
+  calendarOnly: boolean
+  startDate: string
+  monthShort: string[]
+  formatDate: (iso: string) => string
+  onPick: (o: FirstYearEndOption) => void
+  flyProps: { flyTargetRef: React.RefObject<HTMLDivElement | null>; flyTargetFrac: number }
+}) {
+  const [endMonth, setEndMonth] = useState(12)
+  const [showMonths, setShowMonths] = useState(false)
+  const [preview, setPreview] = useState<FirstYearEndOption | null>(null)
+  const [sy, sm] = startDate.split('-').map(Number)
+  const options = calendarOnly
+    ? efFirstYearEndOptions(sy, sm)
+    : abFirstYearEndOptions(sy, sm, endMonth)
+  const cells: 24 | 36 = sm - 1 + 19 > 24 ? 36 : 24
+  const span: [number, number] | null = preview
+    ? [sm - 1, (preview.year - sy) * 12 + preview.month - 1]
+    : [sm - 1, sm - 1]
+  return (
+    <Question
+      title={t('journey_fyend_title')}
+      sub={t('journey_fyend_sub')}
+      info={calendarOnly ? t('journey_fyend_ef_info') : t('journey_fyend_ab_info')}
+    >
+      <YearBand
+        cells={cells}
+        year0={sy}
+        span={span}
+        label={
+          preview
+            ? `${formatDate(startDate)} – ${formatDate(preview.date)}`
+            : t('journey_fyend_start_label', { date: formatDate(startDate) })
+        }
+        note={
+          preview
+            ? `${t('journey_fyend_months', { count: preview.months })}${
+                preview.months > 12
+                  ? ` · ${t('journey_fyend_extended')}`
+                  : preview.months < 12
+                    ? ` · ${t('journey_fyend_short')}`
+                    : ''
+              }`
+            : options.length === 0
+              ? t('journey_fyend_none')
+              : ''
+        }
+      />
+      <div className="jny-chips" style={{ marginTop: 20 }}>
+        {options.map((o) => (
+          <button
+            key={o.date}
+            type="button"
+            className="jny-pick"
+            onMouseEnter={() => setPreview(o)}
+            onClick={() => onPick(o)}
+          >
+            {formatDate(o.date)}
+            <span className="jny-rec">{t('journey_fyend_months', { count: o.months })}</span>
+          </button>
+        ))}
+        {!calendarOnly ? (
+          <button type="button" className="jny-pick" onClick={() => setShowMonths(true)}>
+            {t('journey_fyend_other_month')}
+          </button>
+        ) : null}
+      </div>
+      {showMonths ? (
+        <div className="jny-mchips">
+          {monthShort.map((name, i) => (
+            <button
+              key={name}
+              type="button"
+              className={`jny-mchip${endMonth === i + 1 ? ' is-sel' : ''}`}
+              onClick={() => {
+                setEndMonth(i + 1)
+                setPreview(null)
+              }}
+            >
+              {name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <span style={{ display: 'none' }}>{flyProps.flyTargetFrac}</span>
+    </Question>
+  )
+}
+
+function DoneStep({
+  t,
+  state,
+  mode,
+  fyAnswer,
+  momsAnswer,
+  methodAnswer,
+  onOpen,
+  onContinue,
+}: {
+  t: TFn
+  state: JourneyState
+  mode: 'first' | 'add'
+  fyAnswer: string | null
+  momsAnswer: string | null
+  methodAnswer: string | null
+  onOpen: () => void
+  onContinue: () => void
+}) {
+  const { appName } = useBranding()
+  const s = state.settings
+  const shortName = (s.company_name ?? '').split(' ')[0] || ''
+  const rows: [string, string][] = [
+    [t('journey_card_form'), s.entity_type ? t(FORM_LABEL_KEY[s.entity_type]) : ''],
+  ]
+  if (s.org_number) {
+    rows.push([
+      s.entity_type && usesPersonnummerAsOrgNumber(s.entity_type) ? t('journey_card_persnr') : t('journey_card_orgnr'),
+      s.org_number,
+    ])
+  }
+  if (s.city) rows.push([t('journey_card_seat'), s.city])
+  if (fyAnswer) rows.push([t('journey_card_fy'), fyAnswer])
+  if (s.f_skatt !== undefined) {
+    rows.push([t('journey_card_fskatt'), s.f_skatt ? t('journey_card_fskatt_yes') : t('journey_card_fskatt_pending')])
+  }
+  if (momsAnswer) rows.push([t('journey_card_vat'), momsAnswer])
+  if (methodAnswer) rows.push([t('journey_card_method'), methodAnswer])
+
+  const notes: string[] = []
+  if (s.is_first_fiscal_year && s.first_year_start && s.first_year_end) {
+    notes.push(t('journey_note_first_year', { start: s.first_year_start, end: s.first_year_end }))
+  }
+  if (s.f_skatt === false) notes.push(t('journey_note_fskatt'))
+  if (state.ticLookup?.isCeased) notes.push(t('journey_note_ceased'))
+
+  return (
+    <div className="jny-qstep">
+      <h1 className="jny-qtitle">
+        <InkText text={t('journey_done_title', { name: shortName })} />
+      </h1>
+      <div className="jny-card">
+        <div className="jny-card-eyebrow">{t('journey_card_eyebrow')}</div>
+        <div className="jny-card-name">{s.company_name}</div>
+        <dl>
+          {rows.map(([k, v], i) => (
+            <CardRow key={k} label={k} value={v} delay={250 + i * 140} />
+          ))}
+        </dl>
+      </div>
+      {notes.length > 0 ? (
+        <div className="jny-notes">
+          {notes.map((n, i) => (
+            <NoteLine key={n} text={n} delay={1000 + i * 260} />
+          ))}
+        </div>
+      ) : null}
+      {mode === 'first' ? (
+        <Reveal delay={notes.length > 0 ? 1400 + notes.length * 260 : 1200}>
+          <div className="jny-qactions">
+            <button type="button" className="jny-btn" onClick={onContinue}>
+              {t('journey_done_continue')}
+            </button>
+          </div>
+        </Reveal>
+      ) : (
+        <div className="jny-qactions">
+          <button type="button" className="jny-btn" onClick={onOpen}>
+            {t('journey_open_app', { appName })}
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Delayed mount so the continue action enters (with the standard step rise)
+ *  only after the profile card and notes have finished settling. */
+function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const id = window.setTimeout(() => setOn(true), reduced ? 0 : delay)
+    return () => window.clearTimeout(id)
+  }, [delay])
+  // The slot is laid out from the start (hidden, not absent) so the button's
+  // arrival never shifts the card above it; only the fade plays.
+  return <div className={on ? 'jny-reveal' : 'jny-reveal-wait'}>{children}</div>
+}
+
+function CardRow({ label, value, delay }: { label: string; value: string; delay: number }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const id = window.setTimeout(() => setOn(true), reduced ? 0 : delay)
+    return () => window.clearTimeout(id)
+  }, [delay])
+  return (
+    <div className={`jny-card-row${on ? ' is-on' : ''}`}>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  )
+}
+
+function NoteLine({ text, delay }: { text: string; delay: number }) {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    const id = window.setTimeout(() => setOn(true), reduced ? 0 : delay)
+    return () => window.clearTimeout(id)
+  }, [delay])
+  return <div className={on ? 'is-on' : undefined}>{text}</div>
+}

@@ -26,12 +26,12 @@ function fixture(files: Record<string, string>) {
 }
 
 describe('client-node-builtin guard', () => {
-  it('flags a client component whose lib import chain reaches crypto, with the chain', () => {
+  it.each(['.', 'src'])('flags a client import chain under %s that reaches crypto', (sourceDir) => {
     const root = fixture({
-      'lib/auth/hashing.ts': `import crypto from 'crypto'\nexport const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex')\nexport const isEnabled = () => true\n`,
-      'components/Login.tsx': `'use client'\nimport { isEnabled } from '@/lib/auth/hashing'\nexport default function Login() { return isEnabled() ? null : null }\n`,
+      [`${sourceDir}/lib/auth/hashing.ts`]: `import crypto from 'crypto'\nexport const hash = (s: string) => crypto.createHash('sha256').update(s).digest('hex')\nexport const isEnabled = () => true\n`,
+      [`${sourceDir}/components/Login.tsx`]: `'use client'\nimport { isEnabled } from '@/lib/auth/hashing'\nexport default function Login() { return isEnabled() ? null : null }\n`,
     })
-    const findings = findClientNodeBuiltins(root)
+    const findings = findClientNodeBuiltins(path.join(root, sourceDir))
     expect(findings).toHaveLength(1)
     expect(findings[0]).toMatchObject({ file: 'components/Login.tsx', builtin: 'crypto' })
     expect(findings[0].chain).toEqual(['components/Login.tsx', 'lib/auth/hashing.ts', 'bare:crypto'])

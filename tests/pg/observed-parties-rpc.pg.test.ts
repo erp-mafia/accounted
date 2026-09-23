@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { getPool, withUserContext } from './setup'
 import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
 import { ledgerKey } from '@/lib/parties/ledger-key'
@@ -38,6 +39,15 @@ interface Observed {
   dominant_account_share: number | null
 }
 
+// The shipped query is an independent oracle, including JSON ordering and
+// rounding. Keep the historical migration untouched when optimizing the RPC.
+const originalQuery = readFileSync(
+  new URL('../../supabase/migrations/20260902170000_ledger_key_and_observed_parties.sql', import.meta.url), 'utf8',
+).split('AS $$')[2]!.split('$$;')[0]!
+  .replaceAll('p_company_id', '$1::uuid')
+  .replaceAll('p_from_date', '$2::date')
+  .replaceAll('p_limit', '$3::integer')
+
 async function observed(companyId: string, userId: string, fromDate: string | null = null): Promise<Observed[]> {
   return withUserContext(userId, async (client) => {
     const { rows } = await client.query<{ r: Observed[] }>(
@@ -54,6 +64,73 @@ const expense = (account: string, amount: number) => [
 ]
 
 describe('get_observed_parties (pg)', () => {
+  it('preserves complete results across variants, same-day recurrence, account ties, rounding and limits', async () => {
+    const c = await seedCompany()
+    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }
+    for (let i = 0; i < 12; i++) {
+      await insertPostedJournalEntry({
+        ...base,
+        entryDate: `2026-01-${String(1 + Math.floor(i / 2) * 2).padStart(2, '0')}`,
+        description: `Levfakt Synthetic Services AB (${10000 + i})`,
+        lines: [
+          { accountNumber: '4000', debitAmount: 0.49, creditAmount: 0 },
+          { accountNumber: '4010', debitAmount: 0.49, creditAmount: 0 },
+          { accountNumber: '8310', debitAmount: 0, creditAmount: 0.01 },
+          { accountNumber: '2440', debitAmount: 0, creditAmount: 0.97 },
+        ],
+      })
+    }
+    for (const description of ['Levfakt Alpha AB', 'Levfakt Alpha AB', 'Levfakt Beta AB', 'Levfakt Beta AB']) {
+      await insertPostedJournalEntry({ ...base, entryDate: '2026-02-01', description, lines: expense('6542', 12.25) })
+    }
+    await insertPostedJournalEntry({ ...base, description: '   ', lines: expense('4000', 500) })
+    await insertPostedJournalEntry({ ...base, description: '1234567890', lines: expense('4000', 500) })
+    await insertPostedJournalEntry({ ...base, sourceType: 'vat_settlement', description: 'Excluded VAT', lines: expense('4000', 500) })
+    await insertPostedJournalEntry({ ...base, description: 'Excluded balance', lines: expense('1930', 500) })
+    await insertPostedJournalEntry({ ...base, description: 'Result boundaries', lines: [
+      { accountNumber: '3000', debitAmount: 0, creditAmount: 1 },
+      { accountNumber: '3999', debitAmount: 0, creditAmount: 1 },
+      { accountNumber: '4000', debitAmount: 2, creditAmount: 0 },
+      { accountNumber: '7999', debitAmount: 2, creditAmount: 0 },
+      { accountNumber: '8000', debitAmount: 0, creditAmount: 1 },
+      { accountNumber: '8999', debitAmount: 0, creditAmount: 1 },
+    ] })
+
+    await withUserContext(c.userId, async (client) => {
+      for (const fromDate of [null, '2026-01-05', '2027-01-01']) {
+        for (const limit of [null, -1, 0, 1, 2, 200, 1000, 5000]) {
+          const args = [c.companyId, fromDate, limit]
+          const before = await client.query(originalQuery, args)
+          const after = await client.query('SELECT public.get_observed_parties($1, $2, $3) AS result', args)
+          expect(after.rows[0].result, `${fromDate}/${limit}`).toEqual(Object.values(before.rows[0])[0])
+        }
+      }
+      const { rows } = await client.query('SELECT public.get_observed_parties($1, NULL, 200) AS result', [c.companyId])
+      const synthetic = rows[0].result.find((row: { key: string }) => row.key === 'synthetic services')
+      expect(synthetic).toMatchObject({
+        occurrences: 12, variant_count: 12, cadence_days: 2,
+        expense_sek: 12, dominant_account_number: '4000',
+        dominant_account_count: 12, dominant_account_total: 36, dominant_account_share: 0.34,
+      })
+      expect(synthetic.variants).toHaveLength(8)
+      expect(rows[0].result.find((row: { key: string }) => row.key === 'result boundaries')).toMatchObject({
+        expense_sek: 4, revenue_sek: 2, dominant_account_number: '3000',
+        dominant_account_count: 1, dominant_account_total: 6, dominant_account_share: 0.25,
+      })
+    })
+  }, 60_000)
+
+  it('retains invoker security and the authenticated/service grants without anonymous access', async () => {
+    const { rows } = await getPool().query(`
+      SELECT p.prosecdef,
+        has_function_privilege('authenticated', p.oid, 'EXECUTE') AS authenticated,
+        has_function_privilege('service_role', p.oid, 'EXECUTE') AS service_role,
+        has_function_privilege('anon', p.oid, 'EXECUTE') AS anon
+      FROM pg_proc p WHERE p.oid = 'public.get_observed_parties(uuid,date,integer)'::regprocedure
+    `)
+    expect(rows).toEqual([{ prosecdef: false, authenticated: true, service_role: true, anon: false }])
+  })
+
   it('groups posted vouchers by ledger_key, sums expense SEK, and reports cadence and dominant account', async () => {
     const c = await seedCompany()
     const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }

@@ -29,7 +29,7 @@ Complete field code (fältkod) tables for INK2, INK2R, and INK2S blankett types,
 | 7153 | 1.6a | Avkastningsskatt 15% |
 | 7155 | 1.7a | Avkastningsskatt 30% |
 
-Fields 7104/7114 correspond directly to INK2S fields 8020/8021. (Verified against Skatteverket's official 2025P4 field list: 1.1 is 7104, NOT 7113; 7113 does not exist on INK2 and Skatteverket rejects it with "är inte ett giltigt postnamn".)
+Fields 7104/7114 correspond directly to INK2S fields 7670/7770 (4.15/4.16), not 8020/8021, which are the 4.17/4.18 värdeminskningsavdrag fields. (Verified against Skatteverket's official 2025P4 field list: 1.1 is 7104, NOT 7113; 7113 does not exist on INK2 and Skatteverket rejects it with "är inte ett giltigt postnamn".)
 
 ---
 
@@ -139,40 +139,56 @@ Fields 7104/7114 correspond directly to INK2S fields 8020/8021. (Verified agains
 <a id="ink2s"></a>
 ## 5. INK2S: Skattemässiga justeringar (tax adjustments, page 4)
 
-| SRU | Row | Description |
-|---|---|---|
-| 7650 | 4.1 | Årets resultat, vinst |
-| 7750 | 4.2 | Årets resultat, förlust |
-| 7651 | 4.3a | Skatt på årets resultat (ej avdragsgill) |
-| 7652 | 4.3b | Nedskrivning av finansiella tillgångar |
-| 7653 | 4.3c | Andra bokförda kostnader som inte är avdragsgilla |
-| 7751 | 4.4a | Lämnade koncernbidrag |
-| 7764 | 4.4b | Andra ej bokförda kostnader som ska dras av |
-| 7752 | 4.5a | Ackordsvinster (skattefria) |
-| 7753 | 4.5b | Utdelning (skattefri) |
-| 7754 | 4.5c | Andra bokförda intäkter som inte ska beskattas |
-| 7654 | 4.6a | Schablonintäkt på periodiseringsfonder |
-| 7668 | 4.6b | Schablonintäkt på fondandelar |
-| 7655 | 4.6c | Mottagna koncernbidrag |
-| 7656 | 4.6d | Uppräknat belopp vid återföring av periodiseringsfond |
-| 7657 | 4.6e | Andra ej bokförda intäkter som ska beskattas |
-| 7755 | 4.7a | Bokförd vinst vid avyttring av delägarrätter |
-| 7756 | 4.7b | Bokförd förlust vid avyttring av delägarrätter |
-| 7658 | 4.7e | Kapitalvinst för beskattningsåret |
-| 7757 | 4.7f | Kapitalförlust som ska dras av |
-| 7758 | 4.8a | Bokförd intäkt/vinst i handelsbolag |
-| 7659 | 4.8b | Skattemässigt överskott enl. N3B |
-| 7660 | 4.8c | Bokförd kostnad/förlust i handelsbolag |
-| 7759 | 4.8d | Skattemässigt underskott enl. N3B |
-| 7663 | 4.13 | Andra skattemässiga justeringar (catch-all) |
-| 7763 | 4.14a | Outnyttjat underskott från föregående beskattningsår |
-| 7664 | 4.14b | Reduktion av underskott (beloppsspärr/ackord) |
-| 7670 | 4.14c | Reduktion pga koncernbidragsspärr/fusionsspärr |
-| 8020 | 4.15 | Överskott → överförs till punkt 1.1 (INK2 field 7104) |
-| 8021 | 4.16 | Underskott → överförs till punkt 1.2 (INK2 field 7114) |
-| 7770 | 4.20 | Lån från aktieägare (fysisk person) vid beskattningsårets utgång |
+| SRU | Row | Description | Sign |
+|---|---|---|---|
+| 7650 | 4.1 | Årets resultat, vinst | + |
+| 7651 | 4.3a | Bokförda kostnader som inte ska dras av: a. Skatt på årets resultat | + |
+| 7652 | 4.3b | Bokförda kostnader som inte ska dras av: b. Nedskrivning av finansiella tillgångar | + |
+| 7653 | 4.3c | Bokförda kostnader som inte ska dras av: c. Andra bokförda kostnader | + |
+| 7654 | 4.6a | Intäkter som ska tas upp men som inte ingår i det redovisade resultatet a. Beräknad schablonintäkt på periodiseringsfonder vid beskattningsårets ingång | + |
+| 7655 | 4.6c | Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: c. Mottagna koncernbidrag | + |
+| 7656 | 4.7b | Avyttring av delägarrätter: b. Bokförd förlust | + |
+| 7657 | 4.7d | Avyttring av delägarrätter: d. Återfört uppskov med kapitalvinst enligt blankett N4 | + |
+| 7658 | 4.7e | Avyttring av delägarrätter: e. Kapitalvinst för beskattningsåret | + |
+| 7659 | 4.8b | Andel i handelsbolag (inkl. avyttring): b. Skattemässigt överskott enligt N3B | + |
+| 7660 | 4.8c | Andel i handelsbolag (inkl. avyttring): c. Bokförd kostnad/förlust | + |
+| 7661 | 4.10 | Skattemässig justering av bokfört resultat vid avyttring av näringsfastighet och näringsbostadsrätt | + |
+| 7662 | 4.12 | Återföringar vid avyttring av fastighet t.ex. värdeminskningsavdrag, skogsavdrag och substansminskningsavdrag... | + |
+| 7663 | 4.13 | Andra skattemässiga justeringar av resultatet: + | + |
+| 7665 | 4.6e | Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: e. Andra ej bokförda intäkter | + |
+| 7666 | 4.9 | Skattemässig justering av bokfört resultat för avskrivningar på byggnader och annan fast egendom samt restvärdesavskrivning på maskiner och inventarier (+) | + |
+| 7668 | 4.6b | Beräknad schablonintäkt på fondandelar ägda vid kalenderårets ingång | + |
+| 7670 | 4.15 | Överskott (flyttas till p. 1.1 på sid. 1) | + |
+| 7671 | 4.14b | Reduktion av outnyttjat underskott med hänsyn till beloppsspärr, ackord eller konkurs | + |
+| 7672 | 4.14c | Reduktion av outnyttjat underskott med hänsyn till koncernbidragsspärr, fusionsspärr m.m. (beloppet ska också tas upp vid p. 1.2. på sid. 1) | + |
+| 7673 | 4.6d | Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: d. Uppräknat belopp vid återföring av periodiseringsfond | + |
+| 7750 | 4.2 | Årets resultat, förlust | - |
+| 7751 | 4.4a | Kostnader som ska dras av men som inte ingår i det redovisade resultatet: a. Lämnade koncernbidrag | - |
+| 7752 | 4.5a | Bokförda intäkter som inte ska tas upp: a. Ackordsvinster | - |
+| 7753 | 4.5b | Bokförda intäkter som inte ska tas upp: b. Utdelning | - |
+| 7754 | 4.5c | Bokförda intäkter som inte ska tas upp: c. Andra bokförda intäkter | - |
+| 7755 | 4.7a | Avyttring av delägarrätter: a. Bokförd vinst | - |
+| 7756 | 4.7c | Avyttring av delägarrätter: c. Uppskov med kapitalvinst enligt blankett N4 | - |
+| 7757 | 4.7f | Avyttring av delägarrätter: f. Kapitalförlust som ska dras av | - |
+| 7758 | 4.8a | Andel i handelsbolag (inkl. avyttring): a. Bokförd intäkt/vinst | - |
+| 7759 | 4.8d | Andel i handelsbolag (inkl. avyttring): d. Skattemässigt underskott enligt N3B | - |
+| 7760 | 4.10 | Skattemässig korrigering av bokfört resultat vid avyttring av näringsfastighet och näringsbostadsrätt: - | - |
+| 7761 | 4.11 | Skogs-/substansminskningsavdrag (specificeras på blankett N8) | - |
+| 7762 | 4.13 | Andra skattemässiga justeringar av resultatet: - | - |
+| 7763 | 4.14a | Underskott: a. Outnyttjat underskott från föregående år | - |
+| 7764 | 4.4b | Kostnader som ska dras av men som inte ingår i det redovisade resultatet: b. Andra ej bokförda kostnader | - |
+| 7765 | 4.9 | Skattemässig justering av bokfört resultat för avskrivningar på byggnader och annan fast egendom samt restvärdesavskrivning på maskiner och inventarier (-) | - |
+| 7770 | 4.16 | Underskott (flyttas till p. 1.2 på sid. 1) | - |
+| 8020 | 4.17 | Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende byggnader. | * |
+| 8021 | 4.18 | Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende markanläggningar. | * |
+| 8022 | 4.21 | Pensionskostnader (som ingår i p. 3.8) | * |
+| 8023 | 4.19 | Vid restvärdesavskrivning: återförda belopp för av- och nedskrivning, försäljning, utrangering | * |
+| 8026 | 4.20 | Lån från aktieägare (fysisk person) vid räkenskapsårets utgång | * |
+| 8028 | 4.22 | Koncernbidragsspärrat och fusionsspärrat underskott m.m. (frivillig uppgift) | * |
 
-**Critical**: INK2S codes are NOT auto-derived from BAS accounts. They represent tax adjustments requiring manual calculation. The bookkeeping result (årets resultat from INK2R) flows into 7650/7750, then adjustments produce 8020/8021.
+Transcribed from Skatteverket, Nyheter from beskattningsperiod 2025P4, INK2S_SKV2002-33-01-24-04.xls (valid through 2026P3); the same table is checked in as lib/reports/ink2/official-ink2s-fields.json and pinned by official-ink2s-fields.test.ts. Codes 7011/7012 (räkenskapsårets början/slut) and 8040/8041/8044/8045 (uppdragstagare, revision, X-fields) carry no row number and are omitted here. Note the pairs Skatteverket rejects together: 7650 with 7750, 7670 with 7770.
+
+**Critical**: INK2S codes are NOT auto-derived from BAS accounts. They represent tax adjustments requiring manual calculation. The bookkeeping result (årets resultat from INK2R) flows into 7650/7750, then the adjustments produce 7670 (4.15 Överskott, flows to INK2 7104) or 7770 (4.16 Underskott, flows to INK2 7114). 8020/8021 are 4.17/4.18, the accumulated värdeminskningsavdrag on byggnader and markanläggningar, never the result.
 
 ---
 

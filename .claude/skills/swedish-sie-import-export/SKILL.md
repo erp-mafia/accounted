@@ -134,7 +134,7 @@ For full encoding tables and per-software behaviors, read `references/encoding.m
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| Unbalanced verification | #TRANS sum ≠ 0 | Add öresutjämning (3741) or fix amounts |
+| Unbalanced verification | #TRANS sum ≠ 0 | Add öresutjämning (3740) or fix amounts |
 | IB/UB mismatch | Incomplete year-end closing | Create adjustment verification in opening period |
 | Garbled å/ä/ö | Encoding mismatch | Detect actual encoding, re-decode |
 | Duplicate verno | Series collision on import | Remap to unused series |

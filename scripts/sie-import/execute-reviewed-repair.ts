@@ -51,7 +51,7 @@ async function main() {
   if(staged.error) throw new Error(staged.error.message)
   console.log(JSON.stringify({jobId:staged.data.id,companyId:company,state:staged.data.job_state}))
   // The same lease, engine facade and cron recovery as an ordinary import.
-  const {runSIEWorker}=await import('../../lib/import/sie-job-worker')
+  const {runSIEWorker}=await import('../../src/lib/import/sie-job-worker')
   await runSIEWorker({supabase,importId:staged.data.id,budgetMs:220_000})
   const current=await supabase.from('sie_imports').select('id,job_state,chunks_done,chunks_total,error_message')
     .eq('company_id',company).eq('id',staged.data.id).single()
