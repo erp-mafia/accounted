@@ -1,0 +1,186 @@
+import { NextResponse } from 'next/server'
+import {
+  parseSIEFile,
+  validateSIEFile,
+  detectEncoding,
+  decodeBuffer,
+  calculateFileHash,
+} from '@/lib/import/sie-parser'
+import { suggestMappings, getMappingStats } from '@/lib/import/account-mapper'
+import { prepareSIEPreviewMappings } from '@/lib/import/sie-preview-mappings'
+import { planChartChanges } from '@/lib/import/chart-plan'
+import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from '@/lib/import/sie-artifact-scan'
+import {
+  generateImportPreview,
+  checkDuplicateImport,
+  checkDuplicatePeriodImport,
+  precheckFiscalPeriod,
+} from '@/lib/import/sie-import'
+import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { readSIERequestFile } from '@/lib/import/sie-intake'
+import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
+
+/**
+ * POST /api/import/sie/parse
+ * Parse an uploaded SIE file and return preview data.
+ */
+export const POST = withRouteContext(
+  'sie_import.parse',
+  async (request, ctx) => {
+    const { supabase, companyId, log, requestId } = ctx
+
+    const formData = await request.formData()
+    const file = await readSIERequestFile(formData,supabase,companyId)
+
+    if (!file) {
+      return errorResponseFromCode('SIE_PARSE_NO_FILE', log, { requestId })
+    }
+
+    if (!hasSIEFileExtension(file.name)) {
+      return errorResponseFromCode('SIE_PARSE_INVALID_TYPE', log, {
+        requestId,
+        details: { filename: file.name },
+      })
+    }
+
+    const MAX_FILE_SIZE = 50 * 1024 * 1024
+    if (file.size > MAX_FILE_SIZE) {
+      return errorResponseFromCode('SIE_PARSE_FILE_TOO_LARGE', log, {
+        requestId,
+        details: { sizeMb: +(file.size / 1024 / 1024).toFixed(1) },
+      })
+    }
+
+    if (file.size === 0) {
+      return errorResponseFromCode('SIE_PARSE_EMPTY', log, { requestId })
+    }
+
+    const opLog = log.child({ filename: file.name, sizeBytes: file.size })
+
+    try {
+      const arrayBuffer = await file.arrayBuffer()
+      const encoding = detectEncoding(arrayBuffer)
+      const content = decodeBuffer(arrayBuffer, encoding)
+
+      const duplicate = await checkDuplicateImport(supabase, companyId!, content)
+      const parsed = parseSIEFile(content)
+      await resolveSIEFiscalYear(supabase,companyId,parsed)
+
+      // Mojibake tripwire (warn, never block): CP437 bytes decoded as
+      // windows-1252 somewhere upstream leave C1 specials mid-word in account
+      // names and voucher texts. Surface it as a parse-issue warning, the
+      // preview's existing warnings card, so the user can abort before import.
+      const artifactScan = scanSieForCp1252Artifacts(parsed)
+      if (artifactScan.flagged) {
+        const contentLines = content.split(/\r?\n/)
+        const firstSample = artifactScan.samples[0]
+        const sampleLine = firstSample
+          ? contentLines.findIndex((l) => l.includes(firstSample))
+          : -1
+        parsed.issues.push({
+          severity: 'warning',
+          line: sampleLine >= 0 ? sampleLine + 1 : 1,
+          message: formatSieArtifactWarning(artifactScan),
+        })
+        opLog.warn('sie parse: CP1252 mojibake artifacts in decoded content', {
+          encoding,
+          artifactCount: artifactScan.artifactCount,
+          samples: artifactScan.samples,
+        })
+      }
+
+      const periodDuplicate = parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd
+        ? await checkDuplicatePeriodImport(supabase,companyId!,parsed.stats.fiscalYearStart,parsed.stats.fiscalYearEnd)
+        : null
+
+      const validation = validateSIEFile(parsed)
+
+      if (!validation.valid) {
+        return errorResponseFromCode('SIE_PARSE_VALIDATION_FAILED', opLog, {
+          requestId,
+          details: { errors: validation.errors, warnings: validation.warnings },
+        })
+      }
+
+      const { data: storedMappings } = await supabase
+        .from('sie_account_mappings')
+        .select('*')
+        .eq('company_id', companyId)
+
+      const suggested = suggestMappings(
+        parsed.accounts,
+        BAS_REFERENCE,
+        (storedMappings as SIEAccountMappingRecord[]) || undefined,
+      )
+      const { mappings, archivedOnlyAccounts, excludedSystemAccounts } = prepareSIEPreviewMappings(parsed, suggested)
+
+      const preview = generateImportPreview(parsed, mappings)
+      preview.excludedSystemAccounts = excludedSystemAccounts
+      preview.archivedOnlyAccounts = archivedOnlyAccounts
+      preview.accountCount = parsed.accounts.length - excludedSystemAccounts.length
+
+      // The mapping stats above score the file against the BAS reference. A
+      // consultant with a 41-account seeded company reads "150 mappade" as
+      // "your chart replaces mine", so also say what happens to THIS company's
+      // chart: how many of the file's accounts are new here, how many exist.
+      const chartRows = await fetchAllRows<{ account_number: string }>(({ from, to }) =>
+        supabase
+          .from('chart_of_accounts')
+          .select('account_number')
+          .eq('company_id', companyId)
+          .order('account_number')
+          .range(from, to),
+      )
+      preview.chart = planChartChanges(
+        mappings,
+        new Set(chartRows.map((r) => r.account_number)),
+      )
+
+      // Same containment/overlap verdict the import runs (ensureFiscalPeriod),
+      // so a fiscal-year conflict shows here instead of after the mapping step.
+      if (parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        preview.fiscalYear = await precheckFiscalPeriod(
+          supabase,
+          companyId!,
+          parsed.stats.fiscalYearStart,
+          parsed.stats.fiscalYearEnd,
+        )
+      }
+
+      const fileHash = await calculateFileHash(content)
+
+      return NextResponse.json({
+        success: true,
+        existingImport: duplicate ?? periodDuplicate,
+        encoding,
+        fileHash,
+        parsed: {
+          header: parsed.header,
+          accounts: parsed.accounts,
+          stats: parsed.stats,
+          issues: parsed.issues,
+        },
+        mappings,
+        mappingStats: getMappingStats(mappings),
+        preview,
+        validation: {
+          valid: validation.valid,
+          errors: validation.errors,
+          warnings: validation.warnings,
+        },
+      })
+    } catch (err) {
+      opLog.error('sie parse failed', err as Error)
+      return errorResponseFromCode('SIE_PARSE_FAILED', opLog, {
+        requestId,
+        details: { reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown' },
+      })
+    }
+  },
+)

@@ -336,3 +336,169 @@ describe('webshop_store_settings', () => {
     })
   })
 })
+
+/**
+ * Migrations 20260916190000_webshop_orders_release_draft_invoice_link and
+ * 20260916200000_invoices_cancelled_releases_webshop_order (desk crm#56): an
+ * order is released when its invoice stops being a document, in the same
+ * statement. The FK is ON DELETE SET NULL (hard delete of an unnumbered
+ * draft) and release_webshop_order_on_invoice_cancel clears the link when
+ * the invoice becomes 'cancelled' (makulering). The freeze trigger allows
+ * invoice_id -> null only once the invoice is gone or cancelled: a live
+ * draft stays linked, a sent invoice stays linked, and any swap to a
+ * different invoice is refused.
+ */
+async function insertInvoiceRow(params: {
+  companyId: string
+  userId: string
+  status: 'draft' | 'sent' | 'cancelled'
+  invoiceNumber?: string | null
+}): Promise<string> {
+  const customerId = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.customers (id, user_id, company_id, name, customer_type)
+     VALUES ($1, $2, $3, 'Webshop Cust', 'swedish_business')`,
+    [customerId, params.userId, params.companyId],
+  )
+  const id = randomUUID()
+  await getPool().query(
+    `INSERT INTO public.invoices (id, user_id, company_id, customer_id, invoice_date, due_date,
+       currency, vat_treatment, vat_rate, subtotal, vat_amount, total, status, invoice_number)
+     VALUES ($1, $2, $3, $4, '2026-09-16', '2026-10-16', 'SEK', 'standard_25', 25,
+             400, 100, 500, $5, $6)`,
+    [id, params.userId, params.companyId, customerId, params.status, params.invoiceNumber ?? null],
+  )
+  return id
+}
+
+async function linkedOrder(params: {
+  companyId: string
+  userId: string
+  invoiceId: string
+}): Promise<string> {
+  const orderId = await insertOrderRow({ companyId: params.companyId, userId: params.userId })
+  await getPool().query(`UPDATE public.webshop_orders SET invoice_id = $1 WHERE id = $2`, [
+    params.invoiceId,
+    orderId,
+  ])
+  return orderId
+}
+
+async function orderInvoiceId(orderId: string): Promise<string | null> {
+  const { rows } = await getPool().query<{ invoice_id: string | null }>(
+    `SELECT invoice_id FROM public.webshop_orders WHERE id = $1`,
+    [orderId],
+  )
+  return rows[0]!.invoice_id
+}
+
+describe('webshop_orders invoice link release (crm#56)', () => {
+  it('webshop_orders_invoice_id_fkey is ON DELETE SET NULL', async () => {
+    const { rows } = await getPool().query<{ confdeltype: string }>(
+      `SELECT confdeltype FROM pg_constraint
+       WHERE conname = 'webshop_orders_invoice_id_fkey'
+         AND conrelid = 'public.webshop_orders'::regclass`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.confdeltype).toBe('n')
+  })
+
+  it('hard-deleting an unnumbered draft releases the order (the customer path)', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoiceRow({ companyId, userId, status: 'draft' })
+    const orderId = await linkedOrder({ companyId, userId, invoiceId })
+
+    // The member session is what DELETE /api/invoices/[id] runs as. The
+    // helper rolls back at the end, so the order is read inside the block.
+    const after = await withUserContext(userId, async (client) => {
+      const removed = await client.query(
+        `DELETE FROM public.invoices WHERE id = $1 RETURNING id`,
+        [invoiceId],
+      )
+      expect(removed.rowCount).toBe(1)
+      const { rows } = await client.query<{ invoice_id: string | null }>(
+        `SELECT invoice_id FROM public.webshop_orders WHERE id = $1`,
+        [orderId],
+      )
+      return rows[0]!.invoice_id
+    })
+    expect(after).toBeNull()
+  })
+
+  it('makulering a numbered draft releases the order in the same statement', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoiceRow({
+      companyId,
+      userId,
+      status: 'draft',
+      invoiceNumber: `F-${randomUUID().slice(0, 8)}`,
+    })
+    const orderId = await linkedOrder({ companyId, userId, invoiceId })
+
+    // The member session is what DELETE /api/invoices/[id] runs as for a
+    // numbered draft: one UPDATE, no second write.
+    const after = await withUserContext(userId, async (client) => {
+      const cancelled = await client.query(
+        `UPDATE public.invoices SET status = 'cancelled' WHERE id = $1 AND status = 'draft'`,
+        [invoiceId],
+      )
+      expect(cancelled.rowCount).toBe(1)
+      const { rows } = await client.query<{ invoice_id: string | null }>(
+        `SELECT invoice_id FROM public.webshop_orders WHERE id = $1`,
+        [orderId],
+      )
+      return rows[0]!.invoice_id
+    })
+    expect(after).toBeNull()
+  })
+
+  it('keeps the link to a live draft: no manual unlink through the member session', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoiceRow({ companyId, userId, status: 'draft' })
+    const orderId = await linkedOrder({ companyId, userId, invoiceId })
+
+    // Own withUserContext block: the raise aborts the transaction, so the
+    // failing statement must be the block's last.
+    await expect(
+      withUserContext(userId, (client) =>
+        client.query(`UPDATE public.webshop_orders SET invoice_id = NULL WHERE id = $1`, [
+          orderId,
+        ]),
+      ),
+    ).rejects.toThrow(/still a document/)
+    expect(await orderInvoiceId(orderId)).toBe(invoiceId)
+  })
+
+  it('keeps the link to a sent invoice immutable', async () => {
+    const { userId, companyId } = await seedCompany()
+    const invoiceId = await insertInvoiceRow({
+      companyId,
+      userId,
+      status: 'sent',
+      invoiceNumber: `F-${randomUUID().slice(0, 8)}`,
+    })
+    const orderId = await linkedOrder({ companyId, userId, invoiceId })
+
+    await expect(
+      getPool().query(`UPDATE public.webshop_orders SET invoice_id = NULL WHERE id = $1`, [
+        orderId,
+      ]),
+    ).rejects.toThrow(/still a document/)
+    expect(await orderInvoiceId(orderId)).toBe(invoiceId)
+  })
+
+  it('refuses swapping the link to another invoice even while both are drafts', async () => {
+    const { userId, companyId } = await seedCompany()
+    const first = await insertInvoiceRow({ companyId, userId, status: 'draft' })
+    const second = await insertInvoiceRow({ companyId, userId, status: 'draft' })
+    const orderId = await linkedOrder({ companyId, userId, invoiceId: first })
+
+    await expect(
+      getPool().query(`UPDATE public.webshop_orders SET invoice_id = $1 WHERE id = $2`, [
+        second,
+        orderId,
+      ]),
+    ).rejects.toThrow(/the link is immutable/)
+    expect(await orderInvoiceId(orderId)).toBe(first)
+  })
+})

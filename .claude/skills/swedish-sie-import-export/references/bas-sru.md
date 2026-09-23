@@ -52,8 +52,7 @@ These accounts appear frequently in SIE files and have special significance:
 
 ### Income statement (3xxx-8xxx)
 - **3010-3099** Försäljning varor/tjänster (sales revenue)
-- **3740** Öres-/avrundningsdifferens (rounding differences)
-- **3741** Öresutjämning (øre equalization, used to balance rounding)
+- **3740** Öres- och kronutjämning (öre equalization, used to balance rounding; BAS has no 3741)
 - **4010** Varuinköp (cost of goods purchased)
 - **5010** Lokalhyra (office rent)
 - **6110** Kontorsmaterial (office supplies)

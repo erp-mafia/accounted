@@ -6,10 +6,10 @@ third party.
 
 ## The pipeline today
 
-- `lib/logger.ts` writes structured log records to stdout/stderr. On hosted
+- `src/lib/logger.ts` writes structured log records to stdout/stderr. On hosted
   (Vercel) these are collected by the platform and delivered through the
   configured Vercel log drain, which is the production log delivery path.
-- `lib/observability/sink.ts` is a provider-agnostic seam for an error
+- `src/lib/observability/sink.ts` is a provider-agnostic seam for an error
   tracking vendor. It is a deliberate no-op until an adapter is registered
   with `registerObservabilitySink()` from a server-side init path. No adapter
   is registered by default, so self-hosted builds carry no third-party
@@ -23,7 +23,7 @@ adapter; a no-op sink is not an alerting pipeline on its own.
 
 ## Redaction contract (GDPR, non-negotiable)
 
-`lib/observability/redact.ts` is the single source of truth for what must
+`src/lib/observability/redact.ts` is the single source of truth for what must
 never leave the process in clear text: a key denylist (passwords, tokens,
 IBAN, personnummer, ...), a personnummer regex applied to every string, and
 substring patterns for emails, Swedish IBANs, and gnubok API keys.
@@ -46,7 +46,7 @@ Rules for anyone adding an adapter or a new emission path:
 2. A browser-side adapter (one reading `NEXT_PUBLIC_OBSERVABILITY_DSN`) ships
    data straight from the user's browser to the vendor and bypasses every
    server-side control. It MUST apply the same redaction module before
-   emitting: import from `lib/observability/redact.ts` and run all payloads
+   emitting: import from `src/lib/observability/redact.ts` and run all payloads
    through `redact()` / `redactString()` client-side. Do not register a
    browser adapter that forwards raw console or log payloads.
 3. Do not add a log emission path (new logger, direct `console.*` forwarding,
@@ -54,5 +54,5 @@ Rules for anyone adding an adapter or a new emission path:
    redact module first.
 
 The redaction behavior is pinned by unit tests under
-`lib/observability/__tests__/`; extend them when the denylist or patterns
+`src/lib/observability/__tests__/`; extend them when the denylist or patterns
 change.

@@ -25,6 +25,8 @@ import {
   insertCompany,
   insertFiscalPeriod,
   insertPostedJournalEntry,
+  insertPostedBankJournalEntry,
+  insertTransaction,
 } from './fixtures'
 
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
@@ -73,12 +75,13 @@ async function insertJournalEntry(params: {
   voucherNumber: number
   status?: 'draft' | 'posted' | 'reversed'
   sourceType?: string
+  sourceId?: string
   entryDate?: string
   description?: string
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   if ((params.status ?? 'posted') === 'posted') {
-    return insertPostedJournalEntry({
+    const entry = {
       userId: params.userId,
       companyId: params.companyId,
       fiscalPeriodId: params.fiscalPeriodId,
@@ -86,12 +89,19 @@ async function insertJournalEntry(params: {
       entryDate: params.entryDate ?? '2026-03-15',
       description: params.description ?? 'VAT RPC test',
       sourceType: params.sourceType ?? 'manual',
+      sourceId: params.sourceId ?? null,
       lines: params.lines.map((line) => ({
         accountNumber: line.account,
         debitAmount: line.debit,
         creditAmount: line.credit,
       })),
-    })
+    }
+    if (params.sourceType === 'bank_transaction') {
+      const amount = Math.round(params.lines.filter(line => line.account === '1930').reduce((sum, line) => sum + line.debit - line.credit, 0) * 100) / 100
+      const transactionId = await insertTransaction({ ...params, date: entry.entryDate, amount })
+      return insertPostedBankJournalEntry({ ...entry, transactionId })
+    }
+    return insertPostedJournalEntry(entry)
   }
 
   const id = randomUUID()
@@ -129,6 +139,22 @@ async function seedCompany() {
   const companyId = await insertCompany({ createdBy: userId })
   const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
   return { userId, companyId, fiscalPeriodId }
+}
+
+// Record a verifikat as one of the four kontantmetod cut-off postings, the way
+// postKontantmetodCutoff() does right after committing it.
+async function markCutoffEntry(params: {
+  companyId: string
+  fiscalPeriodId: string
+  kind: 'receivable' | 'receivable_reversal' | 'payable' | 'payable_reversal'
+  journalEntryId: string
+}): Promise<void> {
+  await getPool().query(
+    `INSERT INTO public.kontantmetod_cutoff_entries
+       (company_id, fiscal_period_id, kind, journal_entry_id)
+     VALUES ($1, $2, $3, $4)`,
+    [params.companyId, params.fiscalPeriodId, params.kind, params.journalEntryId],
+  )
 }
 
 describe('get_vat_declaration_totals RPC', () => {
@@ -341,23 +367,64 @@ describe('get_vat_declaration_totals RPC', () => {
     expect(payload.settlement_shaped_entries).toEqual([])
   })
 
-  it('includes the cash-method cut-off but excludes its day-one reversal', async () => {
+  it('includes the cash-method cut-off but excludes the vändning its marker names', async () => {
+    // Both verifikat carry descriptions no filter would ever match. The
+    // exclusion follows kontantmetod_cutoff_entries.kind, so the figure is
+    // right anyway: 2618 keeps the cut-off's 250 and loses the vändning's.
+    const ctx = await seedCompany()
+
+    const cutoffId = await insertJournalEntry({
+      ...ctx,
+      voucherNumber: 1,
+      sourceType: 'year_end',
+      sourceId: ctx.fiscalPeriodId,
+      description: 'Omformulerad avgränsning 2026',
+      lines: [
+        { account: '2618', debit: 0, credit: 250 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 250, credit: 0 },
+      ],
+    })
+    const reversalId = await insertJournalEntry({
+      ...ctx,
+      voucherNumber: 2,
+      sourceType: 'year_end',
+      sourceId: ctx.fiscalPeriodId,
+      description: 'Omformulerad vändning 2027',
+      lines: [
+        { account: '2618', debit: 250, credit: 0 },
+        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 0, credit: 250 },
+      ],
+    })
+    await markCutoffEntry({
+      companyId: ctx.companyId,
+      fiscalPeriodId: ctx.fiscalPeriodId,
+      kind: 'receivable',
+      journalEntryId: cutoffId,
+    })
+    await markCutoffEntry({
+      companyId: ctx.companyId,
+      fiscalPeriodId: ctx.fiscalPeriodId,
+      kind: 'receivable_reversal',
+      journalEntryId: reversalId,
+    })
+
+    const payload = await callRpc(ctx.companyId)
+    expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 0, credit: 250 })
+    expect(payload.source_type_counts).toEqual({ year_end: 2 })
+  })
+
+  it('counts an unmarked year-end entry even with the old cut-off wording', async () => {
+    // The new contract, stated against the ledger. Before the marker table this
+    // entry was dropped on its Swedish text alone; now only a recorded marker
+    // takes a verifikat out of a filed figure, and every legacy row got one
+    // from the migration's backfill.
     const ctx = await seedCompany()
 
     await insertJournalEntry({
       ...ctx,
       voucherNumber: 1,
       sourceType: 'year_end',
-      description: 'Kundfordringar vid bokslut (kontantmetoden)',
-      lines: [
-        { account: '2618', debit: 0, credit: 250 },
-        { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 250, credit: 0 },
-      ],
-    })
-    await insertJournalEntry({
-      ...ctx,
-      voucherNumber: 2,
-      sourceType: 'year_end',
+      sourceId: ctx.fiscalPeriodId,
       description: 'Vändning kundfordringar bokslut (kontantmetoden)',
       lines: [
         { account: '2618', debit: 250, credit: 0 },
@@ -366,8 +433,7 @@ describe('get_vat_declaration_totals RPC', () => {
     })
 
     const payload = await callRpc(ctx.companyId)
-    expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 0, credit: 250 })
-    expect(payload.source_type_counts).toEqual({ year_end: 2 })
+    expect(totalsByAccount(payload).get('2618')).toMatchObject({ debit: 250, credit: 0 })
   })
 
   it('scopes everything to the requested company', async () => {

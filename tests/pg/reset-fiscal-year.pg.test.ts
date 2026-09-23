@@ -79,6 +79,7 @@ async function insertPostedEntry(params: {
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     sourceType: params.sourceType ?? 'manual',
+    legacyImport: true,
     status: 'draft',
     voucherNumber: params.voucherNumber ?? 1,
     entryDate: params.entryDate,
