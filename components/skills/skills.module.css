@@ -555,15 +555,15 @@
  * the strata photo whatever the theme, like the panel. One station per step;
  * the photo pans and the train rolls as --skpan goes from 0 to 1.
  */
-.full[data-journey] { padding: 0; gap: 0; overflow: hidden; background: #16303B; color: #F4F2EC; animation: none; }
+.full[data-journey] { padding: 0; gap: 0; overflow: hidden; background: #141819; color: #F4F2EC; animation: none; }
 .full[data-journey]::before { content: none; }
 .journey { --blue: #2E7FC6; position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: inherit; text-align: left; transition: --skpan 1.8s cubic-bezier(.6, 0, .2, 1); }
 .jbg { position: absolute; inset: 0; pointer-events: none; }
-.jpan { position: absolute; top: 0; bottom: 0; left: 0; width: 180%; background: url('/startkort/sthlm.webp') center / cover no-repeat; transform: translateX(calc(var(--skpan) * -44%)); transition: opacity 1.2s, filter 1.2s; }
-.jshade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 32, 40, .35), rgba(13, 32, 40, .8) 60%, rgba(13, 32, 40, .95)); transition: background-color 1.2s; }
+.jpan { position: absolute; top: 0; bottom: 0; left: 0; width: 180%; background: url('/startkort/sthlm.webp') center / cover no-repeat; transform: translateX(calc(var(--skpan) * -44%)); filter: saturate(.85); transition: opacity 1.2s, filter 1.2s; }
+.jshade { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(16, 19, 21, .35), rgba(16, 19, 21, .8) 60%, rgba(16, 19, 21, .95)); transition: background-color 1.2s; }
 .jgrid { position: absolute; inset: 0; opacity: 0; transition: opacity 1.2s .2s; background-image: linear-gradient(rgba(var(--rf), .1) 1px, transparent 1px), linear-gradient(90deg, rgba(var(--rf), .1) 1px, transparent 1px), linear-gradient(rgba(var(--rf), .045) 1px, transparent 1px), linear-gradient(90deg, rgba(var(--rf), .045) 1px, transparent 1px); background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px; background-position: center; }
 .journey[data-building] .jpan { opacity: .18; filter: grayscale(1) blur(2px); }
-.journey[data-building] .jshade { background-color: rgba(18, 40, 51, .7); }
+.journey[data-building] .jshade { background-color: rgba(20, 24, 27, .7); }
 .journey[data-building] .jgrid { opacity: 1; }
 .journey[data-building] .jline, .journey[data-building] .jsign, .journey[data-building] .jcard { opacity: 0; pointer-events: none; }
 .jx { position: absolute; z-index: 5; right: 20px; top: 20px; width: 36px; height: 36px; display: grid; place-items: center; border-radius: 99px; border: 1px solid rgba(255, 255, 255, .3); background: transparent; color: #fff; cursor: pointer; transition: border-color .15s; }
