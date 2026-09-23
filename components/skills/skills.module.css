@@ -80,7 +80,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 20px 24px 24px;
-  border: 1px solid rgba(255, 255, 255, .12);
+  border: 0;
   border-radius: 8px;
   text-align: left;
   color: inherit;
@@ -90,7 +90,7 @@
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 -2px 0 rgba(0, 0, 0, .35), 0 6px 0 rgba(6, 14, 18, .92), 0 7px 0 rgba(255, 255, 255, .06);
-  transition: opacity .35s, transform .09s, box-shadow .09s, border-color .4s;
+  transition: opacity .35s, transform .09s, box-shadow .09s;
 }
 .face:hover { background: linear-gradient(180deg, rgba(255, 255, 255, .19), rgba(255, 255, 255, .10)), rgba(var(--g), .62); }
 .face:active, .card[data-down] .face {
@@ -103,8 +103,7 @@
 .faceTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 20px; }
 .faceTop .led { margin-left: auto; }
 .led { align-self: flex-end; width: 26px; height: 3px; border-radius: 2px; background: #fff; box-shadow: 0 0 10px 1px #fff; }
-.card[data-lit] .face { opacity: 1; border-color: rgba(255, 255, 255, .5); }
-.card[data-lit]:hover .face { border-color: rgba(255, 255, 255, .65); }
+.card[data-lit] .face { opacity: 1; }
 /* Eld: a wide white light wanders the edge and spills out behind the key */
 .card[data-lit]::before {
   content: "";
@@ -125,24 +124,6 @@
   animation-delay: calc(var(--i) * -1.7s), 0s;
 }
 .card[data-lit]:hover::before { inset: -18px; }
-.face::after {
-  content: "";
-  position: absolute;
-  inset: -2px;
-  padding: 2px;
-  border-radius: inherit;
-  pointer-events: none;
-  opacity: 0;
-  background: conic-gradient(from var(--ang), rgba(255, 255, 255, .14) 0 28%, #fff 50%, rgba(255, 255, 255, .14) 72% 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask-composite: exclude;
-  animation: spin 5s linear infinite;
-  animation-delay: calc(var(--i) * -1.7s);
-  transition: opacity .4s;
-}
-.card[data-lit] .face::after { opacity: calc(.6 + .4 * var(--fire)); }
 .card[data-ring]::after {
   content: "";
   position: absolute;
