@@ -411,3 +411,59 @@ describe('gnubok_list_absence', () => {
     ).rejects.toThrow(/not found/i)
   })
 })
+
+describe('gnubok_get_salary_run: period selector', () => {
+  it('resolves the live run for period_year + period_month', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-6', status: 'review', period_year: 2026, period_month: 6 } })
+    enqueue({ data: [] })
+
+    const result = (await getSalaryRun.execute(
+      { period_year: 2026, period_month: 6 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    )) as { id: string; employees: unknown[] }
+
+    expect(result.id).toBe('run-6')
+    expect(result.employees).toEqual([])
+    // A corrected original coexists with its correction in the same period:
+    // the lookup must exclude it or maybeSingle() would see two rows.
+    expect(findCalls('salary_runs', 'neq')).toEqual([['status', 'corrected']])
+    expect(findCalls('salary_runs', 'eq')).toEqual([
+      ['company_id', 'company-1'],
+      ['period_year', 2026],
+      ['period_month', 6],
+    ])
+  })
+
+  it('names the period when no run exists for it', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    await expect(
+      getSalaryRun.execute({ period_year: 2026, period_month: 2 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow('No salary run for 2026-02')
+  })
+
+  it('requires exactly one selector', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      getSalaryRun.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/either salary_run_id or period_year/)
+    await expect(
+      getSalaryRun.execute(
+        { salary_run_id: 'run-1', period_year: 2026, period_month: 6 },
+        'company-1', 'user-1', supabase as never, { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/either salary_run_id or period_year/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('rejects a month outside 1-12 and a half-given period', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      getSalaryRun.execute({ period_year: 2026, period_month: 13 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/period_month 1-12/)
+    await expect(
+      getSalaryRun.execute({ period_year: 2026 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
+    ).rejects.toThrow(/period_month 1-12/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+})

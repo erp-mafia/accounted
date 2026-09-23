@@ -198,6 +198,101 @@ describe('gnubok_set_run_salary', () => {
   })
 })
 
+describe('gnubok_set_run_salary: hours_worked', () => {
+  const HOURLY_SRE = {
+    id: 'sre-2',
+    employee_id: 'emp-2',
+    salary_type: 'hourly',
+    employment_degree: 100,
+    monthly_salary: 0,
+    hours_worked: null,
+  }
+
+  it('stages hours for an hourly employee with an hours preview and hours-only params', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } }) // draft gate
+    enqueue({ data: HOURLY_SRE }) // sre lookup
+    enqueue({ data: [] }) // no calendar days in the period
+    enqueue({ data: { hourly_rate: 200 } }) // employees.hourly_rate
+    enqueue({ data: { payment_date: '2026-03-25', period_year: 2026, period_month: 3 } }) // run for period check
+    enqueue({ data: { first_name: 'Bo', last_name: 'Berg' } }) // name for preview
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-2' }, error: null }) // pending_operations insert
+
+    const result = (await setRunSalary.execute(
+      { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as {
+      staged: boolean
+      preview: Record<string, unknown>
+      next?: { tool: string }
+    }
+
+    expect(result.staged).toBe(true)
+    const row = findCall('pending_operations', 'insert')?.[0] as Record<string, unknown>
+    expect(String(row.title)).toContain('timmar')
+    expect(row.params).toEqual({ salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 })
+    expect(result.preview.previous_hours_worked).toBeNull()
+    expect(result.preview.new_hours_worked).toBe(160)
+    expect(result.preview.hourly_rate).toBe(200)
+    expect(result.preview).not.toHaveProperty('new_monthly_salary')
+    expect(result.next?.tool).toBe('gnubok_calculate_salary_run')
+  })
+
+  it('refuses hours when the period has calendar days (the calculation would discard them)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: HOURLY_SRE })
+    enqueue({ data: [{ hours: 8 }] })
+
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_HOURS_FROM_CALENDAR/)
+  })
+
+  it('rejects hours on a monthly employee and a salary on an hourly one', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: { ...HOURLY_SRE, salary_type: 'monthly', monthly_salary: 30000 } })
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', hours_worked: 160 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_SALARY_FIELD_MISMATCH/)
+
+    enqueue({ data: { id: 'run-1', status: 'draft', period_year: 2026, period_month: 3 } })
+    enqueue({ data: HOURLY_SRE })
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 30000 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/SALARY_RUN_SALARY_FIELD_MISMATCH/)
+  })
+
+  it('requires exactly one of monthly_salary and hours_worked before touching the run', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2' },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/exactly one of monthly_salary or hours_worked/)
+    await expect(
+      setRunSalary.execute(
+        { salary_run_id: 'run-1', employee_id: 'emp-2', monthly_salary: 1, hours_worked: 1 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/exactly one of monthly_salary or hours_worked/)
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+})
+
 describe('gnubok_update_salary_run', () => {
   const RUN_ROW = {
     id: 'run-1',
