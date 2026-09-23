@@ -86,7 +86,8 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const body = useSWR(hasBody && !locked ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
 
   function copyFull() {
-    const text = body.data
+    // Kvittojakten's body lives in an extension core cannot read: copy the prompt that loads it.
+    const text = hasBody ? body.data : prompt
     const copying = text && navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('Nothing to copy'))
     void copying.then(() => setFullCopy('copied'), () => setFullCopy('failed'))
   }
@@ -127,7 +128,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
             <div className="flex flex-col gap-2">
               <div className={styles.nightBtns}>
                 <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
-                {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>}
+                <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>
                 {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
                 {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
               </div>
