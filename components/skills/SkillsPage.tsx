@@ -346,12 +346,12 @@ function Registry({ companyId }: { companyId: string }) {
             >
               <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
                 <span className={styles.faceTop}>
+                  <SkillMarks id={skill.id} />
                   {doNow.has(skill.id) && <span className={styles.now}>{t('now_tag')}</span>}
                   <span className={styles.led} aria-hidden />
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
-                <SkillMarks id={skill.id} />
               </button>
             </div>
           ))}
