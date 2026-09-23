@@ -13,14 +13,21 @@
  *   npx tsx scripts/backtest-categorize.ts [N]
  *   rm .env.local
  *
- * Consent: only companies with company_settings.data_analysis_opt_in = true
- * are read (#1346). This script goes beyond booking outcomes: it reads each
+ * Scope: this script does NOT run on live customer books. It reads each
  * transaction's description, merchant name and matched underlag (via
- * gatherUnderlag) and sends them to the model again, so the consent copy in
- * messages/*.json (data_analysis.settings_toggle_help) explicitly names
- * "evaluation runs" with exactly those inputs. Do not add inputs here that
- * the copy does not name. Nobody is opted in by default, so an empty run is
- * the expected state until an admin flips the toggle in Inställningar > Företag.
+ * gatherUnderlag) and sends all of it back through the model, which is
+ * identifiable bookkeeping content, not anonymous telemetry. The anonymised
+ * statistical data the customer agreement covers does not stretch to that,
+ * and the DPA limits us to the controller's documented instructions.
+ *
+ * So the corpus is, by default, sandbox companies (seed data we own). To run
+ * against a real company you must name it explicitly:
+ *
+ *   BACKTEST_COMPANY_IDS=<uuid>,<uuid> npx tsx scripts/backtest-categorize.ts
+ *
+ * Only name a company that has a written agreement covering evaluation runs.
+ * The env var is the record that someone made that call deliberately; an
+ * unset run can never touch a customer's books.
  *
  * Leakage caveat: a known vendor's counterparty template may already reflect
  * the very booking under test, inflating the "deterministic nailed it" segment.
@@ -35,25 +42,44 @@ const CONCURRENCY = 4
 async function main() {
   const { createClient } = await import('@supabase/supabase-js')
   // Import after dotenv so lib/ai resolves the provider/model from .env.local.
-  const { gatherCandidates } = await import('../lib/agent/categorize/candidates')
-  const { gatherUnderlag } = await import('../lib/agent/categorize/underlag')
-  const { selectAccount } = await import('../lib/agent/categorize/select-account')
-  const { chunkCompanyIds, listDataAnalysisOptedInCompanyIds } = await import('../lib/company/data-analysis')
+  const { gatherCandidates } = await import('../src/lib/agent/categorize/candidates')
+  const { gatherUnderlag } = await import('../src/lib/agent/categorize/underlag')
+  const { selectAccount } = await import('../src/lib/agent/categorize/select-account')
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
   const supabase = createClient(url, key)
 
-  // Consent gate (#1346): only companies that opted in to data analysis.
-  const optedInIds = await listDataAnalysisOptedInCompanyIds(supabase)
-  if (optedInIds.length === 0) {
-    console.log('\nNo company has opted in to data analysis (company_settings.data_analysis_opt_in). Nothing to backtest.')
+  // Named companies (written agreement required) or, by default, our own
+  // sandbox seed data. Never the whole fleet.
+  const named = (process.env.BACKTEST_COMPANY_IDS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  let companyIds: string[]
+  if (named.length > 0) {
+    companyIds = named
+    console.log(`Backtesting ${named.length} explicitly named company(ies). Each must be covered by a written agreement.`)
+  } else {
+    const { data: sandboxes, error: sandboxError } = await supabase
+      .from('company_settings')
+      .select('company_id')
+      .eq('is_sandbox', true)
+    if (sandboxError) throw sandboxError
+    companyIds = (sandboxes ?? []).map((r) => r.company_id as string)
+    console.log(`No BACKTEST_COMPANY_IDS set: backtesting ${companyIds.length} sandbox company(ies).`)
+  }
+  if (companyIds.length === 0) {
+    console.log('\nNothing to backtest. Set BACKTEST_COMPANY_IDS to a company covered by a written agreement, or seed a sandbox company.')
     return
   }
 
   // Recent booked expense transactions with a counterparty. Queried per chunk
   // of company ids (`.in()` lives in the GET query string), then merged and
   // re-cut to the N most recent overall.
+  const CHUNK = 100
+  const chunks: string[][] = []
+  for (let i = 0; i < companyIds.length; i += CHUNK) chunks.push(companyIds.slice(i, i + CHUNK))
   type Tx = {
     id: string
     company_id: string
@@ -68,7 +94,7 @@ async function main() {
     created_at: string
   }
   const candidatesByChunk: Tx[] = []
-  for (const chunk of chunkCompanyIds(optedInIds)) {
+  for (const chunk of chunks) {
     const { data: txs, error } = await supabase
       .from('transactions')
       .select('id, company_id, merchant_name, description, original_description, amount, date, currency, document_id, journal_entry_id, created_at')

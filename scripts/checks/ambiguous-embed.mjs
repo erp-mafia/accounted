@@ -327,16 +327,17 @@ function walk(dir, out) {
 }
 
 /** Findings across the repo, as `{ where, from, target }`, sorted. */
-export function findAmbiguousEmbeds(root) {
+export function findAmbiguousEmbeds(root, sourceRoot = root) {
   const ambiguousPairs = deriveAmbiguousPairs(path.join(root, 'supabase', 'migrations'))
   if (ambiguousPairs.size === 0) return []
 
   const findings = []
   for (const dir of SCAN_DIRS) {
-    for (const file of walk(path.join(root, dir), [])) {
+    const scanRoot = dir === 'scripts' ? root : sourceRoot
+    for (const file of walk(path.join(scanRoot, dir), [])) {
       const sourceText = fs.readFileSync(file, 'utf8')
       if (!sourceText.includes('.select(')) continue
-      const relPath = path.relative(root, file).split(path.sep).join('/')
+      const relPath = path.relative(scanRoot, file).split(path.sep).join('/')
       for (const finding of findAmbiguousEmbedsInSource(sourceText, file, ambiguousPairs)) {
         findings.push({
           where: `${relPath}:${finding.line}`,

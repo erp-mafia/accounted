@@ -58,6 +58,8 @@ Systemdokumentationen ska förvaras tillsammans med övrig räkenskapsinformatio
 3.4. Företagsspecifika anpassningar av kontoplanen:
 [BESKRIV EVENTUELLA TILLAGDA ELLER BORTTAGNA KONTON, t.ex. "Konto 4010 Inköp varor, 5010 Lokalhyra har lagts till. Inga standardkonton har tagits bort."]
 
+3.5. Vid SIE-import kan oanvända kontodefinitioner i klass 0 och 9 bevaras. Konton med belopp måste mappas till konton 1000-8999 innan importen startas, eftersom Accounteds ekonomiska rapporter inte har stöd för dessa målklasser. Detta är en begränsning i programmet. Källfil och kontomappningar bevaras i importarkivet. Säkerhetsbackupens systemdokumentation innehåller den aktuella kontoplanens namn, kontoklasser, SRU-kopplingar och beskrivningar.
+
 ## 4. Samlingsplan (BFNAR 2013:2 punkt 9.2 c, 9.4, 9.11)
 
 Samlingsplanen beskriver hur bokföringen är organiserad i form av delsystem, grundbokföring och huvudbokföring.
@@ -122,6 +124,12 @@ Följande delsystem matar journalen:
 
 [STRYK DE DELSYSTEM SOM INTE ANVÄNDS I DITT FÖRETAG]
 
+Öresavrundning är avstängd som standard för nya leverantörsfakturor oavsett företagsinställning. Användaren väljer avrundning när den finns på leverantörens faktura. Redan inlästa avrundningsrader behålls även när valet är avstängt. När avrundning väljs sparas den som en separat fakturarad på konto 3740 utan moms. Raden ingår i fakturabeloppet och bokförs vid registrering enligt faktureringsmetoden eller vid betalning enligt kontantmetoden. Avrundningen ändrar inte momsbeloppet eller beskattningsunderlaget för omvänd skattskyldighet. Regeln införs med programversionen för PR #2849; version och första observerade driftsättning visas i behandlingshistoriken. Äldre fakturor med enbart visningsavrundning ändras inte.
+
+Enligt kontantmetoden bokförs leverantörsfakturan vid betalningen, och betalkontot krediteras med det belopp som faktiskt lämnade banken. När en banktransaktion i SEK matchas mot fakturan och beloppet avviker mindre än 1 krona från fakturabeloppet bokförs mellanskillnaden på konto 3740 utan moms och fakturan blir slutbetald; en avvikelse på 1 krona eller mer är en delbetalning och avvisas. När betalningen registreras utan banktransaktion och fakturan har enbart visningsavrundning krediteras betalkontot med det avrundade beloppet att betala och mellanskillnaden bokförs på 3740. Kostnad och ingående moms bokförs alltid med fakturans exakta belopp. Regeln för kontantmetoden infördes med ärende #2852; redan bokförda verifikationer ändras inte.
+
+Undantaget från beskattningsunderlaget gäller bara fakturor i SEK och rader på 3740 med momssats 0 och absolutbelopp högst 0,50 kronor. Det avgränsar regeln till avrundning som editorn kan skapa, inte en allmän momstolerans. Större belopp, andra valutor och rader med annan momssats behåller tidigare behandling.
+
 ### 4.5 Dimensioner
 
 [OM KOSTNADSSTÄLLEN ELLER PROJEKT ANVÄNDS: konteringsrader kan märkas med dimensionsvärden för uppföljning per kostnadsställe eller projekt. Dimensionerna påverkar inte huvudbokföringens saldon. Ses under **Data > Kostnadsställen & projekt**. STRYK DETTA AVSNITT OM DIMENSIONER INTE ANVÄNDS.]
@@ -129,6 +137,12 @@ Följande delsystem matar journalen:
 ### 4.6 Avstämningsordning
 
 Bankkonto 1930 avstäms via bankavstämningsmodulen (flerstegs matchning: exakt belopp och datum, referensmatchning, datumintervall, sannolikhetsmatchning). Avstämningsstatus visas under **Rapporter > Bankavstämning**.
+
+### 4.7 Leverantörsbetalningens belopp och öresavrundning
+
+Vid bankmatchning anger betalningsraden (`supplier_invoice_payments.amount`) den reglerade skulden i fakturans valuta. Banktransaktionen och verifikatets betalningskonto visar faktiskt utbetalt belopp. Vid öresavrundning av en SEK-betalning som reglerar 2440 bokförs skillnaden på 3740: kredit när utbetalningen är lägre än skulden, debet när den är högre.
+
+PR #2850 rättar betalningsradens belopp för nya matchningar från den programversion som innehåller rättningen. Programversionens första registrerade drifttid framgår av Behandlingshistorik (`app_releases`). Betalningsdatumet är inte ändringens driftdatum. Äldre avrundade bankmatchningar kan ha sparat utbetalt belopp i stället för reglerad skuld, vilket kan påverka historiska reskontror och återföringar. Dessa rader och redan avvikande fakturasaldon ändras inte automatiskt. Vid granskning jämförs raden med betalningsverifikatet och banktransaktionen. Äldre delbetalningar utan avrundning har samma belopp enligt båda reglerna.
 
 ## 5. Verifikationer
 

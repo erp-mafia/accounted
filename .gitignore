@@ -57,11 +57,8 @@ supabase/.temp/
 # scripts/inject-public-branding.mjs: runs via predev/prebuild)
 /public/sw.js
 
-# dev docs (internal reference, not published): EXCEPT the iXBRL taxonomy
-# sources and the official Bolagsverket example, which CI needs: the committed
-# lib/bokslut/ixbrl/taxonomy/generated/ registry is regenerated from them by
-# `npm run taxonomy:check` (core-build.yml) and the golden test pins against
-# the example document.
+# Local internal notes and private fixtures stay untracked. Published reference
+# inputs for taxonomy generation and golden tests live in docs/reference/.
 /dev_docs/*
 
 # supabase CLI branching state

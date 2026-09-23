@@ -211,8 +211,16 @@ export const bankSyncResponseSchema = z.object({
 })
 export type BankSyncResponse = z.infer<typeof bankSyncResponseSchema>
 
-/** Error codes specific to the bank sync operation. */
-export const BANK_SYNC_ERROR_CODES = ['CONNECTOR_BANK_SESSION_EXPIRED', 'CONNECTOR_BANK_UPSTREAM_ERROR'] as const
+/**
+ * Error codes specific to the bank sync operation. CONNECTOR_BANK_RATE_LIMITED
+ * is the BANK's 429 (not the service's own budget, CONNECTOR_RATE_LIMITED):
+ * answered with HTTP 429 and the bank's Retry-After header when it sent one.
+ */
+export const BANK_SYNC_ERROR_CODES = [
+  'CONNECTOR_BANK_SESSION_EXPIRED',
+  'CONNECTOR_BANK_UPSTREAM_ERROR',
+  'CONNECTOR_BANK_RATE_LIMITED',
+] as const
 
 // ---------------------------------------------------------------------------
 // Peppol operations (installation -> service, /api/connect/peppol/*)
