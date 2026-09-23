@@ -74,8 +74,8 @@
 .intro h2 { font-family: var(--font-fraunces), var(--font-display), Georgia, serif; font-weight: 300; font-size: clamp(40px, 5.6vw, 72px); line-height: 1; letter-spacing: -.035em; color: #FAF8F1; text-wrap: balance; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 40px 20px; }
 
-.card { position: relative; border-radius: 8px; --fire: .45; }
-.card:hover { --fire: .7; }
+.card { position: relative; border-radius: 8px; --fire: .7; }
+.card:hover { --fire: 1; }
 .face {
   position: relative;
   z-index: 1;
@@ -111,13 +111,13 @@
 .card[data-lit]::before {
   content: "";
   position: absolute;
-  inset: -14px;
-  border-radius: 18px;
+  inset: -16px;
+  border-radius: 20px;
   z-index: 0;
   pointer-events: none;
   background: conic-gradient(from var(--ang), transparent 0 28%, rgba(255, 255, 255, .95) 50%, transparent 72% 100%);
-  filter: blur(18px);
-  opacity: calc(.8 * var(--fire));
+  filter: blur(20px);
+  opacity: calc(.9 * var(--fire));
   animation: spin 5s linear infinite;
   animation-delay: calc(var(--i) * -1.7s);
   transition: opacity .4s, inset .4s;
@@ -126,7 +126,7 @@
   animation: spin 5s linear infinite, ignite 1.6s ease-out;
   animation-delay: calc(var(--i) * -1.7s), 0s;
 }
-.card[data-lit]:hover::before { inset: -18px; }
+.card[data-lit]:hover::before { inset: -22px; }
 
 /* Skapa din egen: a glass key on the photo, dashed until touched, beside the two burning ones */
 @keyframes plusglow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(var(--rf), .5); } 50% { box-shadow: 0 0 18px 5px rgba(var(--rf), 1); } }
@@ -146,6 +146,7 @@
   color: #fff;
   text-align: left;
   cursor: pointer;
+  overflow: hidden;
   transition: background-color .2s, border-color .2s, transform .22s cubic-bezier(.2, .8, .2, 1.3);
 }
 .createFace:hover:not(:disabled) { border-style: solid; border-color: #fff; background: rgba(15, 30, 38, .58); transform: translate(-3px, -3px); }
@@ -154,10 +155,16 @@
 .createFace:disabled { opacity: .5; cursor: default; }
 .createFace h3 { font-weight: 500; font-size: 16px; line-height: 22px; letter-spacing: -.01em; color: #fff; }
 .createFace p { font-size: 13px; line-height: 19px; color: rgba(255, 255, 255, .8); }
-.createPlus { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 99px; background: #fff; color: var(--ground); animation: plusglow 2.8s ease-in-out infinite; }
+.createPlus { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 99px; background: #fff; color: var(--ground); animation: plusglow 2.8s ease-in-out infinite; transition: transform .35s cubic-bezier(.2, .8, .2, 1.3); }
+.createFace:hover:not(:disabled) .createPlus { transform: rotate(90deg) scale(1.1); }
 .createPlus[data-lit] { animation: none; box-shadow: 0 0 22px 7px rgba(var(--rf), 1); transition: box-shadow .3s; }
 .createCta { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 99px; background: #fff; color: #171717; font-size: 13px; font-weight: 500; transition: gap .2s; }
 .createFace:hover:not(:disabled) .createCta { gap: 10px; }
+/* a soft Himmel light breathes behind the create key, and a sheen crosses it now and then */
+@keyframes createbreathe { 0%, 100% { opacity: .25; transform: scale(.97); } 50% { opacity: .6; transform: scale(1.02); } }
+@keyframes sheen { 0%, 70% { transform: translateX(-120%) skewX(-18deg); } 100% { transform: translateX(260%) skewX(-18deg); } }
+.createCard::before { content: ""; position: absolute; inset: -12px; z-index: 0; border-radius: 18px; pointer-events: none; background: radial-gradient(closest-side, rgba(var(--rf), .9), rgba(var(--rf), 0)); filter: blur(14px); animation: createbreathe 4.2s ease-in-out infinite; }
+.createFace::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 40%; pointer-events: none; background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .16), transparent); animation: sheen 6s ease-in-out infinite; }
 
 .spark {
   position: absolute;
