@@ -31,6 +31,9 @@
   --ntext: #F4F2EC;
   --nmuted: #B5B2A9;
   --nline: rgba(255, 255, 255, .13);
+  /* the keys' offset shadow: the border tone, a step darker */
+  --edge: color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%);
+  --edgeHover: color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 26%);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -87,11 +90,11 @@
   opacity: .35;
   cursor: pointer;
   background: hsl(var(--background));
-  box-shadow: 5px 5px 0 hsl(var(--border));
+  box-shadow: 5px 5px 0 var(--edge);
   transition: opacity .35s, transform .22s cubic-bezier(.2, .8, .2, 1.3), box-shadow .22s cubic-bezier(.2, .8, .2, 1.3);
 }
-.face:hover { transform: translate(-3px, -3px); box-shadow: 8px 8px 0 hsl(var(--border)); }
-.face:active, .card[data-down] .face { transition-duration: .35s, .08s, .08s; transform: translate(4px, 4px); box-shadow: 1px 1px 0 hsl(var(--border)); }
+.face:hover { transform: translate(-3px, -3px); box-shadow: 8px 8px 0 var(--edge); }
+.face:active, .card[data-down] .face { transition-duration: .35s, .08s, .08s; transform: translate(4px, 4px); box-shadow: 1px 1px 0 var(--edge); }
 .face:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
 .face h3 { font-weight: 500; font-size: 16px; line-height: 22px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
 .face p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -171,11 +174,11 @@
   border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   background: hsl(var(--background));
-  box-shadow: 4px 4px 0 hsl(var(--border));
+  box-shadow: 4px 4px 0 var(--edge);
   transition: transform .22s cubic-bezier(.2, .8, .2, 1.3), box-shadow .22s cubic-bezier(.2, .8, .2, 1.3), border-color .22s;
 }
-.row:hover { transform: translate(-3px, -3px); border-color: hsl(var(--foreground) / .28); box-shadow: 7px 7px 0 hsl(var(--foreground) / .16); }
-.row:has(.rowMain:active) { transition-duration: .08s; transform: translate(3px, 3px); box-shadow: 1px 1px 0 hsl(var(--foreground) / .12); }
+.row:hover { transform: translate(-3px, -3px); border-color: hsl(var(--foreground) / .28); box-shadow: 7px 7px 0 var(--edgeHover); }
+.row:has(.rowMain:active) { transition-duration: .08s; transform: translate(3px, 3px); box-shadow: 1px 1px 0 var(--edge); }
 .row:has(.rowMain:focus-visible) { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
 /* the brands a skill works with: Gmail, Skatteverket, the connected banks */
 .marks { display: flex; align-items: center; margin-top: auto; padding-top: 6px; }
