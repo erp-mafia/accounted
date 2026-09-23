@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import useSWR from 'swr'
+import dynamic from 'next/dynamic'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
@@ -11,6 +12,14 @@ import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/on
 import { registrySkillHasBody, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
+
+// The markdown parser loads only when someone opens the full instruction.
+const MarkdownMessage = dynamic(() => import('@/components/agent/MarkdownMessage'))
+
+/** The instruction without its YAML frontmatter, which is for the AI, not the reader. */
+function withoutFrontmatter(body: string): string {
+  return body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
+}
 
 export type SheetTarget =
   | { kind: 'registry'; id: RegistrySkillId; locked: boolean }
@@ -100,7 +109,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
       </div>
       <div className={styles.sheetMain}>
         {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
-        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <pre className={styles.fullText} data-ph-mask={own ? '' : undefined}>{body.data ?? ''}</pre>)}
+        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <div className={styles.doc} data-ph-mask={own ? '' : undefined}><MarkdownMessage text={withoutFrontmatter(body.data ?? '')} /></div>)}
       </div>
       <div className={styles.sheetFoot}>
         <div className={styles.promptbox}>
