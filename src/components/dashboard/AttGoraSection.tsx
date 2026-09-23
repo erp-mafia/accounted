@@ -541,7 +541,7 @@ export default function AttGoraSection({
                     )}
                     {counts.document_relevance > 0 && (
                       <WorklistRow
-                        href="/arkiv/granska"
+                        href="/arkiv"
                         icon={FileQuestion}
                         label={t('row_document_relevance')}
                         hint={t('row_document_relevance_detail')}
@@ -550,7 +550,7 @@ export default function AttGoraSection({
                     )}
                     {counts.document_unclassified > 0 && (
                       <WorklistRow
-                        href="/arkiv/granska#typ"
+                        href="/arkiv"
                         icon={FileQuestion}
                         label={t('row_document_unclassified')}
                         count={counts.document_unclassified}

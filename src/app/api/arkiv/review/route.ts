@@ -4,7 +4,7 @@ import type { FieldReviewDocument, ReviewDocument } from '@/lib/arkiv/questions'
 import type { Payload } from '@/lib/documents/extract/fields'
 import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -18,7 +18,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 export type { ReviewDocument, FieldReviewDocument, FieldQuestion, ReviewData } from '@/lib/arkiv/questions'
 
 export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const { data: held, error: heldError } = await ctx.supabase
     .from('document_attachments')

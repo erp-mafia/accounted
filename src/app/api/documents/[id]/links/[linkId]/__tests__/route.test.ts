@@ -26,10 +26,6 @@ beforeEach(() => {
 })
 
 describe('DELETE /api/documents/[id]/links/[linkId]', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
-  })
 
   it('retires a live link of the company\'s document, and answers 404 when none is live', async () => {
     service.enqueue({ data: [{ id: LINK }] })

@@ -14,6 +14,7 @@ import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { primaryFields, schemaForType } from '@/lib/documents/extract/schemas'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
+import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
 import { useFieldLabel } from './useFieldLabel'
@@ -162,11 +163,15 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         </Section>
       )}
 
-      <div className="grid gap-x-10 gap-y-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+      <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
+        {/* The document itself, first: what was read from it sits beside it. */}
+        <div className="lg:sticky lg:top-4 lg:self-start">
+          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} page={initialPage} className="h-[72vh]" />
+        </div>
+        <div className="space-y-8">
+        {view.record && (
         <Section title={t('record_fields')} help={t('record_fields_help')}>
-          {!view.record ? (
-            <p className="text-[13px] text-muted-foreground">{t('record_no_record')}</p>
-          ) : (
+          {(
             <DefList className="text-[13px]">
               {fields.map((f) => {
                 const fact = factOfField.get(f.field)
@@ -226,8 +231,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
             </table>
           )}
         </Section>
-
-        <div className="space-y-8">
+        )}
           {loose.length > 0 && (
             <Section title={t('record_facts')} help={t('facts_help')}>
               <DefList className="text-[13px]">

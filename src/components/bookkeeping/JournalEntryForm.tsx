@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -1354,25 +1355,15 @@ export default function JournalEntryForm({
         </span>
       </div>
 
-      {(monthChanged || selectedPeriodLocked) && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-          <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-attn space-y-0.5">
-            {monthChanged && (
-              <p className="font-medium">
-                {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
-              </p>
-            )}
-            {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-          </div>
-        </div>
+      {/* Attention as ochre sentences (convention 6), not boxed banners. */}
+      {monthChanged && (
+        <AttnLine>
+          {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
+        </AttnLine>
       )}
-
+      {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm text-attn">
-          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
-          <p>{t('no_doc_body')}</p>
-        </div>
+        <AttnLine>{t('no_doc_body')}</AttnLine>
       )}
 
       <JournalEntryReviewContent
@@ -2155,19 +2146,16 @@ export default function JournalEntryForm({
         warningText={embedded ? '' : t('review_warning')}
       >
         {(monthChanged || selectedPeriodLocked) && (
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-attn space-y-0.5">
-              {monthChanged && (
-                <p className="font-medium">
-                  {t('review_month_changed', {
-                    prev: monthLabel(lastPostedMonth as string),
-                    current: monthLabel(entryMonth),
-                  })}
-                </p>
-              )}
-              {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-            </div>
+          <div className="mb-4 space-y-1">
+            {monthChanged && (
+              <AttnLine>
+                {t('review_month_changed', {
+                  prev: monthLabel(lastPostedMonth as string),
+                  current: monthLabel(entryMonth),
+                })}
+              </AttnLine>
+            )}
+            {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
           </div>
         )}
         <JournalEntryReviewContent

@@ -25,10 +25,6 @@ beforeEach(() => {
 })
 
 describe('GET /api/arkiv/search', () => {
-  it('is 404 outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call('?q=hyra'))).status).toBe(404)
-  })
 
   it('is 400 for a query too short, or a kind it does not know', async () => {
     expect((await parseJsonResponse(await call('?q=h'))).status).toBe(400)

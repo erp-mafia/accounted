@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getDashboardCompanyId } from '../../request-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { ArkivReview } from '@/components/arkiv/ArkivReview'
 
 /**
@@ -11,6 +11,6 @@ import { ArkivReview } from '@/components/arkiv/ArkivReview'
  */
 export default async function ArkivReviewPage() {
   const companyId = await getDashboardCompanyId()
-  if (!companyId || !isArkivEnabled(companyId)) notFound()
+  if (!companyId || !isArkivBrainEnabled(companyId)) notFound()
   return <ArkivReview />
 }

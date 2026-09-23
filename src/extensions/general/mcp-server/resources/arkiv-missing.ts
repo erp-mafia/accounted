@@ -1,5 +1,5 @@
 import type { McpResource } from './types'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { EXPECTATION_RULES } from '@/lib/arkiv/lint/checks'
 
 /**
@@ -23,7 +23,7 @@ export const arkivMissingResource: McpResource = {
     'Documents the bookkeeping says should exist but the archive lacks (a loan with interest but no loan agreement, rent paid but no rental agreement), each with its evidence, where it usually lives, and the intake address to forward it to. Close one with gnubok_resolve_missing.',
   mimeType: 'application/json',
   read: async ({ supabase, companyId }) => {
-    if (!isArkivEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
+    if (!isArkivBrainEnabled(companyId)) return { enabled: false, reason: 'Arkiv is not switched on for this company.' }
     const [findings, inbox] = await Promise.all([
       supabase
         .from('arkiv_findings')

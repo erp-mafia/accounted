@@ -12,7 +12,7 @@ import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 type Call = { table: string; op: string; payload?: unknown; filters: Record<string, unknown> }
 
 // A minimal chainable Supabase double that records every write and answers
-// the three backfill selects (rollout unread, retry, everyone's unread) with the rows given.
+// the backfill selects (retry, everyone's unread; the rollout select is gone) with the rows given.
 function makeSupabase(unread: Array<Record<string, unknown>> = [], retry: Array<Record<string, unknown>> = [], rollout: Array<Record<string, unknown>> = []) {
   const calls: Call[] = []
   const chain = (table: string) => {
@@ -91,13 +91,12 @@ describe('readAndStoreDocument', () => {
     expect(calls[0].payload).toMatchObject({ read_error: 'ai_unconfigured', page_count: 0 })
   })
 
-  it('reads text layers for a company outside the rollout but never calls the model', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
+  it('lets the model at a document of any company: the shelf is on for everyone', async () => {
     asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('%PDF-')]), error: null, resolvedPath: 'p' })
     asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'pdf_text', pageCount: 2, partial: 'ai_gated', pages: [{ pageNo: 1, text: 'a', reader: 'pdf_text', hasTextLayer: true }] })
     const { supabase, calls } = makeSupabase()
     const out = await readAndStoreDocument(supabase, doc)
-    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'application/pdf', { allowModel: false, maxModelPages: null })
+    expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'application/pdf', { allowModel: true, maxModelPages: null })
     expect(out).toEqual({ status: 'read', pages: 1, reader: 'pdf_text', partial: 'partial:ai_gated' })
     expect(calls.at(-1)!.payload).toMatchObject({ read_error: 'partial:ai_gated', page_count: 2 })
   })
@@ -151,32 +150,23 @@ describe('storableText', () => {
 describe('readUnreadDocuments', () => {
   beforeEach(() => { vi.clearAllMocks(); process.env.ARKIV_COMPANY_IDS = 'co-1' })
 
-  it('retries gated rows of the rollout companies, asking only for theirs', async () => {
+  it('retries the gated rows of every company, asking for no company in particular', async () => {
     asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
     asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'claude_vision', pageCount: 1, pages: [{ pageNo: 1, text: 't', reader: 'claude_vision', hasTextLayer: false }] })
     const { supabase, calls } = makeSupabase([], [{ ...doc, id: 'r1', mime_type: 'image/jpeg' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 1, read: 1, skipped: 0, errors: 0 })
     expect(readDocumentBytes).toHaveBeenCalledTimes(1)
     expect(readDocumentBytes).toHaveBeenCalledWith(expect.any(Buffer), 'image/jpeg', { allowModel: true, maxModelPages: null })
-    expect(calls.find((c) => c.op === 'select-retry')?.filters.company_id).toEqual(['co-1'])
+    expect(calls.find((c) => c.op === 'select-retry')?.filters.company_id).toBeUndefined()
   })
 
-  it('reads the rollout companies before everyone else, so a company switched on today is not behind the platform', async () => {
-    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
-    asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'pdf_text', pageCount: 1, pages: [{ pageNo: 1, text: 't', reader: 'pdf_text', hasTextLayer: true }] })
-    const others = [{ ...doc, id: 'o1', company_id: 'other' }, { ...doc, id: 'o2', company_id: 'other' }, { ...doc, id: 'o3', company_id: 'other' }]
-    const { supabase, calls } = makeSupabase(others, [], [{ ...doc, id: 'mine-1' }, { ...doc, id: 'mine-2' }])
-    expect(await readUnreadDocuments(supabase, 3)).toEqual({ processed: 3, read: 3, skipped: 0, errors: 0 })
-    const stamped = calls.filter((c) => c.table === 'document_attachments' && c.op === 'update').map((c) => c.filters.id)
-    expect(stamped).toEqual(['mine-1', 'mine-2', 'o1'])
-    expect(calls.find((c) => c.op === 'select-rollout')?.filters.company_id).toEqual(['co-1'])
-  })
 
-  it('asks for no rollout or retry rows when nobody is in the rollout', async () => {
-    delete process.env.ARKIV_COMPANY_IDS
+  it('never asks for rollout rows: nobody goes first now that the shelf is on for everyone', async () => {
     const { supabase, calls } = makeSupabase([{ ...doc, mime_type: 'application/xml' }])
     expect(await readUnreadDocuments(supabase, 10)).toEqual({ processed: 1, read: 0, skipped: 1, errors: 0 })
-    expect(calls.filter((c) => c.op.startsWith('select')).map((c) => c.op)).toEqual(['select'])
+    const ops = calls.filter((c) => c.op.startsWith('select')).map((c) => c.op)
+    expect(ops).not.toContain('select-rollout')
+    expect(ops.at(-1)).toBe('select')
   })
 
   it('stops between documents once the time budget is spent', async () => {

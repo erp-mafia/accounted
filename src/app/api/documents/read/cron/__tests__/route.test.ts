@@ -42,8 +42,7 @@ describe('GET /api/documents/read/cron', () => {
     delete process.env.ARKIV_BACKFILL_PAGES_PER_DAY
   })
 
-  it('queues the classification of an untyped document read inside the rollout, and nothing outside it', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'co-1'
+  it('queues the classification of every untyped document it read, whichever company: the shelf is on for everyone', async () => {
     ;(readUnreadDocuments as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, _n: number, opts: { onRead: (doc: Record<string, unknown>) => Promise<void> }) => {
       await opts.onRead({ id: 'd1', company_id: 'co-1', doc_type: null })
       await opts.onRead({ id: 'd2', company_id: 'co-1', doc_type: 'receipt' })
@@ -51,8 +50,8 @@ describe('GET /api/documents/read/cron', () => {
       return { processed: 3, read: 3, skipped: 0, errors: 0 }
     })
     await GET(new Request('http://localhost/api/documents/read/cron'))
-    expect(enqueueDocumentJob).toHaveBeenCalledTimes(1)
+    expect(enqueueDocumentJob).toHaveBeenCalledTimes(2)
     expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'co-1', 'd1', 'classify')
-    delete process.env.ARKIV_COMPANY_IDS
+    expect(enqueueDocumentJob).toHaveBeenCalledWith({ tag: 'service' }, 'co-2', 'd3', 'classify')
   })
 })

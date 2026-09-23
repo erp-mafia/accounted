@@ -28,10 +28,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/documents/[id]/links', () => {
-  it('is 404 outside the rollout and lists the live links inside it', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await get())).status).toBe(404)
-    process.env.ARKIV_COMPANY_IDS = 'company-1'
+  it('lists the live links', async () => {
     enqueue({ data: [{ id: 'l1', target_kind: 'party', target_id: 'p1', basis: 'proven', method: 'org_number', confidence: 1, created_at: '2026-09-15T00:00:00Z' }] })
     const { status, body } = await parseJsonResponse(await get())
     expect(status).toBe(200)

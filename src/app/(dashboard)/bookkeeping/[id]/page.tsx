@@ -10,7 +10,6 @@ import { Textarea } from '@/components/ui/textarea'
 import {
   Loader2,
   ArrowLeft,
-  AlertTriangle,
   Lock,
   Pencil,
   Copy,
@@ -537,11 +536,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // "Utkast till verifikat" while the number is still unassigned.
   const title = entry.status === 'draft' ? t('title_draft') : t('title', { label: formatVoucher(entry) })
 
-  const metaParts = [
-    formatDate(entry.entry_date),
-    entry.description,
-    entry.committed_at ? t('posted_on', { date: formatDate(entry.committed_at) }) : null,
-  ].filter(Boolean)
+  // The posting date lives once, in Detaljer ("Bokförd"), not also here.
+  const metaParts = [formatDate(entry.entry_date), entry.description].filter(Boolean)
 
   // Header actions (convention 9): the one next step as a filled button, at
   // most a couple of quiet secondaries, everything else in the ⋯ menu. The
@@ -1271,15 +1267,11 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         }
         confirmLabel={t('delete_confirm_label')}
       >
-        <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4">
-          <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('delete_dialog_heading')}</p>
-            <p className="text-muted-foreground">
-              {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
-            </p>
-          </div>
-        </div>
+        {/* Plain consequence text: the title names the action and the attn
+            line carries the warning, so no second boxed banner. */}
+        <p className="text-sm text-muted-foreground">
+          {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
+        </p>
       </ConfirmationDialog>
 
       {/* Reverse (storno) confirmation dialog */}
@@ -1292,12 +1284,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         warningText={t('reverse_warning')}
         confirmLabel={t('reverse_confirm_label')}
       >
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
-            <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
-          </div>
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('reverse_dialog_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
         </div>
       </ConfirmationDialog>
 
@@ -1312,12 +1301,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         warningText={t('deep_chain_body', { depth: reverseDeepChainDepth ?? 3 })}
         confirmLabel={t('deep_chain_reverse_anyway')}
       >
-        <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-          <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="font-medium mb-1">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
-            <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
-          </div>
+        <div className="space-y-1 text-sm">
+          <p className="font-medium">{t('deep_chain_reverse_heading', { voucher: formatVoucher(entry) })}</p>
+          <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
         </div>
       </ConfirmationDialog>
     </div>

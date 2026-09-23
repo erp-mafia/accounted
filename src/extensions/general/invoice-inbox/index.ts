@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { routeClassifiedDocument } from './lib/route-from-arkiv'
+import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import type { EventPayload } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 const extensionLog = createLogger('invoice-inbox')
@@ -723,7 +724,9 @@ export const invoiceInboxExtension: Extension = {
           }
         })
 
-        return NextResponse.json({ data: { items, count: items.length } })
+        // arkiv_section: whether the Dokument section is open for this company, so the
+        // "routed to the archive" line links there only when the link leads somewhere.
+        return NextResponse.json({ data: { items, count: items.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
       },
     },
 

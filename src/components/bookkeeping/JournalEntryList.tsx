@@ -41,9 +41,10 @@ import {
   VTD_CLASS,
   QUIET_LINK_CLASS,
   CHECKBOX_REVEAL_CLASS,
+  HOVER_REVEAL_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -1696,11 +1697,11 @@ export default function JournalEntryList({
                                 // p-2 grows the tap target to 30px without
                                 // changing row height (the row is ~40px from
                                 // the description cell).
-                                'inline-flex items-center rounded-sm p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
-                                // Quiet at rest on desktop, but the table has no
-                                // mobile card to fall back on, so touch keeps the
-                                // icon visible.
-                                'opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100',
+                                'inline-flex items-center rounded-sm p-2 text-muted-foreground hover:text-foreground',
+                                // Quiet at rest; coarse pointers (phones and
+                                // tablets) keep the icon visible, since the
+                                // table has no mobile card to fall back on.
+                                HOVER_REVEAL_CLASS,
                               )}
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1990,12 +1991,9 @@ export default function JournalEntryList({
           warningText={t('reverse_warning')}
           confirmLabel={t('reverse_confirm_label')}
         >
-          <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-            <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-            <div className="text-sm">
-              <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(reverseEntryTarget) })}</p>
-              <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
-            </div>
+          <div className="space-y-1 text-sm">
+            <p className="font-medium">{t('reverse_dialog_heading', { voucher: formatVoucher(reverseEntryTarget) })}</p>
+            <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
           </div>
         </ConfirmationDialog>
       )}

@@ -3040,8 +3040,8 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // on, instead of the generic "Något gick fel" that invites a retry.
   ARKIV_NOT_ENABLED: {
     httpStatus: 403,
-    message_sv: 'Arkiv är inte aktiverat för det här företaget ännu.',
-    message_en: 'Arkiv is not enabled for this company yet.',
+    message_sv: 'Företagshjärnan är inte aktiverad för det här företaget ännu. Arkivet fungerar som vanligt.',
+    message_en: 'The company brain is not switched on for this company yet. The archive works as usual.',
     retryable: false,
   },
   // Signed-URL (direct-to-storage) upload: completion found no object under

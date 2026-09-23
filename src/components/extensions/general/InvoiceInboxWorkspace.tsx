@@ -445,6 +445,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // from "the list is empty": with no list at all we know nothing about the
   // inbox and must not render an authoritative "Inkorgen är tom".
   const [routedToArkiv, setRoutedToArkiv] = useState<InboxItem[]>([])
+  // The Dokument section is not open for every company yet; without it the routed line has no link.
+  const [arkivSection, setArkivSection] = useState(false)
   // The questions Arkiv has about documents in this queue (phase 9d): asked in the
   // rail with one tap, so a person never has to go to Granska for them. Empty
   // outside the Arkiv rollout (the route is 404 there).
@@ -547,6 +549,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         return
       }
       const allItems: InboxItem[] = json.data?.items ?? []
+      setArkivSection(json.data?.arkiv_section === true)
       setRoutedToArkiv(allItems.filter((it) => it.routed_to_arkiv_at))
       const serverItems = allItems.filter((it) => !it.routed_to_arkiv_at)
       // Preserve optimistic upload placeholders that haven't resolved to a
@@ -1439,7 +1442,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
       {routedToArkiv.length > 0 && (
         <div className="mx-4 mt-3">
-          <AttnLine action={{ label: tArkiv('underlag_routed_open'), href: '/arkiv' }}>
+          <AttnLine action={arkivSection ? { label: tArkiv('underlag_routed_open'), href: '/arkiv' } : undefined}>
             {tArkiv('underlag_routed_line', {
               count: routedToArkiv.length,
               types: [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))]

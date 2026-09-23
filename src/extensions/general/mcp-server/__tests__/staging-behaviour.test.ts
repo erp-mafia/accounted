@@ -38,7 +38,7 @@ type Tool = (typeof tools)[number]
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 // Arkiv tools refuse a company outside the rollout before touching the database; the fixture company is in it.
-process.env.ARKIV_COMPANY_IDS = '11111111-1111-4111-8111-111111111111'
+process.env.ARKIV_BRAIN_COMPANY_IDS = '11111111-1111-4111-8111-111111111111'
 const USER_ID = '22222222-2222-4222-8222-222222222222'
 const SOME_UUID = '33333333-3333-4333-8333-333333333333'
 

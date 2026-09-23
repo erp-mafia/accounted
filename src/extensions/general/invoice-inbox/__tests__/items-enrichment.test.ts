@@ -99,6 +99,8 @@ describe('GET /items', () => {
       await route.handler(req(), buildCtx(supabase)),
     )
     expect(status).toBe(200)
+    // The Dokument section is closed for this company (ARKIV_COMPANY_IDS unset), so the routed line gets no link.
+    expect((body.data as { arkiv_section?: boolean }).arkiv_section).toBe(false)
     const byId = Object.fromEntries(body.data.items.map((i) => [i.id, i]))
 
     expect(byId.anchored).toMatchObject({ matched_transaction_journal_entry_id: JE1, underlag_status: 'anchored' })

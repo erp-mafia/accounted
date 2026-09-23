@@ -127,8 +127,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     requiresArkiv: true,
     sub: [
       { href: '/arkiv', labelKey: 'arkiv_all' },
-      { href: '/arkiv/avtal', labelKey: 'arkiv_agreements' },
-      { href: '/arkiv/myndighet', labelKey: 'arkiv_authority' },
+      { href: '/arkiv/historik', labelKey: 'arkiv_history' },
     ],
   },
   {

@@ -15,7 +15,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, RowFoldout } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, RowFoldout } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
@@ -268,19 +268,12 @@ export default function AccrualSchedulesPage() {
                         className="group cursor-pointer transition-colors duration-150 hover:bg-secondary/35"
                         onClick={() => toggleExpanded(schedule.id)}
                       >
+                        {/* One line per row (convention 4): the source
+                            invoice link lives in the foldout below. */}
                         <td className={cn(TD_CLASS, 'max-w-[320px]')}>
                           <span className="block truncate" title={schedule.description ?? ''}>
                             {schedule.description || '-'}
                           </span>
-                          {sourceHref && (
-                            <Link
-                              href={sourceHref}
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
-                            >
-                              {schedule.supplier_invoice_id ? 'Leverantörsfaktura' : 'Kundfaktura'}
-                            </Link>
-                          )}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
                           {schedule.balance_account} → {schedule.target_account}
@@ -313,10 +306,7 @@ export default function AccrualSchedulesPage() {
                                 e.stopPropagation()
                                 setDissolveTarget(schedule)
                               }}
-                              className={cn(
-                                QUIET_LINK_CLASS,
-                                'opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100',
-                              )}
+                              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
                             >
                               Lös upp nu
                             </button>
@@ -327,7 +317,12 @@ export default function AccrualSchedulesPage() {
                         <tr data-no-stagger className="hover:bg-transparent">
                           <td colSpan={7} className="border-b border-border bg-muted/30 p-0">
                             <RowFoldout>
-                              <div className="px-6 py-4">
+                              <div className="space-y-3 px-6 py-4">
+                                {sourceHref && (
+                                  <Link href={sourceHref} className={QUIET_LINK_CLASS}>
+                                    {schedule.supplier_invoice_id ? 'Leverantörsfaktura' : 'Kundfaktura'}
+                                  </Link>
+                                )}
                                 <table className="w-full text-sm">
                                   <thead>
                                     <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -389,11 +384,6 @@ export default function AccrualSchedulesPage() {
               </tbody>
             </table>
           </div>
-
-          <p className="px-1 text-xs leading-5 text-muted-foreground">
-            Månadens andel bokförs automatiskt den sista dagen i varje månad. Öppna en rad
-            för att se varje månads verifikat.
-          </p>
         </>
       )}
 

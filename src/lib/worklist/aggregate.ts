@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 import type { WorklistCounts } from './types'
 import type { MissingUnderlagSample } from './missing-underlag'
+import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import {
   countDeadlinesNeedingAction,
   countExpensePayoutsDue,
@@ -66,6 +67,10 @@ export async function getWorklistCounts(
   companyId: string,
   options: GetWorklistCountsOptions = {},
 ): Promise<WorklistCounts> {
+  // The Dokument rows lead into the section and the brain rows into Granska
+  // and Avtal: a row whose page is a 404 for this company is not counted.
+  const section = isArkivSectionEnabled(companyId)
+  const brain = isArkivBrainEnabled(companyId)
   const [
     bookTransaction,
     bookSkattekonto,
@@ -105,11 +110,11 @@ export async function getWorklistCounts(
     options.skattekontoPaymentDue !== undefined
       ? Promise.resolve(options.skattekontoPaymentDue).then((p) => (p ? 1 : 0))
       : countSkattekontoPaymentDue(supabase, companyId),
-    countHeldDocuments(supabase, companyId),
-    countUnclassifiedDocuments(supabase, companyId),
-    countDocumentFieldReviews(supabase, companyId),
-    countMissedAgreementPayments(supabase, companyId),
-    countArkivFindings(supabase, companyId),
+    section ? countHeldDocuments(supabase, companyId) : 0,
+    section ? countUnclassifiedDocuments(supabase, companyId) : 0,
+    brain ? countDocumentFieldReviews(supabase, companyId) : 0,
+    brain ? countMissedAgreementPayments(supabase, companyId) : 0,
+    brain ? countArkivFindings(supabase, companyId) : 0,
   ])
 
   return {

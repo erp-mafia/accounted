@@ -9,7 +9,14 @@ import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import {
+  TH_CLASS,
+  TD_CLASS,
+  QUIET_LINK_CLASS,
+  CHECKBOX_REVEAL_CLASS,
+  HOVER_REVEAL_CLASS,
+} from '@/components/ui/dry-table'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
@@ -34,7 +41,6 @@ import {
   Pencil,
   Trash2,
   Loader2,
-  CheckCircle2,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
@@ -557,7 +563,14 @@ export default function ChartOfAccountsManager() {
   // Page header + toolbar render even while loading so the chrome is stable.
   const header = (
     <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{tNav('chart_of_accounts')}</h1>
+        {/* Convention 7: the SRU / NE-bilaga explanation that used to sit in
+            the footer lives behind the "?". */}
+        <HelpPopover>
+          <p>{t('help_text')}</p>
+        </HelpPopover>
+      </div>
       <div className="flex items-center gap-4">
         <Badge variant="outline" className="font-normal">{t('bas_version_chip')}</Badge>
         <button type="button" className={QUIET_LINK_CLASS} onClick={() => setPruneDialogOpen(true)}>
@@ -735,8 +748,7 @@ export default function ChartOfAccountsManager() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </th>
-                  <th className={TH_CLASS}>{t('col_active')}</th>
-                  <th className={cn(TH_CLASS, 'w-[84px]')} aria-hidden="true"></th>
+                  <th className={TH_CLASS} aria-hidden="true"></th>
                 </tr>
               </thead>
               <tbody className="stagger-enter">
@@ -747,7 +759,7 @@ export default function ChartOfAccountsManager() {
                     const open = !collapsedMyClasses.has(classNum) || !!searchQuery
                     return (
                       <Fragment key={cls}>
-                        {bandRow(classNum, open, () => toggleMyClass(classNum), 8)}
+                        {bandRow(classNum, open, () => toggleMyClass(classNum), 7)}
                         {open &&
                           classAccounts.map((account) => (
                             <tr
@@ -812,22 +824,22 @@ export default function ChartOfAccountsManager() {
                                   count={usageCounts.get(account.account_number)}
                                 />
                               </td>
-                              <td className={cn(TD_CLASS, 'whitespace-nowrap py-[9px]')}>
-                                <Switch
-                                  checked={account.is_active}
-                                  onCheckedChange={() => toggleActive(account)}
-                                  disabled={togglingAccount === account.account_number}
-                                  aria-label={t('col_active') + ' ' + account.account_number}
-                                  className="scale-75"
-                                />
-                              </td>
                               <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[5px]')}>
-                                <span
-                                  className={cn(
-                                    'inline-flex items-center justify-end gap-1 transition-opacity duration-150',
-                                    'opacity-0 focus-within:opacity-100 group-hover:opacity-100',
-                                  )}
-                                >
+                                {/* Row actions, hover-revealed. Active is the
+                                    normal state, so the per-row switch column
+                                    is gone: an inactive row carries the
+                                    "Inaktiv" chip, and the toggle lives here
+                                    beside edit/delete (same confirm flow). */}
+                                <span className={cn('inline-flex items-center justify-end gap-1', HOVER_REVEAL_CLASS)}>
+                                  <button
+                                    type="button"
+                                    className={cn(QUIET_LINK_CLASS, 'mr-2 disabled:opacity-50')}
+                                    onClick={() => toggleActive(account)}
+                                    disabled={togglingAccount === account.account_number}
+                                    aria-label={`${account.is_active ? t('deactivate_confirm_action') : t('reactivate')} ${account.account_number}`}
+                                  >
+                                    {account.is_active ? t('deactivate_confirm_action') : t('reactivate')}
+                                  </button>
                                   <Button
                                     variant="ghost"
                                     size="icon"
@@ -922,16 +934,22 @@ export default function ChartOfAccountsManager() {
                                       deactivated is NOT activated: it falls
                                       through to the button, relabelled so the
                                       user sees it is coming back, not new. */}
+                                  {/* Muted text for the held state, and the
+                                      add button only on hover (touch keeps
+                                      it visible): a button on each of ~1300
+                                      catalog rows read as noise. */}
                                   {account.is_activated && account.is_active ? (
-                                    <span className="inline-flex items-center gap-1 text-xs text-success">
-                                      <CheckCircle2 className="h-3.5 w-3.5" />
+                                    <span className="text-xs text-muted-foreground">
                                       {t('activated')}
                                     </span>
                                   ) : (
                                     <Button
                                       variant="outline"
                                       size="sm"
-                                      className="h-7 px-3.5 text-xs"
+                                      className={cn(
+                                        'h-7 px-3.5 text-xs',
+                                        !activatingAccounts.has(account.account_number) && HOVER_REVEAL_CLASS,
+                                      )}
                                       onClick={() => activateBASAccount(account.account_number)}
                                       disabled={activatingAccounts.has(account.account_number)}
                                     >
@@ -958,8 +976,8 @@ export default function ChartOfAccountsManager() {
 
       {/* Footer note (concept pgnote) */}
       {!loading && totalCount > 0 && (
-        <p className="px-1 text-xs text-muted-foreground">
-          {t('footer_note', { shown: shownCount, total: totalCount })}
+        <p className="px-1 text-xs tabular-nums text-muted-foreground">
+          {t('footer_count', { shown: shownCount, total: totalCount })}
         </p>
       )}
 

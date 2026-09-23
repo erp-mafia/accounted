@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AiTier } from '@/lib/ai/types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { getAiStatus } from '@/lib/ai'
-import { arkivRollout, isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { readDocumentBytes } from './router'
@@ -190,25 +190,10 @@ export async function readUnreadDocuments(
     }
     return true
   }
-  const rollout = arkivRollout()
-  const companies = rollout === 'all' ? null : rollout
-
-  if (companies && companies.length > 0) {
-    const { data, error } = await supabase
-      .from('document_attachments')
-      .select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error')
-      .is('pages_read_at', null)
-      .in('company_id', companies)
-      .order('created_at', { ascending: false })
-      .limit(limit)
-    if (error) throw new Error(`fetch rollout documents failed: ${error.message}`)
-    if (!(await walkByPlan((data ?? []) as ReadableDocumentRow[]))) return counts
-  }
-
-  if (!spentTime() && getAiStatus().configured && (companies === null || companies.length > 0)) {
+  // The shelf is on for every company: nobody goes first, and everyone's gated rows are retried under the budget.
+  if (!spentTime() && getAiStatus().configured) {
     const room = limit - counts.processed
-    let retry = supabase.from('document_attachments').select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error').in('read_error', RETRY_REASONS)
-    if (companies) retry = retry.in('company_id', companies)
+    const retry = supabase.from('document_attachments').select('id, company_id, storage_path, mime_type, created_at, journal_entry_id, journal_entry_line_id, doc_type, pages_read_at, read_error').in('read_error', RETRY_REASONS)
     const { data, error } = await retry.order('pages_read_at', { ascending: true }).limit(room * 4)
     if (error) throw new Error(`fetch retry documents failed: ${error.message}`)
     // Vision pages already spent today per company, read once and kept as the pass spends more.
