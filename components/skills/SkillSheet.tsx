@@ -66,6 +66,11 @@ export function SkillSheet({ target, companyId, client, canWrite, onClose, onCon
   )
 }
 
+/** Brings the opened instruction into view, once, as it mounts. */
+function scrollToDoc(el: HTMLDivElement | null) {
+  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onDelete }: {
   target: SheetTarget
   companyId: string
@@ -109,7 +114,6 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
       </div>
       <div className={styles.sheetMain}>
         {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
-        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <div className={styles.doc} data-ph-mask={own ? '' : undefined}><MarkdownMessage text={withoutFrontmatter(body.data ?? '')} /></div>)}
       </div>
       <div className={styles.sheetFoot}>
         <div className={styles.promptbox}>
@@ -140,6 +144,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
             {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
           </div>
         )}
+        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <div ref={scrollToDoc} className={styles.doc} data-ph-mask={own ? '' : undefined}><MarkdownMessage text={withoutFrontmatter(body.data ?? '')} /></div>)}
       </div>
       {own && (
         <DestructiveConfirmDialog
