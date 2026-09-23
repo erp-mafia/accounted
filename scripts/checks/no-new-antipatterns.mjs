@@ -358,6 +358,11 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   // carries an explicit year-end exclusion of its own.
   'lib/reports/dimension-pnl.ts',
   'lib/reports/monthly-breakdown.ts',
+  // Tax balances/expenses come from generateTrialBalance; only mixed 2510
+  // counterpart evidence needs vouchers, which account totals cannot retain.
+  // Mirrors exclude-all-year-end (including reversal/correction chains and
+  // linked opening entry); kassaflodesanalys-tax.test.ts pins those filters.
+  'lib/reports/cash-flow-tax.ts',
   // Reconciliation and diagnostics: they compare against the ledger as posted.
   'lib/reports/ar-reconciliation.ts',
   'lib/reports/supplier-reconciliation.ts',
