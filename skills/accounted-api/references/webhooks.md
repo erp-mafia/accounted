@@ -28,13 +28,14 @@ Response `200`:
 ```ts
 {
   data: {
-    webhooks: { id: string, name: string, event_type: string, webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string, disabled_reason: string, created_at: string }[]
+    webhooks: { id: string, name: string, event_type: string, webhook_url: string, active: boolean, api_version_pinned: string, disabled_at: string | null, disabled_reason: string | null, created_at: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -86,6 +87,7 @@ Creates a webhook subscription for one event type. The response includes a fresh
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
@@ -116,17 +118,18 @@ Response `200`:
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
-    disabled_at: string,
-    disabled_reason: string,
+    disabled_at: string | null,
+    disabled_reason: string | null,
     created_at: string,
     secret: string,
-    description: string
+    description: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -179,21 +182,22 @@ Response `200`:
   data: {
     id: string,
     name: string,
-    description: string,
+    description: string | null,
     event_type: string,
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
-    disabled_at: string,
-    disabled_reason: string,
+    disabled_at: string | null,
+    disabled_reason: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -242,10 +246,11 @@ Update the URL, name, description, or active flag. event_type is immutable: dele
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
-{ name?: string, description?: string, webhook_url?: string, active?: boolean }
+{ name?: string, description?: string | null, webhook_url?: string, active?: boolean }
 ```
 
 Example request:
@@ -261,21 +266,22 @@ Response `200`:
   data: {
     id: string,
     name: string,
-    description: string,
+    description: string | null,
     event_type: string,
     webhook_url: string,
     active: boolean,
     api_version_pinned: string,
-    disabled_at: string,
-    disabled_reason: string,
+    disabled_at: string | null,
+    disabled_reason: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -347,16 +353,20 @@ Returns deliveries for the webhook in newest-first order. Each row carries the c
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
+| `delivery_id` | query | `string` | no | Return only this delivery (its id). Combine with the webhook id in the path. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number, response_body: string, error: string, request_id: string, created_at: string, delivered_at: string }[],
+  data: { id: string, webhook_id: string, event_type: string, status: "pending" | "in_flight" | "delivered" | "failed" | "dead", attempts: number, next_attempt_at: string, response_status: number | null, response_body: string | null, error: string | null, request_id: string | null, created_at: string, delivered_at: string | null }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -418,8 +428,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -468,8 +479,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -516,8 +528,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }

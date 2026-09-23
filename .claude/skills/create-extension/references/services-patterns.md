@@ -1,63 +1,48 @@
 # Service Integration Patterns
 
-Two patterns for extensions to provide services to core. Both ensure core compiles without the extension.
+Three ways extension code and core call each other without core importing from `@/extensions/` (CI builds core with zero extensions enabled).
 
-## Pattern A: Interface Registration
+## Pattern A: Interface registration (extension replaces a core default)
 
-Best for single-implementation services (e.g., email). Core defines interface + noop default; extension registers at load time.
+Core owns the interface and a default implementation; the extension registers its implementation at module load. Best for single-implementation services.
 
 ```typescript
 // Core: lib/email/service.ts
-let emailService: EmailService = new NoopEmailService()
-export function getEmailService(): EmailService { return emailService }
-export function registerEmailService(svc: EmailService): void { emailService = svc }
+export function registerEmailService(svc: EmailService): void
 
-// Extension: extensions/general/email/index.ts
-import { registerEmailService } from '@/lib/email/service'
-registerEmailService(new ResendEmailService())  // Registers at module load
-export const emailExtension: Extension = { id: 'email', name: 'Email', version: '1.0.0' }
-
-// Core consumption:
-const svc = getEmailService()
-if (svc.isConfigured()) await svc.sendEmail({ to, subject, html })
+// Extension, module scope: extensions/general/email/index.ts
+registerEmailService(createEmailService())
 ```
 
-## Pattern B: Services Record
+Branding works the same way: `registerBrandingService(partial)` in `lib/branding/service.ts`, read through `getBranding()` (see `extensions/general/_example-branding/index.ts`).
 
-Best for multiple named functions (e.g., AI categorization). Extension exposes via `services`; core discovers via registry.
+## Pattern B: Services record (extension to core)
+
+The extension exposes named functions on `services`; core resolves them through the registry at runtime and treats a missing registration as "this deployment does not offer the feature". The contract type lives in core so both sides agree on the signature.
 
 ```typescript
-// Extension:
+// Extension: extensions/general/enable-banking/index.ts
 services: {
-  findSimilarTemplates: async (...args: unknown[]) => {
-    const { findSimilarTemplates } = await import('./lib/template-embeddings')
-    return findSimilarTemplates(args[0] as Transaction, args[1] as EntityType)
-  },
+  // Contract: lib/bank-sync/trigger-sync-contract.ts
+  triggerConnectionSync,
 },
 
-// Core facade (lib/bookkeeping/template-embeddings.ts):
-const aiExt = extensionRegistry.get('ai-categorization')
-if (aiExt?.services?.findSimilarTemplates) {
-  return aiExt.services.findSimilarTemplates(transaction, entityType)
+// Core caller: app/api/v1/companies/[companyId]/bank-connections/[connectionId]/sync/route.ts
+const services = extensionRegistry.get('enable-banking')?.services as
+  | Partial<EnableBankingServices>
+  | undefined
+if (!services?.triggerConnectionSync) {
+  return v1ErrorResponseFromCode('EXTENSION_DISABLED', ctx.log, { requestId: ctx.requestId })
 }
-return findMatchingTemplates(transaction, entityType)  // Fallback
+const result = await services.triggerConnectionSync(ctx.supabase, { companyId, userId, connectionId, log })
 ```
 
-## Pattern C: Core Services for Extensions
+Lazy `await import()` belongs inside service functions only, never at module scope.
 
-Extensions consume core services via `ctx.services`:
+## Pattern C: Core services for extensions (core to extension)
+
+Extensions consume core services through `ctx.services` instead of importing core internals directly:
 
 ```typescript
-await ctx?.services.ingestTransactions(ctx.supabase, ctx.userId, rawTransactions)
+const ingestFn = ctx?.services.ingestTransactions
 ```
-
-## Comparison
-
-| Aspect | Interface Registration | Services Record |
-|--------|----------------------|-----------------|
-| Defined in | Core (`lib/`) | Extension (`index.ts`) |
-| Discovery | `get*()` getter | `extensionRegistry.get().services` |
-| Functions | Single interface | Multiple named |
-| Lazy imports | No | Yes (inside service fns) |
-| Fallback | Noop default | Core provides fallback |
-| Example | Email | AI categorization |

@@ -1,7 +1,7 @@
 #!/usr/bin/env npx tsx
 /**
- * Crontab generator: emits docker/crontab.hosted and docker/crontab.self-hosted
- * from the `crons` array in vercel.json.
+ * Crontab generator: emits docker/crontab.self-hosted from the `crons` array
+ * in vercel.json.
  *
  * vercel.json is the single source of truth for what runs on a schedule. The
  * Docker deployments run the same HTTP endpoints through supercronic, so their
@@ -14,7 +14,7 @@
  * /api/documents/verify/cron ran weekly against a daily vercel.json.
  *
  * Usage:
- *   npx tsx scripts/generate-crontabs.ts   # rewrite both crontabs
+ *   npx tsx scripts/generate-crontabs.ts   # rewrite the crontab
  *   npm run crontabs:generate              # same, via package.json
  *
  * scripts/__tests__/generate-crontabs.test.ts fails CI if the committed files
@@ -30,9 +30,9 @@ const ROOT = dirname(dirname(__filename))
 const VERCEL_JSON_PATH = join(ROOT, 'vercel.json')
 const DOCKER_DIR = join(ROOT, 'docker')
 
-export type CrontabVariant = 'hosted' | 'self-hosted'
+export type CrontabVariant = 'self-hosted'
 
-export const VARIANTS: readonly CrontabVariant[] = ['hosted', 'self-hosted']
+export const VARIANTS: readonly CrontabVariant[] = ['self-hosted']
 
 export interface VercelCron {
   path: string
@@ -41,7 +41,6 @@ export interface VercelCron {
 
 /** The compose file that bind-mounts each variant, quoted in the file header. */
 const MOUNTED_BY: Record<CrontabVariant, string> = {
-  hosted: 'docker-compose.hosted.yml',
   'self-hosted': 'docker-compose.yml',
 }
 
@@ -83,18 +82,19 @@ export const EXCLUDED_PATHS: Readonly<Record<string, string>> = {}
 
 /**
  * Per-variant schedule overrides, path to cron expression. This is where a
- * deliberate hosted/self-hosted divergence gets recorded, so it reads as a
- * decision with a reason instead of as drift in a hand-edited file.
+ * deliberate divergence from the vercel.json (hosted) cadence gets recorded,
+ * so it reads as a decision with a reason instead of as drift in a
+ * hand-edited file.
  *
- * Empty on both variants: every job currently runs the vercel.json cadence
- * everywhere. Two candidates were considered and rejected:
+ * Empty: every job currently runs the vercel.json cadence everywhere. Two
+ * candidates were considered and rejected:
  *
  *  - /api/documents/verify/cron ran weekly ("0 3 * * 0") in the hand-written
  *    crontabs against a daily vercel.json. Not a load concession: the run is
  *    capped at 200 documents (DOCUMENT_VERIFY_BATCH_SIZE) and walks a
  *    nulls-first queue, so weekly drains the WORM integrity queue seven times
  *    slower on a check that exists to satisfy BFL 7-year retention. The weekly
- *    cadence also sat in crontab.hosted, which is not a small box (the two
+ *    cadence also sat in the since-removed hosted Docker crontab (the two
  *    files were byte-identical), so it cannot have been a self-hosted
  *    concession. Treated as drift and realigned to daily.
  *  - /api/webhooks/dispatch/cron at "* * * * *" is 1440 requests/day that
@@ -107,7 +107,6 @@ export const EXCLUDED_PATHS: Readonly<Record<string, string>> = {}
 export const SCHEDULE_OVERRIDES: Readonly<
   Record<CrontabVariant, Readonly<Record<string, string>>>
 > = {
-  hosted: {},
   'self-hosted': {},
 }
 
@@ -129,7 +128,6 @@ export interface ExtraJob {
 }
 
 export const EXTRA_JOBS: Readonly<Record<CrontabVariant, readonly ExtraJob[]>> = {
-  hosted: [],
   'self-hosted': [
     {
       path: '/api/connector/sync/cron',

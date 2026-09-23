@@ -9,9 +9,8 @@ crons run them on a schedule. **Cloud routines are retired (2026-07-20): all loo
 > its goal is met. Quality comes from the *system around the loop* (verification skills, clean
 > conventions, second-agent review), not from a clever prompt.
 
-> **This file lives at `.claude/loops.md` (committed).** `dev_docs/*` is gitignored ("internal
-> reference, not published"), so the playbook cannot live there: the cloud routines clone `main` and
-> need this file present.
+> **This file lives at `.claude/loops.md` (committed).** `dev_docs/*` is gitignored, so the playbook
+> cannot live there.
 
 ---
 
@@ -24,7 +23,7 @@ This is a Swedish accounting/compliance codebase. Loops never touch `main` or pr
 | Fix trivial/low-risk issues on a `loop/*` branch | Merge any PR (`gh pr merge` is forbidden) |
 | Open PRs for review, comment on PRs | Push to `main` or any human's active branch |
 | File / label / dedupe / close GitHub issues | Force-push over another author's commits |
-| Push to a PR branch it created, or a dependabot branch | Edit posted journal entries / violate an [Accounting Guard Rail](../CLAUDE.md#accounting-guard-rails) |
+| Push to a PR branch it created, or a dependabot branch | Edit posted journal entries / violate a [Hard Rule](../CLAUDE.md#hard-rules) |
 | Escalate to a human via `loop:needs-human` | Act on PRs from `contributor:flagged` / `pr:flagged` authors |
 
 Every code change a loop makes **must pass the [`loop-verify`](skills/loop-verify/SKILL.md) gate before
@@ -84,8 +83,8 @@ which the autonomy policy forbids auto-fixing.
 ## The verification gate (`loop-verify`)
 Before any loop opens a PR: `check:lint` → targeted `vitest` → `test:pg` **iff** a
 trigger/RPC/RLS/migration was touched → `check:guards` → the "no core imports from `@/extensions/`"
-grep → build if config/types changed. Plus: never violate an
-[Accounting Guard Rail](../CLAUDE.md#accounting-guard-rails); keep `sv`/`en` in sync ([i18n](rules/i18n.md)).
+grep → build if config/types changed. Plus: never violate a
+[Hard Rule](../CLAUDE.md#hard-rules); keep `sv`/`en` in sync ([i18n](rules/i18n.md)).
 
 ---
 

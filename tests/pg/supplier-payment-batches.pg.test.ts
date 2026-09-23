@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getClient, getPool, withUserContext } from './setup'
-import { seedCompany, insertAuthUser } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember } from './fixtures'
 
 // pg-real coverage for 20260810160748_supplier_payment_batches.sql: RLS
 // isolation on both tables, the FK RESTRICT that keeps invoices referenced by
@@ -14,6 +14,16 @@ import { seedCompany, insertAuthUser } from './fixtures'
 // the atomic create RPC (happy path, in-transaction active-batch recheck,
 // header + items rolling back together, FOR UPDATE serialization of two
 // concurrent creates, tenant guard and actor pinning, EXECUTE privileges).
+//
+// And 20260904121000_supplier_payment_batches_drop_insert_policies.sql
+// (#2060): the member INSERT policies on both tables are gone, so the
+// SECURITY DEFINER RPC is the only write path in the database as well as in
+// code, while SELECT (both tables) and the batches UPDATE (cancel) stay.
+//
+// Every fixture that seeds a batch or an item directly (insertBatch,
+// insertItem, seedBatchWithItem) runs on the plain pool, i.e. the superuser
+// connection outside withUserContext, so none of them ever relied on the
+// dropped INSERT policies.
 
 async function insertSupplier(companyId: string, userId: string): Promise<string> {
   const id = randomUUID()
@@ -681,5 +691,156 @@ describe('create_supplier_payment_batch RPC', () => {
       [sig],
     )
     expect(rows[0]).toEqual({ anon_can: false, authenticated_can: true, service_role_can: true })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// INSERT locked to the RPC (#2060)
+// ---------------------------------------------------------------------------
+
+/** A plain 'member' (not the owner seedCompany creates): the least-privileged
+ *  role the RPC still accepts as a writer. */
+async function seedMember(companyId: string): Promise<string> {
+  const userId = await insertAuthUser()
+  await insertCompanyMember({ companyId, userId, role: 'member' })
+  return userId
+}
+
+async function captureError(
+  run: () => Promise<unknown>,
+): Promise<{ code?: string; message?: string } | null> {
+  try {
+    await run()
+    return null
+  } catch (err) {
+    return err as { code?: string; message?: string }
+  }
+}
+
+const DIRECT_BATCH_INSERT = `
+  INSERT INTO public.supplier_payment_batches
+    (id, company_id, user_id, format, total_amount, item_count, msg_id, debtor_snapshot)
+  VALUES ($1, $2, $3, 'pain001', 737.5, 1, 'X', '{}')`
+
+const DIRECT_ITEM_INSERT = `
+  INSERT INTO public.supplier_payment_batch_items
+    (batch_id, company_id, supplier_invoice_id, amount, payment_date,
+     payee_type, payee_bankgiro, payee_name, reference_type, reference)
+  VALUES ($1, $2, $3, 737.5, '2099-08-15', 'bankgiro', '50501055',
+          'Derome Bygg AB', 'invoice_number', 'CD3014794407')`
+
+describe('supplier_payment_batches: INSERT locked to the RPC (#2060)', () => {
+  it('leaves exactly the SELECT policies and the batches UPDATE policy in the catalog', async () => {
+    const { rows } = await getPool().query<{
+      tablename: string
+      policyname: string
+      cmd: string
+    }>(
+      `SELECT tablename, policyname, cmd
+         FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename IN ('supplier_payment_batches', 'supplier_payment_batch_items')
+        ORDER BY tablename, cmd, policyname`,
+    )
+    expect(rows).toEqual([
+      {
+        tablename: 'supplier_payment_batch_items',
+        policyname: 'view own-company supplier_payment_batch_items',
+        cmd: 'SELECT',
+      },
+      {
+        tablename: 'supplier_payment_batches',
+        policyname: 'view own-company supplier_payment_batches',
+        cmd: 'SELECT',
+      },
+      {
+        tablename: 'supplier_payment_batches',
+        policyname: 'update own-company supplier_payment_batches',
+        cmd: 'UPDATE',
+      },
+    ])
+  })
+
+  it('refuses a direct INSERT into supplier_payment_batches from a member and from the owner', async () => {
+    const ctx = await seedCompany()
+    const memberId = await seedMember(ctx.companyId)
+
+    for (const userId of [memberId, ctx.userId]) {
+      const err = await captureError(() =>
+        withUserContext(userId, (client) =>
+          client.query(DIRECT_BATCH_INSERT, [randomUUID(), ctx.companyId, userId]),
+        ),
+      )
+      expect(err?.code).toBe('42501')
+      expect(err?.message).toMatch(/row-level security/)
+    }
+  })
+
+  it('refuses a direct INSERT into supplier_payment_batch_items from a member and from the owner', async () => {
+    // The batch itself is seeded on the superuser pool; only the item insert
+    // runs under the member's JWT.
+    const ctx = await seedBatchWithItem()
+    const memberId = await seedMember(ctx.companyId)
+    const otherInvoice = await insertSupplierInvoice(ctx.companyId, ctx.userId, ctx.supplierId)
+
+    for (const userId of [memberId, ctx.userId]) {
+      const err = await captureError(() =>
+        withUserContext(userId, (client) =>
+          client.query(DIRECT_ITEM_INSERT, [ctx.batchId, ctx.companyId, otherInvoice]),
+        ),
+      )
+      expect(err?.code).toBe('42501')
+      expect(err?.message).toMatch(/row-level security/)
+    }
+    expect(await countItems(null, ctx.batchId)).toBe(1)
+  })
+
+  it('still creates through the RPC and cancels through UPDATE for the member whose direct INSERT was refused', async () => {
+    const ctx = await seedInvoiceOnly()
+    const memberId = await seedMember(ctx.companyId)
+    const batchId = randomUUID()
+
+    const outcome = await withUserContext(memberId, async (client) => {
+      // Same session, same authenticated role: the direct write is refused...
+      await client.query('SAVEPOINT direct_insert')
+      const direct = await captureError(() =>
+        client.query(DIRECT_BATCH_INSERT, [batchId, ctx.companyId, memberId]),
+      )
+      await client.query('ROLLBACK TO SAVEPOINT direct_insert')
+
+      // ...while the SECURITY DEFINER RPC, which never consulted the dropped
+      // policies, still lands header + items for the same caller.
+      const result = await callRpc(client, {
+        companyId: ctx.companyId,
+        batchId,
+        items: itemsPayload(ctx.invoiceId),
+      })
+      const items = await countItems(client, batchId)
+
+      // The kept UPDATE policy: the member cancels the batch the RPC created
+      // (the cancel route's compare-and-set), and the kept SELECT policy shows
+      // the result.
+      const cancel = await client.query(
+        `UPDATE public.supplier_payment_batches
+            SET status = 'cancelled', cancelled_at = now(), cancelled_by = $2
+          WHERE id = $1 AND status = 'created'`,
+        [batchId, memberId],
+      )
+      const visible = await client.query<{ status: string }>(
+        `SELECT status FROM public.supplier_payment_batches WHERE id = $1`,
+        [batchId],
+      )
+      return { direct, result, items, cancelled: cancel.rowCount, visible: visible.rows }
+    })
+
+    expect(outcome.direct?.code).toBe('42501')
+    expect(outcome.direct?.message).toMatch(/row-level security/)
+    expect(outcome.result.ok).toBe(true)
+    if (!outcome.result.ok) throw new Error('unreachable')
+    expect(outcome.result.batch.id).toBe(batchId)
+    expect(outcome.result.batch.user_id).toBe(memberId)
+    expect(outcome.items).toBe(1)
+    expect(outcome.cancelled).toBe(1)
+    expect(outcome.visible).toEqual([{ status: 'cancelled' }])
   })
 })

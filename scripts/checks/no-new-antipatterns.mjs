@@ -37,6 +37,13 @@
  *      into a compile error; this guard keeps new reports on that path.
  *      Tracked as a file-set. Voucher/line LISTINGS are sanctioned in
  *      LEDGER_SCAN_SANCTIONED: they have no closingEntry decision to make.
+ *   3c. direct-invoice-payment-insert: a file that inserts into
+ *      `invoice_payments` outside lib/invoices/invoice-payment-row.ts. Five
+ *      hand-built inserts each computed their own `amount`, and the bank-match
+ *      ones stored the cash received instead of the amount applied to the
+ *      invoice, so a whole-krona overshoot absorbed on 3740 made the row
+ *      exceed the receivable (#2250). recordInvoicePaymentRow() is the one
+ *      writer. Tracked as a file-set, no baseline: the count is 0 today.
  *   4. pinned-dep    : a dependency pinned to an exact version (PINNED_DEPS)
  *      whose package.json spec or locked version drifted from the pin. Guards
  *      against a repeat of the @anthropic-ai/bedrock-sdk 0.32.0 prod outage
@@ -135,6 +142,7 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
 import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
+import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
 import {
@@ -143,6 +151,7 @@ import {
 } from './extension-route-guards.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const SOURCE_ROOT = path.join(ROOT, 'src')
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
 
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage'])
@@ -199,7 +208,7 @@ function walk(dir, exts, out = []) {
   return out
 }
 
-const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
+const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/').replace(/^src\//, '')
 
 /** True when any handler segment calls getUser() without an MFA-enforcing guard. */
 function handRollsRouteAuth(src) {
@@ -210,7 +219,7 @@ function handRollsRouteAuth(src) {
 
 /** Route files that hand-roll auth instead of the MFA-enforcing guard. */
 function findRawRouteAuth() {
-  const apiDir = path.join(ROOT, 'app', 'api')
+  const apiDir = path.join(SOURCE_ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
     .filter((f) => handRollsRouteAuth(fs.readFileSync(f, 'utf8')))
     .map(rel)
@@ -233,9 +242,9 @@ const JEL_INSERT_CHAIN_RE = /\.from\(\s*['"]journal_entry_lines['"]\s*\)\s*\.\s*
 /** Files that insert into journal_entry_lines outside the sanctioned writers. */
 function findDirectJelInserts() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   return files
     .filter((f) => {
@@ -243,6 +252,30 @@ function findDirectJelInserts() {
       if (JEL_INSERT_SANCTIONED.has(r)) return false
       if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
       return JEL_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
+    })
+    .map(rel)
+    .sort()
+}
+
+// The one writer of invoice_payments rows: recordInvoicePaymentRow() owns the
+// field semantics (amount = applied to the invoice, never the cash received).
+const INVOICE_PAYMENT_INSERT_SANCTIONED = new Set(['lib/invoices/invoice-payment-row.ts'])
+const INVOICE_PAYMENT_INSERT_CHAIN_RE =
+  /\.from\(\s*['"]invoice_payments['"]\s*\)\s*\.\s*(insert|upsert)\(/
+
+/** Files that insert into invoice_payments outside the sanctioned writer. */
+function findDirectInvoicePaymentInserts() {
+  const files = [
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
+  ]
+  return files
+    .filter((f) => {
+      const r = rel(f)
+      if (INVOICE_PAYMENT_INSERT_SANCTIONED.has(r)) return false
+      if (r.includes('__tests__/') || r.endsWith('.test.ts')) return false
+      return INVOICE_PAYMENT_INSERT_CHAIN_RE.test(fs.readFileSync(f, 'utf8'))
     })
     .map(rel)
     .sort()
@@ -278,9 +311,9 @@ const SUPABASE_JS_NAMESPACE_RE =
  */
 function findLeakySupabaseClients() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   return files
     .filter((f) => {
@@ -358,8 +391,8 @@ const LEDGER_SCAN_RE =
  */
 function findLedgerScanningReports() {
   const files = [
-    ...walk(path.join(ROOT, 'lib', 'reports'), ['.ts']),
-    ...walk(path.join(ROOT, 'lib', 'bokslut'), ['.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'lib', 'reports'), ['.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'lib', 'bokslut'), ['.ts']),
   ]
   return files
     .filter((f) => {
@@ -375,10 +408,10 @@ function findLedgerScanningReports() {
 /** Count of naive Math.round(x*100)/100 occurrences (lines) across source. */
 function countNaiveRound() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   let count = 0
   for (const f of files) {
@@ -405,9 +438,9 @@ const PROVIDER_HOST_RE =
 
 function findProviderHostFiles() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   const found = []
   for (const f of files) {
@@ -425,10 +458,10 @@ function findProviderHostFiles() {
  */
 function countHandRolledInvariants() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   let count = 0
   for (const f of files) {
@@ -477,8 +510,8 @@ function lineHasBareRoundedClass(line) {
 /** Off-ladder border-radius classes in UI code. */
 function findOffLadderRadii() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
   ]
   const findings = []
   for (const f of files) {
@@ -536,11 +569,11 @@ function isPublicEnvRead(node) {
 /** Public env flags compared in place, which the Docker build folds away. */
 function findFoldedPublicFlags() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'contexts'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'contexts'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   const findings = []
   for (const file of files) {
@@ -592,7 +625,6 @@ const DIRECT_AI_CLIENT_ALLOWED = new Set([
   'lib/agent/composer/narrative.ts',
   'lib/agent/composer/prewarm.ts',
   'lib/receipt-hunt/adjudicate.ts',
-  'lib/receipt-hunt/mail-intelligence.ts',
   'extensions/general/whatsapp-inbox/lib/interpret-answer.ts',
   'scripts/smoke-ai.ts',
   // Out-of-tree CI reviewer with its own pinned SDK install (see the
@@ -608,7 +640,7 @@ const DIRECT_AI_CLIENT_RES = [
 function findDirectAiClients() {
   const out = []
   for (const dir of ['lib', 'app', 'extensions', 'components', 'scripts']) {
-    for (const file of walk(path.join(ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
+    for (const file of walk(path.join(dir === 'scripts' ? ROOT : SOURCE_ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
       const r = rel(file)
       if (r.startsWith('lib/ai/')) continue
       if (r.includes('/__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
@@ -640,9 +672,9 @@ const OVERLAY_Z_RE = /\bz-(?:40|50|\[\d+\])/
  */
 function findDialogOverflowRisks() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.tsx']),
   ]
   const findings = []
   for (const f of files) {
@@ -727,10 +759,18 @@ const PINNED_DEPS = [
   },
   {
     name: 'nodemailer',
-    version: '9.0.5',
+    version: '9.1.1',
     reason:
       'SMTP mailer for self-hosts (extensions/general/email/lib/smtp-service.ts). Zero-dependency MIT-0 ' +
       'package on the outbound-mail path; bumps are deliberate, reviewed PRs (audit surface), never silent.',
+  },
+  {
+    name: 'mailparser',
+    version: '3.9.20',
+    reason:
+      'Inbound-mail parser (extensions/general/invoice-inbox). 3.9.20 is the last release that depends on ' +
+      'nodemailer 9.x; 3.9.21+ pull nodemailer 10 as a second nested copy, which this guard cannot see ' +
+      '(it checks the top-level nodemailer only). Bump both pins together, on purpose (#2490).',
   },
 ]
 
@@ -994,9 +1034,9 @@ function isClientErrorSetter(call) {
  */
 function findRawUserErrors() {
   const files = [
-    ...walk(path.join(ROOT, 'app', 'api'), ['route.ts']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']).filter((f) => !rel(f).startsWith('app/api/')),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app', 'api'), ['route.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']).filter((f) => !rel(f).startsWith('app/api/')),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
   ]
   const findings = []
 
@@ -1056,18 +1096,20 @@ const current = {
   providerHosts: findProviderHostFiles(),
   ledgerScanningReports: findLedgerScanningReports(),
   directJelInsert: findDirectJelInserts(),
+  directInvoicePaymentInsert: findDirectInvoicePaymentInserts(),
   leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
-  sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
-  extensionRoutes: findExtensionRouteFindings(ROOT),
+  sekLabelledAmounts: findSekLabelledFxAmounts(SOURCE_ROOT),
+  extensionRoutes: findExtensionRouteFindings(SOURCE_ROOT),
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
-  rawReferenceFetch: findRawReferenceFetches(ROOT),
-  clientNodeBuiltins: findClientNodeBuiltins(ROOT),
-  ambiguousEmbeds: findAmbiguousEmbeds(ROOT),
+  rawReferenceFetch: findRawReferenceFetches(SOURCE_ROOT),
+  clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
+  ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
+  literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1081,6 +1123,7 @@ if (isUpdate) {
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
     handRolledInvariants: { count: current.handRolledInvariants },
+    literalLegalForm: { count: current.literalLegalForm.length },
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
@@ -1140,6 +1183,22 @@ if (current.directJelInsert.length) {
     '  → route line writes through lib/bookkeeping/engine.ts, or derive cost_center/project via\n' +
       '    lineDimensionColumns() (lib/bookkeeping/dimension-resolver.ts) and add the file to\n' +
       '    JEL_INSERT_SANCTIONED in this script with a justification.',
+  )
+}
+
+// 1b1. direct-invoice-payment-insert: allowlist lives in this file
+// (INVOICE_PAYMENT_INSERT_SANCTIONED), no baseline: any unsanctioned insert
+// site is a hard failure.
+if (current.directInvoicePaymentInsert.length) {
+  failed = true
+  console.error(
+    `\n✗ direct-invoice-payment-insert: ${current.directInvoicePaymentInsert.length} file(s) insert into invoice_payments ` +
+      `outside lib/invoices/invoice-payment-row.ts:`,
+  )
+  current.directInvoicePaymentInsert.forEach((f) => console.error(`    ${f}`))
+  console.error(
+    '  → record the payment through recordInvoicePaymentRow() (lib/invoices/invoice-payment-row.ts):\n' +
+      '    it owns the row semantics (amount = applied to the invoice, never the cash received, #2250).',
   )
 }
 
@@ -1447,6 +1506,29 @@ if (newDialogOverflow.length) {
   )
 }
 
+// 1e. literal-legal-form: count may not increase. A legal form named as a
+// string at a call site (see literal-legal-form.mjs) sends every later form
+// down the branch it was not written for; docs/LEGAL-FORMS.md has the
+// profile reads that replace each shape.
+const literalLegalFormBaseline = baseline.literalLegalForm?.count ?? Infinity
+if (current.literalLegalForm.length > literalLegalFormBaseline) {
+  failed = true
+  console.error(
+    `\n✗ literal-legal-form: ${current.literalLegalForm.length} site(s) compare, default or tag a legal form ` +
+      `as a string literal (baseline ${literalLegalFormBaseline}, +${current.literalLegalForm.length - literalLegalFormBaseline}). ` +
+      'Sites in files changed most recently are the likely additions:',
+  )
+  const byFile = new Map()
+  for (const f of current.literalLegalForm) byFile.set(f.file, (byFile.get(f.file) ?? 0) + 1)
+  for (const [file, n] of [...byFile.entries()].sort((a, b) => a[0].localeCompare(b[0])))
+    console.error(`    ${file} (${n})`)
+  console.error(
+    '  → read a capability from lib/company/entity-type.ts instead (filesIncomeReturn, hasOwners,\n' +
+      '    resultClosingAccounts, preparesArsredovisning, ...), tag data with an array of forms, and\n' +
+      '    never default a missing form: resolveCompanyEntityType() throws instead. docs/LEGAL-FORMS.md.',
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -1464,9 +1546,14 @@ if (
   fixedDialogOverflow.length ||
   fixedRawRefs.length ||
   fixedProviderHosts.length ||
-  current.naiveOreRound < baseline.naiveOreRound.count
+  current.naiveOreRound < baseline.naiveOreRound.count ||
+  current.literalLegalForm.length < literalLegalFormBaseline
 ) {
   console.log('\n✓ Progress since baseline:')
+  if (current.literalLegalForm.length < literalLegalFormBaseline)
+    console.log(
+      `    literal-legal-form: -${literalLegalFormBaseline - current.literalLegalForm.length} site(s)`,
+    )
   if (fixedAuthFiles.length) console.log(`    raw-route-auth: -${fixedAuthFiles.length} file(s)`)
   if (fixedLedgerScans.length)
     console.log(`    ledger-scanning-report: -${fixedLedgerScans.length} file(s)`)
@@ -1500,5 +1587,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

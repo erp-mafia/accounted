@@ -22,7 +22,7 @@ interface Extension {
 }
 ```
 
-All surfaces are optional. An extension can provide any combination.
+All surfaces are optional. Core reads only `eventHandlers`, `apiRoutes` and `services` today; the other fields are declared but not wired (settings panels are registered in `lib/extensions/settings-panel-registry.tsx`).
 
 ## Key Supporting Types
 
@@ -48,16 +48,21 @@ interface RouteDefinition { path: string; label: string }
 
 ```typescript
 interface ExtensionContext {
-  userId: string; extensionId: string; supabase: SupabaseClient
+  userId: string; companyId: string; extensionId: string; requestId?: string
+  supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: { get<T>(key?: string): Promise<T | null>; set<T>(key: string, value: T): Promise<void> }
   storage: { download(bucket, path); upload(bucket, path, data, options?); getPublicUrl(bucket, path) }
   log: { info(msg, ...args); warn(msg, ...args); error(msg, ...args) }  // Prefixed ext:{id}
-  services: { ingestTransactions(supabase, userId, raw): Promise<IngestResult> }
+  services: {
+    ingestTransactions(supabase, companyId, userId, raw, options?): Promise<IngestResult>
+    getCashAccounts(supabase, companyId, opts?): Promise<CashAccount[]>
+    getPrimaryCashAccount(supabase, companyId, currency?): Promise<CashAccount | null>
+  }
 }
 ```
 
-Settings stored in `extension_data` table with composite key `(user_id, extension_id, key)`.
+Settings are stored in the `extension_data` table, scoped per company: upsert key `(company_id, extension_id, key)`.
 
 ## Complexity Spectrum
 
@@ -74,13 +79,17 @@ export const loggerExtension: Extension = {
 }
 ```
 
-**Level 3: Service provider** (registers at module load):
+**Level 3: Service provider** (registers a core interface at module load, or exposes named functions core resolves through the registry; see [Services](services-patterns.md)):
 ```typescript
-registerEmailService(new ResendEmailService())
-export const emailExtension: Extension = { id: 'email', name: 'Email', version: '1.0.0' }
+registerEmailService(createEmailService())  // extensions/general/email/index.ts
+
+export const myExtensionExtension: Extension = {
+  id: 'my-extension', name: 'My Extension', version: '1.0.0',
+  services: { triggerSomething },
+}
 ```
 
-**Level 4: Full extension** (events + API + settings + mappingRules + onInstall):
+**Level 4: Full extension** (events + API + settings + mappingRules + onInstall; illustrative, no `receipt-ocr` extension ships):
 ```typescript
 export const receiptOcrExtension: Extension = {
   id: 'receipt-ocr', name: 'Receipt OCR', version: '1.0.0', sector: 'general',

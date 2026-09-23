@@ -1,6 +1,6 @@
 ---
 name: loop-pr-ci-triage
-description: Proactive loop that watches open PRs in erp-mafia/accounted, fixes failing CI, and addresses actionable review-bot / reviewer comments, on the PR branch, never merging. Use on a schedule (cloud routine) or on-demand via /loop-pr-ci-triage. Follows dev_docs/loops.md (propose-don't-merge, dedupe, loop-verify gate).
+description: Proactive loop that watches open PRs in erp-mafia/accounted, fixes failing CI, and addresses actionable review-bot / reviewer comments, on the PR branch, never merging. Use on a session-local schedule (/loop) or on-demand via /loop-pr-ci-triage. Follows .claude/loops.md (propose-don't-merge, dedupe, loop-verify gate).
 ---
 
 # loop-pr-ci-triage

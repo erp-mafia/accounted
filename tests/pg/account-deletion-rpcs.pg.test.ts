@@ -128,11 +128,12 @@ describe('account deletion RPCs (pg)', () => {
     // withUserContext rolls back, so the seeded rows do not leak.
   })
 
-  it('scrubs auth.users metadata: user_metadata wiped, app keys dropped, provider kept', async () => {
+  it('scrubs auth.users: email cleared, user_metadata wiped, app keys dropped, provider kept', async () => {
     // Migration 20260724150000: the route-level updateUserById "wipe" was a
     // silent no-op (GoTrue merges metadata maps), so the tombstone kept the
-    // user's full name. The RPC now scrubs auth.users directly. Email must
-    // survive: it is the documented legitimate-interest tombstone.
+    // user's full name. The RPC now scrubs auth.users directly. Since
+    // *_complete_account_erasure.sql the email is cleared as well, in line
+    // with the published retention period.
     const userId = await insertAuthUser()
     await getPool().query(
       `UPDATE auth.users
@@ -158,7 +159,7 @@ describe('account deletion RPCs (pg)', () => {
         [userId],
       )
       expect(rows).toHaveLength(1)
-      expect(rows[0]!.email).toBe(`pg-real-${userId}@test.invalid`)
+      expect(rows[0]!.email).toBeNull()
       expect(rows[0]!.user_meta).toEqual({})
       expect(rows[0]!.app_meta).toEqual({ provider: 'email', providers: ['email'] })
     })

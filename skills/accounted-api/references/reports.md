@@ -25,6 +25,7 @@ Returns the customer-receivable ledger as of `as_of_date` (defaults to today). E
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `as_of_date` | query | `string` | no | YYYY-MM-DD, a real calendar date between 2000 and next year. Default: today (UTC). |
 
 Response `200`:
 ```ts
@@ -33,8 +34,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -75,6 +77,7 @@ Returns the annual avgifter basis per employee for `year`, summed across booked 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Year, 2020-2100. Required. |
 
 Response `200`:
 ```ts
@@ -83,8 +86,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -126,6 +130,9 @@ Returns assets / liabilities / equity grouped into BAS sections, with the period
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end. |
+| `as_of` | query | `string` | no | Alias for to_date. Pass one or the other, not both. |
 
 Response `200`:
 ```ts
@@ -134,8 +141,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -181,6 +189,9 @@ Renders the balansräkning as application/pdf, byte-equivalent to the dashboard 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `to_date` | query | `string` | no | YYYY-MM-DD inside the fiscal period: the position as of this date. Default: the period end. |
+| `as_of` | query | `string` | no | Alias for to_date. Pass one or the other, not both. |
 
 Response `200` (`application/pdf`).
 
@@ -203,6 +214,7 @@ Validates that the target period's opening balances (IB) equal the prior period'
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -211,8 +223,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -253,6 +266,9 @@ Returns every posted journal line in the period grouped by account, with opening
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `account_from` | query | `string` | no | Lowest account number to include (inclusive), 3-8 digits, e.g. 3000. |
+| `account_to` | query | `string` | no | Highest account number to include (inclusive), 3-8 digits, e.g. 3999. |
 
 Response `200`:
 ```ts
@@ -261,8 +277,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -303,6 +320,9 @@ Returns the period's revenue and expenses grouped by BAS class with subtotals (g
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `from_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period. |
+| `to_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period and not before from_date. |
 
 Response `200`:
 ```ts
@@ -311,8 +331,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -358,6 +379,9 @@ Renders the resultaträkning as application/pdf, byte-equivalent to the dashboar
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `from_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period. Omit with to_date for the whole period. |
+| `to_date` | query | `string` | no | YYYY-MM-DD, inside the fiscal period and not before from_date. |
 
 Response `200` (`application/pdf`).
 
@@ -381,6 +405,7 @@ Returns every committed journal entry in the period with its voucher number, dat
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -389,8 +414,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -429,6 +455,7 @@ Returns revenue + expenses + net result per calendar month inside the fiscal per
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -437,8 +464,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -480,6 +508,9 @@ Returns per-employee salary figures (gross / tax / net / avgifter / vacation acc
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Payroll year, 2020-2100. Required. |
+| `month_from` | query | `number` | no | First month to include, 1-12 (inclusive). |
+| `month_to` | query | `number` | no | Last month to include, 1-12 (inclusive). |
 
 Response `200`:
 ```ts
@@ -488,8 +519,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -532,6 +564,9 @@ Returns the period's SIE4 export as text/plain UTF-8. Includes #FNAMN / #ORGNR h
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
+| `exclude_closing` | query | `string` | no | true leaves the year-end closing verifikat (source_type year_end) out of the #VER records, for importing into a system that books its own closing. Default: included. Archive the default, complete export. |
+| `encoding` | query | `string` | no | cp437 returns CP437 bytes for legacy desktop importers. Default: UTF-8. |
 
 Response `200` (`text/plain`).
 
@@ -554,6 +589,7 @@ Returns the supplier-payable ledger as of `as_of_date` (defaults to today). Each
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `as_of_date` | query | `string` | no | YYYY-MM-DD, a real calendar date between 2000 and next year. Default: today (UTC). |
 
 Response `200`:
 ```ts
@@ -562,8 +598,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -605,6 +642,7 @@ Returns the per-account opening balance + period debit/credit + closing balance 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_id` | query | `string` | yes | Fiscal period id (from GET /fiscal-periods). Required. |
 
 Response `200`:
 ```ts
@@ -618,8 +656,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -666,10 +705,12 @@ Returns per-employee semesterlöneskuld balances as of year-end based on their v
 **Pitfalls:**
 - `year` is required.
 - Employees with vacation_rule = none or semesterersattning are excluded: they have no semesterlöneskuld liability.
+- advanceVacationDebt (per row and in totals) is the förskottsskuld loaded as a cutover opening balance (SemL 29 a §): a receivable on the employee. totalLiability stays the booked 2920 + 2940 liability and is what bokslut and reconciliation use; netLiability subtracts the förskottsskuld for information only.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Year, 2020-2100. Required. |
 
 Response `200`:
 ```ts
@@ -678,8 +719,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -722,6 +764,10 @@ Computes momsdeklaration rutor for the given period_type / year / period. The re
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `period_type` | query | `"monthly" \| "quarterly" \| "yearly"` | yes | Declaration period length. Required. |
+| `year` | query | `number` | yes | Calendar year of the period, 2000-2100. Required. |
+| `period` | query | `number` | yes | Period number within the year: 1-12 for monthly, 1-4 for quarterly, 1 for yearly. Required. |
+| `accounting_method` | query | `"accrual" \| "cash"` | no | Accepted for backward compatibility; has no effect on the figures. |
 
 Response `200`:
 ```ts
@@ -730,8 +776,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -767,6 +814,211 @@ Example response `200`:
       "ruta62": 0,
       "ruta49": 0
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/reports/vat-declaration/filings`
+
+**List the calendar VAT periods the company has recorded as filed.**
+`scope:reports:read · risk:low · idempotent`
+
+Returns every monthly or quarterly momsdeklaration period the company has on record as filed, newest first. `source` is `skatteverket` when the filing was confirmed by a Skatteverket kvittens through the connection, `manual` when a person or an API caller recorded it (POST on this path, or completing the period's moms deadline). `reference` is the Skatteverket reference typed at manual marking, if any. Local state: not a Skatteverket read.
+
+**Use when:** Deciding which VAT period is next to prepare, checking whether a period was already filed before recomputing it, or reconciling a filing calendar against the books.
+**Do not use for:** Reading what Skatteverket actually has on file (use /skatteverket/vat-declarations) or computing the declaration figures (use /reports/vat-declaration).
+
+**Pitfalls:**
+- Helårsmoms (yearly) periods are not listed: their deadline is labelled per räkenskapsår and is completed from the calendar.
+- An empty list means nothing is recorded, not that nothing was filed: companies that file on skatteverket.se by hand only get records when they mark the period (POST here or in the app).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { deadline_id: string, period_type: "monthly" | "quarterly", year: number, period: number, tax_period: string, filed_on: string, source: "skatteverket" | "manual", reference: string | null }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "deadline_id": "11111111-1111-4111-8111-111111111111",
+      "period_type": "quarterly",
+      "year": 2026,
+      "period": 2,
+      "tax_period": "2026-Q2",
+      "filed_on": "2026-08-10",
+      "source": "manual",
+      "reference": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/reports/vat-declaration/filings`
+
+**Record that a VAT period was filed outside the Skatteverket connection.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Marks a monthly or quarterly momsdeklaration period as filed on `filed_on` (Swedish calendar date), optionally with Skatteverket's `reference` (kvittensnummer). Completes the period's moms deadline with status `submitted`, creating the deadline row when the company has none for the period. Nothing is sent to Skatteverket. Idempotent: marking an already-marked period updates its date and reference; a period already confirmed at Skatteverket is returned unchanged (`changed: false`). Dry-runnable.
+
+**Use when:** The declaration was filed on skatteverket.se by hand, by an ombud, or from another system, and the books should know the period is done so the next period opens by default.
+**Do not use for:** Filing the declaration itself: that is the BankID-signed flow (accounted_vat_declaration_submit / the Skatteverket panel). Yearly (helårsmoms) periods: complete the calendar deadline instead.
+
+**Pitfalls:**
+- The period must have ended and `filed_on` must fall after the period's last day and no later than today (Swedish date): otherwise 400 with VAT_FILING_PERIOD_NOT_ENDED, VAT_FILING_DATE_BEFORE_PERIOD_END or VAT_FILING_DATE_IN_FUTURE.
+- Omitting `reference` keeps a previously stored reference; pass null to clear it.
+- This records a fact about the books, it does not verify anything at Skatteverket. Use /skatteverket/vat-declarations to check what was actually received.
+- A 409 CONFLICT means the deadline row changed while it was being marked (for example a deadline regeneration ran at the same moment). Nothing was written; retry the same request.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  period_type: "monthly" | "quarterly",
+  year: number,
+  period: number,
+  filed_on: string,
+  reference?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "period_type": "quarterly",
+  "year": 2026,
+  "period": 2,
+  "filed_on": "2026-08-10",
+  "reference": "ABC123"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    deadline_id: string,
+    period_type: "monthly" | "quarterly",
+    year: number,
+    period: number,
+    tax_period: string,
+    filed_on: string,
+    source: "skatteverket" | "manual",
+    reference: string | null,
+    created: boolean,
+    changed: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadline_id": "11111111-1111-4111-8111-111111111111",
+    "period_type": "quarterly",
+    "year": 2026,
+    "period": 2,
+    "tax_period": "2026-Q2",
+    "filed_on": "2026-08-10",
+    "source": "manual",
+    "reference": "ABC123",
+    "created": false,
+    "changed": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/reports/vat-declaration/filings`
+
+**Undo a manual "filed" mark on a VAT period.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Puts the period's moms deadline back to pending and removes the stored reference. Query params: period_type (monthly|quarterly), year, period. A period confirmed at Skatteverket through the connection is refused with 409 VAT_FILING_CONFIRMED_BY_SKATTEVERKET; a period with no filing record answers 404 VAT_FILING_NOT_FOUND. Dry-runnable.
+
+**Use when:** A period was marked as filed by mistake.
+**Do not use for:** Withdrawing or correcting a declaration at Skatteverket: that is a new declaration for the same period, filed through the ordinary flow.
+
+**Pitfalls:**
+- Only manual marks can be undone; a Skatteverket kvittens is a fact this endpoint does not erase.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `period_type` | query | `"monthly" \| "quarterly"` | yes |  |
+| `year` | query | `number` | yes |  |
+| `period` | query | `number` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deadline_id: string, unmarked: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deadline_id": "11111111-1111-4111-8111-111111111111",
+    "unmarked": true
   },
   "meta": {
     "request_id": "req_…",

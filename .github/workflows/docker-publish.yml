@@ -90,6 +90,16 @@ jobs:
           # OCI attestations, queryable via `docker buildx imagetools inspect`.
           provenance: mode=max
           sbom: true
+          # The runner stage's `apk upgrade` is where Alpine security fixes
+          # enter the image. With the base digest pinned and the instruction
+          # text unchanged, buildx replays that layer from the registry cache
+          # on every build, so a fix Alpine published after the layer was
+          # first built never lands (#2055 bumped the digest by hand for
+          # libssl; #2490 found libexpat stuck the same way for eight days).
+          # Excluding the stage from the cache re-runs its two RUN steps
+          # (apk upgrade, apk add poppler-utils: seconds) while deps and
+          # builder, the expensive stages, keep their cache.
+          no-cache-filters: runner
           # push-by-digest publishes without a tag; `merge` collects the digests
           # and builds the tag list from them. name-canonical records the
           # repository name in the config so the merged manifest resolves.

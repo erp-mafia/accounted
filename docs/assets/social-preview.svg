@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title description">
+  <title id="title">Accounted</title>
+  <desc id="description">Open-source Swedish accounting. Your books. Your data. Built for you and your agents.</desc>
+  <rect width="1280" height="640" fill="#f7f6f3"/>
+  <text x="80" y="111" font-family="Arial, sans-serif" font-size="32" fill="#25231f">accounted<tspan fill="#c94d2b">.</tspan></text>
+  <text x="76" y="285" font-family="Georgia, serif" font-size="98" fill="#25231f">Your books.</text>
+  <text x="76" y="391" font-family="Georgia, serif" font-size="98" fill="#25231f">Your data.</text>
+  <path d="M80 481H1200" stroke="#ccc8bf"/>
+  <text x="80" y="536" font-family="Arial, sans-serif" font-size="26" fill="#514e47">Open-source Swedish accounting.</text>
+  <text x="80" y="576" font-family="Arial, sans-serif" font-size="26" fill="#514e47">Built for you and your agents.</text>
+  <text x="1200" y="576" text-anchor="end" font-family="Arial, sans-serif" font-size="22" fill="#514e47">accounted.se</text>
+</svg>

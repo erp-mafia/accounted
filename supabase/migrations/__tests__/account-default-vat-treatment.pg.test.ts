@@ -63,14 +63,15 @@ describe('chart_of_accounts.default_vat_treatment', () => {
       'standard_25', 'reduced_12', 'reduced_6', 'exempt',
       'reverse_charge_domestic', 'reverse_charge_eu_goods',
       'reverse_charge_eu_services', 'export_goods', 'export_services',
-      'vmb', 'rental_voluntary', 'oss', null,
+      'vmb', 'rental_voluntary', 'oss', 'triangulation_eu_goods', null,
     ]
     for (const treatment of revenueTreatments) {
       await expect(setTreatment(companyId, '3001', treatment)).resolves.toBeDefined()
     }
     const purchaseTreatments = [
       'reverse_charge_domestic', 'reverse_charge_eu_goods',
-      'reverse_charge_eu_services', 'reverse_charge_non_eu_services', null,
+      'reverse_charge_eu_services', 'reverse_charge_non_eu_services',
+      'triangulation_eu_goods', null,
     ]
     for (const treatment of purchaseTreatments) {
       await expect(setTreatment(companyId, '4010', treatment)).resolves.toBeDefined()
@@ -95,6 +96,17 @@ describe('chart_of_accounts.default_vat_treatment', () => {
     await insertAccount(companyId, userId, '4010', 4)
     await expect(setTreatment(companyId, '3106', 'oss')).resolves.toBeDefined()
     await expect(setTreatment(companyId, '4010', 'oss')).rejects.toThrow()
+  })
+
+  it('accepts triangulation on both sides (20260914170000_account_vat_treatment_triangulation)', async () => {
+    // Unlike oss, this one is legal on revenue AND purchases: the middleman
+    // declares the purchase in ruta 37 and the onward sale in ruta 38, so a
+    // constraint that allowed only one side would block half the trade.
+    const { companyId, userId } = await seedCompany()
+    await insertAccount(companyId, userId, '3107', 3)
+    await insertAccount(companyId, userId, '4512', 4)
+    await expect(setTreatment(companyId, '3107', 'triangulation_eu_goods')).resolves.toBeDefined()
+    await expect(setTreatment(companyId, '4512', 'triangulation_eu_goods')).resolves.toBeDefined()
   })
 
   it('normalizes values accepted by the predecessor before enforcing classes', async () => {

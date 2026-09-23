@@ -23,7 +23,7 @@ import { seedCompany } from './fixtures'
  *  2. keys of OPERATION_RISK_TIERS (imported, not parsed)
  */
 
-const SERVER_TS = resolve(__dirname, '../../extensions/general/mcp-server/server.ts')
+const SERVER_TS = resolve(__dirname, '../../src/extensions/general/mcp-server/server.ts')
 
 // Matches `stagePendingOperation(<client>, <companyId>, <userId>, '<op_type>'`
 // across line breaks. If the staging signature changes, the call-site count

@@ -150,6 +150,33 @@ describe('fiscal_period_tax_adjustments constraints and RLS', () => {
     })
   })
 
+  it('accepts the deficit_carryforward adjustment type (INK2S 4.14 a) and still rejects unknown types', async () => {
+    const owner = await seedCompany()
+
+    const inserted = await getPool().query(
+      `INSERT INTO public.fiscal_period_tax_adjustments
+         (company_id, user_id, fiscal_period_id, adjustment_type, source,
+          source_key, description, account_number, amount, included)
+       VALUES ($1, $2, $3, 'deficit_carryforward', 'manual',
+               'manual:deficit_carryforward',
+               'Outnyttjat underskott från föregående beskattningsår', NULL, 250000, true)
+       RETURNING id`,
+      [owner.companyId, owner.userId, owner.fiscalPeriodId],
+    )
+    expect(inserted.rows).toHaveLength(1)
+
+    await expect(
+      getPool().query(
+        `INSERT INTO public.fiscal_period_tax_adjustments
+           (company_id, user_id, fiscal_period_id, adjustment_type, source,
+            source_key, description, account_number, amount, included)
+         VALUES ($1, $2, $3, 'some_other_type', 'manual',
+                 'manual:other', 'Okänd justering', NULL, 1, true)`,
+        [owner.companyId, owner.userId, owner.fiscalPeriodId],
+      ),
+    ).rejects.toThrow(/adjustment_type_check/i)
+  })
+
   it('blocks adjustment changes after the fiscal period is locked', async () => {
     const owner = await seedCompany()
     const adjustmentId = await insertAdjustment(owner)

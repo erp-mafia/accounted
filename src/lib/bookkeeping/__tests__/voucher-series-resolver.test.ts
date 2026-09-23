@@ -1,0 +1,367 @@
+import { describe, it, expect } from 'vitest'
+import {
+  applyDefaultSeriesToMap,
+  buildVoucherSeriesOptions,
+  formatVoucher,
+  isStandardVoucherSeriesMap,
+  parseVoucher,
+  resolveDefaultSeriesForSource,
+  STANDARD_VOUCHER_SERIES_MAP,
+  voucherSeriesLabel,
+  VOUCHER_SERIES_PRESETS,
+} from '../voucher-series-resolver'
+import { JournalEntrySourceTypeSchema } from '@/lib/api/schemas'
+import type { JournalEntrySourceType } from '@/types'
+
+describe('resolveDefaultSeriesForSource', () => {
+  it('returns A when settings is null', () => {
+    expect(resolveDefaultSeriesForSource(null, 'manual')).toBe('A')
+  })
+
+  it('returns A when settings is undefined', () => {
+    expect(resolveDefaultSeriesForSource(undefined, 'manual')).toBe('A')
+  })
+
+  it('returns A when the map is missing entirely', () => {
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: null },
+        'manual',
+      ),
+    ).toBe('A')
+  })
+
+  it('returns A when the source_type is not in the map', () => {
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: 'A' } },
+        'supplier_invoice_registered',
+      ),
+    ).toBe('A')
+  })
+
+  it('returns the configured letter for a known source_type', () => {
+    expect(
+      resolveDefaultSeriesForSource(
+        {
+          default_voucher_series_per_source_type: {
+            manual: 'A',
+            supplier_invoice_registered: 'B',
+            salary_payment: 'C',
+          },
+        },
+        'supplier_invoice_registered',
+      ),
+    ).toBe('B')
+    expect(
+      resolveDefaultSeriesForSource(
+        {
+          default_voucher_series_per_source_type: {
+            manual: 'A',
+            supplier_invoice_registered: 'B',
+            salary_payment: 'C',
+          },
+        },
+        'salary_payment',
+      ),
+    ).toBe('C')
+  })
+
+  it('accepts a bare map (no settings wrapper)', () => {
+    expect(
+      resolveDefaultSeriesForSource(
+        { manual: 'A', supplier_invoice_registered: 'B' },
+        'supplier_invoice_registered',
+      ),
+    ).toBe('B')
+  })
+
+  it('rejects invalid values and falls back to A', () => {
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: 'lowercase' } },
+        'manual',
+      ),
+    ).toBe('A')
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: 'AB' } },
+        'manual',
+      ),
+    ).toBe('A')
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: '' } },
+        'manual',
+      ),
+    ).toBe('A')
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: '1' } },
+        'manual',
+      ),
+    ).toBe('A')
+  })
+})
+
+describe('applyDefaultSeriesToMap', () => {
+  it('moves types following the old default onto the new default', () => {
+    const result = applyDefaultSeriesToMap(
+      { manual: 'A', invoice_paid: 'A', invoice_cash_payment: 'A' },
+      'A',
+      'V',
+    )
+    expect(result).toEqual({ manual: 'V', invoice_paid: 'V', invoice_cash_payment: 'V' })
+  })
+
+  it('preserves explicit per-type overrides that differ from the old default', () => {
+    const result = applyDefaultSeriesToMap(
+      { manual: 'A', supplier_invoice_paid: 'B', salary_payment: 'C' },
+      'A',
+      'V',
+    )
+    // Only the type that was following the old default (A) moves; B and C stay.
+    expect(result).toEqual({ manual: 'V', supplier_invoice_paid: 'B', salary_payment: 'C' })
+  })
+
+  it('does not mutate the input map', () => {
+    const input = { manual: 'A', invoice_paid: 'A' }
+    applyDefaultSeriesToMap(input, 'A', 'V')
+    expect(input).toEqual({ manual: 'A', invoice_paid: 'A' })
+  })
+
+  it('returns an empty map when given null/undefined', () => {
+    expect(applyDefaultSeriesToMap(null, 'A', 'V')).toEqual({})
+    expect(applyDefaultSeriesToMap(undefined, 'A', 'V')).toEqual({})
+  })
+
+  it('is a no-op on values when old and new default are equal', () => {
+    const result = applyDefaultSeriesToMap(
+      { manual: 'A', supplier_invoice_paid: 'B' },
+      'A',
+      'A',
+    )
+    expect(result).toEqual({ manual: 'A', supplier_invoice_paid: 'B' })
+  })
+})
+
+describe('formatVoucher', () => {
+  it('formats series + number for a posted entry', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 1 })).toBe('A1')
+    expect(formatVoucher({ voucher_series: 'B', voucher_number: 12 })).toBe('B12')
+  })
+
+  it('returns hyphen for null voucher_number', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: null })).toBe('-')
+  })
+
+  it('returns hyphen for voucher_number 0 (uncommitted draft placeholder)', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 0 })).toBe('-')
+  })
+
+  it('falls back to series A when series is null', () => {
+    expect(formatVoucher({ voucher_series: null, voucher_number: 5 })).toBe('A5')
+  })
+
+  it('uppercases the series', () => {
+    expect(formatVoucher({ voucher_series: 'b', voucher_number: 3 })).toBe('B3')
+  })
+})
+
+describe('parseVoucher', () => {
+  it('parses a well-formed label', () => {
+    expect(parseVoucher('A1')).toEqual({ series: 'A', number: 1 })
+    expect(parseVoucher('B12')).toEqual({ series: 'B', number: 12 })
+  })
+
+  it('round-trips with formatVoucher', () => {
+    const label = formatVoucher({ voucher_series: 'C', voucher_number: 42 })
+    expect(parseVoucher(label)).toEqual({ series: 'C', number: 42 })
+  })
+
+  it('uppercases and trims input', () => {
+    expect(parseVoucher('  a5 ')).toEqual({ series: 'A', number: 5 })
+  })
+
+  it('accepts one space or hyphen between series and number (how users type it in search)', () => {
+    expect(parseVoucher('A 209')).toEqual({ series: 'A', number: 209 })
+    expect(parseVoucher('A-209')).toEqual({ series: 'A', number: 209 })
+    expect(parseVoucher('a-1')).toEqual({ series: 'A', number: 1 })
+  })
+
+  it('returns null for malformed input', () => {
+    expect(parseVoucher('')).toBeNull()
+    expect(parseVoucher('-')).toBeNull()
+    expect(parseVoucher('123')).toBeNull()
+    expect(parseVoucher('AA1')).toBeNull()
+    expect(parseVoucher('A0')).toBeNull()
+    expect(parseVoucher('A--1')).toBeNull()
+    expect(parseVoucher('A  1')).toBeNull()
+  })
+})
+
+describe('VOUCHER_SERIES_PRESETS', () => {
+  it('offers the conventional Swedish series in a stable order', () => {
+    expect(VOUCHER_SERIES_PRESETS.map((p) => p.letter)).toEqual(
+      'ABCDEFGHIJKLM'.split(''),
+    )
+  })
+
+  it('gives every preset a non-empty label', () => {
+    for (const preset of VOUCHER_SERIES_PRESETS) {
+      expect(preset.label.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('uses letters the resolver accepts as a series', () => {
+    for (const preset of VOUCHER_SERIES_PRESETS) {
+      expect(
+        resolveDefaultSeriesForSource({ manual: preset.letter }, 'manual'),
+      ).toBe(preset.letter)
+    }
+  })
+})
+
+describe('voucherSeriesLabel', () => {
+  it('describes a preset letter', () => {
+    // A is the general series manual entries land in, not kundfakturor: it is
+    // the shipped default for every source_type. Guards against a relabelling
+    // that would mislabel every existing company's history.
+    expect(voucherSeriesLabel('A')).toBe('Redovisning')
+    expect(voucherSeriesLabel('B')).toBe('Kundfakturor')
+    expect(voucherSeriesLabel('K')).toBe('Lön')
+  })
+
+  it('returns an empty string for a letter with no preset meaning', () => {
+    expect(voucherSeriesLabel('N')).toBe('')
+    expect(voucherSeriesLabel('Z')).toBe('')
+    expect(voucherSeriesLabel('')).toBe('')
+  })
+
+  it('lets the company name beat the preset, in place', () => {
+    // A byrå that runs löner on L (not the preset K) must see its own word.
+    expect(voucherSeriesLabel('L', { L: 'Lön' })).toBe('Lön')
+    expect(voucherSeriesLabel('L', { L: ' Lön ' })).toBe('Lön')
+  })
+
+  it('names a letter with no preset when the company has named it', () => {
+    expect(voucherSeriesLabel('N', { N: 'Utlägg' })).toBe('Utlägg')
+  })
+
+  it('falls back to the preset when the company name is empty or missing', () => {
+    expect(voucherSeriesLabel('K', { K: '' })).toBe('Lön')
+    expect(voucherSeriesLabel('K', { K: '   ' })).toBe('Lön')
+    expect(voucherSeriesLabel('K', {})).toBe('Lön')
+    expect(voucherSeriesLabel('K', null)).toBe('Lön')
+    expect(voucherSeriesLabel('N', { K: 'x' })).toBe('')
+  })
+})
+
+describe('buildVoucherSeriesOptions', () => {
+  it('offers the presets first, in their fixed order, with preset labels', () => {
+    const options = buildVoucherSeriesOptions(null, [])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+    expect(options[0]).toEqual({ letter: 'A', label: 'Redovisning' })
+  })
+
+  it('appends extra letters once, sorted, after the presets', () => {
+    const options = buildVoucherSeriesOptions(null, ['Z', 'N', 'N', 'A'])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLMNZ')
+    expect(options.find((o) => o.letter === 'N')).toEqual({ letter: 'N', label: '' })
+  })
+
+  it('drops anything that is not a single uppercase letter', () => {
+    const options = buildVoucherSeriesOptions(null, ['', null, undefined, 'ab', 'n', 7, ' '])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+  })
+
+  it('applies company names to presets in place and lists named non-preset letters', () => {
+    const options = buildVoucherSeriesOptions({ L: 'Lön', N: 'Utlägg' }, [])
+    expect(options.find((o) => o.letter === 'L')).toEqual({ letter: 'L', label: 'Lön' })
+    expect(options.find((o) => o.letter === 'K')).toEqual({ letter: 'K', label: 'Lön' })
+    expect(options.find((o) => o.letter === 'N')).toEqual({ letter: 'N', label: 'Utlägg' })
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLMN')
+  })
+
+  it('ignores malformed keys in the label map', () => {
+    const options = buildVoucherSeriesOptions({ ab: 'x', n: 'y', '': 'z' }, [])
+    expect(options.map((o) => o.letter).join('')).toBe('ABCDEFGHIJKLM')
+  })
+})
+
+describe('STANDARD_VOUCHER_SERIES_MAP', () => {
+  const sourceTypes = JournalEntrySourceTypeSchema.options
+  const legacyAllA = Object.fromEntries(sourceTypes.map((type) => [type, 'A']))
+
+  it('assigns a letter to every journal source type, so a new type cannot fall back to A unnoticed', () => {
+    expect(Object.keys(STANDARD_VOUCHER_SERIES_MAP).sort()).toEqual([...sourceTypes].sort())
+  })
+
+  it('only uses letters the presets name, so every series in the set has a name in the pickers', () => {
+    for (const letter of new Set(Object.values(STANDARD_VOUCHER_SERIES_MAP))) {
+      expect(letter).toMatch(/^[A-Z]$/)
+      expect(voucherSeriesLabel(letter)).not.toBe('')
+    }
+  })
+
+  it('keeps manual entries and bank transactions in A, the general series', () => {
+    expect(STANDARD_VOUCHER_SERIES_MAP.manual).toBe('A')
+    expect(STANDARD_VOUCHER_SERIES_MAP.bank_transaction).toBe('A')
+  })
+
+  it('separates the reskontra, lön, moms, periodisering and bokslut flows', () => {
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_created).toBe('B')
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_paid).toBe('C')
+    expect(STANDARD_VOUCHER_SERIES_MAP.invoice_cash_payment).toBe('C')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_registered).toBe('D')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_paid).toBe('E')
+    expect(STANDARD_VOUCHER_SERIES_MAP.supplier_invoice_cash_payment).toBe('E')
+    expect(STANDARD_VOUCHER_SERIES_MAP.accrual).toBe('H')
+    expect(STANDARD_VOUCHER_SERIES_MAP.year_end).toBe('I')
+    expect(STANDARD_VOUCHER_SERIES_MAP.salary_payment).toBe('K')
+    expect(STANDARD_VOUCHER_SERIES_MAP.vat_settlement).toBe('M')
+  })
+
+  it('books each type of a fresh company in its series, and an explicit override still wins', () => {
+    const fresh = { default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP } }
+    expect(resolveDefaultSeriesForSource(fresh, 'invoice_created')).toBe('B')
+    expect(resolveDefaultSeriesForSource(fresh, 'salary_payment')).toBe('K')
+    expect(resolveDefaultSeriesForSource(fresh, 'manual')).toBe('A')
+
+    const overridden = {
+      default_voucher_series_per_source_type: { ...STANDARD_VOUCHER_SERIES_MAP, invoice_created: 'F' },
+    }
+    expect(resolveDefaultSeriesForSource(overridden, 'invoice_created')).toBe('F')
+  })
+
+  it('never reaches an existing company: the resolver reads the row, not the standard set', () => {
+    const existing = { default_voucher_series_per_source_type: legacyAllA }
+    for (const type of sourceTypes) {
+      expect(resolveDefaultSeriesForSource(existing, type)).toBe('A')
+    }
+    // A row that predates a source type keeps falling back to A for it too.
+    expect(
+      resolveDefaultSeriesForSource(
+        { default_voucher_series_per_source_type: { manual: 'A' } },
+        'expense_payout',
+      ),
+    ).toBe('A')
+  })
+})
+
+describe('isStandardVoucherSeriesMap', () => {
+  it('is true for the standard set and for a superset that adds an unknown key', () => {
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP })).toBe(true)
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP, future_type: 'Q' })).toBe(true)
+  })
+
+  it('is false when one type deviates, when a type is missing, and for no map', () => {
+    expect(isStandardVoucherSeriesMap({ ...STANDARD_VOUCHER_SERIES_MAP, salary_payment: 'L' })).toBe(false)
+    const partial: Partial<Record<JournalEntrySourceType, string>> = { ...STANDARD_VOUCHER_SERIES_MAP }
+    delete partial.storno
+    expect(isStandardVoucherSeriesMap(partial as Record<string, string>)).toBe(false)
+    expect(isStandardVoucherSeriesMap(null)).toBe(false)
+    expect(isStandardVoucherSeriesMap(undefined)).toBe(false)
+    expect(isStandardVoucherSeriesMap({})).toBe(false)
+  })
+})

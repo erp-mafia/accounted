@@ -246,9 +246,10 @@ export function parseEmbeds(select, rootTable) {
 /**
  * The table a `.select()` call reads from, resolved by walking ITS OWN method
  * chain back to `.from()`. Never the nearest preceding `.from()` in the file:
- * `.from('journal_entry_lines').select('... journal_entries!inner(...)')` sits
- * a few lines below an unrelated `.from('journal_entries')` in
- * scripts/seed-demo-account.ts, and pairing by proximity flags it wrongly.
+ * `.from('journal_entry_lines').select('... journal_entries!inner(...)')` can
+ * sit a few lines below an unrelated `.from('journal_entries')` in the same
+ * file (a removed demo seeding script did exactly that), and pairing by
+ * proximity flags it wrongly.
  */
 function fromTableOfChain(selectCall) {
   let node = selectCall.expression.expression
@@ -326,16 +327,17 @@ function walk(dir, out) {
 }
 
 /** Findings across the repo, as `{ where, from, target }`, sorted. */
-export function findAmbiguousEmbeds(root) {
+export function findAmbiguousEmbeds(root, sourceRoot = root) {
   const ambiguousPairs = deriveAmbiguousPairs(path.join(root, 'supabase', 'migrations'))
   if (ambiguousPairs.size === 0) return []
 
   const findings = []
   for (const dir of SCAN_DIRS) {
-    for (const file of walk(path.join(root, dir), [])) {
+    const scanRoot = dir === 'scripts' ? root : sourceRoot
+    for (const file of walk(path.join(scanRoot, dir), [])) {
       const sourceText = fs.readFileSync(file, 'utf8')
       if (!sourceText.includes('.select(')) continue
-      const relPath = path.relative(root, file).split(path.sep).join('/')
+      const relPath = path.relative(scanRoot, file).split(path.sep).join('/')
       for (const finding of findAmbiguousEmbedsInSource(sourceText, file, ambiguousPairs)) {
         findings.push({
           where: `${relPath}:${finding.line}`,

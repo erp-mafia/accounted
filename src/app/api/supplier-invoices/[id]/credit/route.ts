@@ -1,0 +1,208 @@
+import { NextResponse } from 'next/server'
+import { eventBus } from '@/lib/events'
+import { ensureInitialized } from '@/lib/init'
+import { createSupplierCreditNoteEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
+import { supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
+import { buildSupplierCreditNoteRow } from '@/lib/supplier-invoices/credit-note'
+import { cancelSchedulesForSource } from '@/lib/bookkeeping/accruals/service'
+import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import type { SupplierInvoice, SupplierInvoiceItem, AccountingMethod } from '@/types'
+import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { normalizeVatRateToFraction } from '@/lib/vat/supplier-invoice-line-checks'
+
+ensureInitialized()
+
+export const POST = withRouteContext(
+  'supplier_invoice.credit',
+  async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params
+    const { user, supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ supplierInvoiceId: id })
+
+    const { data: original, error: fetchError } = await supabase
+      .from('supplier_invoices')
+      .select('*, supplier:suppliers(*), items:supplier_invoice_items(*)')
+      .eq('id', id)
+      .eq('company_id', companyId)
+      .single()
+
+    if (fetchError || !original) {
+      return errorResponseFromCode('SI_NOT_FOUND', opLog, { requestId })
+    }
+
+    if (original.status === 'credited') {
+      return errorResponseFromCode('SI_CREDIT_ALREADY_CREDITED', opLog, { requestId })
+    }
+
+    const { data: arrivalNum } = await supabase
+      .rpc('get_next_arrival_number', { p_company_id: companyId })
+
+    const { data: creditNote, error: creditError } = await supabase
+      .from('supplier_invoices')
+      .insert(
+        buildSupplierCreditNoteRow(original, {
+          userId: user.id,
+          companyId,
+          arrivalNumber: arrivalNum,
+          date: new Date().toISOString().split('T')[0],
+        }),
+      )
+      .select()
+      .single()
+
+    if (creditError || !creditNote) {
+      opLog.error('credit note insert failed', creditError as Error)
+      return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
+        requestId,
+        details: { reason: getUserErrorMessage(creditError) || 'unknown' },
+      })
+    }
+
+    const creditItems = (original.items || []).map((item: SupplierInvoiceItem) => ({
+      supplier_invoice_id: creditNote.id,
+      sort_order: item.sort_order,
+      description: item.description,
+      quantity: item.quantity,
+      unit: item.unit,
+      unit_price: item.unit_price,
+      line_total: item.line_total,
+      account_number: item.account_number,
+      vat_code: item.vat_code,
+      vat_rate: normalizeVatRateToFraction(item.vat_rate),
+      vat_amount: item.vat_amount,
+      // Preserve the self-assessed RC rate so the credit-note verifikat
+      // reverses fiktiv moms at the same rate the original was booked at.
+      reverse_charge_rate: item.reverse_charge_rate,
+      // Preserve the SLP flag for display parity; the journal reversal reads
+      // the ORIGINAL items, so the 7533/2514 swap is correct either way.
+      apply_slp: item.apply_slp ?? false,
+      // Dims copied for display parity; the journal reversal reads the
+      // ORIGINAL items below (dimensions PR7).
+      dimensions: item.dimensions ?? {},
+    }))
+
+    await supabase.from('supplier_invoice_items').insert(creditItems)
+
+    const { data: settings } = await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .single()
+
+    const accountingMethod = (settings?.accounting_method as AccountingMethod) || 'accrual'
+
+    // Kontantmetoden skips only while the original is still UNPAID: nothing
+    // reached the ledger, so there is nothing to reverse and recognition
+    // rightly waits for cash. A PAID original was already booked by its
+    // payment verifikat (expense + 2641 ingående moms), and leaving that
+    // un-reversed overstates both the cost and the moms deduction.
+    let journalEntryId: string | null = null
+    if (supplierCreditNoteNeedsJournalEntry(accountingMethod, original)) {
+      try {
+        // Pass the ORIGINAL items: deferred lines carry their periodisering
+        // fields there, so the credit entry reverses against the same 17xx
+        // interim account the registration booked to. The copied credit-note
+        // items intentionally have no accrual fields.
+        const journalEntry = await createSupplierCreditNoteEntry(
+          supabase, companyId!, user.id,
+          creditNote as SupplierInvoice,
+          (original.items || []) as SupplierInvoiceItem[],
+          original.supplier?.supplier_type || 'swedish_business',
+          original.supplier?.name,
+        )
+        if (journalEntry) {
+          journalEntryId = journalEntry.id
+          await supabase
+            .from('supplier_invoices')
+            .update({ registration_journal_entry_id: journalEntry.id })
+            .eq('id', creditNote.id)
+        }
+      } catch (err) {
+        // Roll back the orphan credit-note row (items cascade-delete) on JE
+        // failure: same momsdeklaration-integrity concern as the POST route.
+        await supabase.from('supplier_invoices').delete().eq('id', creditNote.id).eq('company_id', companyId)
+
+        if (isBookkeepingError(err)) {
+          return errorResponse(err, opLog, { requestId })
+        }
+        opLog.error('failed to create credit note journal entry', err as Error)
+        return errorResponseFromCode('SI_CREDIT_FAILED', opLog, {
+          requestId,
+          details: {
+            reason: err instanceof Error ? getUserErrorMessage(err) : 'unknown',
+            step: 'credit_note_journal_entry',
+          },
+        })
+      }
+    }
+
+    // Periodisering interplay: cancel remaining months and storno the
+    // already-posted dissolutions so origin + dissolutions + stornos +
+    // credit-note net to zero on both the interim and cost accounts.
+    // Best-effort: a reversal hiccup (e.g. locked period) must not block the
+    // credit itself: the schedule stays active and visible for follow-up,
+    // and the response carries a PARTIAL-style warning (same pattern as the
+    // supplier-create route's ACCRUAL_SCHEDULE_FAILED warning).
+    const warnings: Array<{ code: string; message: string }> = []
+    try {
+      const cancelResult = await cancelSchedulesForSource(
+        supabase,
+        companyId!,
+        user.id,
+        { supplierInvoiceId: id },
+        { reversalDate: creditNote.invoice_date },
+      )
+      if (cancelResult.failedReversals > 0) {
+        warnings.push({
+          code: 'ACCRUAL_CANCEL_PARTIAL',
+          message:
+            'Fakturan krediterades, men en eller flera periodiseringsverifikat ' +
+            'kunde inte vändas. Periodiseringen är fortfarande aktiv: ' +
+            'kontrollera under Bokföring → Periodiseringar.',
+        })
+      }
+    } catch (err) {
+      opLog.warn('failed to cancel accrual schedules for credited supplier invoice', err as Error)
+      warnings.push({
+        code: 'ACCRUAL_CANCEL_PARTIAL',
+        message:
+          'Fakturan krediterades, men periodiseringarna kunde inte avslutas. ' +
+          'Kontrollera under Bokföring → Periodiseringar.',
+      })
+    }
+
+    const newRemaining = Math.max(0, original.remaining_amount - original.total)
+    const newStatus = newRemaining <= 0 ? 'credited' : original.status
+
+    await supabase
+      .from('supplier_invoices')
+      .update({
+        status: newStatus,
+        remaining_amount: newRemaining,
+      })
+      .eq('id', id)
+
+    try {
+      await eventBus.emit({
+        type: 'supplier_invoice.credited',
+        payload: {
+          supplierInvoice: original as SupplierInvoice,
+          creditNote: creditNote as SupplierInvoice,
+          companyId: companyId!,
+          userId: user.id,
+        },
+      })
+    } catch (err) {
+      opLog.warn('supplier_invoice.credited event emission failed', err as Error)
+    }
+
+    return NextResponse.json({
+      data: creditNote,
+      journal_entry_id: journalEntryId,
+      ...(warnings.length > 0 ? { warnings } : {}),
+    })
+  },
+  { requireWrite: true },
+)

@@ -1457,6 +1457,20 @@ function processChain(
         }
         continue
       }
+      // PostgREST's null filter on an embedded resource (`?invoice_items=is.null`,
+      // the anti-join on a to-many embed: the parents whose embed is empty)
+      // names the embed declared in this chain's select, not a column. The
+      // embed itself was resolved when the aliases were registered, so there
+      // is no column left to check. Only `is` reaches an embed this way:
+      // `.eq('invoice_items', x)` is a real phantom and stays one. Grammar
+      // proven on a real PostgREST by complete-invoice-lines-count.tool.test.ts.
+      const operator = method === 'is' ? 'is' : literalText(args[1])
+      const embedNullFilter =
+        !raw.includes('.') &&
+        aliases.has(raw) &&
+        operator === 'is' &&
+        (method === 'is' || method === 'not' || method === 'filter')
+      if (embedNullFilter) continue
       const resolved = resolvePath(raw, node, 'filter')
       if (!resolved) continue
       push(resolved.table, resolved.column, 'filter', node, raw)
