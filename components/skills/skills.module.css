@@ -142,6 +142,36 @@
   animation: ring .8s ease-out forwards;
 }
 
+/* Skapa din egen: a glass key on the photo, dashed until touched, beside the three burning ones */
+@keyframes plusglow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(var(--rf), .5); } 50% { box-shadow: 0 0 18px 5px rgba(var(--rf), 1); } }
+.createFace {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 18px 18px;
+  border: 1.5px dashed rgba(255, 255, 255, .6);
+  border-radius: var(--radius);
+  background: rgba(15, 30, 38, .4);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color .2s, border-color .2s, transform .22s cubic-bezier(.2, .8, .2, 1.3);
+}
+.createFace:hover:not(:disabled) { border-style: solid; border-color: #fff; background: rgba(15, 30, 38, .58); transform: translate(-3px, -3px); }
+.createFace:active:not(:disabled) { transition-duration: .08s; transform: translate(2px, 2px); }
+.createFace:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
+.createFace:disabled { opacity: .5; cursor: default; }
+.createFace h3 { font-weight: 500; font-size: 16px; line-height: 22px; letter-spacing: -.01em; color: #fff; }
+.createFace p { font-size: 13px; line-height: 19px; color: rgba(255, 255, 255, .8); }
+.createPlus { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 99px; background: #fff; color: var(--ground); animation: plusglow 2.8s ease-in-out infinite; }
+.createCta { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 99px; background: #fff; color: #171717; font-size: 13px; font-weight: 500; transition: gap .2s; }
+.createFace:hover:not(:disabled) .createCta { gap: 10px; }
+
 .spark {
   position: absolute;
   z-index: 5;
@@ -212,42 +242,10 @@
 .rowMain::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
 .row .nm { display: block; font-weight: 500; font-size: 15px; line-height: 21px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
 .row .ds { flex: 1; font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-/*
- * "Gör det med Claude": a quiet outline pill. The only motion is a small
- * Himmel dot breathing at its start, the sign that the agent is there.
- */
 @keyframes rundot {
   0%, 100% { box-shadow: 0 0 0 0 rgba(var(--rf), 0); }
   50% { box-shadow: 0 0 6px 2px rgba(var(--rf), .9); }
 }
-.run {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 16px 0 14px;
-  border: 1px solid hsl(var(--border));
-  border-radius: 99px;
-  background: hsl(var(--background));
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 1;
-  white-space: nowrap;
-  color: hsl(var(--foreground));
-  cursor: pointer;
-  transition: background-color .18s, color .18s, border-color .18s;
-}
-.run::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 99px;
-  background: var(--rbd);
-  animation: rundot 2.6s ease-in-out infinite;
-}
-.run:hover { background: hsl(var(--foreground)); border-color: hsl(var(--foreground)); color: hsl(var(--background)); }
-.run:hover::before { background: var(--rb); }
-.run:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
 /* "Gör nu": the Att göra list has work waiting that this skill does */
 .now {
   display: inline-flex;
@@ -269,7 +267,7 @@
 .face .now::before { background: var(--rbd); }
 .nowLight { position: absolute; top: 12px; right: 12px; pointer-events: none; border-color: rgba(var(--rf), .9); background: #EEF3FA; color: #2A4468; }
 .nowLight::before { background: var(--rbd); }
-.row[data-now] .nm { padding-right: 64px; }
+.row[data-now] .nm { padding-right: 88px; }
 .row[data-now] { --edge: var(--edgeNow); --edgeHover: var(--edgeNow); }
 
 /* a quiet "Öppna" that surfaces on hover, bottom right */
@@ -427,6 +425,23 @@
 .sheetFoot .nightBtns > button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 16px -8px hsl(var(--foreground) / .35); }
 .sheetFoot .nightBtns > .pillGhost:hover:not(:disabled) { border-color: hsl(var(--foreground) / .35); }
 .sheetFoot .nightBtns > button:active:not(:disabled) { transition-duration: .08s; transform: translateY(0); box-shadow: none; }
+/* "Gör det med Claude": the sheet's one loud thing, a dark pill with the panel's light wandering its edge */
+.goWrap { position: relative; display: flex; isolation: isolate; border-radius: 99px; }
+.goWrap::before { content: ""; position: absolute; inset: -6px; z-index: -1; border-radius: 99px; pointer-events: none; background: conic-gradient(from var(--ang), transparent 0 28%, rgba(var(--rf), 1) 50%, transparent 72% 100%); filter: blur(10px); opacity: .6; animation: spin 4s linear infinite; transition: opacity .3s, inset .3s; }
+.goWrap:hover::before { inset: -10px; opacity: 1; }
+.go { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: 56px; padding: 0 24px; border: 0; border-radius: 99px; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-size: 15px; font-weight: 500; cursor: pointer; transition: transform .2s cubic-bezier(.2, .8, .2, 1.3), box-shadow .2s; }
+.go:hover { transform: translateY(-2px); box-shadow: 0 10px 24px -10px hsl(var(--foreground) / .6); }
+.go:active { transition-duration: .08s; transform: none; box-shadow: none; }
+.go:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 4px; }
+.go svg { transition: transform .2s; }
+.go:hover svg { transform: translate(2px, -2px); }
+.goDot { width: 7px; height: 7px; border-radius: 99px; background: var(--rb); animation: rundot 2.6s ease-in-out infinite; }
+.goHint { margin-top: -2px; font-size: 12px; text-align: center; color: hsl(var(--muted-foreground)); }
+.todoLine { font-size: 14px; line-height: 21px; }
+.todoLine b { font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .goWrap::before, .goDot, .createPlus { animation: none; }
+}
 .nightNote { font-size: 12px; color: hsl(var(--muted-foreground)); }
 
 /* ── Helskärm: the creator, light, with the halftone skyline ── */

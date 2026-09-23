@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useTranslations } from 'next-intl'
+import { ArrowRight, Plus } from 'lucide-react'
 import useSWR from 'swr'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -251,6 +252,7 @@ function Registry({ companyId }: { companyId: string }) {
       ? 'unlocking'
       : isConnected ? 'open' : pending ? 'waiting' : 'locked'
   const client = pickConnectedAiClient(connected ?? [], pending ?? undefined) ?? pending ?? 'claude'
+  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
 
   // ── connect ──
   const [addressCopy, setAddressCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -365,9 +367,12 @@ function Registry({ companyId }: { companyId: string }) {
 
   // ── derived view ──
   const top = REGISTRY_SKILLS.slice(0, FREE_SKILLS)
+  // skills with work waiting on Att göra come first
+  const rest = REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => skill.id)
   const rows: Row[] = [
     ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, own: row })),
-    ...REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => ({ key: skill.id, name: t(`skills.${skill.id}.name`), desc: t(`skills.${skill.id}.desc`), id: skill.id })),
+    ...[...rest.filter((id) => doNow.has(id)), ...rest.filter((id) => !doNow.has(id))]
+      .map((id) => ({ key: id, name: t(`skills.${id}.name`), desc: t(`skills.${id}.desc`), id })),
   ]
   useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
   const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
@@ -409,7 +414,7 @@ function Registry({ companyId }: { companyId: string }) {
               <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
                 <span className={styles.faceTop}>
                   <SkillMarks id={skill.id} />
-                  {doNow.has(skill.id) && <span className={styles.now}>{t('now_tag')}</span>}
+                  {doNow.has(skill.id) && <span className={styles.now}>{t('now_count', { count: doNow.get(skill.id)! })}</span>}
                   <span className={styles.led} aria-hidden />
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
@@ -418,6 +423,15 @@ function Registry({ companyId }: { companyId: string }) {
               </button>
             </div>
           ))}
+          {/* the invitation to make one's own, as big as the keys beside it */}
+          <div className={`${styles.card} ${styles.createCard}`}>
+            <button type="button" className={styles.createFace} disabled={!canWrite} onClick={createSkill}>
+              <span className={styles.createPlus} aria-hidden><Plus className="h-4 w-4" /></span>
+              <h3>{t('create_card_title')}</h3>
+              <p>{t('create_card_body', { client: clientName })}</p>
+              <span className={styles.createCta}>{t('create_card_cta', { client: clientName })}<ArrowRight className="h-3.5 w-3.5" aria-hidden /></span>
+            </button>
+          </div>
         </div>
       </section>
 
@@ -441,7 +455,7 @@ function Registry({ companyId }: { companyId: string }) {
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
                   {row.id && <SkillMarks id={row.id} />}
-                  {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_tag')}</span>}
+                  {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_count', { count: doNow.get(row.id)! })}</span>}
                   <span className={styles.open} aria-hidden>{t('open_hint')}</span>
                 </div>
               </li>
@@ -497,6 +511,7 @@ function Registry({ companyId }: { companyId: string }) {
         companyId={companyId}
         client={client}
         canWrite={canWrite}
+        todo={sheetKey ? doNow.get(sheetKey) : undefined}
         onClose={() => setSheet(null)}
         onConnect={(target) => { setSheet(null); connect(target) }}
         onEdit={IN_APP_CREATOR ? (target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) } : undefined}

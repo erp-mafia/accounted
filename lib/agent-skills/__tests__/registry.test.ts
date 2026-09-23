@@ -3,20 +3,20 @@ import { skillsToDoNow } from '../registry'
 
 describe('skillsToDoNow', () => {
   it('tags nothing when the worklist is empty', () => {
-    expect(skillsToDoNow({})).toEqual(new Set())
-    expect(skillsToDoNow({ book_transaction: 0, verifikat_missing_document: 0 })).toEqual(new Set())
+    expect(skillsToDoNow({})).toEqual(new Map())
+    expect(skillsToDoNow({ book_transaction: 0, verifikat_missing_document: 0 })).toEqual(new Map())
   })
 
   it('tags Kvittojakten when a verifikat is missing its document', () => {
-    expect(skillsToDoNow({ verifikat_missing_document: 2 })).toEqual(new Set(['kvittojakten']))
+    expect(skillsToDoNow({ verifikat_missing_document: 2 })).toEqual(new Map([['kvittojakten', 2]]))
   })
 
-  it('tags each skill from any of its categories', () => {
-    expect(skillsToDoNow({ book_skattekonto: 1, inbox_document: 3, reconciliation_due: 1 }))
-      .toEqual(new Set(['bookkeep', 'kvittojakten', 'reconcile-month']))
+  it('adds up every category a skill answers', () => {
+    expect(skillsToDoNow({ book_transaction: 5, book_skattekonto: 1, verifikat_missing_document: 2, inbox_document: 3, reconciliation_due: 1 }))
+      .toEqual(new Map([['bookkeep', 6], ['kvittojakten', 5], ['reconcile-month', 1]]))
   })
 
   it('ignores categories no skill answers', () => {
-    expect(skillsToDoNow({ pending_operations: 4, deadline_action: 1 })).toEqual(new Set())
+    expect(skillsToDoNow({ pending_operations: 4, deadline_action: 1 })).toEqual(new Map())
   })
 })

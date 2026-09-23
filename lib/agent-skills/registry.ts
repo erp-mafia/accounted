@@ -39,7 +39,7 @@ export function registrySkillSlug(id: RegistrySkillId, client: AiClient): string
 
 /**
  * Which "Att göra" counts make a skill worth running right now. A skill is
- * tagged "Gör nu" when any of its categories has work waiting. Skills with
+ * tagged with its count when any of its categories has work waiting. Skills with
  * no entry are never tagged: VAT and payroll deadlines share one count
  * (deadline_action) that does not say which tax is due.
  */
@@ -49,11 +49,12 @@ const NOW_CATEGORIES: Partial<Record<RegistrySkillId, readonly WorklistCategory[
   'reconcile-month': ['reconciliation_due'],
 }
 
-/** The skills with waiting work, given the worklist counts. */
-export function skillsToDoNow(counts: Partial<Record<WorklistCategory, number>>): Set<RegistrySkillId> {
-  const now = new Set<RegistrySkillId>()
+/** The skills with waiting work, and how many Att göra items each would clear. */
+export function skillsToDoNow(counts: Partial<Record<WorklistCategory, number>>): Map<RegistrySkillId, number> {
+  const now = new Map<RegistrySkillId, number>()
   for (const [id, categories] of Object.entries(NOW_CATEGORIES) as [RegistrySkillId, readonly WorklistCategory[]][]) {
-    if (categories.some((category) => (counts[category] ?? 0) > 0)) now.add(id)
+    const total = categories.reduce((sum, category) => sum + Math.max(0, counts[category] ?? 0), 0)
+    if (total > 0) now.set(id, total)
   }
   return now
 }

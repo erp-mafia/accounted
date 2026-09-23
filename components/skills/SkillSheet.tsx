@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
+import { ArrowUpRight, X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -39,11 +39,13 @@ async function readBody(url: string): Promise<string> {
  * copies the prompt and opens an empty chat: the prompt names a skill and
  * nothing else, but it still travels by clipboard, never in the chat URL.
  */
-export function SkillSheet({ target, companyId, client, canWrite, onClose, onConnect, onEdit, onDelete }: {
+export function SkillSheet({ target, companyId, client, canWrite, todo, onClose, onConnect, onEdit, onDelete }: {
   target: SheetTarget | null
   companyId: string
   client: AiClient
   canWrite: boolean
+  /** How many Att göra items this skill would clear. */
+  todo?: number
   onClose: () => void
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
@@ -52,17 +54,19 @@ export function SkillSheet({ target, companyId, client, canWrite, onClose, onCon
   return (
     <SlideOver open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SlideOverContent aria-describedby={undefined} className={styles.sheet}>
-        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
+        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} todo={todo} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
       </SlideOverContent>
     </SlideOver>
   )
 }
 
-function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onDelete }: {
+function SheetBody({ target, companyId, client, canWrite, todo, onConnect, onEdit, onDelete }: {
   target: SheetTarget
   companyId: string
   client: AiClient
   canWrite: boolean
+  /** How many Att göra items this skill would clear. */
+  todo?: number
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
@@ -125,8 +129,16 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
             </div>
           ) : (
             <div className="flex flex-col gap-2">
+              {todo ? <p className={styles.todoLine}><b>{todo}</b>{t('sheet_todo', { count: todo })}</p> : null}
+              <span className={styles.goWrap}>
+                <button type="button" className={styles.go} onClick={copyAndOpen}>
+                  <span className={styles.goDot} aria-hidden />
+                  {t('run_client', { client: clientName })}
+                  <ArrowUpRight className="h-4 w-4" aria-hidden />
+                </button>
+              </span>
+              <p className={styles.goHint}>{t('run_hint', { client: clientName })}</p>
               <div className={styles.nightBtns}>
-                <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
                 <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>
                 {own && onEdit && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
                 {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
