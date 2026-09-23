@@ -371,10 +371,11 @@
       outside .page, so it uses only global tokens ── */
 .sheet { --rf: 176, 198, 228; --rb: #B8CAE4; --rbd: #8FA9CF; background: hsl(var(--background)) !important; color: hsl(var(--foreground)); }
 .sheetBody { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: inherit; overflow-y: auto; }
-/* white head and foot; the steps sit on a soft tray that takes up the spare height */
+/* a white head; the steps sit on a soft tray that takes up the spare height */
 .sheetHead { display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; border-bottom: 1px solid hsl(var(--border)); }
 .sheetMain { flex: 1 0 auto; display: flex; flex-direction: column; gap: 16px; padding: 24px; background: hsl(var(--frame)); }
-.sheetFoot { display: flex; flex-direction: column; gap: 14px; padding: 20px 24px 24px; border-top: 1px solid hsl(var(--border)); }
+/* the phrase and the buttons follow the steps on the tray, so the spare height falls below them */
+.sheetFoot { display: flex; flex-direction: column; gap: 14px; padding-top: 12px; }
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
 .x:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }

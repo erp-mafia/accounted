@@ -107,37 +107,37 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
       </div>
       <div className={styles.sheetMain}>
         {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
-      </div>
-      <div className={styles.sheetFoot}>
-        <div className={styles.promptbox}>
-          <span>{t('say_label')}</span>
-          <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
+        <div className={styles.sheetFoot}>
+          <div className={styles.promptbox}>
+            <span>{t('say_label')}</span>
+            <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
+          </div>
+          {locked ? (
+            <div className="flex flex-col gap-3">
+              <p className={styles.lockedline}>{t('locked_line')}</p>
+              <div className={styles.nightBtns}>
+                {AI_CLIENTS.map((c, i) => (
+                  <button key={c.id} type="button" className={i === 0 ? styles.pill : `${styles.pill} ${styles.pillGhost}`} onClick={() => onConnect(c.id)}>
+                    {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <div className={styles.nightBtns}>
+                <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
+                {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>}
+                {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
+                {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
+              </div>
+              {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
+              {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
+              {fullCopy === 'failed' && <p role="alert" className={styles.nightNote}>{t('body_failed')}</p>}
+              {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+            </div>
+          )}
         </div>
-        {locked ? (
-          <div className="flex flex-col gap-3">
-            <p className={styles.lockedline}>{t('locked_line')}</p>
-            <div className={styles.nightBtns}>
-              {AI_CLIENTS.map((c, i) => (
-                <button key={c.id} type="button" className={i === 0 ? styles.pill : `${styles.pill} ${styles.pillGhost}`} onClick={() => onConnect(c.id)}>
-                  {i === 0 ? t('connect_client', { client: c.name }) : c.name}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2">
-            <div className={styles.nightBtns}>
-              <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
-              {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>}
-              {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
-              {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
-            </div>
-            {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
-            {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
-            {fullCopy === 'failed' && <p role="alert" className={styles.nightNote}>{t('body_failed')}</p>}
-            {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
-          </div>
-        )}
       </div>
       {own && (
         <DestructiveConfirmDialog
