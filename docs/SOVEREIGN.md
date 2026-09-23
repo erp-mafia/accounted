@@ -42,7 +42,7 @@ Three things carry the sovereign claim, in order of how much they matter:
 | VAT and AGI file generation for manual filing at Skatteverket | Skatteverket API submission and skattekonto sync (Accounted's API client registration) |
 | Peppol BIS Billing 3 invoice generation (UBL download) | Peppol sending and receiving through the network (Accounted's contracted access point; an own Qvalia account also works) |
 | Document archive with SHA-256 integrity and WORM bucket | Company lookup (TIC), migration from Fortnox/Visma/Bokio/Björn Lundén via the Arcim gateway |
-| MCP server, API keys, staged approvals | Receipt hunt in a connected mailbox (Accounted's Google OAuth app), WhatsApp intake (Accounted's Meta credentials), Stripe billing |
+| MCP server, API keys, staged approvals | WhatsApp intake (Accounted's Meta credentials), Stripe billing |
 | AI document extraction, assistant Q&A and one-tap categorization on a BYO endpoint; HTML mail invoices | Specialized conversational flows (VAT review, KPI explanation, settings help, bokslut helpers): Anthropic-family backend only (Bedrock or the direct API), not a BYO OpenAI-compatible endpoint ([#1800](https://github.com/erp-mafia/accounted/issues/1800)) |
 | Push notifications (your VAPID keys), invoice email via your own SMTP relay (`EMAIL_PROVIDER=smtp`) or Resend (section 6) | |
 
@@ -153,11 +153,11 @@ Alert on a non-zero exit: the script prints a few progress lines on success and 
 
 A sovereign deployment still has these touchpoints. None carries accounting data; list them for your own risk register rather than pretending they are gone.
 
-- **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker-compose.build.yml up --build`).
+- **Image distribution**: the app image is pulled from GitHub Container Registry (`ghcr.io/erp-mafia/gnubok`), and the cron sidecar downloads `supercronic` from GitHub Releases at build time. Mirror both into your own registry for an air-gapped setup (build from source: `docker compose -f docker-compose.yml -f docker/compose.build.yml up --build`).
 - **Fonts**: `next/font/google` downloads Geist and Hedvig Letters Serif **at build time** and self-hosts them; browsers never call Google. The GitHub-built image therefore has no runtime font dependency; a source build fetches them once during `next build`.
 - **Invoice email**: the email extension sends through Resend (US) or, with `EMAIL_PROVIDER=smtp`, through your own relay: a Swedish mail provider, an M365/Workspace relay, Postfix on the host (variables in SELF-HOSTING.md, Email section; TLS is required unless you set `SMTP_REQUIRE_TLS=false` for a plaintext relay on a trusted LAN). Pick SMTP for a sovereign deployment, or leave invoice email unconfigured (invoices download as PDF). Resend, if you choose it, carries invoice PDFs to your customers but no ledger data.
 - **Telemetry**: none. Analytics (PostHog) and Vercel Speed Insights are hosted-only and switched off by `NEXT_PUBLIC_SELF_HOSTED=true`; there is no error-tracking integration at all (SELF-HOSTING.md, Error Tracking: errors go to the container logs); there is no call-home licence check, by design.
-- **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Google OAuth for receipt hunt, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
+- **Upstream services you opt into**: Enable Banking, Skatteverket, TIC, the migration gateway, Meta for WhatsApp are hosted-only today (section 2) and simply stay unconfigured.
 
 ## 7. Checklist
 

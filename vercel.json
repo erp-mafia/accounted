@@ -153,6 +153,26 @@
     {
       "path": "/api/parties/resolver/cron",
       "schedule": "45 5 * * *"
+    },
+    {
+      "path": "/api/documents/read/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/documents/classify/cron",
+      "schedule": "2-59/5 * * * *"
+    },
+    {
+      "path": "/api/documents/jobs/cron",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/arkiv/derive/cron",
+      "schedule": "40 4 * * *"
+    },
+    {
+      "path": "/api/arkiv/lint/cron",
+      "schedule": "10 5 * * *"
     }
   ]
 }

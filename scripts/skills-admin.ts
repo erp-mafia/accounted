@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import yaml from 'js-yaml'
 import { z } from 'zod'
-import { SkillBodySchema } from '../lib/agent-skills/validation'
+import { SkillBodySchema } from '../src/lib/agent-skills/validation'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REPO = 'erp-mafia/accounted'

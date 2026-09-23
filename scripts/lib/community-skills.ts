@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import yaml from 'js-yaml'
 import { z } from 'zod'
-import { SkillBodySchema } from '../../lib/agent-skills/validation'
+import { SkillBodySchema } from '../../src/lib/agent-skills/validation'
 import type { DiscoveredAtom } from './atom-discovery'
 
 /** Reviewed registry entries and private submissions ultimately use this path. */

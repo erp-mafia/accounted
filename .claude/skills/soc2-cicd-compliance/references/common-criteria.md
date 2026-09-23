@@ -10,7 +10,7 @@ Organizational integrity, ethical values, board oversight, structural standards.
 
 ### CC1.1 - Tone at the top, integrity, ethical values
 
-* **Deterministic**: presence of `CODE_OF_CONDUCT.md`; presence of an employee handbook acknowledgment registry in the compliance directory.
+* **Deterministic**: presence of `.github/CODE_OF_CONDUCT.md`; presence of an employee handbook acknowledgment registry in the compliance directory.
 * **Agentic**: parse the Code of Conduct to ensure it explicitly addresses contractor and vendor conduct (2022 points-of-focus update).
 * **Out of repo**: actual ethical conduct in board meetings, day-to-day management behavior.
 
@@ -41,7 +41,7 @@ The entity generates and uses relevant, quality information internally and exter
 
 ### CC2.3 - External communication
 
-* **Deterministic**: `SECURITY.md` in repository root with responsible disclosure and (if applicable) bug bounty instructions.
+* **Deterministic**: `.github/SECURITY.md` with responsible disclosure and (if applicable) bug bounty instructions.
 
 ## CC3: Risk Assessment
 

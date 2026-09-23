@@ -1,0 +1,153 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
+import type { WorklistCounts } from './types'
+import type { MissingUnderlagSample } from './missing-underlag'
+import {
+  countDeadlinesNeedingAction,
+  countExpensePayoutsDue,
+  countInboxDocuments,
+  countHeldDocuments,
+  countUnclassifiedDocuments,
+  countDocumentFieldReviews,
+  countMissedAgreementPayments,
+  countArkivFindings,
+  countOverdueInvoices,
+  countPendingOperations,
+  countReconciliationDue,
+  countSkattekontoPaymentDue,
+  countSuggestedMatches,
+  countSupplierInvoicesAwaitingApproval,
+  countUnbookedSkattekontoRows,
+  countUnbookedTransactions,
+  countVerifikatMissingDocument,
+} from './categories'
+
+/**
+ * All worklist counts in one round-trip burst. Each count is a bounded query
+ * (mostly head-only; suggested_match revalidates its candidates, see
+ * categories.ts) and individually soft-fails to 0, so this is safe to call
+ * from layouts and server components on every render.
+ *
+ * `total` is the number of distinct actionable items: suggested_match is a
+ * fast path over transactions already counted in book_transaction, so it is
+ * excluded to avoid double-counting (see lib/worklist/types.ts).
+ */
+export interface GetWorklistCountsOptions {
+  /**
+   * Suggested matches the caller is already fetching (Hem renders them in
+   * the Att göra pane): the count is taken from this list instead of a
+   * second scan of the same rows. A promise is accepted so it can run in
+   * parallel with the other counts.
+   */
+  suggestedMatches?: SuggestedMatch[] | Promise<SuggestedMatch[]>
+  /**
+   * People owed for unpaid utlägg the caller is already fetching (Hem
+   * renders one row per person): the count is the list's length instead of
+   * a second scan of expense_claims.
+   */
+  expensePayoutsDue?: ExpensePayoutDue[] | Promise<ExpensePayoutDue[]>
+  /**
+   * The next uncovered skattekonto charge the caller is already fetching
+   * (Hem renders it as one Betala row): the count is 1 or 0 from that value
+   * instead of a second scan. Pass null for "nothing to pay in".
+   */
+  skattekontoPaymentDue?: SkattekontoPaymentDue | null | Promise<SkattekontoPaymentDue | null>
+  /**
+   * The missing-underlag page the caller is already fetching to say what the
+   * errand behind the row is (Hem renders it as the row's detail line). Its
+   * `total` is computed over the full filtered set inside the same RPC, so
+   * passing it replaces the count call rather than adding one.
+   */
+  missingUnderlag?: MissingUnderlagSample | Promise<MissingUnderlagSample>
+}
+
+export async function getWorklistCounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: GetWorklistCountsOptions = {},
+): Promise<WorklistCounts> {
+  const [
+    bookTransaction,
+    bookSkattekonto,
+    inboxDocument,
+    suggestedMatch,
+    supplierInvoiceApproval,
+    verifikatMissingDocument,
+    overdueInvoice,
+    deadlineAction,
+    pendingOperations,
+    reconciliationDue,
+    expensePayout,
+    skattekontoPaymentDue,
+    documentRelevance,
+    documentUnclassified,
+    documentFieldReview,
+    agreementPaymentMissed,
+    arkivFinding,
+  ] = await Promise.all([
+    countUnbookedTransactions(supabase, companyId),
+    countUnbookedSkattekontoRows(supabase, companyId),
+    countInboxDocuments(supabase, companyId),
+    options.suggestedMatches
+      ? Promise.resolve(options.suggestedMatches).then((m) => m.length)
+      : countSuggestedMatches(supabase, companyId),
+    countSupplierInvoicesAwaitingApproval(supabase, companyId),
+    options.missingUnderlag
+      ? Promise.resolve(options.missingUnderlag).then((s) => s.total)
+      : countVerifikatMissingDocument(supabase, companyId),
+    countOverdueInvoices(supabase, companyId),
+    countDeadlinesNeedingAction(supabase, companyId),
+    countPendingOperations(supabase, companyId),
+    countReconciliationDue(supabase, companyId),
+    options.expensePayoutsDue
+      ? Promise.resolve(options.expensePayoutsDue).then((p) => p.length)
+      : countExpensePayoutsDue(supabase, companyId),
+    options.skattekontoPaymentDue !== undefined
+      ? Promise.resolve(options.skattekontoPaymentDue).then((p) => (p ? 1 : 0))
+      : countSkattekontoPaymentDue(supabase, companyId),
+    countHeldDocuments(supabase, companyId),
+    countUnclassifiedDocuments(supabase, companyId),
+    countDocumentFieldReviews(supabase, companyId),
+    countMissedAgreementPayments(supabase, companyId),
+    countArkivFindings(supabase, companyId),
+  ])
+
+  return {
+    counts: {
+      book_transaction: bookTransaction,
+      book_skattekonto: bookSkattekonto,
+      inbox_document: inboxDocument,
+      suggested_match: suggestedMatch,
+      supplier_invoice_approval: supplierInvoiceApproval,
+      verifikat_missing_document: verifikatMissingDocument,
+      overdue_invoice: overdueInvoice,
+      deadline_action: deadlineAction,
+      pending_operations: pendingOperations,
+      reconciliation_due: reconciliationDue,
+      expense_payout: expensePayout,
+      skattekonto_payment_due: skattekontoPaymentDue,
+      document_relevance: documentRelevance,
+      document_unclassified: documentUnclassified,
+      document_field_review: documentFieldReview,
+      agreement_payment_missed: agreementPaymentMissed,
+      arkiv_finding: arkivFinding,
+    },
+    total:
+      bookTransaction +
+      bookSkattekonto +
+      inboxDocument +
+      supplierInvoiceApproval +
+      verifikatMissingDocument +
+      overdueInvoice +
+      deadlineAction +
+      pendingOperations +
+      reconciliationDue +
+      expensePayout +
+      skattekontoPaymentDue +
+      documentRelevance +
+      documentUnclassified +
+      documentFieldReview +
+      agreementPaymentMissed +
+      arkivFinding,
+  }
+}

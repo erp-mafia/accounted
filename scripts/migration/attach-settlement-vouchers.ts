@@ -184,7 +184,7 @@ async function main() {
   // dotenv() call, and app modules capture env into module constants when they
   // are first evaluated (see refresh-supplier-payment-state.ts, first run on
   // 2026-09-14).
-  const { attachSettlementVouchersBatch } = await import('../../lib/invoices/attach-settlement-voucher')
+  const { attachSettlementVouchersBatch } = await import('../../src/lib/invoices/attach-settlement-voucher')
   const result = await attachSettlementVouchersBatch(supabase, {
     companyId: COMPANY_ID!,
     userId,

@@ -1,8 +1,0 @@
-# Optional resource and startup-health controls.
-# Requires Docker Compose 2.20.2+ and Docker Engine 25.0+.
-# Usage: docker compose -f docker-compose.yml -f docker-compose.resources.yml up -d
-services:
-  app:
-    cpus: 2
-    healthcheck:
-      start_interval: 5s

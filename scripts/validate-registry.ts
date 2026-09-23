@@ -23,7 +23,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
-import { markdownProblems, SkillBodySchema } from '../lib/agent-skills/validation'
+import { markdownProblems, SkillBodySchema } from '../src/lib/agent-skills/validation'
 import { discoverCommunitySkills } from './lib/community-skills'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')

@@ -64,6 +64,19 @@ not among the imported ones. These warnings do not by themselves put
 every record into `needs_attention` and must be reviewed before later accounting
 actions. The existing mapper is reused without changing its VAT rules.
 
+A supplier credit note (#2838) is stored the way Kreditera writes one: the
+magnitudes of the invoice it reverses beside `is_credit_note`, status `credited`,
+nothing paid and nothing remaining, whatever sign the provider states. It is
+paired through `supplier_invoices.credited_invoice_id` only when the provider
+names the credited invoice (Fortnox `CreditReference`) and that invoice is an
+ordinary invoice of the same supplier, in the same currency, not smaller than
+the credit; never by amount. The registration link corroborates a credit note
+against the NEGATED total, because its verifikat debits 2440. A supplier credit
+note the company already holds in the shape written before #2838 (the provider's
+negative total on an unflagged row) is skipped with reason
+`creditNoteInOldShape` instead of being inserted a second time; rewriting those
+rows is a separate, founder-approved repair.
+
 There is no snapshot purge or TTL job. A pending or failed snapshot remains
 available for retry. The archive includes customers, suppliers, invoices, their
 items and payments, and source-ID mappings; operational jobs and encrypted

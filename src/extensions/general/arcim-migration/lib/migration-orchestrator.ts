@@ -1,0 +1,1695 @@
+/**
+ * Migration orchestrator: coordinates the data migration from
+ * an external accounting system directly via provider APIs into gnubok.
+ *
+ * Bookkeeping data (accounts, balances, vouchers) is imported
+ * via SIE files through the core SIE import engine. This orchestrator
+ * handles only entity-level imports:
+ *   1. Company info → pre-fill company_settings
+ *   2. Customers → needed before sales invoices
+ *   3. Suppliers → needed before supplier invoices
+ *   4. Sales invoices (all statuses, duplicates skipped)
+ *   5. Supplier invoices (all statuses, duplicates skipped)
+ *   6. Asset register (Fortnox only) → asset register rows, no journal entries
+ *
+ * Performance note: All steps use bulk reads + chunked inserts to
+ * avoid N+1 round-trips that would exhaust the Vercel function
+ * timeout (300s hard cap). A typical import with a few thousand
+ * entities completes in a handful of Supabase requests per step.
+ */
+
+import { bokioSupplierSource, recordBokioSupplierSources } from './bokio-supplier-source'
+import { chunk } from '@/lib/utils'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { MigrationProgress, MigrationResults, MigrationStepError, SkipReasons } from '../types'
+import type { ProviderName } from '@/lib/providers/types'
+import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
+import type { CustomerDto, SupplierDto, CreditedInvoiceRefDto, SalesInvoiceDto, SupplierInvoiceDto, PartyDto } from '@/lib/providers/dto'
+import { resolveConsent } from '@/lib/providers/resolve-consent'
+import { normalizeVatNumber, isValidSwedishVatNumber } from '@/lib/vat/vat-number'
+import { orgNumberKey } from '@/lib/invariants/org-number'
+import {
+  fetchCompanyInfoDirect,
+  fetchCustomersDirect,
+  fetchSuppliersDirect,
+  fetchSalesInvoicesDirect,
+  fetchSupplierInvoicesDirect,
+  hydrateSalesInvoices,
+  hydrateSupplierInvoices,
+} from '@/lib/providers/provider-data-fetcher'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { suggestPartiesForCompany } from '@/lib/parties/suggest'
+import { createLogger } from '@/lib/logger'
+import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
+import { completeInvoiceRows, type CompleteInvoiceRowsTrail } from '@/lib/invoices/complete-invoice-rows'
+import {
+  linkMigratedRegistrationVouchers,
+  type MigratedInvoiceLinkInput,
+} from '@/lib/invoices/link-migrated-registration-vouchers'
+import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
+import { ORE_TOLERANCE } from '@/lib/money'
+import {
+  buildCustomerMetadataEnrichment,
+  type CustomerMetadataEnrichment,
+  type ExistingCustomerMetadata,
+} from './customer-metadata'
+import { insertWithPerRowFallback } from './insert-fallback'
+import { importProviderAssets, FortnoxAssetScopesRequiredError } from './import-assets'
+import {
+  mapCustomer,
+  mapSupplier,
+  mapSalesInvoice,
+  mapSupplierInvoice,
+  mapCompanyInfo,
+  inferTypeFromParty,
+  buildFxRateIndex,
+  type FxUnresolved,
+} from './entity-mapper'
+import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
+import { existingInvoiceKey, listedInvoiceKeys, type ExistingSupplierInvoiceIdentity } from './supplier-invoice-identity'
+
+const log = createLogger('extensions/arcim-migration/migration-orchestrator')
+
+export interface MigrationOptions {
+  consentId: string
+  companyId: string
+  userId: string
+  supabase: SupabaseClient
+  /**
+   * Service-role client for the behandlingshistorik rows the sales-invoice
+   * step writes (processing_history has no INSERT policy, and `supabase` is
+   * the user's session client). Resolved once, and only when there are rows
+   * to write, so a run that imports nothing invoice-shaped never builds it.
+   * See lib/invoices/complete-invoice-rows.ts.
+   */
+  createHistoryClient: () => Promise<Pick<SupabaseClient, 'from'>>
+  importCompanyInfo?: boolean
+  importCustomers?: boolean
+  importSuppliers?: boolean
+  importSalesInvoices?: boolean
+  importSupplierInvoices?: boolean
+  /** Import the provider's asset register (Fortnox only). Default true. */
+  importAssets?: boolean
+  /** Auto-link imported supplier invoices to GL payment vouchers. Default true. */
+  reconcileVouchers?: boolean
+  /**
+   * Epoch ms by which the run must have handed back its results. The hosted
+   * dispatcher route runs under a Vercel function ceiling, and a run killed
+   * there loses its terminal NDJSON line: the wizard can only report a
+   * dropped connection, and the user retries a job that half-landed. The
+   * steps whose cost grows with the register (invoice hydration) shrink to
+   * fit; see hydrationBudgetMs. Absent: no ceiling (self-hosted, tests), the
+   * provider defaults apply.
+   */
+  deadlineMs?: number
+  /**
+   * Fill the Kontakter register from the migrated data at the end of the
+   * run. Default true. The wizard drives one request per step (#2469) and
+   * turns this off on all but the last, so the scan runs once per migration.
+   */
+  suggestParties?: boolean
+  /**
+   * Fiscal years the SIE import covers. Paid invoices issued outside them are
+   * neither fetched in detail nor inserted (see invoice-scope.ts); unpaid
+   * ones are kept from any year. Null or omitted imports the whole register.
+   */
+  fiscalYearScope?: FiscalYearScope | null
+  /**
+   * An earlier request in this migration already received rows on this
+   * grant. Seeds ProviderRunState.grantProven so an opaque 403 on the first
+   * call of a later per-step request still reads as one closed register,
+   * not a dead token (the same rule as within a single request). Only
+   * affects how a failure is classified, never what is fetched or written.
+   */
+  grantProven?: boolean
+  onProgress?: (progress: MigrationProgress) => void
+}
+
+/**
+ * Chunk size for bulk inserts. 500 rows/request keeps payloads below
+ * PostgREST's practical size limit while minimising round-trips.
+ */
+const INSERT_CHUNK_SIZE = 500
+/** Sales-invoice row writes in flight at once (one complete_invoice_rows call per invoice). */
+const ITEM_RPC_CONCURRENCY = 8
+/** The writer named in the behandlingshistorik event for every invoice's rows. */
+export const MIGRATION_WIZARD_SOURCE = 'migration-wizard'
+const ENRICHMENT_CONCURRENCY = 10
+
+/**
+ * Ceiling for one hydration pass, the provider-data-fetcher default: the
+ * deadline-derived budget below never exceeds it.
+ */
+const HYDRATION_BUDGET_CEILING_MS = 90_000
+/**
+ * Time kept back after a hydration pass for what follows it: inserting the
+ * register (party stubs, invoices, rows) and the tail steps that carry no
+ * budget of their own (voucher links, reconciliation, party suggestions).
+ * The per-row share is measured: the Well Done Payroll run of 2026-09-07
+ * inserted, linked and reconciled 400 invoices in about 20 s once its
+ * hydration was done.
+ */
+const INSERT_RESERVE_FIXED_MS = 30_000
+const INSERT_RESERVE_PER_ROW_MS = 12
+
+function emitProgress(options: MigrationOptions, progress: MigrationProgress) {
+  options.onProgress?.(progress)
+}
+
+/**
+ * Wall-clock budget for one hydration pass, derived from the run's deadline.
+ *
+ * Hydration is the one step whose cost grows with the register (one detail
+ * request per invoice, at the provider's rate limit) and the one step that
+ * can be cut short without losing data: rows it did not reach are reported
+ * on the result and completed later by the complete-invoice-lines pass. So
+ * it absorbs the squeeze, and the insert phase keeps its reserve. Undefined
+ * means "no deadline": hydrateSalesInvoices then applies its own default.
+ */
+function hydrationBudgetMs(options: MigrationOptions, rowsToInsert: number): number | undefined {
+  if (options.deadlineMs === undefined) return undefined
+  const remaining = options.deadlineMs - Date.now()
+  const reserve = INSERT_RESERVE_FIXED_MS + rowsToInsert * INSERT_RESERVE_PER_ROW_MS
+  return Math.max(0, Math.min(HYDRATION_BUDGET_CEILING_MS, remaining - reserve))
+}
+
+/** Seconds since `startedAt`, for the one timing line each step logs. */
+function elapsedSeconds(startedAt: number): number {
+  return Math.round((Date.now() - startedAt) / 1000)
+}
+
+/**
+ * Codes that doom every remaining provider call in this run: dead/expired
+ * grant, missing integration license, API module not activated. Continuing
+ * would fail four more times with the same cause and then report a
+ * "successful" migration with zero rows (the failure mode that sent a real
+ * config issue to the bug tracker). Rethrow so /migrate answers with the
+ * structured code and the wizard shows the actual remediation.
+ *
+ * PROVIDER_RESOURCE_FORBIDDEN is deliberately NOT here: it means the grant
+ * answered other calls in this same run and only one register is closed, so
+ * the remaining steps have every chance of succeeding.
+ */
+const FATAL_STEP_ERROR_CODES = new Set([
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_LICENSE_MISSING',
+  'PROVIDER_API_MODULE_INACTIVE',
+])
+
+/**
+ * What this run has learned about the grant, threaded through the steps so a
+ * later failure can be read in context.
+ */
+interface ProviderRunState {
+  /**
+   * True once any provider fetch in this run has returned data: the access
+   * token provably works, so a 403 after that point is the provider closing
+   * one register, not the grant dying.
+   *
+   * Set it from rows actually returned, never from a fetch that merely
+   * resolved. fetchCustomersDirect and friends answer [] without issuing any
+   * request when the provider needs a company id this consent has none of
+   * (Bokio, Björn Lundén) or does not expose the register at all (WINT
+   * suppliers), and a step that never spoke to the provider proves nothing
+   * about the grant. Reading it as proof would downgrade a genuine auth
+   * expiry on the NEXT step to a non-fatal per-register denial, and the run
+   * would report success with empty sections: exactly what
+   * FATAL_STEP_ERROR_CODES exists to prevent. An empty but real answer only
+   * costs the better message on a later 403, so under-claiming is the safe
+   * direction.
+   */
+  grantProven: boolean
+}
+
+/**
+ * Record a failed step on the results so the UI can render it. Non-fatal
+ * failures keep the log-and-continue behavior (one bad step must not discard
+ * the others' already-persisted rows); fatal connection-level failures
+ * rethrow, see FATAL_STEP_ERROR_CODES.
+ */
+function recordStepError(
+  results: MigrationResults,
+  step: MigrationStepError['step'],
+  err: unknown,
+  runState: ProviderRunState,
+): void {
+  // Company information is step 1, so grantProven is false there by
+  // definition. Its 403 is still no proof of a dead grant: the fetch used to
+  // swallow every error and return null, and a grant that really is dead says
+  // so on the next step, which stays fatal. Letting the opening call abort the
+  // run would turn a partial import into no import at all.
+  const grantProven = runState.grantProven || step === 'companyInfo'
+  const code = classifyProviderError(err, { grantProven })
+  if (code && FATAL_STEP_ERROR_CODES.has(code)) throw err
+
+  const rawMessage = err instanceof Error ? err.message : String(err)
+  const entry = code ? getErrorEntry(code) : undefined
+  let message: string
+  if (code === 'PROVIDER_RESOURCE_FORBIDDEN') {
+    // The registry cannot hold this copy: the useful half is the provider's
+    // own sentence naming the register, which only the error carries. Fortnox
+    // is the one provider that sends it (fortnoxErrorMessage caps it at 300
+    // chars); the others send an opaque body and get the base message alone.
+    message = getProviderResourceForbiddenMessage(fortnoxErrorMessage(err))
+  } else {
+    message = entry?.message_sv ?? `Leverantören svarade med ett fel: ${rawMessage}`
+  }
+
+  results.stepErrors = results.stepErrors ?? []
+  results.stepErrors.push({ step, code, message })
+}
+
+function getOrgNumberFromParty(party: PartyDto): string | null {
+  return (
+    party.legalEntity?.companyId ||
+    party.identifications?.find((i) => i.schemeId === 'SE:ORGNR')?.id ||
+    null
+  )
+}
+
+/**
+ * Dedup key for supplier org numbers: the register stores the 10-digit key
+ * (#2391) while a provider sends whatever spelling it holds ('556677-8899'),
+ * so the map is keyed by orgNumberKey on both sides; a value that is not a
+ * Swedish org number keys by itself, as before.
+ */
+const orgMapKey = (value: string): string => orgNumberKey(value) ?? value
+
+/**
+ * The existing row a register party maps onto, or undefined.
+ *
+ * Org number first, then name. The name fallback also applies when the party
+ * HAS an org number, but only onto an existing row that has none: such a row
+ * is an invoice stub (the invoice steps create org-less minimal parties for
+ * counterparties the register step never delivered, which for Björn Lundén
+ * was every one of them until 2026-09-08), and the register row is the same
+ * party with its details. Two org-numbered parties are never folded by name.
+ */
+function resolveExistingParty(
+  orgKey: string | null,
+  name: string | undefined,
+  byOrg: Map<string, string>,
+  byName: Map<string, string>,
+  orgNumberOf: (id: string) => string | null | undefined,
+): string | undefined {
+  if (orgKey) {
+    const byOrgId = byOrg.get(orgKey)
+    if (byOrgId) return byOrgId
+  }
+  if (!name) return undefined
+  const byNameId = byName.get(name)
+  if (!byNameId) return undefined
+  if (orgKey && orgNumberOf(byNameId)) return undefined
+  return byNameId
+}
+
+/**
+ * Split a listed invoice register into the rows this run imports and the
+ * rows outside the imported fiscal years (see invoice-scope.ts). Runs on
+ * the list payload, before hydration, so a declined invoice never costs a
+ * detail fetch (#2469).
+ */
+function partitionByScope<T extends SalesInvoiceDto | SupplierInvoiceDto>(
+  invoices: T[],
+  scope: FiscalYearScope | null | undefined,
+): { kept: T[]; excluded: T[] } {
+  const kept: T[] = []
+  const excluded: T[] = []
+  for (const dto of invoices) (invoiceWithinScope(dto, scope) ? kept : excluded).push(dto)
+  return { kept, excluded }
+}
+
+/**
+ * Lookback for the per-chunk register re-read. `created_at` defaults to the
+ * insert's transaction start, so a row whose insert began before our
+ * snapshot read but committed after it carries a timestamp older than the
+ * snapshot; the margin covers that and clock skew between the function and
+ * the database. Rows the margin re-reads are already in the maps.
+ */
+const REGISTER_DELTA_LOOKBACK_MS = 30_000
+
+const registerDeltaCursor = (): string =>
+  new Date(Date.now() - REGISTER_DELTA_LOOKBACK_MS).toISOString()
+
+type PartyRegisterRow = { id: string; org_number: string | null; name: string | null }
+
+/**
+ * Rows of the customer or supplier register that landed after `sinceIso`.
+ *
+ * The existing-row snapshot is taken once at step start, so a second request
+ * for the same step (a double submit, or a retry while the first request is
+ * still inserting) sees none of the first request's rows and inserts them
+ * again: 987 duplicate customers and 9 duplicate suppliers in one company
+ * (2026-09-10). Re-reading the delta right before each chunk narrows the
+ * window to one chunk's insert. The durable fix is a unique index on
+ * (company_id, org_number), which is a founder call (DECISIONS.md).
+ */
+async function fetchPartyRowsSince(
+  supabase: SupabaseClient,
+  table: 'customers' | 'suppliers',
+  companyId: string,
+  sinceIso: string,
+): Promise<PartyRegisterRow[]> {
+  return fetchAllRows<PartyRegisterRow>(({ from, to }) =>
+    supabase
+      .from(table)
+      .select('id, org_number, name')
+      .eq('company_id', companyId)
+      .gt('created_at', sinceIso)
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
+}
+
+/**
+ * Log a foreign-currency document that was imported WITHOUT a SEK conversion.
+ *
+ * It is still imported (dropping it would lose räkenskapsinformation), but it
+ * carries exchange_rate = null, so every booking path refuses it loudly rather
+ * than posting it as if 1 unit = 1 SEK. Counted into the step's result so the
+ * migration reports it instead of passing it off as an ordinary import.
+ */
+function logFxUnresolved(kind: string, invoiceNumber: string, fx: FxUnresolved): void {
+  // Structured logger, not console.error: the record passes the observability
+  // redaction pipeline (lib/observability/redact.ts) before it can reach any
+  // sink, so invoice identifiers in log output stay inside the same PII
+  // controls as every other server log line.
+  log.error('document imported without a SEK conversion; set an exchange rate before booking it', {
+    entityType: kind,
+    entityId: invoiceNumber,
+    currency: fx.currency,
+    documentDate: fx.date || null,
+    reason: fx.reason,
+  })
+}
+
+// ── Main orchestrator ─────────────────────────────────────────────
+
+export async function executeMigration(options: MigrationOptions): Promise<MigrationResults> {
+  const { consentId, companyId, userId, supabase } = options
+  const results: MigrationResults = {}
+  // One id per run: every InvoiceRowsCompleted event this import writes
+  // shares it, so the import reads as one thread in the behandlingshistorik.
+  const runId = crypto.randomUUID()
+  // What this run has proven about the grant, read by recordStepError: a 403
+  // once a call has already succeeded is one closed register, not a dead token.
+  const runState: ProviderRunState = { grantProven: options.grantProven === true }
+  // Every invoice this run inserted, with the booking voucher the provider
+  // named for it. Linked to the SIE-imported registration verifikat after both
+  // invoice steps (see the registration-link step below).
+  const bokioSources = new Map<string, ReturnType<typeof bokioSupplierSource>>()
+  const registrationLinkInputs: MigratedInvoiceLinkInput[] = []
+
+  // Resolve consent to get access token and provider
+  const resolved = await resolveConsent(companyId, consentId)
+  const provider = resolved.consent.provider as ProviderName
+  const accessToken = resolved.accessToken
+  const providerCompanyId = resolved.providerCompanyId
+
+  try {
+    // ── Step 1: Company information ───────────────────────────────
+    if (options.importCompanyInfo !== false) {
+      emitProgress(options, { status: 'fetching', currentStep: 'Hämtar företagsinformation...', progress: 5 })
+      try {
+        const companyInfo = await fetchCompanyInfoDirect(provider, accessToken, providerCompanyId)
+        if (companyInfo) {
+          // A DTO means the provider answered on this token. A null does not:
+          // it also means "no company-information resource for this provider",
+          // which is decided before any request goes out.
+          runState.grantProven = true
+          const mapped = mapCompanyInfo(companyInfo)
+          const { data: existing } = await supabase
+            .from('company_settings')
+            .select('company_name, org_number, vat_number')
+            .eq('company_id', companyId)
+            .single()
+
+          const updates: Record<string, unknown> = {}
+          if (!existing?.company_name && mapped.company_name) updates.company_name = mapped.company_name
+          if (!existing?.org_number && mapped.org_number) updates.org_number = mapped.org_number
+          if (!existing?.vat_number && mapped.vat_number) {
+            // Normalise provider input; only persist a structurally valid
+            // SE+12 momsregistreringsnummer so a malformed value from an
+            // external API can't enter company_settings unchecked.
+            const normalizedVat = normalizeVatNumber(mapped.vat_number)
+            if (isValidSwedishVatNumber(normalizedVat)) {
+              updates.vat_number = normalizedVat
+              updates.vat_registered = true
+            } else {
+              // Observability: a provider sent a VAT number we can't normalise
+              // to a valid SE+12 momsregistreringsnummer. We drop it (above),
+              // but surface the anomaly so consistently-bad provider data is
+              // visible. Don't log the raw value: it can embed a personnummer.
+              console.warn(
+                `[migration] Dropped malformed VAT number from ${provider} for company ${companyId} (normalized length ${normalizedVat.length})`,
+              )
+            }
+          }
+          if (mapped.fiscal_year_start_month !== 1) {
+            updates.fiscal_year_start_month = mapped.fiscal_year_start_month
+          }
+          if (mapped.address_line1) updates.address_line1 = mapped.address_line1
+          if (mapped.postal_code) updates.postal_code = mapped.postal_code
+          if (mapped.city) updates.city = mapped.city
+          if (mapped.phone) updates.phone = mapped.phone
+          if (mapped.email) updates.email = mapped.email
+
+          if (Object.keys(updates).length > 0) {
+            await supabase.from('company_settings').update(updates).eq('company_id', companyId)
+          }
+          results.companyInfo = { imported: true }
+        }
+      } catch (err) {
+        console.error('Failed to import company info:', err)
+        results.companyInfo = { imported: false }
+        recordStepError(results, 'companyInfo', err, runState)
+      }
+    }
+
+    // ── Step 2: Customers (bulk) ──────────────────────────────────
+    // customerIdMap: provider customer id → Accounted customer id.
+    // orgNumberToCustomerId / nameToCustomerId speed up invoice lookup
+    // without extra queries later.
+    const customerIdMap = new Map<string, string>()
+    const orgNumberToCustomerId = new Map<string, string>()
+    const nameToCustomerId = new Map<string, string>()
+    // The wizard runs one step per request (#2469), so the invoice steps can
+    // arrive with the customer step skipped and these maps empty. Without
+    // the register loaded, every customer on the invoice list would be
+    // re-created as a stub and the invoices pointed at the stubs. Loaded
+    // once per request, by whichever step first needs it.
+    let customerRegisterLoaded = false
+    const loadCustomerRegister = async () => {
+      if (customerRegisterLoaded) return
+      customerRegisterLoaded = true
+      const existing = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('customers')
+            .select('id, org_number, name')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+      )
+      for (const row of existing) {
+        if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
+        if (row.name) nameToCustomerId.set(row.name, row.id)
+      }
+    }
+
+    if (options.importCustomers !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar kunder...', progress: 20 })
+      try {
+        const customers = await fetchCustomersDirect(provider, accessToken, providerCompanyId)
+        // Rows, not a resolved promise: see ProviderRunState.grantProven.
+        if (customers.length > 0) runState.grantProven = true
+
+        // One bulk read instead of N `.eq('org_number', ...)` lookups.
+        type ExistingCustomer = ExistingCustomerMetadata & {
+          id: string
+          org_number: string | null
+          name: string | null
+        }
+        const customerSnapshotAt = registerDeltaCursor()
+        const existingCustomers = await fetchAllRows<ExistingCustomer>(
+          ({ from, to }) =>
+            supabase
+              .from('customers')
+              .select('id, org_number, name, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
+              .eq('company_id', companyId)
+              // Stable order: .range() pages past 1 000 rows are only
+              // reliable with a total order.
+              .order('id', { ascending: true })
+              .range(from, to)
+        )
+        const existingCustomerById = new Map(existingCustomers.map((row) => [row.id, row]))
+        const customerOrgNumberById = new Map(existingCustomers.map((row) => [row.id, row.org_number]))
+        for (const row of existingCustomers) {
+          if (row.org_number) orgNumberToCustomerId.set(row.org_number, row.id)
+          if (row.name) nameToCustomerId.set(row.name, row.id)
+        }
+        customerRegisterLoaded = true
+
+        let imported = 0
+        let updated = 0
+        let skipped = 0
+        const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
+
+        type PendingCustomer = {
+          dto: CustomerDto
+          row: Record<string, unknown>
+        }
+        const pending: PendingCustomer[] = []
+        const pendingEnrichments: { id: string; changes: CustomerMetadataEnrichment }[] = []
+        // Providers can hand back the same record more than once (a paging
+        // fault upstream, or genuine source duplicates). The DB-backed maps
+        // above only know rows that existed BEFORE this run, so without an
+        // in-run key set every repeat would be inserted again.
+        const pendingCustomerKeys = new Set<string>()
+
+        // Dedup against already-imported records: org number first, then
+        // name. Otherwise org-less customers (private persons) are
+        // re-created on every re-sync, since the org-number map can never
+        // match them, and an org-less invoice stub is re-created beside the
+        // register row it stood in for (see resolveExistingParty).
+        const existingCustomerIdFor = (party: PartyDto): string | undefined =>
+          resolveExistingParty(
+            getOrgNumberFromParty(party),
+            party.name,
+            orgNumberToCustomerId,
+            nameToCustomerId,
+            (id) => customerOrgNumberById.get(id),
+          )
+
+        for (const customer of customers) {
+          if (!customer.active) {
+            skipReasons.inactive = (skipReasons.inactive ?? 0) + 1
+            skipped++
+            continue
+          }
+
+          const orgNumber = getOrgNumberFromParty(customer.party)
+          const existingCustomerId = existingCustomerIdFor(customer.party)
+          if (existingCustomerId) {
+            customerIdMap.set(customer.id, existingCustomerId)
+            const existingCustomer = existingCustomerById.get(existingCustomerId)
+            const mapped = mapCustomer(customer, userId, companyId)
+            const changes = existingCustomer
+              ? buildCustomerMetadataEnrichment(existingCustomer, mapped)
+              : null
+            if (changes) {
+              pendingEnrichments.push({ id: existingCustomerId, changes })
+            } else {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+            }
+            continue
+          }
+
+          const pendingKey = (orgNumber ?? `name:${customer.party.name?.toLowerCase() ?? ''}`).trim()
+          if (pendingCustomerKeys.has(pendingKey)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            continue
+          }
+          pendingCustomerKeys.add(pendingKey)
+
+          pending.push({ dto: customer, row: mapCustomer(customer, userId, companyId) })
+        }
+
+        let customerDeltaSince = customerSnapshotAt
+        for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+          // Rows another request wrote since the snapshot (or since the
+          // previous chunk) go through the same dedupe as the snapshot rows.
+          const deltaCursor = registerDeltaCursor()
+          for (const row of await fetchPartyRowsSince(supabase, 'customers', companyId, customerDeltaSince)) {
+            if (row.org_number && !orgNumberToCustomerId.has(row.org_number)) orgNumberToCustomerId.set(row.org_number, row.id)
+            if (row.name && !nameToCustomerId.has(row.name)) nameToCustomerId.set(row.name, row.id)
+            if (!customerOrgNumberById.has(row.id)) customerOrgNumberById.set(row.id, row.org_number)
+          }
+          customerDeltaSince = deltaCursor
+          const toInsert: PendingCustomer[] = []
+          for (const candidate of batch) {
+            const appearedId = existingCustomerIdFor(candidate.dto.party)
+            if (appearedId) {
+              customerIdMap.set(candidate.dto.id, appearedId)
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            toInsert.push(candidate)
+          }
+          if (toInsert.length === 0) continue
+
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'customers', toInsert.map((p) => p.row), 'id, org_number, name'
+          )
+
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Customer insert failed for ${outcome.failedCount} of ${toInsert.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
+          }
+
+          for (let i = 0; i < toInsert.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const providerId = toInsert[i].dto.id
+            const newId = insertedRow.id as string
+            customerIdMap.set(providerId, newId)
+            if (insertedRow.org_number) orgNumberToCustomerId.set(insertedRow.org_number as string, newId)
+            if (insertedRow.name) nameToCustomerId.set(insertedRow.name as string, newId)
+            imported++
+          }
+        }
+
+        // A rerun can match hundreds of legacy customers. Update only rows
+        // that actually have new provider metadata, with bounded concurrency,
+        // so enrichment neither overwrites edits nor serializes the migration.
+        for (const batch of chunk(pendingEnrichments, ENRICHMENT_CONCURRENCY)) {
+          const outcomes = await Promise.all(batch.map(async ({ id, changes }) => {
+            const { data, error } = await supabase
+              .from('customers')
+              // Object literal, not the record itself: absent keys serialize
+              // away, and the phantom-column guard can resolve the columns.
+              .update({
+                contact_person: changes.contact_person,
+                invoice_email_cc_addresses: changes.invoice_email_cc_addresses,
+                invoice_email_bcc_addresses: changes.invoice_email_bcc_addresses,
+                org_number: changes.org_number,
+              })
+              .eq('id', id)
+              .eq('company_id', companyId)
+              .select('id')
+              .maybeSingle()
+            return { data, error }
+          }))
+
+          for (const outcome of outcomes) {
+            if (outcome.error || !outcome.data) {
+              if (outcome.error) {
+                console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
+                errorSample ??= outcome.error.message
+              }
+              skipReasons.failed = (skipReasons.failed ?? 0) + 1
+              skipped++
+            } else {
+              updated++
+            }
+          }
+        }
+
+        results.customers = { total: customers.length, imported, updated, skipped, skipReasons, errorSample: errorSample ?? undefined }
+      } catch (err) {
+        console.error('Failed to import customers:', err)
+        recordStepError(results, 'customers', err, runState)
+      }
+    }
+
+    // ── Step 3: Suppliers (bulk) ──────────────────────────────────
+    const supplierIdMap = new Map<string, string>()
+    const orgNumberToSupplierId = new Map<string, string>()
+    const nameToSupplierId = new Map<string, string>()
+    // Same per-request register load as for customers (#2469).
+    let supplierRegisterLoaded = false
+    const loadSupplierRegister = async () => {
+      if (supplierRegisterLoaded) return
+      supplierRegisterLoaded = true
+      const existing = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        ({ from, to }) =>
+          supabase
+            .from('suppliers')
+            .select('id, org_number, name')
+            .eq('company_id', companyId)
+            .order('id', { ascending: true })
+            .range(from, to)
+      )
+      for (const row of existing) {
+        if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
+        if (row.name) nameToSupplierId.set(row.name, row.id)
+      }
+    }
+
+    if (options.importSuppliers !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörer...', progress: 40 })
+      try {
+        const suppliers = await fetchSuppliersDirect(provider, accessToken, providerCompanyId)
+        if (suppliers.length > 0) runState.grantProven = true
+
+        const supplierSnapshotAt = registerDeltaCursor()
+        const existingSuppliers = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+          ({ from, to }) =>
+            supabase
+              .from('suppliers')
+              .select('id, org_number, name')
+              .eq('company_id', companyId)
+              .order('id', { ascending: true })
+              .range(from, to)
+        )
+        const supplierOrgNumberById = new Map(existingSuppliers.map((row) => [row.id, row.org_number]))
+        for (const row of existingSuppliers) {
+          if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
+          if (row.name) nameToSupplierId.set(row.name, row.id)
+        }
+        supplierRegisterLoaded = true
+        // Org-less stubs the register now names: written after the inserts.
+        const pendingSupplierOrgNumbers: { id: string; org_number: string }[] = []
+
+        let imported = 0
+        let skipped = 0
+        const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
+
+        type PendingSupplier = { dto: SupplierDto; row: Record<string, unknown> }
+        const pending: PendingSupplier[] = []
+        // Same in-run repeat guard as customers.
+        const pendingSupplierKeys = new Set<string>()
+
+        // Same org-number-then-name dedup as customers, so org-less suppliers
+        // (e.g. PostNord, IKANO BANK) aren't duplicated on every re-sync.
+        const existingSupplierIdFor = (party: PartyDto): string | undefined => {
+          const orgNumber = getOrgNumberFromParty(party)
+          return resolveExistingParty(
+            orgNumber ? orgMapKey(orgNumber) : null,
+            party.name,
+            orgNumberToSupplierId,
+            nameToSupplierId,
+            (id) => supplierOrgNumberById.get(id),
+          )
+        }
+
+        for (const supplier of suppliers) {
+          if (!supplier.active) {
+            skipReasons.inactive = (skipReasons.inactive ?? 0) + 1
+            skipped++
+            continue
+          }
+
+          const orgNumber = getOrgNumberFromParty(supplier.party)
+          const existingSupplierId = existingSupplierIdFor(supplier.party)
+          if (existingSupplierId) {
+            supplierIdMap.set(supplier.id, existingSupplierId)
+            if (orgNumber && !supplierOrgNumberById.get(existingSupplierId)) {
+              const key = orgMapKey(orgNumber)
+              pendingSupplierOrgNumbers.push({ id: existingSupplierId, org_number: key })
+              supplierOrgNumberById.set(existingSupplierId, key)
+              orgNumberToSupplierId.set(key, existingSupplierId)
+            }
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            continue
+          }
+
+          const pendingKey = (
+            orgNumber ? orgMapKey(orgNumber) : `name:${supplier.party.name?.toLowerCase() ?? ''}`
+          ).trim()
+          if (pendingSupplierKeys.has(pendingKey)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            continue
+          }
+          pendingSupplierKeys.add(pendingKey)
+
+          pending.push({ dto: supplier, row: mapSupplier(supplier, userId, companyId) })
+        }
+
+        let supplierDeltaSince = supplierSnapshotAt
+        for (const batch of chunk(pending, INSERT_CHUNK_SIZE)) {
+          // Same per-chunk delta re-read as customers.
+          const deltaCursor = registerDeltaCursor()
+          for (const row of await fetchPartyRowsSince(supabase, 'suppliers', companyId, supplierDeltaSince)) {
+            if (row.org_number && !orgNumberToSupplierId.has(orgMapKey(row.org_number))) {
+              orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
+            }
+            if (row.name && !nameToSupplierId.has(row.name)) nameToSupplierId.set(row.name, row.id)
+            if (!supplierOrgNumberById.has(row.id)) supplierOrgNumberById.set(row.id, row.org_number)
+          }
+          supplierDeltaSince = deltaCursor
+          const toInsert: PendingSupplier[] = []
+          for (const candidate of batch) {
+            const appearedId = existingSupplierIdFor(candidate.dto.party)
+            if (appearedId) {
+              supplierIdMap.set(candidate.dto.id, appearedId)
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            toInsert.push(candidate)
+          }
+          if (toInsert.length === 0) continue
+
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'suppliers', toInsert.map((p) => p.row), 'id, org_number, name'
+          )
+
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Supplier insert failed for ${outcome.failedCount} of ${toInsert.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
+          }
+
+          for (let i = 0; i < toInsert.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const providerId = toInsert[i].dto.id
+            const newId = insertedRow.id as string
+            supplierIdMap.set(providerId, newId)
+            if (insertedRow.org_number) orgNumberToSupplierId.set(orgMapKey(insertedRow.org_number as string), newId)
+            if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
+            imported++
+          }
+        }
+
+        for (const batch of chunk(pendingSupplierOrgNumbers, ENRICHMENT_CONCURRENCY)) {
+          await Promise.all(batch.map(async ({ id, org_number }) => {
+            const { error } = await supabase
+              .from('suppliers')
+              .update({ org_number })
+              .eq('id', id)
+              .eq('company_id', companyId)
+            if (error) {
+              console.error('[migration] Supplier org number enrichment failed:', error.message)
+              errorSample ??= error.message
+            }
+          }))
+        }
+
+        results.suppliers = { total: suppliers.length, imported, skipped, skipReasons, errorSample: errorSample ?? undefined }
+      } catch (err) {
+        console.error('Failed to import suppliers:', err)
+        recordStepError(results, 'suppliers', err, runState)
+      }
+    }
+
+    // ── Step 4: Sales invoices (bulk) ─────────────────────────────
+    if (options.importSalesInvoices !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar kundfakturor...', progress: 60 })
+      const stepStartedAt = Date.now()
+      try {
+        // The bare list first; the detail forms are fetched further down,
+        // once the rows this run can insert are known. Scoped before that:
+        // a paid invoice outside the imported fiscal years never costs a
+        // detail fetch (#2469).
+        const listedAll = await fetchSalesInvoicesDirect(provider, accessToken, providerCompanyId)
+        if (listedAll.length > 0) runState.grantProven = true
+        const { kept: listed, excluded } = partitionByScope(listedAll, options.fiscalYearScope)
+
+        // Resolve against the customers already in the register, whether the
+        // customer step ran in this request or an earlier one.
+        await loadCustomerRegister()
+
+        // Bulk-load existing invoice numbers once.
+        const existingInvoices = await fetchAllRows<{ id: string; invoice_number: string | null }>(({ from, to }) =>
+          supabase
+            .from('invoices')
+            .select('id, invoice_number')
+            .eq('company_id', companyId)
+            .range(from, to)
+        )
+        const existingInvoiceNumbers = new Set(existingInvoices.map((r) => r.invoice_number))
+        // For pairing a migrated kreditfaktura with the invoice it credits
+        // when that invoice was imported by an earlier run (Phase D below).
+        const invoiceIdByNumber = new Map<string, string>()
+        for (const row of existingInvoices) {
+          if (row.invoice_number) invoiceIdByNumber.set(row.invoice_number, row.id)
+        }
+
+        let imported = 0
+        let skipped = 0
+        const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
+
+        // Hydrate only what this run can insert. The list payload omits VAT,
+        // the net and the line items for most providers, so the detail form
+        // is fetched per invoice (see provider-data-fetcher), and that pass is
+        // the one cost here that grows with the register. An invoice already
+        // in the database is a duplicate whatever its detail form says, so a
+        // request spent on it buys nothing: on a re-run of a large register
+        // it would burn the whole budget on rows that never reach the insert.
+        const fresh = listed.filter((inv) => !existingInvoiceNumbers.has(inv.invoiceNumber))
+        const alreadyImported = listed.length - fresh.length
+        if (alreadyImported > 0) {
+          skipReasons.duplicate = alreadyImported
+          skipped += alreadyImported
+        }
+        const { invoices, hydration, unhydratedIds } = await hydrateSalesInvoices(
+          provider, accessToken, providerCompanyId, fresh, hydrationBudgetMs(options, fresh.length),
+        )
+        console.log(
+          `[migration] Sales invoices: ${listedAll.length} listed, ${excluded.length} outside the imported fiscal years, `
+          + `${fresh.length} new, ${hydration.hydrated}/${hydration.needed} detail forms fetched (${elapsedSeconds(stepStartedAt)} s)`,
+        )
+        // invoice_number carries a UNIQUE (company_id, invoice_number) index,
+        // so a repeated number WITHIN the fetched set (paging fault or source
+        // duplicate) must be skipped here: inside one insert statement it
+        // would reject the whole chunk. Empty numbers are exempt: they are
+        // stored as NULL, which the partial index does not cover.
+        const seenInvoiceNumbers = new Set<string>()
+
+        // Phase A: resolve customer for each invoice; collect those that
+        // need a minimal customer record to be created on-the-fly.
+        type ResolvedInvoice = { dto: SalesInvoiceDto; customerId: string }
+        const resolved: ResolvedInvoice[] = []
+
+        type NewCustomerStub = {
+          key: string // dedupe key (orgNumber or lowercased name)
+          row: Record<string, unknown>
+          // invoices waiting for this stub's id
+          waitingInvoiceIndices: number[]
+        }
+        const stubByKey = new Map<string, NewCustomerStub>()
+        const stubsForThisBatch: { orgNumber: string | null; name: string }[] = []
+
+        for (const inv of invoices) {
+          if (inv.invoiceNumber) {
+            if (seenInvoiceNumbers.has(inv.invoiceNumber)) {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            seenInvoiceNumbers.add(inv.invoiceNumber)
+          }
+
+          const customerOrgNumber = getOrgNumberFromParty(inv.customer)
+          let customerId: string | null = null
+
+          if (customerOrgNumber && orgNumberToCustomerId.has(customerOrgNumber)) {
+            customerId = orgNumberToCustomerId.get(customerOrgNumber)!
+          } else if (nameToCustomerId.has(inv.customer.name)) {
+            customerId = nameToCustomerId.get(inv.customer.name)!
+          }
+
+          if (customerId) {
+            resolved.push({ dto: inv, customerId })
+            continue
+          }
+
+          // Need to create a minimal customer: dedupe by org number first,
+          // then by name, so invoices sharing a missing party only create
+          // one stub row.
+          const key = (customerOrgNumber ?? `name:${inv.customer.name.toLowerCase()}`).trim()
+          let stub = stubByKey.get(key)
+          if (!stub) {
+            const customerType = inferTypeFromParty(inv.customer)
+            const minimalCustomer = {
+              user_id: userId,
+              company_id: companyId,
+              name: inv.customer.name,
+              customer_type: customerType,
+              default_payment_terms: 30,
+              country:
+                inv.customer.postalAddress?.countryCode ||
+                (customerType === 'swedish_business' ? 'SE' : null),
+              vat_number_validated: false,
+              org_number: customerOrgNumber,
+            }
+            stub = { key, row: minimalCustomer, waitingInvoiceIndices: [] }
+            stubByKey.set(key, stub)
+            stubsForThisBatch.push({ orgNumber: customerOrgNumber, name: inv.customer.name })
+          }
+          // reserve slot; we'll backfill customerId after stubs insert
+          const placeholderIndex = resolved.length
+          resolved.push({ dto: inv, customerId: '' })
+          stub.waitingInvoiceIndices.push(placeholderIndex)
+        }
+
+        // Phase B: insert any missing customer stubs in chunks.
+        if (stubByKey.size > 0) {
+          const stubList = [...stubByKey.values()]
+          for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
+            const outcome = await insertWithPerRowFallback(
+              supabase, 'customers', batch.map((s) => s.row), 'id, org_number, name'
+            )
+
+            if (outcome.failedCount > 0) {
+              console.error(
+                `[migration] Sales invoice customer stub insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+                outcome.firstError
+              )
+              errorSample ??= outcome.firstError
+            }
+
+            for (let i = 0; i < batch.length; i++) {
+              const insertedRow = outcome.returned[i]
+              if (!insertedRow) {
+                // Mark invoices waiting on this failed stub as no-match
+                for (const idx of batch[i].waitingInvoiceIndices) {
+                  resolved[idx] = { ...resolved[idx], customerId: '__FAILED__' }
+                }
+                continue
+              }
+              const newId = insertedRow.id as string
+              if (insertedRow.org_number) orgNumberToCustomerId.set(insertedRow.org_number as string, newId)
+              if (insertedRow.name) nameToCustomerId.set(insertedRow.name as string, newId)
+              for (const idx of batch[i].waitingInvoiceIndices) {
+                resolved[idx] = { ...resolved[idx], customerId: newId }
+              }
+            }
+          }
+        }
+
+        // Drop invoices whose customer couldn't be created. That is a DB
+        // failure (the stub insert errored, errorSample carries it), not a
+        // matching miss: counting it as noMatch would render a green result
+        // row with the database error hidden.
+        const ready = resolved.filter((r) => {
+          if (r.customerId === '__FAILED__') {
+            skipReasons.failed = (skipReasons.failed ?? 0) + 1
+            skipped++
+            return false
+          }
+          return !!r.customerId
+        })
+
+        // Phase B2: resolve the SEK conversion for every foreign-currency
+        // invoice, at the rate valid on its OWN issue date. The provider DTO
+        // carries no rate and no SEK amount, so without this every foreign
+        // invoice lands unconverted. One pass over the whole step (not per
+        // chunk) so repeat (currency, date) pairs are fetched once.
+        const fxRates = await buildFxRateIndex(
+          supabase,
+          ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
+        )
+        let fxUnresolved = 0
+        let vatUnresolved = 0
+        let creditNotesUnlinked = 0
+        let creditNotesLinked = 0
+        // This run's inserts by the provider's own id, and the credit notes
+        // whose provider named the invoice they credit, for Phase D.
+        const invoiceIdBySourceId = new Map<string, string>()
+        const creditNotesToPair: { invoiceId: string; ref: CreditedInvoiceRefDto; invoiceNumber: string }[] = []
+
+        // Phase C: chunk-insert invoices + their line items.
+        for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
+          const mappedBatch = batch.map((r) => ({
+            ...mapSalesInvoice(r.dto, userId, companyId, r.customerId, fxRates),
+            dto: r.dto,
+          }))
+
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'invoices', mappedBatch.map((m) => m.invoice), 'id'
+          )
+
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Sales invoice insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
+          }
+
+          const rowsByInvoice: { invoiceId: string; rows: Record<string, unknown>[] }[] = []
+          for (let i = 0; i < mappedBatch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const invoiceId = insertedRow.id
+            if (mappedBatch[i].items.length > 0) {
+              rowsByInvoice.push({ invoiceId: String(invoiceId), rows: mappedBatch[i].items })
+            }
+            registrationLinkInputs.push({
+              invoiceId: String(invoiceId),
+              kind: 'customer',
+              sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
+              invoiceDate: mappedBatch[i].dto.issueDate,
+              totalSek: mappedBatch[i].invoice.total_sek as number | null,
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
+              invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
+            })
+            const fx = mappedBatch[i].fxUnresolved
+            if (fx) {
+              fxUnresolved++
+              logFxUnresolved('Sales invoice', mappedBatch[i].dto.invoiceNumber, fx)
+            }
+            if (mappedBatch[i].vatUnresolved) {
+              vatUnresolved++
+              console.warn(
+                `[migration] Sales invoice ${mappedBatch[i].dto.invoiceNumber}: no VAT in provider payload; `
+                + 'imported with gross as subtotal and a null rate.'
+              )
+            }
+            if (mappedBatch[i].dto.id) invoiceIdBySourceId.set(mappedBatch[i].dto.id, String(invoiceId))
+            if (mappedBatch[i].dto.invoiceNumber) invoiceIdByNumber.set(mappedBatch[i].dto.invoiceNumber, String(invoiceId))
+            if (mappedBatch[i].creditNoteUnlinked) {
+              const ref = mappedBatch[i].creditedInvoiceRef
+              if (ref) {
+                creditNotesToPair.push({ invoiceId: String(invoiceId), ref, invoiceNumber: mappedBatch[i].dto.invoiceNumber })
+              } else {
+                creditNotesUnlinked++
+              }
+            }
+            imported++
+          }
+
+          // One complete_invoice_rows call per invoice (migration
+          // 20260906135730): the write path the row-completion pass uses, so
+          // an invoice's rows are written at most once whichever writer gets
+          // there first, and a bad row set rejects its own invoice rather than
+          // the whole chunk. Small concurrent groups keep the round trips off
+          // the wizard's clock. completeInvoiceRows also writes the
+          // InvoiceRowsCompleted event for every invoice the RPC filled, the
+          // same event the pass writes, so the two writers reconcile per
+          // invoice (BFNAR 2013:2 p. 9.16).
+          if (rowsByInvoice.length > 0) {
+            const historyClient = await options.createHistoryClient()
+            const trail: CompleteInvoiceRowsTrail = {
+              source: MIGRATION_WIZARD_SOURCE,
+              provider,
+              consentId,
+              correlationId: runId,
+              actor: { type: 'user', id: userId },
+            }
+            for (const group of chunk(rowsByInvoice, ITEM_RPC_CONCURRENCY)) {
+              await Promise.all(group.map(async ({ invoiceId, rows }) => {
+                const outcome = await completeInvoiceRows(supabase, {
+                  companyId,
+                  invoiceId,
+                  rows,
+                  trail,
+                  historyClient,
+                })
+                if (outcome.status === 'failed') {
+                  console.error(
+                    `[migration] Sales invoice items insert failed for ${invoiceId}:`,
+                    outcome.reason,
+                  )
+                }
+              }))
+            }
+          }
+        }
+
+        // Phase D: pair each imported kreditfaktura with the invoice it
+        // credits. The provider names that invoice by its own id and number
+        // (Bokio: invoiceRef); the id resolves against this run's inserts,
+        // the number against those and against invoices imported earlier.
+        // Nothing is guessed from amounts: an unresolved reference stays
+        // unpaired and is counted, with the number on the row's notes.
+        for (const group of chunk(creditNotesToPair, ITEM_RPC_CONCURRENCY)) {
+          await Promise.all(group.map(async ({ invoiceId, ref, invoiceNumber }) => {
+            const target = (ref.id && invoiceIdBySourceId.get(ref.id))
+              || (ref.invoiceNumber && invoiceIdByNumber.get(ref.invoiceNumber))
+              || null
+            if (!target || target === invoiceId) {
+              creditNotesUnlinked++
+              console.warn(
+                `[migration] Credit note ${invoiceNumber}: credited invoice ${ref.invoiceNumber ?? ref.id} `
+                + 'is not among the imported invoices; imported unpaired.',
+              )
+              return
+            }
+            const { error } = await supabase
+              .from('invoices')
+              .update({ credited_invoice_id: target })
+              .eq('id', invoiceId)
+              .eq('company_id', companyId)
+            if (error) {
+              creditNotesUnlinked++
+              console.error(`[migration] Credit note ${invoiceNumber}: pairing with ${target} failed:`, error.message)
+              return
+            }
+            creditNotesLinked++
+          }))
+        }
+
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.salesInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, creditNotesLinked, hydration, errorSample: errorSample ?? undefined }
+        console.log(`[migration] Sales invoices: ${imported} imported, ${skipped} skipped (${elapsedSeconds(stepStartedAt)} s)`)
+      } catch (err) {
+        console.error('Failed to import sales invoices:', err)
+        recordStepError(results, 'salesInvoices', err, runState)
+      }
+    }
+
+    // ── Step 5: Supplier invoices (bulk) ──────────────────────────
+    if (options.importSupplierInvoices !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörsfakturor...', progress: 80 })
+      const stepStartedAt = Date.now()
+      try {
+        // Same shape as sales invoices: list, scope, then hydrate what is new.
+        const listedAll = await fetchSupplierInvoicesDirect(provider, accessToken, providerCompanyId)
+        if (listedAll.length > 0) runState.grantProven = true
+        const { kept: listed, excluded } = partitionByScope(listedAll, options.fiscalYearScope)
+
+        await loadSupplierRegister()
+
+        // Load every existing supplier invoice's identity once: (supplier,
+        // number), or (supplier, date, amount) for a number-less one.
+        const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity>(({ from, to }) =>
+          supabase
+            .from('supplier_invoices')
+            .select('supplier_invoice_number, supplier_id, invoice_date, total')
+            .eq('company_id', companyId)
+            .range(from, to)
+        )
+        const existingSuppInvKeys = new Set(
+          existingSuppInv.map(existingInvoiceKey).filter((key): key is string => key !== null)
+        )
+        const isStored = (supplierId: string, inv: SupplierInvoiceDto): boolean =>
+          listedInvoiceKeys(supplierId, inv).some((key) => existingSuppInvKeys.has(key))
+
+        // Compute next arrival number locally. Unique index is
+        // (company_id, arrival_number); we're the only writer during
+        // migration so incrementing in-memory is safe.
+        const { data: maxRow } = await supabase
+          .from('supplier_invoices')
+          .select('arrival_number')
+          .eq('company_id', companyId)
+          .order('arrival_number', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        let nextArrivalNumber = ((maxRow?.arrival_number as number | undefined) ?? 0) + 1
+
+        let imported = 0
+        let skipped = 0
+        const skipReasons: SkipReasons = {}
+        let errorSample: string | null = null
+
+        // Same rule as sales invoices: only rows this run can insert get a
+        // detail request. A supplier invoice is already imported when its
+        // supplier resolves through the maps step 3 filled and that
+        // (supplier, number) pair is in the database; the loop below applies
+        // the same test after stubs, so the two agree.
+        const resolveExistingSupplierId = (inv: SupplierInvoiceDto): string | null => {
+          const orgNumber = getOrgNumberFromParty(inv.supplier)
+          if (orgNumber && orgNumberToSupplierId.has(orgMapKey(orgNumber))) {
+            return orgNumberToSupplierId.get(orgMapKey(orgNumber))!
+          }
+          return nameToSupplierId.get(inv.supplier.name) ?? null
+        }
+        const isAlreadyImported = (inv: SupplierInvoiceDto): boolean => {
+          const supplierId = resolveExistingSupplierId(inv)
+          return !!supplierId && isStored(supplierId, inv)
+        }
+        const fresh = listed.filter((inv) => !isAlreadyImported(inv))
+        const alreadyImported = listed.length - fresh.length
+        if (alreadyImported > 0) {
+          skipReasons.duplicate = alreadyImported
+          skipped += alreadyImported
+        }
+        const { invoices, hydration, unhydratedIds } = await hydrateSupplierInvoices(
+          provider, accessToken, providerCompanyId, fresh, hydrationBudgetMs(options, fresh.length),
+        )
+        console.log(
+          `[migration] Supplier invoices: ${listedAll.length} listed, ${excluded.length} outside the imported fiscal years, `
+          + `${fresh.length} new, ${hydration.hydrated}/${hydration.needed} detail forms fetched (${elapsedSeconds(stepStartedAt)} s)`,
+        )
+
+        type ResolvedSupplierInvoice = { dto: SupplierInvoiceDto; supplierId: string }
+        const resolved: ResolvedSupplierInvoice[] = []
+
+        type NewSupplierStub = {
+          key: string
+          row: Record<string, unknown>
+          waitingInvoiceIndices: number[]
+        }
+        const stubByKey = new Map<string, NewSupplierStub>()
+
+        for (const inv of invoices) {
+          // An invoice the provider returned with no amount AND no line items
+          // carries nothing to import: Bokio answers that way for invoices
+          // older than the register its API exposes (292 of 661 for one
+          // migrated company). Importing them wrote 0 kr rows whose zero
+          // balance then read as settled. A negative payable IS an amount (a
+          // kreditfaktura), so only a record with no amount at all is
+          // declined; the count is reported instead of being silently absent.
+          const payable = inv.legalMonetaryTotal?.payableAmount?.value
+          if ((!Number.isFinite(payable) || payable === 0) && inv.lines.length === 0) {
+            skipReasons.zeroTotal = (skipReasons.zeroTotal ?? 0) + 1
+            skipped++
+            continue
+          }
+
+          const supplierOrgNumber = getOrgNumberFromParty(inv.supplier)
+          let supplierId: string | null = null
+
+          if (supplierOrgNumber && orgNumberToSupplierId.has(orgMapKey(supplierOrgNumber))) {
+            supplierId = orgNumberToSupplierId.get(orgMapKey(supplierOrgNumber))!
+          } else if (nameToSupplierId.has(inv.supplier.name)) {
+            supplierId = nameToSupplierId.get(inv.supplier.name)!
+          }
+
+          if (supplierId) {
+            if (isStored(supplierId, inv)) {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              continue
+            }
+            resolved.push({ dto: inv, supplierId })
+            continue
+          }
+
+          // Need to create a minimal supplier: dedupe the same way as customers.
+          const key = (
+            supplierOrgNumber ? orgMapKey(supplierOrgNumber) : `name:${inv.supplier.name.toLowerCase()}`
+          ).trim()
+          let stub = stubByKey.get(key)
+          if (!stub) {
+            const supplierType = inferTypeFromParty(inv.supplier)
+            const minimalSupplier = {
+              user_id: userId,
+              company_id: companyId,
+              name: inv.supplier.name,
+              supplier_type: supplierType,
+              default_payment_terms: 30,
+              default_currency: 'SEK',
+              country:
+                inv.supplier.postalAddress?.countryCode ||
+                (supplierType === 'swedish_business' ? 'SE' : null),
+              org_number: supplierOrgNumber ? orgMapKey(supplierOrgNumber) : supplierOrgNumber,
+            }
+            stub = { key, row: minimalSupplier, waitingInvoiceIndices: [] }
+            stubByKey.set(key, stub)
+          }
+          const placeholderIndex = resolved.length
+          resolved.push({ dto: inv, supplierId: '' })
+          stub.waitingInvoiceIndices.push(placeholderIndex)
+        }
+
+        if (stubByKey.size > 0) {
+          const stubList = [...stubByKey.values()]
+          for (const batch of chunk(stubList, INSERT_CHUNK_SIZE)) {
+            const outcome = await insertWithPerRowFallback(
+              supabase, 'suppliers', batch.map((s) => s.row), 'id, org_number, name'
+            )
+
+            if (outcome.failedCount > 0) {
+              console.error(
+                `[migration] Supplier invoice supplier stub insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+                outcome.firstError
+              )
+              errorSample ??= outcome.firstError
+            }
+
+            for (let i = 0; i < batch.length; i++) {
+              const insertedRow = outcome.returned[i]
+              if (!insertedRow) {
+                for (const idx of batch[i].waitingInvoiceIndices) {
+                  resolved[idx] = { ...resolved[idx], supplierId: '__FAILED__' }
+                }
+                continue
+              }
+              const newId = insertedRow.id as string
+              if (insertedRow.org_number) orgNumberToSupplierId.set(orgMapKey(insertedRow.org_number as string), newId)
+              if (insertedRow.name) nameToSupplierId.set(insertedRow.name as string, newId)
+              for (const idx of batch[i].waitingInvoiceIndices) {
+                resolved[idx] = { ...resolved[idx], supplierId: newId }
+              }
+            }
+          }
+        }
+
+        // After stubs, do a final dedupe pass against existing supplier invoices
+        // using the now-resolved supplierId. The in-run key set catches the
+        // same (supplier, number) pair appearing twice in the fetched data,
+        // which the UNIQUE (company_id, supplier_id, supplier_invoice_number)
+        // index would otherwise reject mid-insert. NULL/empty numbers are
+        // exempt: the index treats NULLs as distinct.
+        const seenSuppInvKeys = new Set<string>()
+        const ready = resolved.filter((r) => {
+          if (r.supplierId === '__FAILED__' || !r.supplierId) {
+            // Failed stub insert = DB failure with errorSample set, so count
+            // it as failed; noMatch would hide the error in the result row.
+            if (r.supplierId === '__FAILED__') {
+              skipReasons.failed = (skipReasons.failed ?? 0) + 1
+              skipped++
+            }
+            return false
+          }
+          if (isStored(r.supplierId, r.dto)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            return false
+          }
+          if (r.dto.invoiceNumber) {
+            const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
+            if (seenSuppInvKeys.has(dupKey)) {
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+              skipped++
+              return false
+            }
+            seenSuppInvKeys.add(dupKey)
+          }
+          return true
+        })
+
+        // Resolve the SEK conversion for every foreign-currency invoice at the
+        // rate valid on its OWN issue date (see the sales-invoice step).
+        const fxRates = await buildFxRateIndex(
+          supabase,
+          ready.map((r) => ({ currencyCode: r.dto.currencyCode, issueDate: r.dto.issueDate }))
+        )
+        let fxUnresolved = 0
+        let vatUnresolved = 0
+        let creditNotesUnlinked = 0
+        let creditNotesLinked = 0
+        // Supplier credit notes whose provider named the invoice they credit,
+        // paired once every row of the run is inserted (the original may come
+        // after its credit note). Keyed by the provider's id of the invoice.
+        const insertedBySourceId = new Map<string, { id: string; supplierId: string; currency: string; total: number; isCreditNote: boolean }>()
+        const creditNotesToPair: { invoiceId: string; sourceId: string; refId: string; invoiceNumber: string }[] = []
+
+        for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
+          const mappedBatch = batch.map((r) => {
+            const { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, creditedInvoiceRef } = mapSupplierInvoice(
+              r.dto, userId, companyId, r.supplierId, fxRates
+            )
+            invoice.arrival_number = nextArrivalNumber++
+            return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }
+          })
+
+          const outcome = await insertWithPerRowFallback(
+            supabase, 'supplier_invoices', mappedBatch.map((m) => m.invoice), 'id'
+          )
+
+          if (outcome.failedCount > 0) {
+            console.error(
+              `[migration] Supplier invoice insert failed for ${outcome.failedCount} of ${batch.length} rows:`,
+              outcome.firstError
+            )
+            skipReasons.failed = (skipReasons.failed ?? 0) + outcome.failedCount
+            skipped += outcome.failedCount
+            errorSample ??= outcome.firstError
+            // A failed row leaves a hole in the arrival numbering. That is
+            // acceptable: ankomstnummer is an internal sequence, not a
+            // verifikationsnummer, and rewinding the counter after a PARTIAL
+            // success would hand out numbers that already landed.
+          }
+
+          const allItems: Record<string, unknown>[] = []
+          for (let i = 0; i < mappedBatch.length; i++) {
+            const insertedRow = outcome.returned[i]
+            if (!insertedRow) continue
+            const invoiceId = insertedRow.id
+            for (const item of mappedBatch[i].items) {
+              allItems.push({ ...item, supplier_invoice_id: invoiceId })
+            }
+            if (mappedBatch[i].dto.supplierEvidence) bokioSources.set(String(invoiceId), bokioSupplierSource(mappedBatch[i].dto, mappedBatch[i].supplierId))
+            registrationLinkInputs.push({
+              invoiceId: String(invoiceId),
+              kind: 'supplier',
+              sourceVoucher: mappedBatch[i].dto.sourceVoucher ?? null,
+              ...(mappedBatch[i].dto.supplierEvidence?.voucherKind === 'cash_purchase'
+                ? { settlement: { sourcePaid: mappedBatch[i].dto.paymentStatus.paid, userId } } : {}),
+              refNotFetched: unhydratedIds.has(mappedBatch[i].dto.id),
+              invoiceDate: mappedBatch[i].dto.issueDate,
+              // What the registration voucher must show: a credit note is
+              // stored in magnitudes but DEBITS 2440.
+              totalSek: supplierPayableEffectSek(
+                mappedBatch[i].invoice.total_sek as number | null,
+                mappedBatch[i].invoice.is_credit_note as boolean,
+              ),
+              currencyCode: mappedBatch[i].dto.currencyCode || 'SEK',
+              invoiceNumber: mappedBatch[i].dto.invoiceNumber || null,
+            })
+            const isCreditNote = mappedBatch[i].invoice.is_credit_note === true
+            if (mappedBatch[i].dto.id) {
+              insertedBySourceId.set(mappedBatch[i].dto.id, {
+                id: String(invoiceId),
+                supplierId: mappedBatch[i].supplierId,
+                currency: String(mappedBatch[i].invoice.currency),
+                total: Number(mappedBatch[i].invoice.total),
+                isCreditNote,
+              })
+            }
+            if (isCreditNote) {
+              const refId = mappedBatch[i].creditedInvoiceRef?.id
+              if (refId && mappedBatch[i].dto.id) {
+                creditNotesToPair.push({ invoiceId: String(invoiceId), sourceId: mappedBatch[i].dto.id, refId, invoiceNumber: mappedBatch[i].dto.invoiceNumber })
+              } else {
+                creditNotesUnlinked++
+              }
+            }
+            const fx = mappedBatch[i].fxUnresolved
+            if (fx) {
+              fxUnresolved++
+              logFxUnresolved('Supplier invoice', mappedBatch[i].dto.invoiceNumber, fx)
+            }
+            if (mappedBatch[i].vatUnresolved) {
+              vatUnresolved++
+              console.warn(
+                `[migration] Supplier invoice ${mappedBatch[i].dto.invoiceNumber}: no VAT in provider payload; `
+                + 'imported with gross as subtotal.'
+              )
+            }
+            imported++
+          }
+
+          if (allItems.length > 0) {
+            for (const itemBatch of chunk(allItems, INSERT_CHUNK_SIZE)) {
+              const { error: itemErr } = await supabase.from('supplier_invoice_items').insert(itemBatch)
+              if (itemErr) {
+                console.error(`[migration] Supplier invoice items insert failed (${itemBatch.length}):`, itemErr.message)
+              }
+            }
+          }
+        }
+
+        // Pair each supplier credit note with the invoice it credits, by the
+        // provider's own id of that invoice and only among this run's
+        // inserts: a supplier's invoice number is not unique in the company,
+        // so nothing is resolved by number here, and never by amount. The
+        // same checks as the job worker's pairing pass: an ordinary invoice
+        // of the same supplier, in the same currency, not smaller than the
+        // credit. Anything else stays unpaired, with the number the provider
+        // named on the row's notes.
+        for (const credit of creditNotesToPair) {
+          const own = insertedBySourceId.get(credit.sourceId)
+          const original = insertedBySourceId.get(credit.refId)
+          const pairable = own && original && original.id !== credit.invoiceId && !original.isCreditNote
+            && original.supplierId === own.supplierId && original.currency === own.currency
+            && Math.abs(own.total) <= Math.abs(original.total) + ORE_TOLERANCE
+          if (!pairable) {
+            creditNotesUnlinked++
+            console.warn(`[migration] Supplier credit note ${credit.invoiceNumber}: the invoice it names is not among this run's imports; imported unpaired.`)
+            continue
+          }
+          const { error } = await supabase
+            .from('supplier_invoices')
+            .update({ credited_invoice_id: original.id })
+            .eq('id', credit.invoiceId)
+            .eq('company_id', companyId)
+          if (error) {
+            creditNotesUnlinked++
+            console.error(`[migration] Supplier credit note ${credit.invoiceNumber}: pairing failed:`, error.message)
+            continue
+          }
+          creditNotesLinked++
+        }
+
+        if (excluded.length > 0) {
+          skipReasons.outsideFiscalYears = excluded.length
+          skipped += excluded.length
+        }
+        results.supplierInvoices = { total: listedAll.length, imported, skipped, skipReasons, fxUnresolved, vatUnresolved, creditNotesUnlinked, creditNotesLinked, hydration, errorSample: errorSample ?? undefined }
+        console.log(`[migration] Supplier invoices: ${imported} imported, ${skipped} skipped (${elapsedSeconds(stepStartedAt)} s)`)
+      } catch (err) {
+        console.error('Failed to import supplier invoices:', err)
+        recordStepError(results, 'supplierInvoices', err, runState)
+      }
+    }
+
+    // ── Step 5b: Link imported invoices to their registration vouchers ──
+    // The provider named the verifikat that booked each invoice ("A329");
+    // the SIE import preserved that source ref on the entry it created. Link
+    // the two where the match is exact and amount-corroborated, so migrated
+    // invoices stop reading as unbooked. Writes only the invoice-side FK from
+    // NULL; never touches journal entries. Best-effort like step 6: the
+    // invoices are already persisted, and /reconcile can re-run this.
+    if (registrationLinkInputs.length > 0) {
+      emitProgress(options, { status: 'importing', currentStep: 'Kopplar fakturor till verifikationer...', progress: 90 })
+      try {
+        const links = await linkMigratedRegistrationVouchers({
+          supabase,
+          companyId,
+          invoices: registrationLinkInputs,
+        })
+        results.registrationLinks = {
+          scanned: links.scanned,
+          linked: links.linked,
+          noRef: links.noRef,
+          refNotFetched: links.refNotFetched,
+          unresolved: links.unresolved,
+          ambiguous: links.ambiguous,
+          amountMismatch: links.amountMismatch,
+          alreadyLinked: links.alreadyLinked,
+        }
+        const bokioRecords = [...bokioSources].map(([invoiceId, source]) => ({
+          invoice_id: invoiceId, source,
+          voucher_id: links.reports.find(row => row.invoiceId === invoiceId && row.linkType === 'settlement')?.journalEntryId,
+        }))
+        for (const batch of chunk(bokioRecords, 100)) {
+          await recordBokioSupplierSources(supabase, companyId, consentId, batch)
+        }
+        console.log(
+          `[migration] Registration vouchers: ${links.linked} linked, ${links.noRef} without ref, ${links.refNotFetched} ref not fetched, ${links.unresolved} unresolved, `
+          + `${links.ambiguous} ambiguous, ${links.amountMismatch} amount mismatch, ${links.alreadyLinked} already linked (${links.scanned} scanned)`,
+        )
+      } catch (err) {
+        console.error('Failed to link registration vouchers:', err)
+        recordStepError(results, 'registrationLinks', err, runState)
+      }
+    }
+
+    // ── Step 5c: Asset register (Fortnox only) ─────────────────────
+    // Register metadata only: the bookkeeping values (12xx anskaffning and
+    // ackumulerade avskrivningar) already arrived via SIE, so this step never
+    // writes journal entries. A consent without the Fortnox assets scope
+    // reports scopesMissing instead of failing the migration.
+    if (options.importAssets !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Importerar anläggningstillgångar...', progress: 92 })
+      try {
+        const assets = await importProviderAssets({ supabase, companyId, userId, consentId })
+        if (assets) results.assets = assets
+      } catch (err) {
+        if (err instanceof FortnoxAssetScopesRequiredError) {
+          log.warn('asset register skipped: consent lacks the Fortnox assets scope')
+          results.assets = { total: 0, imported: 0, skipped: 0, scopesMissing: true }
+        } else {
+          console.error('Failed to import assets:', err)
+          recordStepError(results, 'assets', err, runState)
+        }
+      }
+    }
+
+    // ── Step 6: Reconcile supplier invoices to GL payment vouchers ────
+    // The GL (incl. the Dr 2440 / Cr 1930 bank-payment vouchers) is imported
+    // separately via SIE. Supplier invoices arrive (via ?filter=unpaid) as open
+    // payables with no link to those vouchers, so settled invoices would surface
+    // as overdue. Auto-link the unambiguous matches. Best-effort: a failure here
+    // must never fail the migration: the imported data is already persisted.
+    if (options.reconcileVouchers !== false) {
+      emitProgress(options, { status: 'importing', currentStep: 'Stämmer av betalningar mot verifikationer...', progress: 95 })
+      try {
+        const recon = await reconcileSupplierInvoiceVouchers({ supabase, companyId, userId })
+        results.reconciliation = {
+          scanned: recon.scanned,
+          autoLinked: recon.autoLinked,
+          ambiguous: recon.ambiguous,
+          unmatched: recon.unmatched,
+        }
+        console.log(
+          `[migration] Reconcile: ${recon.autoLinked} auto-linked, ${recon.ambiguous} need review, ${recon.unmatched} unmatched (${recon.scanned} scanned)`,
+        )
+      } catch (err) {
+        console.error('Failed to reconcile supplier invoice payments:', err)
+        recordStepError(results, 'reconciliation', err, runState)
+      }
+    }
+
+    // Fill the Kontakter register from the migrated vouchers and documents
+    // (non-blocking): suggested parties only, confirmed by the user later.
+    if (options.suggestParties !== false) {
+      try {
+        const summary = await suggestPartiesForCompany(supabase, companyId, userId)
+        console.log(`[migration] party suggestions: ${summary.created} new, ${summary.attached} attached, ${summary.skipped} skipped`)
+      } catch (err) {
+        console.error('Failed to suggest parties after migration:', err)
+      }
+    }
+
+    emitProgress(options, { status: 'completed', progress: 100, results })
+    return results
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Migration failed'
+    emitProgress(options, { status: 'failed', progress: 0, error: message })
+    throw error
+  }
+}

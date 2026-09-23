@@ -5,7 +5,7 @@ import { resolve, basename } from 'node:path'
 import { spawn } from 'node:child_process'
 import { parseArgs } from 'node:util'
 import dotenv from 'dotenv'
-import { createServiceRoleClient } from '../../lib/supabase/service-client'
+import { createServiceRoleClient } from '../../src/lib/supabase/service-client'
 import { invoiceFixture, providerPage, type LoadProvider } from './fixtures'
 
 const PROJECT = 'metjnjrhvujscngnpzdv'
@@ -35,8 +35,8 @@ process.env.NEXT_PUBLIC_SUPABASE_URL = url
 process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = config.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? config.SUPABASE_ANON_KEY ?? 'synthetic-unused-anon-key'
 process.env.SUPABASE_SERVICE_ROLE_KEY = key
 process.env.PERSONNUMMER_ENCRYPTION_KEY = 'synthetic-provider-load-test-only'
-delete process.env.UPSTASH_REDIS_REST_URL
-delete process.env.UPSTASH_REDIS_REST_TOKEN
+for (const name of ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN',
+  'UPSTASH_STORAGE_KV_REST_API_URL', 'UPSTASH_STORAGE_KV_REST_API_TOKEN']) delete process.env[name]
 Object.assign(process.env, { NODE_ENV: 'test' })
 const originalFetch = globalThis.fetch
 const client = () => createServiceRoleClient(url, key, { auth: { persistSession: false, autoRefreshToken: false },
@@ -97,7 +97,7 @@ async function child() {
     assert.ok(page >= 1 && size > 0)
     return Response.json(providerPage(provider, page, size, count, detailEvery))
   }
-  const { runProviderMigrationWorker } = await import('../../extensions/general/arcim-migration/lib/migration-job-worker')
+  const { runProviderMigrationWorker } = await import('../../src/extensions/general/arcim-migration/lib/migration-job-worker')
   const start = performance.now()
   const result = await runProviderMigrationWorker({ jobId: values.job, budgetMs: budget })
   const elapsedMs = Math.round(performance.now() - start)

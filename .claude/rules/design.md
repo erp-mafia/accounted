@@ -1,7 +1,7 @@
 ---
 paths:
-  - "app/**"
-  - "components/**"
+  - "src/app/**"
+  - "src/components/**"
 ---
 
 # Design Context & Design System

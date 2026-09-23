@@ -106,7 +106,7 @@ export function findLiteralLegalForms(root) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
-  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..')
+  const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..', 'src')
   const findings = findLiteralLegalForms(root)
   for (const f of findings) console.log(`${f.file}:${f.line}: ${f.text}`)
   console.log(`\n${findings.length} literal legal-form site(s).`)

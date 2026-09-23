@@ -17,7 +17,7 @@ The deterministic scanner identifies the presence of a high-risk license. It can
 **Inputs to provide**:
 * The dependency tree path showing how the AGPL component arrived.
 * The repository's `Dockerfile`, `docker-compose.yml`, `kubernetes/` manifests, ingress configuration, deployment manifests.
-* The repository's `README.md` and any `architecture.md` / `ARCHITECTURE.md`.
+* The repository's `README.md` and `docs/architecture.md` (or another architecture document).
 * The license text of the AGPL component.
 
 **Prompt**:
