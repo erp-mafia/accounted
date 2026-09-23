@@ -12,12 +12,14 @@ import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './
 import { refreshTokenOf } from './lib/credentials'
 import { parseBackfillFrom, syncZettlePurchases } from './lib/order-sync'
 import type { BackfillDateError } from './lib/order-sync'
+import { parseZettleOrganizationName } from './lib/organization-name'
 import { MAX_BACKFILL_YEARS } from './types'
 import type { ZettleConnection, ZettleStatusResponse } from './types'
 
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_DISCONNECT = { maxRequests: 10, windowMs: 60_000 }
 const RATE_LIMIT_SYNC = { maxRequests: 10, windowMs: 60_000 }
+const RATE_LIMIT_RENAME = { maxRequests: 20, windowMs: 60_000 }
 const RATE_LIMIT_BACKFILL = { maxRequests: 5, windowMs: 60_000 }
 
 /** Wall clock a single manual run may spend before it stops and resumes later. */
@@ -66,6 +68,73 @@ async function guardConnectPreconditions(auth: AuthedContext): Promise<NextRespo
   const sandboxBlocked = await guardSandbox(auth.supabase, auth.companyId)
   if (sandboxBlocked) return sandboxBlocked
   return requireCapability(auth.supabase, auth.companyId, CAPABILITY.zettle_sync)
+}
+
+/**
+ * POST /organization-name: persist the merchant store label and backfill
+ * webshop_orders.store_label so Orders Butik does not keep showing the UUID.
+ */
+async function handlePostOrganizationName(
+  request: Request,
+  ctx?: ExtensionContext,
+): Promise<NextResponse> {
+  const auth = await requireUserAndCompany(ctx)
+  if (auth instanceof NextResponse) return auth
+
+  const capabilityBlocked = await requireCapability(
+    auth.supabase,
+    auth.companyId,
+    CAPABILITY.zettle_sync,
+  )
+  if (capabilityBlocked) return capabilityBlocked
+
+  const rl = await checkRateLimit({
+    prefix: 'zettle:organization-name',
+    identifier: auth.userId,
+    ...RATE_LIMIT_RENAME,
+  })
+  if (!rl.ok) return rl.response!
+
+  const body = (await request.json().catch(() => ({}))) as {
+    organization_name?: unknown
+  }
+  const parsed = parseZettleOrganizationName(body.organization_name)
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 })
+  }
+
+  // One RPC, one transaction: the connection UPDATE holds the row lock while
+  // webshop_orders.store_label (Orders Butik) is backfilled, so two
+  // concurrent renames cannot leave the orders on an older name than the
+  // connection. A failed backfill still commits the rename (backfilled=false).
+  const { data: result, error: renameError } = await auth.supabase.rpc('rename_zettle_store', {
+    p_company_id: auth.companyId,
+    p_name: parsed.name,
+  })
+
+  if (renameError) {
+    return NextResponse.json(
+      { error: 'Kunde inte spara butiksnamnet. Försök igen.' },
+      { status: 500 },
+    )
+  }
+  const outcome = (result ?? {}) as { updated?: boolean; backfilled?: boolean }
+  if (!outcome.updated) {
+    return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
+  }
+
+  if (outcome.backfilled === false) {
+    return NextResponse.json(
+      {
+        success: true,
+        organization_name: parsed.name,
+        warning: 'Namnet sparades, men befintliga ordrar kunde inte uppdateras.',
+      },
+      { status: 200 },
+    )
+  }
+
+  return NextResponse.json({ success: true, organization_name: parsed.name })
 }
 
 export const zettleApiRoutes: ApiRouteDefinition[] = [
@@ -377,6 +446,11 @@ export const zettleApiRoutes: ApiRouteDefinition[] = [
       }
       return NextResponse.json({ success: true, enabled: body.enabled })
     },
+  },
+  {
+    method: 'POST',
+    path: '/organization-name',
+    handler: handlePostOrganizationName,
   },
   {
     method: 'DELETE',
