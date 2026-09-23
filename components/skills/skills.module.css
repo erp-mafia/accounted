@@ -374,15 +374,18 @@
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
 .x:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }
-.dtTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
-.dtTop .marks { margin: 0; padding: 0; }
+.dtTop { display: flex; align-items: flex-start; gap: 12px; }
+.dtTop .marks { flex: none; margin: 0; padding: 4px 0 0; }
 .dtTop .mark { width: 28px; height: 28px; }
-.dtLed { width: 40px; height: 4px; border-radius: 2px; background: hsl(var(--foreground)); }
-.sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; }
+.dtTop h2 { flex: 1; min-width: 0; padding-top: 1px; }
+.dtTop .x { flex: none; align-self: flex-start; }
+.sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; text-wrap: balance; }
 .dtD { font-size: 14px; line-height: 21px; color: hsl(var(--muted-foreground)); max-width: 52ch; }
-.steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; counter-reset: s; }
-.steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; padding: 12px 0; border-top: 1px solid hsl(var(--border)); line-height: 20px; counter-increment: s; }
-.steps li::before { content: counter(s, decimal-leading-zero); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; color: hsl(var(--muted-foreground)); padding-top: 3px; }
+/* the steps run down a line, each number a small key */
+.steps { position: relative; margin: 0; padding: 0 0 0 36px; list-style: none; display: flex; flex-direction: column; gap: 16px; counter-reset: s; }
+.steps::before { content: ""; position: absolute; left: 11px; top: 12px; bottom: 12px; width: 1px; background: hsl(var(--border)); }
+.steps li { position: relative; padding-top: 2px; line-height: 20px; counter-increment: s; }
+.steps li::before { content: counter(s); position: absolute; left: -36px; top: 0; width: 23px; height: 23px; display: grid; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 2px 2px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; }
 .promptbox { border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: hsl(var(--frame)); }
 .promptbox span { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .promptbox p { font-family: var(--font-display); font-size: 18px; line-height: 25px; }
