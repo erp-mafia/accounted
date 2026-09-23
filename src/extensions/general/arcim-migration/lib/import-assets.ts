@@ -101,7 +101,6 @@ function isoDateOrNull(value: string | null | undefined): string | null {
   return isIsoDateShaped(date) ? date : null
 }
 
-/** Whole months between two ISO dates, rounded to nearest, minimum 1. */
 /**
  * Useful life in whole months, from the month the plan starts through the
  * month it ends.
