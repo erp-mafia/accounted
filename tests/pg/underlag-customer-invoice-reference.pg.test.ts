@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool } from './setup'
-import { seedCompany, insertPostedJournalEntry, insertTransaction } from './fixtures'
+import { seedCompany, insertPostedBankJournalEntry, insertPostedJournalEntry, insertTransaction } from './fixtures'
 
 /**
  * Customer-invoice hänvisning in the missing-underlag predicate (#2298,
@@ -121,8 +121,8 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
 
     // The importer's shape for an EU service sale under kontantmetoden:
     // debit bank, credit 3308. Source type 'import' is in the needs-doc list.
-    const mkJe = (n: number, sourceType: string) =>
-      insertPostedJournalEntry({
+    const mkJe = async (n: number, sourceType: string) => {
+      const entry = {
         userId,
         companyId,
         fiscalPeriodId,
@@ -134,7 +134,13 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
           { accountNumber: '1930', debitAmount: 10000, creditAmount: 0 },
           { accountNumber: '3308', debitAmount: 0, creditAmount: 10000 },
         ],
-      })
+      }
+      if (sourceType !== 'bank_transaction') return insertPostedJournalEntry(entry)
+      const transactionId = await insertTransaction({ userId, companyId, amount: 10000, date: entry.entryDate })
+      const id = await insertPostedBankJournalEntry({ ...entry, transactionId })
+      await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, id])
+      return id
+    }
 
     jeImportLinked = await mkJe(1, 'import')
     jeImportLoose = await mkJe(2, 'import')
@@ -160,7 +166,6 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
       journalEntryId: jeImportCancelledPayment,
     })
 
-    await insertTransaction({ userId, companyId, journalEntryId: jeBankLinked, date: '2026-06-04' })
     const bankInvoice = await insertCustomerInvoice({ userId, companyId })
     await linkAsPayment({ userId, companyId, invoiceId: bankInvoice, journalEntryId: jeBankLinked })
 

@@ -88,7 +88,8 @@ const apLines = (amount: number): PostedJournalEntryLine[] => [
   { accountNumber: '1930', debitAmount: 0, creditAmount: amount },
 ]
 
-function seedVoucher(company: Seeded, lines: PostedJournalEntryLine[], sourceType = 'bank_transaction') {
+// These existing vouchers have no source bank transaction in the fixture.
+function seedVoucher(company: Seeded, lines: PostedJournalEntryLine[], sourceType = 'manual') {
   return insertPostedJournalEntry({
     userId: company.userId,
     companyId: company.companyId,

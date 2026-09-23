@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
-import { seedCompany, insertPostedJournalEntry } from './fixtures'
+import { seedCompany, insertPostedBankJournalEntry } from './fixtures'
 
 async function bookMerchant(params: {
   userId: string
@@ -32,27 +32,29 @@ async function bookMerchant(params: {
   /** transactions.exchange_rate: the rate recorded on the row. Null = none. */
   exchangeRate?: number | null
 }): Promise<void> {
-  const entryId = await insertPostedJournalEntry({
-    userId: params.userId,
-    companyId: params.companyId,
-    fiscalPeriodId: params.fiscalPeriodId,
-    entryDate: params.date,
-    voucherNumber: params.voucherNumber,
-    sourceType: 'bank_transaction',
-    lines: [
-      { accountNumber: params.expenseAccount, debitAmount: params.amount, creditAmount: 0 },
-      { accountNumber: '1930', debitAmount: 0, creditAmount: params.amount },
-    ],
-  })
+  const transactionId = randomUUID()
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, amount_sek, exchange_rate,
         date, description, journal_entry_id, merchant_name, category)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'expense_software')`,
-    [randomUUID(), params.companyId, params.userId, params.currency ?? 'SEK',
+    [transactionId, params.companyId, params.userId, params.currency ?? 'SEK',
      -params.amount, params.amountSek ?? null, params.exchangeRate ?? null, params.date,
-     `Payment ${params.merchantName}`, entryId, params.merchantName],
+     `Payment ${params.merchantName}`, null, params.merchantName],
   )
+  const entryId = await insertPostedBankJournalEntry({
+    userId: params.userId,
+    companyId: params.companyId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    entryDate: params.date,
+    voucherNumber: params.voucherNumber,
+    transactionId,
+    lines: [
+      { accountNumber: params.expenseAccount, debitAmount: params.amount, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: params.amount },
+    ],
+  })
+  await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, entryId])
 }
 
 /**

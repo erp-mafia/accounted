@@ -7,9 +7,22 @@ import {
   insertCashAccount,
   insertDraftJournalEntry,
   insertPostedJournalEntry,
+  insertPostedBankJournalEntry,
   insertBalancedLines,
   insertTransaction,
 } from './fixtures'
+
+async function insertDocumentSurfaceEntry(params: Parameters<typeof insertPostedJournalEntry>[0] & { cashAccountId?: string | null }) {
+  if (params.sourceType !== 'bank_transaction') return insertPostedJournalEntry(params)
+  const bankLine = params.lines?.find(line => line.accountNumber === '1930' || line.accountNumber === '1940')
+  if (!bankLine) throw new Error('Bank document fixture needs its settlement line')
+  const transactionId = await insertTransaction({ ...params, cashAccountId: params.cashAccountId,
+    date: params.entryDate, amount: Math.round((bankLine.debitAmount - bankLine.creditAmount) * 100) / 100,
+  })
+  const id = await insertPostedBankJournalEntry({ ...params, transactionId })
+  await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, id])
+  return id
+}
 
 /**
  * P1-3 (mcp_optimization_plan): both missing-document surfaces implement ONE
@@ -171,7 +184,7 @@ describe('document surfaces unification', () => {
     fiscalPeriodId = s.fiscalPeriodId
 
     const mkJe = async (n: number, sourceType: string) => {
-      return insertPostedJournalEntry({
+      return insertDocumentSurfaceEntry({
         userId,
         companyId,
         fiscalPeriodId,
@@ -198,20 +211,12 @@ describe('document surfaces unification', () => {
     jeSiPartialCovered = await mkJe(10, 'supplier_invoice_paid')
     jeSiPayUnanchored = await mkJe(11, 'supplier_invoice_paid')
 
-    // Bank transactions pointing at the bank-driven entries. The with-doc tx
-    // deliberately keeps document_id NULL (the 1,100-row reverse gap on
-    // prod): the surface must key on document_attachments, not
-    // transactions.document_id. jeSiPaymentCovered also gets a tx so the
-    // transactions surface exercises the reference arm.
-    for (const [jeId, date] of [
-      [jeBankNoDoc, '2026-06-01'],
-      [jeBankWithDoc, '2026-06-02'],
-      [jeBankWaived, '2026-06-03'],
-      [jeBankStaleDoc, '2026-06-04'],
-      [jeSiPaymentCovered, '2026-06-08'],
-    ] as const) {
-      await insertTransaction({ userId, companyId, journalEntryId: jeId, date })
-    }
+    // Bank-origin fixtures already point to their source rows, with document_id
+    // still NULL. The supplier payment also gets a bank row so both surfaces
+    // exercise its retained-document reference.
+    await insertTransaction({ userId, companyId, journalEntryId: jeSiPaymentCovered,
+      date: '2026-06-08', amount: 800,
+    })
 
     await attachDocument({ userId, companyId, journalEntryId: jeBankWithDoc })
     await attachDocument({
@@ -334,7 +339,7 @@ describe('document surfaces unification', () => {
     let voucher = 1
     const expected: string[] = []
     for (const sourceType of NEEDS_DOC_SOURCE_TYPES) {
-      const id = await insertPostedJournalEntry({
+      const id = await insertDocumentSurfaceEntry({
         userId: s.userId,
         companyId: s.companyId,
         fiscalPeriodId: s.fiscalPeriodId,
@@ -405,8 +410,8 @@ describe('document surfaces unification', () => {
         description: `inbox item ${n}`,
         sourceType: 'inbox_item',
         lines: [
-          { accountNumber: '1930', debitAmount: 100 * n, creditAmount: 0 },
-          { accountNumber: '3001', debitAmount: 0, creditAmount: 100 * n },
+          { accountNumber: '1930', debitAmount: 0, creditAmount: 100 * n },
+          { accountNumber: '4000', debitAmount: 100 * n, creditAmount: 0 },
         ],
       })
     const jeWithUnderlag = await mkInboxJe(1)
@@ -468,7 +473,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       FROM transactions t
       JOIN journal_entries je ON je.id = t.journal_entry_id
       JOIN fiscal_periods fp ON fp.id = je.fiscal_period_id
-      WHERE t.document_id IS NOT NULL
+      WHERE t.company_id = $1 AND t.document_id IS NOT NULL
         AND je.status = 'posted'
         AND fp.is_closed = false
         AND fp.locked_at IS NULL
@@ -506,6 +511,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       userId: s.userId,
       companyId: s.companyId,
       journalEntryId: jeA,
+      amount: 100,
       date: '2026-06-15',
     })
     await getPool().query(`UPDATE public.transactions SET document_id = $1 WHERE id = $2`, [docA, txA])
@@ -518,11 +524,12 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       userId: s.userId,
       companyId: s.companyId,
       journalEntryId: jeB,
+      amount: 200,
       date: '2026-06-16',
     })
     await getPool().query(`UPDATE public.transactions SET document_id = $1 WHERE id = $2`, [docB, txB])
 
-    await getPool().query(BACKFILL_SQL)
+    await getPool().query(BACKFILL_SQL, [s.companyId])
 
     const { rows: aRows } = await getPool().query<{ journal_entry_id: string | null }>(
       `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
@@ -550,6 +557,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       userId: s.userId,
       companyId: s.companyId,
       journalEntryId: jeC,
+      amount: 400,
       date: '2026-06-17',
     })
     await getPool().query(`UPDATE public.transactions SET document_id = $1 WHERE id = $2`, [docC, txC])
@@ -558,7 +566,7 @@ describe('transaction-pinned document backfill (migration 20260724090000 §4)', 
       [s.fiscalPeriodId],
     )
 
-    await getPool().query(BACKFILL_SQL)
+    await getPool().query(BACKFILL_SQL, [s.companyId])
 
     const { rows: cRows } = await getPool().query<{ journal_entry_id: string | null }>(
       `SELECT journal_entry_id FROM public.document_attachments WHERE id = $1`,
@@ -613,7 +621,7 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
     UPDATE document_attachments d
     SET journal_entry_id = candidate.journal_entry_id
     FROM candidate
-    WHERE candidate.pick = 1
+    WHERE candidate.company_id = $1 AND candidate.pick = 1
       AND d.id = candidate.document_id
       AND d.company_id = candidate.company_id
       AND d.journal_entry_id IS NULL
@@ -685,7 +693,7 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
     const before = await verifikatSurface(s.companyId)
     expect((before.verifikat ?? []).map((v) => v.journal_entry_id)).toContain(jePay)
 
-    await getPool().query(BACKFILL_SQL)
+    await getPool().query(BACKFILL_SQL, [s.companyId])
 
     expect(await anchorOf(doc)).toBe(jePay)
     const after = await verifikatSurface(s.companyId)
@@ -745,7 +753,7 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
       documentId: anchored,
     })
 
-    await getPool().query(BACKFILL_SQL)
+    await getPool().query(BACKFILL_SQL, [s.companyId])
 
     expect(await anchorOf(floating)).toBe(jeReg)
     expect(await anchorOf(anchored)).toBe(jeOther)
@@ -787,7 +795,7 @@ describe('floating supplier-invoice document backfill (migration 20260727180000)
       [s.fiscalPeriodId],
     )
 
-    await getPool().query(BACKFILL_SQL)
+    await getPool().query(BACKFILL_SQL, [s.companyId])
 
     expect(await anchorOf(doc)).toBeNull()
   })
@@ -798,11 +806,12 @@ describe('transactions_without_documents: bank account on each row (A4)', () => 
     const s = await seedCompany()
     const cashAccountId = await insertCashAccount({ companyId: s.companyId, ledgerAccount: '1940' })
     const mkJe = (n: number) =>
-      insertPostedJournalEntry({
+      insertDocumentSurfaceEntry({
         userId: s.userId,
         companyId: s.companyId,
         fiscalPeriodId: s.fiscalPeriodId,
         voucherNumber: n,
+        cashAccountId: n === 1 ? cashAccountId : null,
         entryDate: `2026-06-${String(n).padStart(2, '0')}`,
         description: `bank ${n}`,
         sourceType: 'bank_transaction',
@@ -813,20 +822,8 @@ describe('transactions_without_documents: bank account on each row (A4)', () => 
       })
     const jeWithAccount = await mkJe(1)
     const jeWithoutAccount = await mkJe(2)
-    const txWith = await insertTransaction({
-      companyId: s.companyId,
-      userId: s.userId,
-      journalEntryId: jeWithAccount,
-      cashAccountId,
-      date: '2026-06-01',
-    })
-    const txWithout = await insertTransaction({
-      companyId: s.companyId,
-      userId: s.userId,
-      journalEntryId: jeWithoutAccount,
-      cashAccountId: null,
-      date: '2026-06-02',
-    })
+    const txWith = (await getPool().query('SELECT source_id FROM journal_entries WHERE id = $1', [jeWithAccount])).rows[0].source_id
+    const txWithout = (await getPool().query('SELECT source_id FROM journal_entries WHERE id = $1', [jeWithoutAccount])).rows[0].source_id
 
     const { rows } = await getPool().query<{
       r: { ok: boolean; transactions: Array<{ id: string; cash_account_id: string | null; cash_account_ledger: string | null }> }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
-import type { CreateJournalEntryInput, MappingResult, VatJournalLine } from '@/types'
+import type { CreateJournalEntryInput, MappingResult, Transaction, VatJournalLine } from '@/types'
 
 // Mock engine
 vi.mock('../engine', () => ({
@@ -114,7 +114,26 @@ describe('createTransactionJournalEntry', () => {
     mockedFindFiscalPeriod.mockResolvedValue('period-1')
   })
 
+  it.each([-50, 50])('preserves the source snapshot and chosen settlement side for amount %s', async amount => {
+    const { supabase } = createQueuedMockSupabase()
+    const tx = makeTransaction({ id: 'source-1', cash_account_id: 'original-cash', amount })
+    const mapping = makeMappingResult(amount < 0
+      ? { credit_account: '1940' } : { debit_account: '1940', credit_account: '3001' })
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, mapping)
+    expect(mockedCreateEntry.mock.calls[0][3].bank_booking_context).toEqual([{
+      transaction_id: tx.id, cash_account_id: 'original-cash', settlement_account: '1940',
+      date: tx.date, amount, currency: tx.currency,
+    }])
+  })
+
   // --- Validation ---
+
+  it('normalizes a legacy null source currency to the existing SEK default', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    const tx = makeTransaction({ currency: null as unknown as Transaction['currency'] })
+    await createTransactionJournalEntry(supabase as never, 'company-1', 'user-1', tx, makeMappingResult())
+    expect(mockedCreateEntry.mock.calls[0][3].bank_booking_context?.[0].currency).toBe('SEK')
+  })
 
   it('throws when debit_account is missing', async () => {
     const tx = makeTransaction()

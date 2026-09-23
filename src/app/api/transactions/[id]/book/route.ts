@@ -1,3 +1,5 @@
+import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { eventBus } from '@/lib/events'
 import { ensureInitialized } from '@/lib/init'
@@ -181,6 +183,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         repointCashAccountId ?? (transaction as Transaction).cash_account_id,
       ))
 
+    const settlementAccount = await resolveSettlementAccount(
+      supabase, companyId, repointCashAccountId ?? transaction.cash_account_id, log, transaction.currency,
+    )
+
     // Create journal entry via the engine
     let journalEntry
     try {
@@ -190,6 +196,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         description,
         source_type: 'bank_transaction',
         source_id: id,
+        bank_booking_context: [bankBookingContext(transaction, settlementAccount, repointCashAccountId)],
         lines,
         ...(voucherSeries ? { voucher_series: voucherSeries } : {}),
       })
