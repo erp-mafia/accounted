@@ -80,21 +80,21 @@
   flex-direction: column;
   gap: 10px;
   padding: 20px 24px 24px;
-  border: 2px solid hsl(var(--foreground));
-  border-radius: 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
   text-align: left;
   color: hsl(var(--foreground));
   opacity: .35;
   cursor: pointer;
   background: hsl(var(--background));
-  box-shadow: 6px 6px 0 hsl(var(--foreground));
+  box-shadow: 5px 5px 0 hsl(var(--border));
   transition: opacity .35s, transform .09s, box-shadow .09s;
 }
-.face:hover { transform: translate(-1px, -1px); box-shadow: 7px 7px 0 hsl(var(--foreground)); }
-.face:active, .card[data-down] .face { transform: translate(4px, 4px); box-shadow: 2px 2px 0 hsl(var(--foreground)); }
+.face:hover { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 hsl(var(--border)); }
+.face:active, .card[data-down] .face { transform: translate(4px, 4px); box-shadow: 1px 1px 0 hsl(var(--border)); }
 .face:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
-.face h3 { font-weight: 700; font-size: 22px; line-height: 26px; letter-spacing: -.02em; color: hsl(var(--foreground)); }
-.face p { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 12.5px; line-height: 20px; color: hsl(var(--muted-foreground)); }
+.face h3 { font-weight: 500; font-size: 18px; line-height: 24px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
+.face p { font-size: 13px; line-height: 20px; color: hsl(var(--muted-foreground)); }
 .faceTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 20px; }
 .faceTop .led { margin-left: auto; }
 .led { align-self: flex-end; width: 26px; height: 3px; border-radius: 2px; background: var(--rbd); box-shadow: 0 0 8px 1px rgba(var(--rf), .9); }
@@ -166,21 +166,21 @@
   flex-direction: column;
   gap: 6px;
   padding: 14px 16px 16px;
-  border: 1.5px solid hsl(var(--foreground));
-  border-radius: 8px;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
   background: hsl(var(--background));
-  box-shadow: 4px 4px 0 hsl(var(--foreground));
+  box-shadow: 4px 4px 0 hsl(var(--border));
   transition: transform .09s, box-shadow .09s;
 }
-.row:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 hsl(var(--foreground)); }
-.row:has(.rowMain:active) { transform: translate(3px, 3px); box-shadow: 1px 1px 0 hsl(var(--foreground)); }
+.row:hover { transform: translate(-1px, -1px); border-color: hsl(var(--foreground) / .22); box-shadow: 5px 5px 0 hsl(var(--foreground) / .12); }
+.row:has(.rowMain:active) { transform: translate(3px, 3px); box-shadow: 1px 1px 0 hsl(var(--foreground) / .12); }
 .row:has(.rowMain:focus-visible) { outline: 2px solid hsl(var(--foreground)); outline-offset: 3px; }
 .row[data-hit] { animation: hitflare .8s ease-out; }
 /* the name is the button; its ::after stretches the click over the whole key */
 .rowMain { all: unset; cursor: pointer; }
 .rowMain::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
-.row .nm { display: block; font-weight: 700; font-size: 16px; line-height: 21px; letter-spacing: -.015em; color: hsl(var(--foreground)); }
-.row .ds { flex: 1; font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 12px; line-height: 18px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.row .nm { display: block; font-weight: 500; font-size: 15px; line-height: 21px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
+.row .ds { flex: 1; font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 /*
  * "Gör det med Claude": a quiet outline pill. The only motion is a small
  * Himmel dot breathing at its start, the sign that the agent is there.
