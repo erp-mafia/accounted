@@ -257,10 +257,11 @@
 .row[data-now] .nm { padding-right: 88px; }
 .row[data-now] { --edge: var(--edgeNow); --edgeHover: var(--edgeNow); }
 
-/* a quiet "Öppna" that surfaces on hover, bottom right */
-.open { position: absolute; right: 14px; bottom: 12px; font-size: 11px; line-height: 16px; letter-spacing: .02em; color: hsl(var(--muted-foreground)); opacity: 0; transform: translateX(-3px); transition: opacity .2s, transform .2s; pointer-events: none; }
-.open::after { content: " \2192"; }
-.face:hover .open, .face:focus-visible .open, .row:hover .open, .row:has(.rowMain:focus-visible) .open { opacity: 1; transform: none; }
+/* a quiet "Öppna" on every key, bottom right; it darkens and its arrow steps out on hover */
+.open { position: absolute; right: 14px; bottom: 12px; font-size: 11px; line-height: 16px; letter-spacing: .02em; color: hsl(var(--muted-foreground)); transition: color .2s; pointer-events: none; }
+.open::after { content: "\2192"; display: inline-block; margin-left: 4px; transition: transform .2s; }
+.face:hover .open, .face:focus-visible .open, .row:hover .open, .row:has(.rowMain:focus-visible) .open { color: hsl(var(--foreground)); }
+.face:hover .open::after, .face:focus-visible .open::after, .row:hover .open::after, .row:has(.rowMain:focus-visible) .open::after { transform: translateX(3px); }
 .anchor { position: absolute; left: 16px; top: 16px; width: 0; height: 0; }
 .row[data-own] { animation: rise .5s cubic-bezier(.2, .7, .2, 1); }
 
