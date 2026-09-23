@@ -35,6 +35,8 @@
   --edge: color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%);
   --edgeHover: color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 26%);
   --edgePanel: color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 38%);
+  /* a "Gör nu" key keeps a Himmel edge at rest */
+  --edgeNow: #8FA9CF;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -99,6 +101,7 @@
 .face:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
 .face h3 { font-weight: 500; font-size: 16px; line-height: 22px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
 .face p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.card[data-now] .face, .card[data-now] .face:hover, .card[data-now] .face:active, .card[data-now][data-down] .face { --edgePanel: var(--edgeNow); }
 .faceTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 20px; }
 .faceTop { justify-content: flex-start; gap: 8px; min-height: 24px; }
 .faceTop .led { margin-left: auto; }
@@ -250,6 +253,12 @@
 .nowLight { position: absolute; top: 12px; right: 12px; pointer-events: none; border-color: rgba(var(--rf), .9); background: #EEF3FA; color: #2A4468; }
 .nowLight::before { background: var(--rbd); }
 .row[data-now] .nm { padding-right: 64px; }
+.row[data-now] { --edge: var(--edgeNow); --edgeHover: var(--edgeNow); }
+
+/* a quiet "Öppna" that surfaces on hover, bottom right */
+.open { position: absolute; right: 14px; bottom: 12px; font-size: 11px; line-height: 16px; letter-spacing: .02em; color: hsl(var(--muted-foreground)); opacity: 0; transform: translateX(-3px); transition: opacity .2s, transform .2s; pointer-events: none; }
+.open::after { content: " \2192"; }
+.face:hover .open, .face:focus-visible .open, .row:hover .open, .row:has(.rowMain:focus-visible) .open { opacity: 1; transform: none; }
 .anchor { position: absolute; left: 16px; top: 16px; width: 0; height: 0; }
 .row[data-own] { animation: rise .5s cubic-bezier(.2, .7, .2, 1); }
 

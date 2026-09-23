@@ -343,6 +343,7 @@ function Registry({ companyId }: { companyId: string }) {
               data-lit={litKeys > i ? '' : undefined}
               data-ring={ringKey === i ? '' : undefined}
               data-down={sheetKey === skill.id ? '' : undefined}
+              data-now={doNow.has(skill.id) ? '' : undefined}
             >
               <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
                 <span className={styles.faceTop}>
@@ -352,6 +353,7 @@ function Registry({ companyId }: { companyId: string }) {
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
+                <span className={styles.open} aria-hidden>{t('open_hint')}</span>
               </button>
             </div>
           ))}
@@ -379,6 +381,7 @@ function Registry({ companyId }: { companyId: string }) {
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
                   {row.id && <SkillMarks id={row.id} />}
                   {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_tag')}</span>}
+                  <span className={styles.open} aria-hidden>{t('open_hint')}</span>
                 </div>
               </li>
             ))}
