@@ -739,3 +739,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-23] The Dokument section (sidebar, /arkiv pages, its Att göra rows) is gated by ARKIV_COMPANY_IDS again, Arcim only, until it looks finished; the shelf pipeline and MCP stay on for everyone: founder saw it on prod and called it unfinished.
 
 [2026-09-23] Cash-flow tax bridges current tax expense and tax balances; 1630 and other taxes stay in working capital. Inspect mixed 2510 transfers and refuse unallocatable payments instead of guessing. No ledger repair or closing-filter change.
+
+[2026-09-23] Cash-flow tax also bridges BAS 6996/6997 against 2517: foreign income-tax expense already reduces operating profit, so add it back before the separate tax-payment line. K3 finalization remains blocked by the existing draft-only gate.

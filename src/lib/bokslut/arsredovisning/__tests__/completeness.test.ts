@@ -11,6 +11,7 @@ import {
 } from '../completeness'
 import { mapTrialBalancesToK2 } from '../../ixbrl/k2-mapper'
 import { buildBrRows, buildRrRows } from '../statement-rows'
+import { K3_CASH_FLOW_TAX_ALLOCATION_WARNING } from '../build-data'
 
 const eligibility: AnnualReportEligibilityResult = {
   k2_eligible: true,
@@ -172,6 +173,25 @@ describe('validateAnnualReportCompleteness', () => {
     value.report.accounting_framework = 'k3'
     const result = validateAnnualReportCompleteness(value)
     expect(result.issues.some((issue) => issue.code === 'AR-K3-DRAFT-ONLY')).toBe(true)
+  })
+
+  it.each(['signing', 'filing'] as const)('blocks %s after a tax-allocation failure for a larger K3 company', (stage) => {
+    const value = input(stage)
+    value.report.accounting_framework = 'k3'
+    value.eligibility = { ...eligibility, size_classification: 'larger' }
+    value.report.kassaflodesanalys = undefined
+    value.report.warnings = [K3_CASH_FLOW_TAX_ALLOCATION_WARNING]
+    value.report.kassaflodesanalys_omission = {
+      rule: 'forbidden', requested: false, confirmed: false, omitted: false,
+    }
+    const result = validateAnnualReportCompleteness(value)
+    expect(result.ok).toBe(false)
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'AR-K3-DRAFT-ONLY', severity: 'error',
+    }))
+    expect(result.issues).toContainEqual(expect.objectContaining({
+      code: 'AR-SOURCE-WARNING', message: K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
+    }))
   })
 
   it('reports a cash-flow omission the law does not allow, and nothing when honoured', () => {

@@ -40,6 +40,11 @@ const entry = (debit: string, credit: string, amount = 1000, source: Entry['sour
 const fixtures: Fixture[] = [
   { name: 'unpaid income tax on 2510', entries: [entry('8910', '2510')], expectedTax: 0, expectedCash: 0 },
   { name: 'unpaid income tax on 2512', entries: [entry('8910', '2512')], expectedTax: 0, expectedCash: 0 },
+  { name: 'unpaid foreign income tax on 6997 and 2517', entries: [entry('6997', '2517')], expectedTax: 0, expectedCash: 0 },
+  { name: 'foreign income tax paid directly on 6996', entries: [entry('6996', '1930')], expectedTax: -1000, expectedCash: -1000 },
+  { name: 'foreign tax accrual and partial settlement', entries: [entry('6997', '2517'), entry('2517', '1930', 400)], expectedTax: -400, expectedCash: -400 },
+  { name: 'foreign tax expense reclassified when paid', entries: [entry('6997', '2517'), entry('2517', '1930'), entry('6996', '6997')], expectedTax: -1000, expectedCash: -1000 },
+  { name: 'foreign income tax refund on operating expense account', entries: [entry('1930', '6996')], expectedTax: 1000, expectedCash: 1000 },
   { name: 'imported unpaid income tax on 2510', entries: [entry('8910', '2510', 1000, 'import')], expectedTax: 0, expectedCash: 0 },
   { name: 'native year-end provision remains excluded', entries: [entry('8910', '2512', 1000, 'year_end')], expectedTax: 0, expectedCash: 0 },
   { name: '2510 accrual and full payment', entries: [entry('8910', '2510'), entry('2510', '1930')], expectedTax: -1000, expectedCash: -1000 },

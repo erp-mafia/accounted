@@ -7,6 +7,11 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 // Deferred tax (894x) has no payment effect. Other 89xx accounts need an
 // explicit classification rather than being assumed to be current income tax.
 const CURRENT_TAX_EXPENSE = /^(891|892|893)/
+// BAS 2026 also places paid/unpaid foreign income tax in operating expenses.
+// K3 29.2 includes foreign income taxes, so add these back before the tax line.
+const OPERATING_INCOME_TAX_EXPENSE = new Set(['6996', '6997'])
+const isCurrentTaxExpense = (account: string) => CURRENT_TAX_EXPENSE.test(account)
+  || OPERATING_INCOME_TAX_EXPENSE.has(account)
 const CURRENT_TAX_BALANCE = new Set(['1640', '2510', '2512', '2517', '2518'])
 const OTHER_TAX_BALANCE = new Set(['2513', '2514', '2515'])
 const OTHER_TAX_EXPENSE = new Set(['5191', '7533', '7550'])
@@ -82,7 +87,7 @@ async function nonIncomeTaxTransfer(
     const other = group.filter(line => OTHER_TAX_BALANCE.has(line.account_number)
       || OTHER_TAX_EXPENSE.has(line.account_number))
     const pureTaxEntry = group.every(line => CURRENT_TAX_BALANCE.has(line.account_number)
-      || CURRENT_TAX_EXPENSE.test(line.account_number)
+      || isCurrentTaxExpense(line.account_number)
       || OTHER_TAX_BALANCE.has(line.account_number) || OTHER_TAX_EXPENSE.has(line.account_number))
     if (other.length > 0) {
       if (!pureTaxEntry) {
@@ -125,17 +130,19 @@ export async function calculateCashFlowTax(
   fiscalPeriodId: string,
   openingEntryId: string | null,
   rows: TrialBalanceRow[],
-): Promise<{ paidIncomeTax: number; otherTaxLiabilityChange: number }> {
+): Promise<{ paidIncomeTax: number; otherTaxLiabilityChange: number; expenseInOperatingProfit: number }> {
   let expense = 0
+  let expenseInOperatingProfit = 0
   let incomeTaxDelta = 0
   let otherTaxDelta = 0
   for (const row of rows) {
     const account = row.account_number
     const movement = row.period_debit - row.period_credit
-    if (CURRENT_TAX_EXPENSE.test(account)) expense -= movement
+    if (isCurrentTaxExpense(account)) expense -= movement
     else if (account.startsWith('89') && !account.startsWith('894') && account !== '8999' && r2(movement) !== 0) {
       throw new CashFlowTaxAllocationError()
     }
+    if (OPERATING_INCOME_TAX_EXPENSE.has(account)) expenseInOperatingProfit += movement
     const delta = row.closing_debit - row.closing_credit - row.opening_debit + row.opening_credit
     if (CURRENT_TAX_BALANCE.has(account)) incomeTaxDelta += delta
     if (OTHER_TAX_BALANCE.has(account)) otherTaxDelta += delta
@@ -149,5 +156,6 @@ export async function calculateCashFlowTax(
   return {
     paidIncomeTax: r2(expense - incomeTaxDelta - transferred),
     otherTaxLiabilityChange: r2(-otherTaxDelta + transferred),
+    expenseInOperatingProfit: r2(expenseInOperatingProfit),
   }
 }

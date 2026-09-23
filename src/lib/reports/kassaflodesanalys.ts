@@ -182,11 +182,13 @@ export async function generateKassaflodesanalys(
   // positive; we report it as a positive number to be added.
   const avskrivningar = r2(sumPeriodDebitByPrefix(rows, ['78']))
 
-  // Övriga ej-kassaflödesposter: this category is used for non-cash items
-  // beyond depreciation (e.g., reversals of provisions, unrealized FX).
-  // v1 places it at 0: extensions can compute it from specific account
-  // patterns. Kept in the type so the structure is stable.
-  const ovrigaEjKassaflodesposter = 0
+  const tax = await calculateCashFlowTax(
+    supabase, companyId, fiscalPeriodId, period.opening_balance_entry_id ?? null, rows,
+  )
+
+  // Foreign income-tax expense on 6996/6997 already reduced the starting
+  // result. Add it back here; the tax bridge below supplies the payment.
+  const ovrigaEjKassaflodesposter = tax.expenseInOperatingProfit
 
   // Receivables include skattekonto (1630). Depositing bank funds there is
   // a cash outflow; a later tax charge reduces this receivable and must not
@@ -199,10 +201,6 @@ export async function generateKassaflodesanalys(
 
   // Δ Varulager (14xx). Same sign as receivables: stock grew → cash out.
   const deltaVarulager = r2(-sumDeltaByPrefix(rows, ['14']))
-
-  const tax = await calculateCashFlowTax(
-    supabase, companyId, fiscalPeriodId, period.opening_balance_entry_id ?? null, rows,
-  )
 
   // Working-capital liabilities include property/pension/yield taxes. Their
   // expenses already reduce operating profit; they are not income-tax payments.
