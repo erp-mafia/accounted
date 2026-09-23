@@ -759,3 +759,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-23] Cash-flow tax also bridges BAS 6996/6997 against 2517: foreign income-tax expense already reduces operating profit, so add it back before the separate tax-payment line. K3 finalization remains blocked by the existing draft-only gate.
 
 [2026-09-23] Sanction voucher reads in cash-flow-tax only for mixed-tax counterpart evidence: balances still come from the trial balance, which cannot retain counterpart pairing. Tests pin the same year-end, reversal/correction and opening-entry exclusions.
+
+[2026-09-24] Enable Banking companyId for enskild firma: 12-digit personnummer when the template accepts it, else 10 digits, else no prefill (no template). Prefilled fields are locked on the hosted page, so a wrong prefill blocks the user; no prefill only asks them to type.
