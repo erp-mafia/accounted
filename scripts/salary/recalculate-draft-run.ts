@@ -167,7 +167,7 @@ async function main() {
   // that constant is undefined and service clients built from it fail (the
   // bug PR #2628 fixed in refresh-supplier-payment-state.ts).
   const { recalculationRefusal, inspectStoredPayslip, applyRefusal, describeRow, ACKNOWLEDGE_FLAG } = await import(
-    '../../lib/salary/recalculate-draft-run'
+    '../../src/lib/salary/recalculate-draft-run'
   )
   // The flag is parsed above, before any app import; the refusal text that
   // names it lives in the lib. One name, checked rather than trusted.
@@ -280,8 +280,8 @@ async function main() {
     process.exit(1)
   }
 
-  const { runSalaryCalculation } = await import('../../lib/salary/run-calculation')
-  const { createLogger } = await import('../../lib/logger')
+  const { runSalaryCalculation } = await import('../../src/lib/salary/run-calculation')
+  const { createLogger } = await import('../../src/lib/logger')
   const result = await runSalaryCalculation({
     supabase,
     companyId: COMPANY_ID!,

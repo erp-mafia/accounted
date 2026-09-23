@@ -151,6 +151,7 @@ import {
 } from './extension-route-guards.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const SOURCE_ROOT = path.join(ROOT, 'src')
 const BASELINE_PATH = path.join(ROOT, 'scripts', 'checks', 'antipatterns-baseline.json')
 
 const IGNORE_DIRS = new Set(['node_modules', '.next', '.git', 'dist', 'build', 'coverage'])
@@ -207,7 +208,7 @@ function walk(dir, exts, out = []) {
   return out
 }
 
-const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/')
+const rel = (p) => path.relative(ROOT, p).split(path.sep).join('/').replace(/^src\//, '')
 
 /** True when any handler segment calls getUser() without an MFA-enforcing guard. */
 function handRollsRouteAuth(src) {
@@ -218,7 +219,7 @@ function handRollsRouteAuth(src) {
 
 /** Route files that hand-roll auth instead of the MFA-enforcing guard. */
 function findRawRouteAuth() {
-  const apiDir = path.join(ROOT, 'app', 'api')
+  const apiDir = path.join(SOURCE_ROOT, 'app', 'api')
   return walk(apiDir, ['route.ts'])
     .filter((f) => handRollsRouteAuth(fs.readFileSync(f, 'utf8')))
     .map(rel)
@@ -241,9 +242,9 @@ const JEL_INSERT_CHAIN_RE = /\.from\(\s*['"]journal_entry_lines['"]\s*\)\s*\.\s*
 /** Files that insert into journal_entry_lines outside the sanctioned writers. */
 function findDirectJelInserts() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   return files
     .filter((f) => {
@@ -265,9 +266,9 @@ const INVOICE_PAYMENT_INSERT_CHAIN_RE =
 /** Files that insert into invoice_payments outside the sanctioned writer. */
 function findDirectInvoicePaymentInserts() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   return files
     .filter((f) => {
@@ -310,9 +311,9 @@ const SUPABASE_JS_NAMESPACE_RE =
  */
 function findLeakySupabaseClients() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   return files
     .filter((f) => {
@@ -390,8 +391,8 @@ const LEDGER_SCAN_RE =
  */
 function findLedgerScanningReports() {
   const files = [
-    ...walk(path.join(ROOT, 'lib', 'reports'), ['.ts']),
-    ...walk(path.join(ROOT, 'lib', 'bokslut'), ['.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'lib', 'reports'), ['.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'lib', 'bokslut'), ['.ts']),
   ]
   return files
     .filter((f) => {
@@ -407,10 +408,10 @@ function findLedgerScanningReports() {
 /** Count of naive Math.round(x*100)/100 occurrences (lines) across source. */
 function countNaiveRound() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   let count = 0
   for (const f of files) {
@@ -437,9 +438,9 @@ const PROVIDER_HOST_RE =
 
 function findProviderHostFiles() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   const found = []
   for (const f of files) {
@@ -457,10 +458,10 @@ function findProviderHostFiles() {
  */
 function countHandRolledInvariants() {
   const files = [
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   let count = 0
   for (const f of files) {
@@ -509,8 +510,8 @@ function lineHasBareRoundedClass(line) {
 /** Off-ladder border-radius classes in UI code. */
 function findOffLadderRadii() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
   ]
   const findings = []
   for (const f of files) {
@@ -568,11 +569,11 @@ function isPublicEnvRead(node) {
 /** Public env flags compared in place, which the Docker build folds away. */
 function findFoldedPublicFlags() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'lib'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'contexts'), ['.ts', '.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'lib'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'contexts'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.ts', '.tsx']),
   ]
   const findings = []
   for (const file of files) {
@@ -639,7 +640,7 @@ const DIRECT_AI_CLIENT_RES = [
 function findDirectAiClients() {
   const out = []
   for (const dir of ['lib', 'app', 'extensions', 'components', 'scripts']) {
-    for (const file of walk(path.join(ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
+    for (const file of walk(path.join(dir === 'scripts' ? ROOT : SOURCE_ROOT, dir), ['.ts', '.tsx', '.mjs'])) {
       const r = rel(file)
       if (r.startsWith('lib/ai/')) continue
       if (r.includes('/__tests__/') || r.endsWith('.test.ts') || r.endsWith('.test.tsx')) continue
@@ -671,9 +672,9 @@ const OVERLAY_Z_RE = /\bz-(?:40|50|\[\d+\])/
  */
 function findDialogOverflowRisks() {
   const files = [
-    ...walk(path.join(ROOT, 'app'), ['.tsx']),
-    ...walk(path.join(ROOT, 'components'), ['.tsx']),
-    ...walk(path.join(ROOT, 'extensions'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'extensions'), ['.tsx']),
   ]
   const findings = []
   for (const f of files) {
@@ -1033,9 +1034,9 @@ function isClientErrorSetter(call) {
  */
 function findRawUserErrors() {
   const files = [
-    ...walk(path.join(ROOT, 'app', 'api'), ['route.ts']),
-    ...walk(path.join(ROOT, 'app'), ['.ts', '.tsx']).filter((f) => !rel(f).startsWith('app/api/')),
-    ...walk(path.join(ROOT, 'components'), ['.ts', '.tsx']),
+    ...walk(path.join(SOURCE_ROOT, 'app', 'api'), ['route.ts']),
+    ...walk(path.join(SOURCE_ROOT, 'app'), ['.ts', '.tsx']).filter((f) => !rel(f).startsWith('app/api/')),
+    ...walk(path.join(SOURCE_ROOT, 'components'), ['.ts', '.tsx']),
   ]
   const findings = []
 
@@ -1099,16 +1100,16 @@ const current = {
   leakySupabaseClients: findLeakySupabaseClients(),
   pinnedDepViolations: findPinnedDepViolations(),
   rawUserErrors: findRawUserErrors(),
-  sekLabelledAmounts: findSekLabelledFxAmounts(ROOT),
-  extensionRoutes: findExtensionRouteFindings(ROOT),
+  sekLabelledAmounts: findSekLabelledFxAmounts(SOURCE_ROOT),
+  extensionRoutes: findExtensionRouteFindings(SOURCE_ROOT),
   offLadderRadii: findOffLadderRadii(),
   foldedPublicFlags: findFoldedPublicFlags(),
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
-  rawReferenceFetch: findRawReferenceFetches(ROOT),
-  clientNodeBuiltins: findClientNodeBuiltins(ROOT),
-  ambiguousEmbeds: findAmbiguousEmbeds(ROOT),
-  literalLegalForm: findLiteralLegalForms(ROOT),
+  rawReferenceFetch: findRawReferenceFetches(SOURCE_ROOT),
+  clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
+  ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
+  literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()

@@ -1,0 +1,152 @@
+import type { BokioClient } from './client';
+
+/**
+ * Bokio document (upload) resource config + fetchers.
+ *
+ * Bokio exposes receipts/underlag via two endpoints:
+ *   - GET /companies/{cid}/uploads               : list, carries journalEntryId
+ *   - GET /companies/{cid}/uploads/{id}/download : raw bytes (octet-stream)
+ *
+ * The list does NOT include a filename, and the download is served as
+ * application/octet-stream, so the real file type comes from the list item's
+ * `contentType`, and a filename has to be synthesised by the caller.
+ *
+ * The link between an upload and a gnubok verifikat is recovered from the
+ * Bokio journal entry's human voucher number (e.g. "V342"): the SIE import
+ * preserves it on journal_entries.source_voucher_series / source_voucher_number.
+ * Bokio restarts numbering at V1 every fiscal year, so the number alone is not
+ * unique: callers must scope the match by fiscal year (the entry's date).
+ */
+
+const UPLOADS_PATH = '/uploads';
+const JOURNAL_ENTRIES_PATH = '/journal-entries';
+
+/** Bokio's pageSize caps at 100. */
+const PAGE_SIZE = 100;
+
+/** A `V342`-style voucher number: one or more letters (series) + digits. */
+const VOUCHER_NUMBER_RE = /^([A-Za-z]+)(\d+)$/;
+
+export interface BokioUpload {
+  id: string;
+  description: string | null;
+  contentType: string | null;
+  journalEntryId: string | null;
+}
+
+interface BokioJournalEntry {
+  id: string;
+  journalEntryNumber: string | null;
+  date: string;
+  items?: { account: number | string; debit: number; credit: number }[];
+  reversingJournalEntryId?: string | null;
+  reversedByJournalEntryId?: string | null;
+}
+
+export interface BokioVoucherEvidence extends BokioVoucherRef {
+  id: string;
+  items: { account: string; debit: number; credit: number }[];
+  reversingJournalEntryId: string | null;
+  reversedByJournalEntryId: string | null;
+}
+
+/** A Bokio voucher reference parsed from its journalEntryNumber. */
+export interface BokioVoucherRef {
+  /** Voucher series letter(s), e.g. "V". */
+  series: string;
+  /** Numeric part of the voucher number, e.g. 342. */
+  number: number;
+  /** Entry date (YYYY-MM-DD), used to scope the match by fiscal year. */
+  date: string;
+}
+
+function voucherRef(entry: BokioJournalEntry): BokioVoucherRef | null {
+  const match = VOUCHER_NUMBER_RE.exec(entry.journalEntryNumber ?? '');
+  if (!match) return null;
+  return { series: match[1], number: Number(match[2]), date: entry.date };
+}
+
+/** Resolve only the invoice's referenced entry, within a bounded worker batch. */
+export async function fetchBokioVoucherRef(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+  entryId: string,
+): Promise<BokioVoucherEvidence> {
+  const entry = await client.get<BokioJournalEntry>(accessToken,
+    `/companies/${encodeURIComponent(companyId)}${JOURNAL_ENTRIES_PATH}/${encodeURIComponent(entryId)}`);
+  const ref = entry.id === entryId ? voucherRef(entry) : null;
+  if (!ref || ref.number <= 0) throw new Error('Bokio journal entry did not supply a matching, readable voucher reference');
+  return { ...ref, id: entry.id,
+    items: (entry.items ?? []).map(item => ({ ...item, account: String(item.account) })),
+    reversingJournalEntryId: entry.reversingJournalEntryId ?? null,
+    reversedByJournalEntryId: entry.reversedByJournalEntryId ?? null };
+}
+
+async function paginate<T>(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+  path: string,
+): Promise<T[]> {
+  const all: T[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const result = await client.getPage<T>(accessToken, companyId, path, {
+      page,
+      pageSize: PAGE_SIZE,
+    });
+    all.push(...result.items);
+    totalPages = result.totalPages;
+    page++;
+  } while (page <= totalPages);
+
+  return all;
+}
+
+/** Page every upload (receipt) for a company. */
+export function fetchBokioUploads(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+): Promise<BokioUpload[]> {
+  return paginate<BokioUpload>(client, accessToken, companyId, UPLOADS_PATH);
+}
+
+/**
+ * Build a GUID → voucher-reference index from Bokio's journal entries.
+ * An upload only carries the entry's GUID; this resolves it to the human
+ * voucher number (and date) that gnubok preserved from the SIE import.
+ * Entries with an unparseable number are skipped.
+ */
+export async function fetchBokioVoucherIndex(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+): Promise<Map<string, BokioVoucherRef>> {
+  const entries = await paginate<BokioJournalEntry>(
+    client,
+    accessToken,
+    companyId,
+    JOURNAL_ENTRIES_PATH,
+  );
+
+  const index = new Map<string, BokioVoucherRef>();
+  for (const entry of entries) {
+    const ref = voucherRef(entry);
+    if (ref) index.set(entry.id, ref);
+  }
+  return index;
+}
+
+/** Download a single upload's bytes. */
+export function downloadBokioUpload(
+  client: BokioClient,
+  accessToken: string,
+  companyId: string,
+  uploadId: string,
+): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
+  return client.getBytes(accessToken, companyId, `${UPLOADS_PATH}/${uploadId}/download`);
+}

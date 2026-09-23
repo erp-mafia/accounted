@@ -68,7 +68,7 @@ function arg(name: string): string | undefined {
 config({ path: arg('env-file') ?? '.env.local' })
 
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { reverseEntry } from '../lib/bookkeeping/engine'
+import { reverseEntry } from '../src/lib/bookkeeping/engine'
 
 const COMPANY_ID = arg('company-id')
 const PERIOD_ID = arg('period-id')
