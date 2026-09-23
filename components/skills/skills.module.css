@@ -80,20 +80,18 @@
   flex-direction: column;
   gap: 10px;
   padding: 20px 24px 24px;
-  border: 1px solid hsl(var(--background) / .5);
+  border: 1px solid hsl(var(--border));
   border-radius: var(--radius);
   text-align: left;
   color: hsl(var(--foreground));
   opacity: .35;
   cursor: pointer;
-  background: hsl(var(--background) / .82);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  box-shadow: 5px 5px 0 hsl(var(--background) / .28);
+  background: hsl(var(--background));
+  box-shadow: 5px 5px 0 hsl(var(--border));
   transition: opacity .35s, transform .09s, box-shadow .09s;
 }
-.face:hover { transform: translate(-1px, -1px); background: hsl(var(--background) / .9); box-shadow: 6px 6px 0 hsl(var(--background) / .34); }
-.face:active, .card[data-down] .face { transform: translate(4px, 4px); box-shadow: 1px 1px 0 hsl(var(--background) / .28); }
+.face:hover { transform: translate(-1px, -1px); box-shadow: 6px 6px 0 hsl(var(--border)); }
+.face:active, .card[data-down] .face { transform: translate(4px, 4px); box-shadow: 1px 1px 0 hsl(var(--border)); }
 .face:focus-visible { outline: 2px solid #fff; outline-offset: 4px; }
 .face h3 { font-weight: 500; font-size: 18px; line-height: 24px; letter-spacing: -.01em; color: hsl(var(--foreground)); }
 .face p { font-size: 13px; line-height: 20px; color: hsl(var(--muted-foreground)); }
