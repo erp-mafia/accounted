@@ -19,19 +19,22 @@ This reference covers (a) which Access Points and service providers operate in S
 | **Compello, Edicom, TrueCommerce, Tungsten Automation** | Various | Niche / enterprise / EDI |, | Minor Sweden footprint relative to top tier. |
 | **Storecove** | Dutch | Developer-first, multi-mandate API | 30+ countries | Single REST API spans Peppol + DBNAlliance + local mandates (FR, IT SDI, BE, DE, PL KSeF, etc.). 30-day free sandbox. Strong fit for ERP/SaaS embedding. |
 
-## Qvalia public pricing (EUR, as of April 2026)
+## Qvalia public pricing (EUR, read from qvalia.com/pricing 2026-09-21)
 
-| Tier | Monthly EUR | Messages/mo |
-|---|---|---|
-| Free | €0 | 1 |
-| Small | €9 | 25 |
-| Medium | €39 | 100 |
-| Plus | €99 | 1,000 |
-| Plus | €249 | 2,500 |
-| Plus | €499 | 5,000 |
-| Plus | €899 | 10,000+ |
+| Plan | Monthly EUR | Messages/mo | API access |
+|---|---|---|---|
+| Connect Small | €9 | 25 | No |
+| Connect Medium | €39 | 100 | Yes |
+| Connect Large | €99 | 1,000 | Yes |
+| Connect 1X | €299 | 5,000 | Yes |
+| Connect 2X | €499 | 12,000 | Yes |
+| Connect 3X | €899 | 30,000 | Yes |
 
-Setup fee 0. Includes inbound + outbound Peppol BIS Billing 3 + EHF + multi-mandate routing. **Most transparent commercial pricing in the Swedish market**, useful as a benchmark.
+Billed monthly, no setup fee listed. Messages beyond the plan cost €1 each (Small to Large) or €0.50 each (1X to 3X), billed in arrears. The multi-tenant Partner API is priced by agreement, not on the public page. **Most transparent commercial pricing in the Swedish market**, useful as a benchmark.
+
+The April 2026 version of this table was wrong on the upper tiers (it listed €499 for 5,000 and €899 for 10,000+ messages, less than half the real volumes) and listed a free tier that is not on the pricing page.
+
+API note (2026-09): Qvalia's Partner API now documents HMAC-signed webhooks with replay protection, an idempotency key on submission, and terminal versus non-terminal delivery statuses. Details and sources in `docs/PEPPOL_FOUNDATION.md` ("Qvalia API update").
 
 ## SME pricing benchmarks (April 2026)
 
@@ -112,7 +115,7 @@ Pattern: **bigger players are bundling tax + invoicing + AP automation + complia
 For a new Swedish accounting/fintech product, the practical menu:
 
 1. **Storecove**, best DX, single API across Peppol + IT SDI + FR PA + PL KSeF + BE + DE. Free 30-day sandbox. Effective rate €0.05-€0.30/invoice. **Best fit when multi-mandate is needed.**
-2. **Qvalia**, transparent EUR pricing, ISO 27001, Swedish-headquartered. Good fit for SME-only Swedish flows.
+2. **Qvalia**, transparent EUR pricing, ISO 27001, Swedish-headquartered, partner and multi-tenant API. Since September 2026 the API documents signed webhooks, idempotent submission and a defined status lifecycle, which closes most of the DX gap to Storecove for Peppol-only flows. Accounted's contracted Access Point.
 3. **InExchange**, heaviest Swedish installed base, but partial vendor lock-in via Visma Group ownership.
 4. **Visma Autoinvoice / Maventa**, only worth it if already integrating Visma ecosystem.
 5. **Pagero / Basware**, enterprise-only, not SME-friendly post-acquisition.

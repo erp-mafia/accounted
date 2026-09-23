@@ -1,0 +1,559 @@
+/**
+ * Unit tests for the staged kontoplan tools: gnubok_create_account and
+ * gnubok_update_account. Covers registration/scope/risk-tier wiring, the
+ * BAS 2026 prefill (resolve-don't-guess), the duplicate/inactive pre-flight
+ * gates, and dry-run staging behaviour. Executor-side coverage
+ * (commitCreateAccount / commitUpdateAccount) lives in
+ * lib/pending-operations/__tests__/account-and-note-executors.test.ts.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createQueuedMockSupabase } from '@/tests/helpers'
+import { tools } from '../server'
+import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
+import { OPERATION_RISK_TIERS } from '@/lib/pending-operations/risk-tiers'
+import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+
+const createAccount = tools.find((t) => t.name === 'gnubok_create_account')!
+const updateAccount = tools.find((t) => t.name === 'gnubok_update_account')!
+
+/**
+ * A 4-digit number guaranteed absent from the BAS 2026 catalog, in classes
+ * 4-7 so the fixture's account_type 'expense' passes the class/type
+ * consistency guard.
+ */
+function findNonBasNumber(): string {
+  for (let n = 4000; n <= 7999; n++) {
+    const candidate = String(n)
+    if (!getBASReference(candidate)) return candidate
+  }
+  throw new Error('BAS catalog unexpectedly covers every 4-digit expense number')
+}
+const NON_BAS_NUMBER = findNonBasNumber()
+
+const noopSupabase = { from: vi.fn() } as never
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('kontoplan tools: registration', () => {
+  it('both tools exist, stage, and declare strict schemas', () => {
+    for (const tool of [createAccount, updateAccount]) {
+      expect(tool).toBeDefined()
+      expect((tool.inputSchema as { additionalProperties?: boolean }).additionalProperties).toBe(false)
+      const out = tool.outputSchema as { properties?: Record<string, unknown>; required?: string[] }
+      expect(out?.properties?.staged).toBeDefined()
+      expect(out?.required).toContain('staged')
+      expect(tool.description).toMatch(/stag(e|es|ing)/i)
+      expect(tool.annotations.readOnlyHint).toBe(false)
+      expect(tool.annotations.destructiveHint).toBe(false)
+    }
+  })
+
+  it('only requires account_number', () => {
+    expect((createAccount.inputSchema as { required?: string[] }).required).toEqual(['account_number'])
+    expect((updateAccount.inputSchema as { required?: string[] }).required).toEqual(['account_number'])
+  })
+
+  it('is mapped to bookkeeping:write scope and low risk tier', () => {
+    expect(TOOL_SCOPE_MAP.gnubok_create_account).toBe('bookkeeping:write')
+    expect(TOOL_SCOPE_MAP.gnubok_update_account).toBe('bookkeeping:write')
+    expect(OPERATION_RISK_TIERS.create_account).toBe('low')
+    expect(OPERATION_RISK_TIERS.update_account).toBe('low')
+  })
+})
+
+describe('gnubok_create_account: validation gates', () => {
+  it('rejects a non-4-digit account number before any DB call', async () => {
+    await expect(
+      createAccount.execute({ account_number: '193' }, 'company-1', 'user-1', noopSupabase),
+    ).rejects.toThrow(/4 digits/)
+    await expect(
+      createAccount.execute({ account_number: '19300' }, 'company-1', 'user-1', noopSupabase),
+    ).rejects.toThrow(/4 digits/)
+  })
+
+  it('rejects when the account already exists and is active', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true } })
+    await expect(
+      createAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/finns redan/)
+  })
+
+  it('points to gnubok_update_account when the account exists but is inactive', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: false } })
+    await expect(
+      createAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/inaktivt.*is_active=true/s)
+  })
+
+  it('rejects a non-BAS number without name/type/balance', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // no existing row
+    await expect(
+      createAccount.execute({ account_number: NON_BAS_NUMBER }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/not in the BAS 2026 catalog/)
+  })
+
+  it('rejects a percent-style default_vat_rate (must be a fraction)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    await expect(
+      createAccount.execute(
+        { account_number: '5410', default_vat_rate: 25 },
+        'company-1', 'user-1', supabase as never,
+      ),
+    ).rejects.toThrow(/fraction, not percent/)
+  })
+
+  it('rejects an account_type inconsistent with the BAS class digit', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // no existing row
+    await expect(
+      createAccount.execute(
+        { account_number: '2999', account_name: 'Fel', account_type: 'expense', normal_balance: 'debit' },
+        'company-1', 'user-1', supabase as never,
+      ),
+    ).rejects.toThrow(/BAS class 2/)
+  })
+
+  it('exposes untaxed_reserves in the input schema enum (21xx round-trip)', () => {
+    const props = (createAccount.inputSchema as { properties: Record<string, { enum?: string[] }> }).properties
+    expect(props.account_type.enum).toContain('untaxed_reserves')
+  })
+})
+
+describe('gnubok_create_account: staging behaviour (dry_run)', () => {
+  it('prefills name/type/balance/SRU from the BAS catalog', async () => {
+    const ref = getBASReference('5410')!
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null }) // no existing row
+    const result = (await createAccount.execute(
+      { account_number: '5410', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { dry_run?: boolean; preview: Record<string, unknown> }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview).toMatchObject({
+      account_number: '5410',
+      account_name: ref.account_name,
+      account_type: ref.account_type,
+      normal_balance: ref.normal_balance,
+      plan_type: 'full_bas',
+      source: 'bas_2026',
+    })
+  })
+
+  it('explicit args win over the BAS prefill', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    const result = (await createAccount.execute(
+      { account_number: '5410', account_name: 'Verktyg och maskiner', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview.account_name).toBe('Verktyg och maskiner')
+    expect(result.preview.source).toBe('bas_2026')
+  })
+
+  it('stages a fully-specified custom account as plan_type k1 / source custom', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    const result = (await createAccount.execute(
+      {
+        account_number: NON_BAS_NUMBER,
+        account_name: 'Eget specialkonto',
+        account_type: 'expense',
+        normal_balance: 'debit',
+        dry_run: true,
+      },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: Record<string, unknown> }
+
+    expect(result.preview).toMatchObject({
+      account_number: NON_BAS_NUMBER,
+      account_name: 'Eget specialkonto',
+      account_type: 'expense',
+      normal_balance: 'debit',
+      plan_type: 'k1',
+      source: 'custom',
+    })
+  })
+})
+
+describe('list tools: PostgREST 1000-row cap (fetchAllRows paging)', () => {
+  const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const listCustomers = tools.find((t) => t.name === 'gnubok_list_customers')!
+  const listSuppliers = tools.find((t) => t.name === 'gnubok_list_suppliers')!
+  const listArticles = tools.find((t) => t.name === 'gnubok_list_articles')!
+
+  function makeChartRow(n: number, sortOrder: number | null = n) {
+    return {
+      account_number: String(n),
+      account_name: `Konto ${n}`,
+      account_class: Math.floor(n / 1000),
+      account_group: String(n).slice(0, 2),
+      account_type: 'asset',
+      normal_balance: 'debit',
+      is_active: true,
+      description: null,
+      sort_order: sortOrder,
+    }
+  }
+
+  it('gnubok_list_accounts returns all 1290 accounts across two pages, in account_number order', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // Page 1: exactly PAGE_SIZE rows so fetchAllRows requests a second page.
+    // The pages arrive in account_number order, as Postgres returns them.
+    // 1510 and 2050 carry sort_order 0 like every seeded account; none of
+    // these may move: sort_order is not the BAS sequence.
+    const page1 = Array.from({ length: 1000 }, (_, i) =>
+      makeChartRow(1000 + i, 1000 + i === 1510 ? 0 : 1000 + i),
+    )
+    const page2 = Array.from({ length: 290 }, (_, i) =>
+      makeChartRow(2000 + i, 2000 + i === 2050 ? 0 : 2000 + i),
+    )
+    enqueue({ data: page1 })
+    enqueue({ data: page2 })
+
+    const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      accounts: { account_number: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1290)
+    // Paging invariant: ordered on the UNIQUE account_number, two ranges.
+    expect(findCalls('chart_of_accounts', 'order')).toEqual([
+      ['account_number', { ascending: true }],
+      ['account_number', { ascending: true }],
+    ])
+    expect(findCalls('chart_of_accounts', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.accounts.map((a) => a.account_number)).toEqual(
+      [...page1, ...page2].map((a) => a.account_number),
+    )
+    expect(result.accounts[510].account_number).toBe('1510')
+    expect(result.accounts[1050].account_number).toBe('2050')
+    // sort_order is no longer selected at all.
+    for (const [columns] of findCalls('chart_of_accounts', 'select')) {
+      expect(String(columns)).not.toContain('sort_order')
+    }
+  })
+
+  it('gnubok_list_customers pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // Names descend while ids ascend, so the output order proves the re-sort.
+    const makeCustomer = (i: number) => ({
+      id: `c${String(i).padStart(4, '0')}`,
+      name: `Kund ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeCustomer(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeCustomer(1000 + i)) })
+
+    const result = (await listCustomers.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      customers: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('customers', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('customers', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.customers[0].name).toBe('Kund 0001')
+    expect(result.customers[1001].name).toBe('Kund 1002')
+  })
+
+  it('gnubok_list_suppliers pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const makeSupplier = (i: number) => ({
+      id: `s${String(i).padStart(4, '0')}`,
+      name: `Leverantör ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeSupplier(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeSupplier(1000 + i)) })
+
+    const result = (await listSuppliers.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      suppliers: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('suppliers', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('suppliers', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.suppliers[0].name).toBe('Leverantör 0001')
+  })
+
+  it('gnubok_list_articles pages on id and re-sorts by name', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    const makeArticle = (i: number) => ({
+      id: `a${String(i).padStart(4, '0')}`,
+      name: `Artikel ${String(1002 - i).padStart(4, '0')}`,
+    })
+    enqueue({ data: Array.from({ length: 1000 }, (_, i) => makeArticle(i)) })
+    enqueue({ data: Array.from({ length: 2 }, (_, i) => makeArticle(1000 + i)) })
+
+    const result = (await listArticles.execute({}, 'company-1', 'user-1', supabase as never)) as {
+      articles: { id: string; name: string }[]
+      count: number
+    }
+
+    expect(result.count).toBe(1002)
+    expect(findCalls('articles', 'order')).toEqual([
+      ['id', { ascending: true }],
+      ['id', { ascending: true }],
+    ])
+    expect(findCalls('articles', 'range')).toEqual([
+      [0, 999],
+      [1000, 1999],
+    ])
+    expect(result.articles[0].name).toBe('Artikel 0001')
+  })
+
+  it('gnubok_list_accounts returns a single short page unchanged', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    // 1910 is seeded (sort_order 0) and 1930 user-added: Postgres returns
+    // them in account_number order and the tool must keep it.
+    enqueue({ data: [makeChartRow(1910, 0), makeChartRow(1930)] })
+
+    const result = (await listAccounts.execute(
+      { account_class: 1 },
+      'company-1', 'user-1', supabase as never,
+    )) as { accounts: { account_number: string }[]; count: number }
+
+    expect(result.count).toBe(2)
+    // One page only: 2 < PAGE_SIZE stops the loop.
+    expect(findCalls('chart_of_accounts', 'range')).toEqual([[0, 999]])
+    // Filters still applied inside the paged query builder.
+    expect(findCalls('chart_of_accounts', 'eq')).toEqual(
+      expect.arrayContaining([
+        ['company_id', 'company-1'],
+        ['is_active', true],
+        ['account_class', 1],
+      ]),
+    )
+    expect(findCalls('chart_of_accounts', 'order')).toEqual([['account_number', { ascending: true }]])
+    expect(result.accounts.map((a) => a.account_number)).toEqual(['1910', '1930'])
+  })
+})
+
+describe('gnubok_update_account', () => {
+  it('rejects a non-4-digit account number before any DB call', async () => {
+    await expect(
+      updateAccount.execute({ account_number: 'abcd' }, 'company-1', 'user-1', noopSupabase),
+    ).rejects.toThrow(/4 digits/)
+  })
+
+  it('points to gnubok_create_account when the account does not exist', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    await expect(
+      updateAccount.execute(
+        { account_number: '5410', account_name: 'Nytt namn' },
+        'company-1', 'user-1', supabase as never,
+      ),
+    ).rejects.toThrow(/finns inte.*gnubok_create_account/s)
+  })
+
+  it('rejects a call with no fields to change', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { account_number: '5410', account_name: 'Förbrukningsinventarier', is_active: true } })
+    await expect(
+      updateAccount.execute({ account_number: '5410' }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/Nothing to update/)
+  })
+
+  it('stages a momsruta override (vat_box) on a 26xx account', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '2617',
+        account_name: 'Utgående moms tjänster utanför EU 25 %',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '2617', vat_box: '30', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { dry_run?: boolean; preview: { current: Record<string, unknown>; changes: Record<string, unknown> } }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.current.vat_box).toBeNull()
+    expect(result.preview.changes).toEqual({ vat_box: '30' })
+  })
+
+  it('refuses vat_box outside the set and on accounts that are not 26xx', async () => {
+    const current = (accountNumber: string) => ({
+      data: {
+        account_number: accountNumber,
+        account_name: 'x',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        default_vat_treatment: null,
+        vat_box: null,
+        sru_code: null,
+        is_active: true,
+      },
+    })
+    const bad = createQueuedMockSupabase()
+    bad.enqueue(current('2617'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '2617', vat_box: '49' },
+        'company-1', 'user-1', bad.supabase as never,
+      ),
+    ).rejects.toThrow(/vat_box must be one of/)
+
+    const wrongAccount = createQueuedMockSupabase()
+    wrongAccount.enqueue(current('4545'))
+    await expect(
+      updateAccount.execute(
+        { account_number: '4545', vat_box: '60' },
+        'company-1', 'user-1', wrongAccount.supabase as never,
+      ),
+    ).rejects.toThrow(/26xx/)
+  })
+
+  it('dry-run preview carries current values and the requested changes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '5410',
+        account_name: 'Förbrukningsinventarier',
+        description: null,
+        default_vat_code: null,
+        default_vat_rate: null,
+        sru_code: '7321', // 5410's catalog value (lib/bookkeeping/bas-data)
+        is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '5410', account_name: 'Verktyg', is_active: false, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { dry_run?: boolean; preview: { current: Record<string, unknown>; changes: Record<string, unknown> } }
+
+    expect(result.dry_run).toBe(true)
+    expect(result.preview.current.account_name).toBe('Förbrukningsinventarier')
+    expect(result.preview.changes).toEqual({ account_name: 'Verktyg', is_active: false })
+  })
+
+  it('preserves an existing booking rate when only treatment changes', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '4056', account_name: 'EU-varor', default_vat_rate: 0.12,
+        default_vat_treatment: null, is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '4056', default_vat_treatment: 'reverse_charge_eu_goods', dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({
+      default_vat_treatment: 'reverse_charge_eu_goods',
+    })
+  })
+
+  it('can clear a treatment to restore BAS fallback', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        account_number: '3041', account_name: 'Försäljning', default_vat_rate: 0.25,
+        default_vat_treatment: 'standard_25', is_active: true,
+      },
+    })
+    const result = (await updateAccount.execute(
+      { account_number: '3041', default_vat_treatment: null, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { changes: Record<string, unknown> } }
+
+    expect(result.preview.changes).toEqual({ default_vat_treatment: null })
+  })
+})
+
+describe('gnubok_list_accounts: compact detail and paging', () => {
+  // Easy Online Stores brief 2026-09-16, F6: 379 accounts came back as 88 kB
+  // in one answer. Both options are opt-in so every existing caller keeps the
+  // rows it had; `total` rides along on every answer.
+  const listAccounts = tools.find((t) => t.name === 'gnubok_list_accounts')!
+  const full = (n: string, name: string, cls: number, vat: string | null) => ({
+    account_number: n, account_name: name, account_class: cls, account_group: n.slice(0, 2), account_type: 'asset',
+    normal_balance: 'debit', is_active: true, description: null, default_vat_treatment: vat,
+  })
+  const rows = [
+    full('1930', 'Företagskonto', 1, null),
+    full('2617', 'Utgående moms tjänster utanför EU 25 %', 2, null),
+    full('4545', 'Import av varor 25 %', 4, 'import_goods'),
+  ]
+  const compactRows = rows.map(({ account_number, account_name, account_class, is_active, default_vat_treatment }) =>
+    ({ account_number, account_name, account_class, is_active, default_vat_treatment }))
+  const SELECT = 'account_number, account_name, account_class, account_group, account_type, normal_balance, is_active, description, default_vat_treatment'
+  type Page = { accounts: { account_number: string }[]; count: number; total: number }
+
+  it('compact selects only what an agent needs to pick or check a konto, and reports total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ detail: 'compact' }, 'company-1', 'user-1', supabase as never)) as Page
+    // One literal select for both modes: compact is a projection, so the
+    // phantom-column scanner can still read every column name.
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: compactRows, count: 3, total: 3 })
+  })
+
+  it('full detail keeps the previous columns, gains default_vat_treatment, and adds total', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({}, 'company-1', 'user-1', supabase as never)) as Page
+    expect(findCall('chart_of_accounts', 'select')).toEqual([SELECT])
+    expect(result).toEqual({ accounts: rows, count: 3, total: 3 })
+  })
+
+  it('limit and offset page the result in account_number order and keep total', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 1, offset: 1 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result.accounts.map((a) => a.account_number)).toEqual(['2617'])
+    expect(result.count).toBe(1)
+    expect(result.total).toBe(3)
+  })
+
+  it('an offset past the end is an empty page with the total intact', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    const result = (await listAccounts.execute({ limit: 50, offset: 10 }, 'company-1', 'user-1', supabase as never)) as Page
+    expect(result).toEqual({ accounts: [], count: 0, total: 3 })
+  })
+
+  it('rejects a non-positive limit and a negative offset before any query', async () => {
+    const { supabase, calls } = createQueuedMockSupabase()
+    await expect(
+      listAccounts.execute({ limit: 0 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/limit must be a positive integer/)
+    await expect(
+      listAccounts.execute({ offset: -1 }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toThrow(/offset must be a non-negative integer/)
+    expect(calls).toHaveLength(0)
+  })
+})

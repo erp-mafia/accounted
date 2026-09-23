@@ -120,16 +120,19 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
     title: 'Employees',
     members: ['employees', 'salary'],
     blurb:
-      'The employee register plus absence (frånvaro), vacation balances and year close, and ' +
-      'payroll cutover opening balances. Running payroll itself: salary-runs.md.',
+      'The employee register plus absence (frånvaro), worked days (tidrapport for hourly staff ' +
+      'and OB), benefits (förmåner), recurring lines (standing monthly rows), vacation balances ' +
+      'and year close, payroll cutover opening balances, and the company salary settings (pay ' +
+      'day, avvikelseperiod, payment file format). Running payroll itself: salary-runs.md.',
   },
   {
     file: 'salary-runs.md',
     title: 'Salary runs',
     members: ['salary-runs'],
     blurb:
-      'Swedish payroll runs: create -> calculate -> approve -> book/mark-paid -> generate-agi ' +
-      '(arbetsgivardeklaration), with per-employee payslips and draft-only line edits.',
+      'Swedish payroll runs: create -> calculate -> approve -> payment-file (pain.001 / LB) -> ' +
+      'mark-paid -> book -> generate-agi (arbetsgivardeklaration), with per-employee payslips, ' +
+      'draft-only line edits and :correct (rättelsekörning) for a booked run.',
   },
   {
     file: 'reports.md',
@@ -138,6 +141,16 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
       'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export.',
+  },
+  {
+    file: 'assets.md',
+    title: 'Fixed assets',
+    members: ['assets'],
+    blurb:
+      'The anläggningsregister: register an asset (no voucher, the purchase is already booked), ' +
+      'correct it while no depreciation is posted, and dispose it (sale, scrap or business transfer) ' +
+      'which posts the avyttring voucher with gain/loss, VAT and jämkning. Depreciation itself is ' +
+      'proposed and posted per fiscal period through the year-end flow.',
   },
   {
     file: 'webhooks.md',

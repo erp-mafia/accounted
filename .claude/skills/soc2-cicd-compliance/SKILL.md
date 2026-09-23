@@ -89,8 +89,8 @@ Minimum set:
 * `Incident_Response_Plan.md` (CC7.3, CC7.4) - classification, containment, post-mortem procedure.
 * `Data_Classification_Handling.md` (C1.1, C1.2, P1.1) - data tiers and handling rules.
 * `Risk_Register.md` or `risk_register.csv` (CC3.1, CC3.4) - identified risks and mitigations.
-* `SECURITY.md` (CC2.3) - external responsible-disclosure surface, repository root.
-* `CODE_OF_CONDUCT.md` (CC1.1) - tone-at-the-top artifact.
+* `.github/SECURITY.md` (CC2.3) - external responsible-disclosure surface, `.github/` directory.
+* `.github/CODE_OF_CONDUCT.md` (CC1.1) - tone-at-the-top artifact.
 
 The skill prompts the LLM hierarchically: parse policy → extract constraint → query repo state → emit pass/fail with the criterion identifier and the policy clause cited. See `references/canonical-documents.md` for prompt patterns.
 

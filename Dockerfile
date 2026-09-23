@@ -51,6 +51,18 @@ ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# `next build` type-checks the whole production project (tsconfig.build.json)
+# after compiling, and that step now needs more heap than Node gives itself by
+# default. V8 caps its default old-space at about 4 GB on 64-bit whatever the
+# machine has, so a self-hosted build fails with "Ineffective mark-compacts
+# near heap limit" on a 32 GB host exactly as it would on a 4 GB one: more RAM
+# does not raise the ceiling, only this does. Measured on the current tree:
+# the check completes at 5120 MiB and dies at the default.
+#
+# Only the builder stage sets this. The runner is a separate FROM and its
+# runtime heap stays whatever the deployment chooses.
+ENV NODE_OPTIONS=--max-old-space-size=6144
+
 RUN npm run build
 
 # ── Stage 4: Runner ──
@@ -111,7 +123,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/public /opt/gnubok-template/publi
 RUN mkdir -p /app/.next/cache /app/public && \
     chown nextjs:nodejs /app /app/.next /app/.next/cache /app/public
 
-COPY --chmod=755 --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
+COPY --chmod=755 --chown=nextjs:nodejs docker/docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
 

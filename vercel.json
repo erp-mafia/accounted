@@ -3,6 +3,14 @@
   "regions": ["arn1"],
   "crons": [
     {
+      "path": "/api/import/sie/invariants/cron",
+      "schedule": "15 4 * * 1"
+    },
+    {
+      "path": "/api/import/sie/worker/cron",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/deadlines/status/cron",
       "schedule": "0 6 * * *"
     },
@@ -20,7 +28,11 @@
     },
     {
       "path": "/api/extensions/enable-banking/sync/cron",
-      "schedule": "0 5 * * *"
+      "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/extensions/enable-banking/health-probe/cron",
+      "schedule": "30 4 * * *"
     },
     {
       "path": "/api/extensions/stripe/transactions/cron",
@@ -103,6 +115,10 @@
       "schedule": "45 5 * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/worker/cron",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/extensions/arcim-migration/complete-invoice-lines/cron",
       "schedule": "20 * * * *"
     },
@@ -137,6 +153,26 @@
     {
       "path": "/api/parties/resolver/cron",
       "schedule": "45 5 * * *"
+    },
+    {
+      "path": "/api/documents/read/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/documents/classify/cron",
+      "schedule": "2-59/5 * * * *"
+    },
+    {
+      "path": "/api/documents/jobs/cron",
+      "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/arkiv/derive/cron",
+      "schedule": "40 4 * * *"
+    },
+    {
+      "path": "/api/arkiv/lint/cron",
+      "schedule": "10 5 * * *"
     }
   ]
 }
