@@ -2654,3 +2654,21 @@ describe('vat_treatment exempt/export books no input VAT', () => {
     assertBalanced(input)
   })
 })
+
+
+describe('supplier payment bank origins', () => {
+  it.each(['cash', 'accrual'])('preserves the bank source for %s payments', async kind => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+    const invoice = makeSupplierInvoice()
+    const tx = { id: 'tx-source', cash_account_id: 'cash-source', date: '2024-06-15', amount: -10000, currency: 'SEK' as const }
+    if (kind === 'cash') await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice,
+      [makeItem()], tx.date, 'swedish_business', undefined, '1940', undefined, tx)
+    else await createSupplierInvoicePaymentEntry(null as never, 'company-1', 'user-1', invoice,
+      10000, tx.date, undefined, undefined, '1940', tx)
+    expect(mockedCreateEntry.mock.calls[0][3]).toMatchObject({ source_id: invoice.id, bank_booking_context: [{
+      transaction_id: tx.id, cash_account_id: tx.cash_account_id, settlement_account: '1940',
+      date: tx.date, amount: tx.amount, currency: tx.currency,
+    }] })
+  })
+})

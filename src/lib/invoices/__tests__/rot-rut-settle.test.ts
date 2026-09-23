@@ -26,6 +26,13 @@ vi.mock('@/lib/transactions/inbox-underlag', () => ({
   propagateUnderlagForBookedTransaction: (...args: unknown[]) => mockPropagateUnderlag(...args),
 }))
 
+// The receivable lookup is pinned by rot-rut-receivable.test.ts; here only
+// which legs ask for it and what the writer receives.
+const mockGetPayoutOreRounding = vi.fn()
+vi.mock('@/lib/invoices/rot-rut-receivable', () => ({
+  getPayoutOreRounding: (...args: unknown[]) => mockGetPayoutOreRounding(...args),
+}))
+
 import { settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
@@ -53,6 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
+  mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
 })
 
 describe('settleRotRutPayoutRequest', () => {
@@ -308,6 +316,56 @@ describe('settleRotRutPayoutRequest', () => {
     expect(findCalls('rot_rut_payout_request_items', 'update')).toEqual([])
   })
 
+  it('clears the öre remainder on a fully paid begäran', async () => {
+    enqueue({ data: makeRequestRow({ requested_total: 671 }) })
+    enqueue({
+      data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-1', decided_total: 671 }),
+    })
+    enqueue({ data: [] })
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.25, invoiceCount: 1 })
+
+    const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      amount: 671,
+    })
+
+    expect(outcome).toMatchObject({ ok: true, amount: 671, fullyPaid: true })
+    expect(mockGetPayoutOreRounding).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({ id: REQUEST_ID }),
+      671,
+    )
+    expect(mockCreatePayoutEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ amount: 671, oreRounding: 0.25, invoiceCount: 1 }),
+    )
+  })
+
+  it('never rounds a partial payout: its remainder stays on 1513', async () => {
+    enqueue({ data: makeRequestRow({ decided_total: 2500, decided_at: '2026-07-01T00:00:00Z' }) })
+    enqueue({
+      data: makeRequestRow({ status: 'partially_paid', settlement_journal_entry_id: 'je-1', decided_total: 2500 }),
+    })
+
+    await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
+      requestId: REQUEST_ID,
+      paymentDate: '2026-07-10',
+      amount: 2500,
+    })
+
+    expect(mockGetPayoutOreRounding).not.toHaveBeenCalled()
+    expect(mockCreatePayoutEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ amount: 2500, oreRounding: 0 }),
+    )
+  })
+
   it('surfaces an engine failure as a raw error without touching the request', async () => {
     enqueue({ data: makeRequestRow() })
     mockCreatePayoutEntry.mockRejectedValue(new Error('No open fiscal period'))
@@ -416,8 +474,8 @@ describe('settleRotRutPayoutRequestSet', () => {
       paymentDate: '2026-07-10',
       bankAccount: '1930',
       legs: [
-        { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000 },
-        { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250 },
+        { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000, oreRounding: 0, invoiceCount: 0 },
+        { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250, oreRounding: 0, invoiceCount: 0 },
       ],
     })
     // The single-request writer is never used for a bundle.
@@ -562,6 +620,45 @@ describe('settleRotRutPayoutRequestSet', () => {
     ])
     // Both carry a voucher now, so both retire their sibling hints.
     expect(mockClearSuggestions).toHaveBeenCalledTimes(2)
+  })
+
+  it('rounds only the fully paid leg of a bundle with a reduced beslut', async () => {
+    enqueue({
+      data: [
+        makeRequestRow({ decided_total: 2500, decided_at: '2026-07-01T00:00:00Z' }),
+        makeSecondRequestRow(),
+      ],
+    })
+    mockCreatePayoutSetEntry.mockResolvedValue({ id: 'je-set' })
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.75, invoiceCount: 1 })
+    enqueue({
+      data: makeRequestRow({ status: 'partially_paid', settlement_journal_entry_id: 'je-set', decided_total: 2500 }),
+    })
+    enqueue({
+      data: makeSecondRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-set', decided_total: 2250 }),
+    })
+    enqueue({ data: [] })
+
+    await settleRotRutPayoutRequestSet(supabase, 'user-1', 'company-1', { ...setParams, amount: 4750 })
+
+    expect(mockGetPayoutOreRounding).toHaveBeenCalledTimes(1)
+    expect(mockGetPayoutOreRounding).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      expect.objectContaining({ id: REQUEST_ID_2 }),
+      2250,
+    )
+    expect(mockCreatePayoutSetEntry).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        legs: [
+          expect.objectContaining({ requestId: REQUEST_ID, amount: 2500, oreRounding: 0 }),
+          expect.objectContaining({ requestId: REQUEST_ID_2, amount: 2250, oreRounding: 0.75 }),
+        ],
+      }),
+    )
   })
 
   it('surfaces an engine failure as a raw error without touching any request', async () => {

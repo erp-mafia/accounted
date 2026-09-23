@@ -2436,6 +2436,17 @@ export interface SIEExportOptions {
 }
 
 // Input types for creating entries
+export interface BankBookingContext {
+  transaction_id: string
+  cash_account_id: string | null
+  /** Explicit sibling move, committed atomically with the voucher. */
+  target_cash_account_id?: string
+  settlement_account: string
+  date: string
+  amount: number
+  currency: string
+}
+
 export interface CreateJournalEntryInput {
   fiscal_period_id: string
   entry_date: string
@@ -2444,6 +2455,8 @@ export interface CreateJournalEntryInput {
   source_id?: string
   voucher_series?: string
   notes?: string
+  /** Bank-source state used to build the lines, revalidated before posting. */
+  bank_booking_context?: BankBookingContext[]
   lines: CreateJournalEntryLineInput[]
 }
 
@@ -2624,6 +2637,9 @@ export type PendingOperationType =
   // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
   // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
   | 'settle_rot_rut_payout'
+  // Link ROT/RUT begäran to a payout verifikat that already exists (booked by
+  // hand): no voucher, only the settlement pointer (gnubok_link_rot_rut_payout_voucher).
+  | 'link_rot_rut_payout_voucher'
   // Anläggningsregister (gnubok_create_asset / gnubok_update_asset /
   // gnubok_dispose_asset): the register rows are master data (no voucher),
   // the disposal posts the avyttring voucher via disposeAsset().
@@ -3865,8 +3881,21 @@ export interface RawTransaction {
   proprietary_bank_transaction_code?: string | null
 }
 
+/** Internal bank-fetch context. Its token is revalidated within each database write. */
+export interface BankIngestRoute {
+  connectionId: string
+  sessionId: string
+  accountUid: string
+  cashAccountId: string
+  ledgerAccount: string
+  currency: string
+  token: string
+}
+
 /** Options for the transaction ingestion pipeline */
 export interface IngestOptions {
+  /** Required by the PSD2 extension; manual and file imports do not provide this. */
+  bankRoute?: BankIngestRoute
   /** Skip auto-categorization (mapping engine + journal entry creation).
    * Reconciliation and invoice matching still run.
    * Used when SIE-imported entries overlap the sync date range

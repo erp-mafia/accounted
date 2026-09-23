@@ -7,6 +7,7 @@ import {
   insertCompanyMember,
   insertDraftJournalEntry,
   insertCashAccount,
+  insertTransaction,
 } from '@/tests/pg/fixtures'
 
 // Migration 20260723210000_verifikat_inline_rattelse.sql: the founder-approved
@@ -30,6 +31,7 @@ async function insertPostedEntry(params: {
   voucherNumber?: number
   sourceType?: string
   description?: string
+  bankTransactionId?: string
 }): Promise<{ entryId: string; debitLineId: string; creditLineId: string }> {
   const entryId = await insertDraftJournalEntry({
     userId: params.userId,
@@ -60,8 +62,18 @@ async function insertPostedEntry(params: {
      RETURNING id`,
     [entryId],
   )
+  if (params.bankTransactionId) await setBankOrigin(entryId, params.companyId, [params.bankTransactionId], '1930')
   await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
   return { entryId, debitLineId: debitRows[0].id, creditLineId: creditRows[0].id }
+}
+
+async function setBankOrigin(entryId: string, companyId: string, transactionIds: string[], ledger: string) {
+  await getPool().query(`UPDATE journal_entries SET source_id = ($3::uuid[])[1],
+    bank_booking_context = (SELECT jsonb_agg(jsonb_build_object(
+      'transaction_id', t.id, 'cash_account_id', t.cash_account_id, 'settlement_account', $4::text,
+      'date', t.date, 'amount', t.amount, 'currency', t.currency) ORDER BY t.id)
+      FROM transactions t WHERE t.company_id = $2 AND t.id = ANY($3::uuid[]))
+    WHERE id = $1 AND company_id = $2`, [entryId, companyId, transactionIds, ledger])
 }
 
 async function insertChartAccount(companyId: string, userId: string, accountNumber: string): Promise<void> {
@@ -517,14 +529,11 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
     const { companyId, userId, fiscalPeriodId } = await seedCompany()
     await insertChartAccount(companyId, userId, '5420')
     await insertChartAccount(companyId, userId, '1930')
+    const txId = await insertTransaction({ companyId, userId, date: '2026-02-10', amount: -1000 })
     const { entryId, debitLineId, creditLineId } = await insertPostedEntry({
-      companyId, userId, fiscalPeriodId, sourceType: 'bank_transaction',
+      companyId, userId, fiscalPeriodId, sourceType: 'bank_transaction', bankTransactionId: txId,
     })
-    await getPool().query(
-      `INSERT INTO public.transactions (user_id, company_id, date, description, amount, journal_entry_id, is_business)
-       VALUES ($1, $2, '2026-02-10', 'Bank tx', -1000, $3, true)`,
-      [userId, companyId, entryId],
-    )
+    await getPool().query('UPDATE transactions SET journal_entry_id = $2, is_business = true WHERE id = $1', [txId, entryId])
 
     // Changing the 1930 net is refused: the bank feed amount is immutable.
     await expect(
@@ -571,12 +580,10 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
        VALUES ($1, '1930', 0, 10874.81, 2, 'Förutbetalda intäkter') RETURNING id`,
       [entryId],
     )
+    const txId = await insertTransaction({ companyId, userId, date: '2026-02-10', amount: 10874.81 })
+    await setBankOrigin(entryId, companyId, [txId], '1930')
     await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
-    await getPool().query(
-      `INSERT INTO public.transactions (user_id, company_id, date, description, amount, journal_entry_id, is_business)
-       VALUES ($1, $2, '2026-02-10', 'BOKADIREKT X', 10874.81, $3, true)`,
-      [userId, companyId, entryId],
-    )
+    await getPool().query('UPDATE transactions SET journal_entry_id = $2, is_business = true WHERE id = $1', [txId, entryId])
 
     // Moving the 1930 net somewhere that is NOT the bank amount is still
     // refused, and the message now carries both amounts.
@@ -640,14 +647,16 @@ describe('inline rättelse: lines (correct_entry_lines_inline)', () => {
        VALUES ($1, '1940', 0, 1000, 2) RETURNING id`,
       [entryId],
     )
-    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
     const { rows: txRows } = await getPool().query<{ id: string }>(
       `INSERT INTO public.transactions (user_id, company_id, date, description, amount, cash_account_id, is_business, journal_entry_id)
        VALUES ($1, $2, '2026-02-10', 'Swish 1', 600, $3, true, NULL),
-              ($1, $2, '2026-02-10', 'Swish 2', 400, $3, true, $4)
+              ($1, $2, '2026-02-10', 'Swish 2', 400, $3, true, NULL)
        RETURNING id`,
-      [userId, companyId, cashAccountId, entryId],
+      [userId, companyId, cashAccountId],
     )
+    await setBankOrigin(entryId, companyId, txRows.map(tx => tx.id), '1940')
+    await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [entryId])
+    await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [txRows[1].id, entryId])
     // Both transactions carry split links; the second ALSO has the direct FK
     // (the 1:1 bulk-book shape). Double counting it would make the anchor
     // 1 400 and wrongly refuse the fix below.

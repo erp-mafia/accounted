@@ -17,6 +17,7 @@ import {
   seedCompany,
   insertDraftJournalEntry,
   insertPostedJournalEntry,
+  insertPostedBankJournalEntry,
 } from './fixtures'
 
 async function insertLines(
@@ -36,19 +37,20 @@ async function insertLines(
 async function insertBookedTransaction(params: {
   companyId: string
   userId: string
-  journalEntryId: string
+  journalEntryId: string | null
   merchantName: string
   category: string
   date: string
   amount?: number
-}): Promise<void> {
+}): Promise<string> {
+  const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.transactions
        (id, company_id, user_id, currency, amount, date, description,
         journal_entry_id, merchant_name, category)
      VALUES ($1, $2, $3, 'SEK', $4, $5, $6, $7, $8, $9)`,
     [
-      randomUUID(),
+      id,
       params.companyId,
       params.userId,
       params.amount ?? -500,
@@ -59,6 +61,7 @@ async function insertBookedTransaction(params: {
       params.category,
     ],
   )
+  return id
 }
 
 /** ISO date + n days, as a UTC timestamptz string (for committed_at). */
@@ -80,13 +83,20 @@ async function bookMerchant(params: {
   voucherNumber: number
   sourceType?: string
 }): Promise<string> {
-  const entryId = await insertPostedJournalEntry({
+  const transactionId = await insertBookedTransaction({
+    companyId: params.companyId,
+    userId: params.userId,
+    journalEntryId: null,
+    merchantName: params.merchantName,
+    category: params.category,
+    date: params.date,
+  })
+  const entryParams = {
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     entryDate: params.date,
     voucherNumber: params.voucherNumber,
-    sourceType: params.sourceType ?? 'bank_transaction',
     // Booked 3 days after the transaction: exercises the committed_at-based
     // lag (entry_date == transaction date would give 0).
     committedAt: plusDays(params.date, 3),
@@ -94,15 +104,11 @@ async function bookMerchant(params: {
       { accountNumber: params.expenseAccount, debitAmount: 500, creditAmount: 0 },
       { accountNumber: '1930', debitAmount: 0, creditAmount: 500 },
     ],
-  })
-  await insertBookedTransaction({
-    companyId: params.companyId,
-    userId: params.userId,
-    journalEntryId: entryId,
-    merchantName: params.merchantName,
-    category: params.category,
-    date: params.date,
-  })
+  }
+  const entryId = params.sourceType && params.sourceType !== 'bank_transaction'
+    ? await insertPostedJournalEntry({ ...entryParams, sourceType: params.sourceType })
+    : await insertPostedBankJournalEntry({ ...entryParams, transactionId })
+  await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, entryId])
   return entryId
 }
 
@@ -290,6 +296,7 @@ describe('get_ledger_usage_stats', () => {
     await insertBookedTransaction({
       companyId, userId,
       journalEntryId: stornoId,
+      amount: 300,
       merchantName: 'STORNO VENDOR',
       category: 'expense_other',
       date: '2026-06-15',
@@ -315,10 +322,14 @@ describe('get_ledger_usage_stats', () => {
     // (regression for 20260708110000; observed on prod as 2614).
     let rcVoucher = 20
     for (const d of ['2026-05-20', '2026-06-18']) {
-      const rcEntry = await insertPostedJournalEntry({
+      const transactionId = await insertBookedTransaction({
+        companyId, userId, journalEntryId: null,
+        merchantName: 'GOOGLE WO', category: 'expense_software', date: d,
+      })
+      const rcEntry = await insertPostedBankJournalEntry({
         userId, companyId, fiscalPeriodId,
         entryDate: d,
-        voucherNumber: rcVoucher++, sourceType: 'bank_transaction',
+        voucherNumber: rcVoucher++, transactionId,
         committedAt: plusDays(d, 3),
         lines: [
           { accountNumber: '5420', debitAmount: 500, creditAmount: 0 },
@@ -327,10 +338,7 @@ describe('get_ledger_usage_stats', () => {
           { accountNumber: '1930', debitAmount: 0, creditAmount: 500 },
         ],
       })
-      await insertBookedTransaction({
-        companyId, userId, journalEntryId: rcEntry,
-        merchantName: 'GOOGLE WO', category: 'expense_software', date: d,
-      })
+      await getPool().query('UPDATE transactions SET journal_entry_id = $2 WHERE id = $1', [transactionId, rcEntry])
     }
 
     // Suppliers: Telia with 3 consistent invoices (one of them multi-line,

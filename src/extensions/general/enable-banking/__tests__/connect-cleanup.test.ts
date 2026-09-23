@@ -16,6 +16,7 @@ vi.mock('../lib/api-client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api-client')>()
   return {
     ...actual,
+    deleteSession: vi.fn(),
     startAuthorization: (...args: unknown[]) => mockStartAuthorization(...args),
     // index.ts resolves the pinned auth method (with metadata for logging)
     // through the details variant; both point at one mock for simplicity.
@@ -31,6 +32,7 @@ vi.mock('@/lib/branding/resolve', () => ({
 }))
 
 import { enableBankingExtension } from '../index'
+import { deleteSession } from '../lib/api-client'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -361,7 +363,7 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
     )
   })
 
-  it('forwards the pinned method name on the reconnect path too', async () => {
+  it('forwards the pinned method on reconnect while retaining the old consent for callback fan-out', async () => {
     mockGetPreferredAuthMethod.mockResolvedValue({
       name: 'BANKID',
       approach: 'DECOUPLED',
@@ -374,14 +376,14 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
       call++
       if (call === 1) {
         // The existing connection loaded up front: reconnect derives the bank
-        // identity and psu_type from this row. session_id null skips the
-        // sibling check + revoke.
+        // identity and psu_type from this row. The old consent stays held
+        // until the callback completes the replacement.
         return makeChain({
           data: {
             id: 'conn-1',
             bank_name: 'Handelsbanken',
             provider: 'handelsbanken-se',
-            session_id: null,
+            session_id: 'old-shared-consent',
             psu_type: 'business',
           },
         })
@@ -407,6 +409,7 @@ describe('POST /connect auth-method pinning wired into startAuthorization', () =
     expect(args[1]).toBe('SE')
     expect(args[4]).toBe('business')
     expect(args[5]).toBe('BANKID')
+    expect(deleteSession).not.toHaveBeenCalled()
   })
 })
 

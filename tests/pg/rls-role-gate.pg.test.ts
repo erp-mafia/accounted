@@ -107,7 +107,7 @@ describe('commit_journal_entry tenant guard', () => {
           companyId,
           entryId,
         ]),
-      ).rejects.toThrow(/unauthorized: caller is not a member/i)
+      ).rejects.toMatchObject({ code: '42501', message: 'CASH_ACCOUNT_COMPANY_WRITE_DENIED' })
     })
   })
 })

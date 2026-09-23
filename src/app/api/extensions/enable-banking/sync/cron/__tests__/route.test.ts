@@ -51,15 +51,6 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   DEFAULT_UNATTENDED_CONFIDENCE_THRESHOLD: 0.9,
 }))
 
-// The balance mirror runs against cash_accounts after every successful sync;
-// its own behavior is covered in lib/cash-accounts/__tests__/service.test.ts.
-vi.mock('@/lib/cash-accounts/service', async () => {
-  const actual = await vi.importActual<typeof import('@/lib/cash-accounts/service')>(
-    '@/lib/cash-accounts/service',
-  )
-  return { ...actual, updateBalancesFromSync: vi.fn().mockResolvedValue(undefined) }
-})
-
 vi.mock('@/lib/email/service', () => ({
   getEmailService: () => ({ isConfigured: () => false, sendEmail: vi.fn() }),
 }))
@@ -78,6 +69,16 @@ import { GET } from '../route'
 
 function makeClient(state: ClientState) {
   return {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      const row = state.active.find(row => row.id === args.p_connection_id && row.company_id === args.p_company_id)
+      if (!row) throw new Error('Unknown sync fixture connection')
+      const payload = name === 'persist_bank_sync_result'
+        ? { last_synced_at: args.p_completed_at, status: 'active', error_message: null }
+        : { status: args.p_status, error_message: args.p_message }
+      Object.assign(row, payload)
+      state.updates.push({ ids: [row.id], payload })
+      return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
+    }),
     from: () => {
       const filters: Record<string, unknown> = {}
       let isDelete = false
@@ -541,6 +542,17 @@ describe('GET /api/extensions/enable-banking/sync/cron: failure log level', () =
 })
 
 describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave the row alone', () => {
+  it('keeps a routing conflict eligible for the next run without changing its cursor or consent status', async () => {
+    const lastSyncedAt = hoursAgo(24)
+    state.active = [connection({ last_synced_at: lastSyncedAt })]
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    const response = await GET(cronRequest())
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ processed: 1, totalFailed: 1 })
+    expect(state.updates).toEqual([])
+    expect(state.active[0]).toMatchObject({ status: 'active', last_synced_at: lastSyncedAt, error_message: null })
+  })
+
   // 2026-09-04: a connector contract mismatch parked four canary companies in
   // 'error' with "förnya anslutningen", and users re-authorized consents that
   // were fine. Neither a connector-hop failure nor a bank refusing right now

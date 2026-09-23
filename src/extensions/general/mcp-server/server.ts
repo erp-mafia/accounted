@@ -303,6 +303,7 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
 import {
@@ -18574,6 +18575,18 @@ export const tools: McpTool[] = [
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       // Booking order: largest first, as the matcher offers them.
       const ordered = [...requests].sort((a, b) => expectedRotRutPayoutAmount(b) - expectedRotRutPayoutAmount(a))
+      // A fully paid begäran also clears the öre its invoices carry on 1513
+      // beyond the requested kronor (3740). Preview only: the commit
+      // recomputes it at booking.
+      const oreRoundings = await Promise.all(
+        ordered.map((r) => {
+          const payout = expectedRotRutPayoutAmount(r)
+          return payout >= Number(r.requested_total)
+            ? getPayoutOreRounding(supabase, companyId, r, payout).then((x) => x.rounding)
+            : 0
+        }),
+      )
+      const oreRoundingTotal = roundOre(oreRoundings.reduce((sum, x) => sum + x, 0))
 
       return stagePendingOperation(supabase, companyId, userId, 'settle_rot_rut_payout',
         `ROT/RUT-utbetalning: ${txDesc} → ${ordered.map((r) => r.name).join(', ')}`,
@@ -18584,20 +18597,114 @@ export const tools: McpTool[] = [
           transaction_currency: transaction.currency,
           transaction_date: transaction.date,
           expected_total: expectedTotal,
-          requests: ordered.map((r) => ({
+          requests: ordered.map((r, i) => ({
             request_id: r.id,
             name: r.name,
             deduction_type: r.deduction_type,
+            status: r.status,
+            expected_payout: expectedRotRutPayoutAmount(r),
+            ore_rounding: oreRoundings[i],
+          })),
+          ore_rounding_total: oreRoundingTotal,
+        },
+        actor,
+        {
+          description: `After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran)${oreRoundingTotal > 0 ? `, plus debit 3740 Öresavrundning ${oreRoundingTotal} kr so 1513 clears the öre the whole-kronor begäran left` : ''}, every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.`,
+          tool: 'gnubok_list_rot_rut_payout_requests',
+        },
+        { dateForPeriodCheck: transaction.date },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_link_rot_rut_payout_voucher',
+    keywords: ['rotavdrag', 'rutavdrag', 'utbetalning skatteverket', '1513', 'koppla verifikat', 'öresavrundning'],
+    title: 'Link Existing Rot/Rut Payout Voucher',
+    catalogVisibility: 'search',
+    description:
+      'Link ROT/RUT begäran to a payout voucher already booked by hand (credits 1513; öre rounding allowed). Books nothing, marks the begäran settled. For an unbooked bank row use gnubok_settle_rot_rut_payout instead. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        journal_entry_id: { type: 'string', description: 'The posted payout voucher (debit 19xx / credit 1513)' },
+        request_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+      },
+      required: ['journal_entry_id', 'request_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const journalEntryId = args.journal_entry_id as string
+      const rawIds = Array.isArray(args.request_ids) ? (args.request_ids as unknown[]) : []
+      const requestIds = [...new Set(rawIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
+      if (!journalEntryId || requestIds.length === 0) {
+        throw codedError('VALIDATION_ERROR', 'journal_entry_id and request_ids are required')
+      }
+      if (requestIds.length > 10) {
+        throw codedError('VALIDATION_ERROR', 'request_ids: at most 10 begäran per voucher')
+      }
+
+      // Plain reads only: a staging tool writes nothing but the pending row,
+      // so the link_rot_rut_payout_voucher RPC (which locks and writes) runs at
+      // approval and makes the final call on every rule. This only refuses
+      // what can never pass and shows the approver the numbers.
+      const [{ data: voucher, error: voucherError }, { data: requestRows, error: reqError }] = await Promise.all([
+        supabase
+          .from('journal_entries')
+          .select('id, entry_date, voucher_series, voucher_number, description, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+          .eq('company_id', companyId)
+          .eq('id', journalEntryId)
+          .maybeSingle(),
+        supabase
+          .from('rot_rut_payout_requests')
+          .select('id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id')
+          .eq('company_id', companyId)
+          .in('id', requestIds),
+      ])
+      if (voucherError) throw dbError(voucherError)
+      if (reqError) throw dbError(reqError)
+      if (!voucher) throw registryError('ROT_RUT_LINK_VOUCHER_NOT_FOUND')
+      if (voucher.status !== 'posted') throw registryError('ROT_RUT_LINK_VOUCHER_NOT_ELIGIBLE')
+      const requests = (requestRows ?? []) as Array<RotRutPayoutRequestCandidate & { name: string }>
+      if (requests.length !== requestIds.length) throw registryError('ROT_RUT_REQUEST_NOT_FOUND')
+      const other = requests.find((r) => r.settlement_journal_entry_id && r.settlement_journal_entry_id !== journalEntryId)
+      if (other) throw registryError('ROT_RUT_LINK_ALREADY_SETTLED')
+
+      let bankAmount = 0
+      let receivableCredit = 0
+      for (const line of (voucher.lines ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) {
+        const net = Number(line.debit_amount) - Number(line.credit_amount)
+        if (line.account_number === '1513') receivableCredit -= net
+        else if (line.account_number.startsWith('19')) bankAmount += net
+      }
+      const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
+      const voucherLabel = `${voucher.voucher_series}${voucher.voucher_number}`
+
+      return stagePendingOperation(supabase, companyId, userId, 'link_rot_rut_payout_voucher',
+        `ROT/RUT-utbetalning: koppla ${voucherLabel} till ${requests.map((r) => r.name).join(', ')}`,
+        { journal_entry_id: journalEntryId, request_ids: requestIds },
+        {
+          journal_entry_id: journalEntryId,
+          voucher_number: voucherLabel,
+          entry_date: voucher.entry_date,
+          bank_amount: roundOre(bankAmount),
+          voucher_1513_credit: roundOre(receivableCredit),
+          expected_total: expectedTotal,
+          rounding: roundOre(receivableCredit - expectedTotal),
+          requests: requests.map((r) => ({
+            request_id: r.id,
+            name: r.name,
             status: r.status,
             expected_payout: expectedRotRutPayoutAmount(r),
           })),
         },
         actor,
         {
-          description: 'After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran), every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.',
+          description: 'After approval every begäran points at the voucher and reads paid (or partially paid); no new voucher is booked. Verify with gnubok_list_rot_rut_payout_requests.',
           tool: 'gnubok_list_rot_rut_payout_requests',
         },
-        { dateForPeriodCheck: transaction.date },
       )
     },
   },

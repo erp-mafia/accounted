@@ -2061,3 +2061,20 @@ describe('createInvoicePaymentJournalEntry: settles the outstanding amount, not 
     expect(input.lines.find((l) => l.account_number === '1510')!.credit_amount).toBe(1250)
   })
 })
+
+
+describe('invoice payment bank origins', () => {
+  it.each(['cash', 'accrual'])('preserves the bank source for %s payments', async kind => {
+    vi.clearAllMocks()
+    const invoice = makeInvoice({})
+    const tx = { id: 'tx-source', cash_account_id: 'cash-source', date: '2024-06-15', amount: 1250, currency: 'SEK' as const }
+    if (kind === 'cash') await createInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice,
+      tx.date, 'enskild_firma', undefined, '1940', tx)
+    else await createInvoicePaymentJournalEntry(null as never, 'company-1', 'user-1', invoice,
+      tx.date, undefined, undefined, undefined, '1940', tx)
+    expect(mockedCreateEntry.mock.calls[0][3]).toMatchObject({ source_id: invoice.id, bank_booking_context: [{
+      transaction_id: tx.id, cash_account_id: tx.cash_account_id, settlement_account: '1940',
+      date: tx.date, amount: tx.amount, currency: tx.currency,
+    }] })
+  })
+})

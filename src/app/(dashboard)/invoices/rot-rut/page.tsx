@@ -33,6 +33,9 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 const RotRutPayoutDialog = dynamic(() => import('@/components/invoices/RotRutPayoutDialog'), {
   ssr: false,
 })
+const RotRutLinkVoucherDialog = dynamic(() => import('@/components/invoices/RotRutLinkVoucherDialog'), {
+  ssr: false,
+})
 
 type RequestStatus = 'generated' | 'submitted' | 'paid' | 'partially_paid' | 'rejected' | 'cancelled'
 
@@ -146,6 +149,7 @@ export default function RotRutOverviewPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [linkingRequest, setLinkingRequest] = useState<PayoutRequest | null>(null)
 
   // The file dialog is driven by ?new=1 so the browser back button closes it
   // (same pattern as /invoices and /invoices/recurring).
@@ -571,6 +575,15 @@ export default function RotRutOverviewPage() {
                             </Button>
                           </>
                         )}
+                        {!request.settlement_journal_entry_id &&
+                          request.status !== 'generated' &&
+                          request.status !== 'cancelled' &&
+                          request.status !== 'rejected' &&
+                          canWrite && (
+                            <Button type="button" size="sm" variant="ghost" disabled={isBusy} onClick={() => setLinkingRequest(request)}>
+                              {t('link_voucher_action')}
+                            </Button>
+                          )}
                         {state.needsReclaim && canWrite && (
                           <Button type="button" size="sm" disabled={isBusy} onClick={() => void reclaim(request)}>
                             {isBusy && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
@@ -588,6 +601,23 @@ export default function RotRutOverviewPage() {
       )}
 
       <DestructiveConfirmDialog {...dialogProps} />
+
+      {linkingRequest && (
+        <RotRutLinkVoucherDialog
+          request={{
+            id: linkingRequest.id,
+            name: linkingRequest.name,
+            expected: expectedRotRutPayoutAmount(linkingRequest),
+          }}
+          onOpenChange={(open) => {
+            if (!open) setLinkingRequest(null)
+          }}
+          onLinked={() => {
+            setLinkingRequest(null)
+            void load()
+          }}
+        />
+      )}
 
       {showNewRequest && (
         <RotRutPayoutDialog
