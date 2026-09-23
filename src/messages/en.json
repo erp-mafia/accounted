@@ -3526,6 +3526,8 @@
     "amounts_differ_set": "The amount differs from the sum of the requests",
     "set_exact_required": "Several requests can only be booked together when the transaction equals the sum of their decided amounts exactly. Match them one at a time or book the transaction another way.",
     "booking_receivable_line_named": "1513 Receivable, split invoice ({name})",
+    "booking_rounding_line": "3740 Öre rounding",
+    "booking_rounding_note": "The request was sent in whole kronor. The öre the invoices booked on account 1513 beyond that go to 3740, so the receivable from Skatteverket is cleared.",
     "on_confirm_requests": "All {count} requests are marked as paid out"
   },
   "tx_invoice_picker": {

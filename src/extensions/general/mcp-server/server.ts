@@ -303,6 +303,7 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
 import {
@@ -18574,6 +18575,18 @@ export const tools: McpTool[] = [
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       // Booking order: largest first, as the matcher offers them.
       const ordered = [...requests].sort((a, b) => expectedRotRutPayoutAmount(b) - expectedRotRutPayoutAmount(a))
+      // A fully paid begäran also clears the öre its invoices carry on 1513
+      // beyond the requested kronor (3740). Preview only: the commit
+      // recomputes it at booking.
+      const oreRoundings = await Promise.all(
+        ordered.map((r) => {
+          const payout = expectedRotRutPayoutAmount(r)
+          return payout >= Number(r.requested_total)
+            ? getPayoutOreRounding(supabase, companyId, r, payout)
+            : 0
+        }),
+      )
+      const oreRoundingTotal = roundOre(oreRoundings.reduce((sum, x) => sum + x, 0))
 
       return stagePendingOperation(supabase, companyId, userId, 'settle_rot_rut_payout',
         `ROT/RUT-utbetalning: ${txDesc} → ${ordered.map((r) => r.name).join(', ')}`,
@@ -18584,17 +18597,19 @@ export const tools: McpTool[] = [
           transaction_currency: transaction.currency,
           transaction_date: transaction.date,
           expected_total: expectedTotal,
-          requests: ordered.map((r) => ({
+          requests: ordered.map((r, i) => ({
             request_id: r.id,
             name: r.name,
             deduction_type: r.deduction_type,
             status: r.status,
             expected_payout: expectedRotRutPayoutAmount(r),
+            ore_rounding: oreRoundings[i],
           })),
+          ore_rounding_total: oreRoundingTotal,
         },
         actor,
         {
-          description: 'After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran), every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.',
+          description: `After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran)${oreRoundingTotal > 0 ? `, plus debit 3740 Öresavrundning ${oreRoundingTotal} kr so 1513 clears the öre the whole-kronor begäran left` : ''}, every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.`,
           tool: 'gnubok_list_rot_rut_payout_requests',
         },
         { dateForPeriodCheck: transaction.date },

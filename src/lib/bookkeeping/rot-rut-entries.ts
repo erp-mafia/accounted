@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
-import { roundOre } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX, roundOre } from '@/lib/money'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 
 /**
@@ -20,6 +20,16 @@ import { createJournalEntry, findFiscalPeriod } from './engine'
  * rot_rut_payout_requests.settlement_journal_entry_id on every request the
  * voucher settles; source_id carries the first of them.
  *
+ * A fully paid begäran also clears the öre its invoices carried on 1513 but
+ * the whole-kronor BegartBelopp left out (oreRounding, lib/invoices/
+ * rot-rut-receivable.ts): the leg credits 1513 with the full receivable and
+ * 3740 Öresavrundning is debited the difference, so the bank leg stays the
+ * paid amount:
+ *
+ *   Debit  19xx bank account                 [paid]
+ *   Debit  3740 Öresavrundning               [oreRounding]
+ *   Credit 1513 Skattereduktion rot/rut      [paid + oreRounding]
+ *
  * At partial approval (delvis beviljad) the paid amount clears here and the
  * remainder stays on 1513 until the user corrects it (kundfordran/kundförlust
  * depending on the outcome with the buyer): deliberately manual, never
@@ -31,6 +41,11 @@ export interface RotRutPayoutLeg {
   deductionType: 'rot' | 'rut'
   /** What Skatteverket paid for this begäran (kr). */
   amount: number
+  /**
+   * The öre the invoices carry on 1513 beyond the paid kronor (0 <= x < 1).
+   * Credited to 1513 on top of amount and debited to 3740. Omit or 0 for none.
+   */
+  oreRounding?: number
 }
 
 function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): string {
@@ -66,7 +81,15 @@ export async function createRotRutPayoutSetEntry(
   const legs = params.legs.map((leg) => ({
     ...leg,
     amount: roundOre(leg.amount),
+    oreRounding: roundOre(leg.oreRounding ?? 0),
   }))
+  // Rounding is the sub-krona truncation remainder, never a real difference.
+  const badRounding = legs.find(
+    (leg) => leg.oreRounding < 0 || leg.oreRounding >= ORE_ROUNDING_SETTLEMENT_MAX,
+  )
+  if (badRounding) {
+    throw new Error(`Invalid öre rounding ${badRounding.oreRounding} on begäran ${badRounding.requestName}`)
+  }
   const total = roundOre(legs.reduce((sum, leg) => sum + leg.amount, 0))
   const bankAccount = params.bankAccount ?? '1930'
   const description = payoutDescription(
@@ -87,10 +110,18 @@ export async function createRotRutPayoutSetEntry(
         credit_amount: 0,
         line_description: description,
       },
+      ...legs
+        .filter((leg) => leg.oreRounding > 0)
+        .map((leg) => ({
+          account_number: ORE_ROUNDING_ACCOUNT,
+          debit_amount: leg.oreRounding,
+          credit_amount: 0,
+          line_description: `Öresavrundning ${deductionLabel([leg])}-avdrag (${leg.requestName})`,
+        })),
       ...legs.map((leg) => ({
         account_number: '1513',
         debit_amount: 0,
-        credit_amount: leg.amount,
+        credit_amount: roundOre(leg.amount + leg.oreRounding),
         // A single begäran keeps the voucher text on both legs (as before);
         // a bundle names its own begäran on each 1513 leg.
         line_description:
@@ -115,6 +146,8 @@ export async function createRotRutPayoutEntry(
     deductionType: 'rot' | 'rut'
     paymentDate: string
     amount: number
+    /** See RotRutPayoutLeg.oreRounding. */
+    oreRounding?: number
     /** BAS 19xx account the payout landed on. Defaults to 1930. */
     bankAccount?: string
   },
@@ -128,6 +161,7 @@ export async function createRotRutPayoutEntry(
         requestName: params.requestName,
         deductionType: params.deductionType,
         amount: params.amount,
+        oreRounding: params.oreRounding,
       },
     ],
   })
