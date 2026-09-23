@@ -14,6 +14,7 @@
  * The executor functions previously lived in the commit route. They are kept
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -3615,7 +3616,7 @@ async function commitMatchTransactionInvoice(
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
-        paymentAccount,
+        paymentAccount, transaction,
       )
       journalEntryId = je?.id ?? null
     } else {
@@ -3669,6 +3670,7 @@ async function commitMatchTransactionInvoice(
           description: desc,
           source_type: 'invoice_paid',
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: clearingLines,
         })
         journalEntryId = je?.id ?? null

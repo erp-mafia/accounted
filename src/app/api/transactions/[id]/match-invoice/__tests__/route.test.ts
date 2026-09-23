@@ -1019,6 +1019,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         'enskild_firma',
         undefined,
         '1940',
+        tx,
       )
     })
 

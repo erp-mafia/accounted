@@ -130,6 +130,10 @@ function extractCode(error: unknown): string | null {
 
   const obj = error as Record<string, unknown>
 
+  // Application conflicts use PT409 so PostgREST does not retry them as
+  // serialization failures. Callers must refresh stale inputs first.
+  if (obj.code === 'PT409') return 'CONFLICT'
+
   // Typed bookkeeping error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', ... }
   if (typeof obj.code === 'string' && /^[A-Z_]+$/.test(obj.code)) {
     return obj.code
@@ -138,6 +142,7 @@ function extractCode(error: unknown): string | null {
   // Wrapped error: { error: { code: '...' } }
   if (typeof obj.error === 'object' && obj.error !== null) {
     const inner = obj.error as Record<string, unknown>
+    if (inner.code === 'PT409') return 'CONFLICT'
     if (typeof inner.code === 'string' && /^[A-Z_]+$/.test(inner.code)) {
       return inner.code
     }
@@ -329,6 +334,7 @@ function postgresCodeToStructured(code: string): string | null {
       return 'NOT_FOUND'
     case '40001':
     case '40P01':
+    case 'PT409':
       return 'CONFLICT'
     default:
       return null
@@ -526,7 +532,7 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
   }
   if (err instanceof BookkeepingDatabaseError) {
-    return { code: err.code, details: { operation: err.operation } }
+    return { code: err.code, details: { operation: err.operation, ...(err.pgCode ? { pgCode: err.pgCode } : {}) } }
   }
   return { code: 'INTERNAL_ERROR' }
 }

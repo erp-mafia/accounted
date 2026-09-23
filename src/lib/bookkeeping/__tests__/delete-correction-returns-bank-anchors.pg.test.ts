@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from '@/tests/pg/setup'
-import { insertBalancedLines, insertTransaction, seedCompany } from '@/tests/pg/fixtures'
+import { insertTransaction, seedCompany } from '@/tests/pg/fixtures'
 
 // delete_last_voucher (migration 20260908095907, issue #2364): deleting a
 // correction returns the bank anchors correctEntry moved onto it (the pointer
@@ -37,7 +37,9 @@ async function insertPostedEntry(params: {
       params.correctionOfId ?? null,
     ],
   )
-  await insertBalancedLines(id)
+  const reversal = params.sourceType === 'storno'
+  await getPool().query(`INSERT INTO journal_entry_lines(journal_entry_id, account_number, debit_amount, credit_amount)
+    VALUES ($1, '1930', $2, $3), ($1, '4000', $3, $2)`, [id, reversal ? 1000 : 0, reversal ? 0 : 1000])
   await getPool().query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [id])
   return id
 }

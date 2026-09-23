@@ -514,6 +514,20 @@ describe('createDraftEntry: date/period cross-validation', () => {
     { account_number: '3001', debit_amount: 0, credit_amount: 1000 },
   ]
 
+  it('persists the caller bank snapshot on the draft header before creating its lines', async () => {
+    const supabase = buildSupabase({ name: 'FY 2024', period_start: '2024-01-01', period_end: '2024-12-31' })
+    const bankContext = [{ transaction_id: 'tx-1', cash_account_id: null, settlement_account: '1930',
+      date: '2024-06-01', amount: 1000, currency: 'SEK' }]
+    await createDraftEntry(supabase as never, 'company-1', 'user-1', {
+      fiscal_period_id: 'period-1', entry_date: '2024-06-01', description: 'Bank source',
+      source_type: 'bank_transaction', source_id: 'tx-1', bank_booking_context: bankContext, lines: validLines,
+    })
+    const index = supabase.from.mock.calls.findIndex(([table]) => table === 'journal_entries')
+    expect(supabase.from.mock.results[index].value.insert).toHaveBeenCalledWith(expect.objectContaining({
+      bank_booking_context: bankContext,
+    }))
+  })
+
   it('rejects entry date before period start', async () => {
     const supabase = buildSupabase({
       name: 'FY 2025',

@@ -6,6 +6,7 @@ import {
   insertFiscalPeriod,
   insertTransaction,
   insertDraftJournalEntry,
+  insertCashAccount,
 } from '@/tests/pg/fixtures'
 import { getClient, getPool, withUserContext } from '@/tests/pg/setup'
 
@@ -144,7 +145,7 @@ describe('mark_entry_as_opening_balance RPC', () => {
     await insertCompanyMember({ companyId, userId, role: 'owner' })
     const fiscalPeriodId = await insertFiscalPeriod({ userId, companyId })
     const entryId = await insertPostedEntry({
-      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'bank_transaction',
+      userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'supplier_invoice_registered',
     })
 
     await withUserContext(userId, async (client) => {
@@ -171,8 +172,9 @@ describe('mark_entry_as_opening_balance RPC', () => {
         { account: '1940', debit: 0, credit: 2500 },
       ],
     })
+    const cashAccountId = await insertCashAccount({ companyId, ledgerAccount: '1940' })
     await insertTransaction({
-      companyId, userId, amount: -2500, journalEntryId: entryId,
+      companyId, userId, amount: -2500, cashAccountId, journalEntryId: entryId,
     })
 
     await withUserContext(userId, async (client) => {
@@ -285,7 +287,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
     })
 
     await expect(
-      insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId }),
+      insertTransaction({ companyId, userId, amount: 5000, journalEntryId: entryId }),
     ).rejects.toThrow(/opening balance entry/i)
   })
 
@@ -294,7 +296,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
     const obEntryId = await insertPostedEntry({
       userId, companyId, fiscalPeriodId, voucherNumber: 1, sourceType: 'opening_balance',
     })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000 })
 
     await expect(
       getPool().query(
@@ -307,7 +309,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
   it('allows linking to an ordinary entry and unlinking back to NULL', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedOwner()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500 })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000 })
 
     await getPool().query(
       `UPDATE public.transactions SET journal_entry_id = $1 WHERE id = $2`,
@@ -333,7 +335,7 @@ describe('check_transaction_link_not_opening_balance trigger (20260723190000)', 
   it('leaves updates that do not change journal_entry_id alone', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedOwner()
     const entryId = await insertPostedEntry({ userId, companyId, fiscalPeriodId, voucherNumber: 1 })
-    const txId = await insertTransaction({ companyId, userId, amount: -2500, journalEntryId: entryId })
+    const txId = await insertTransaction({ companyId, userId, amount: 5000, journalEntryId: entryId })
 
     // Same-value SET (e.g. a generic column-list UPDATE) must not raise even
     // though the trigger's UPDATE OF column list matches.

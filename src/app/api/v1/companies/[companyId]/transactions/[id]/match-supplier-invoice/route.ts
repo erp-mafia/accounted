@@ -5,6 +5,7 @@
  * Mirrors the dashboard's internal route: same FX-difference handling,
  * same cash-method-FX rejection, same optimistic-lock interlock.
  */
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -377,6 +378,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           description: desc,
           source_type: sourceType,
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
         })
         if (je) journalEntryId = je.id
@@ -401,6 +403,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           (isPureSek || exchangeRateDifference !== 0) && fullSettlement
             ? actualBankSek
             : undefined,
+          transaction,
         )
         if (je) journalEntryId = je.id
       } else {
@@ -417,6 +420,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           // the internal 1930 default only stands for unlinked transactions,
           // via resolveSettlementAccount's own fallback (#1000).
           paymentAccount,
+          transaction,
         )
         if (je) journalEntryId = je.id
       }

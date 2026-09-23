@@ -77,6 +77,7 @@ describe('undo_bank_file_import', () => {
     const bookedTx = await insertTransaction({
       companyId,
       userId,
+      amount: 1000,
       journalEntryId: jeId,
       bankFileImportId: importId,
     })

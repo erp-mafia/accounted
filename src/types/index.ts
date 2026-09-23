@@ -2430,6 +2430,17 @@ export interface SIEExportOptions {
 }
 
 // Input types for creating entries
+export interface BankBookingContext {
+  transaction_id: string
+  cash_account_id: string | null
+  /** Explicit sibling move, committed atomically with the voucher. */
+  target_cash_account_id?: string
+  settlement_account: string
+  date: string
+  amount: number
+  currency: string
+}
+
 export interface CreateJournalEntryInput {
   fiscal_period_id: string
   entry_date: string
@@ -2438,6 +2449,8 @@ export interface CreateJournalEntryInput {
   source_id?: string
   voucher_series?: string
   notes?: string
+  /** Bank-source state used to build the lines, revalidated before posting. */
+  bank_booking_context?: BankBookingContext[]
   lines: CreateJournalEntryLineInput[]
 }
 
