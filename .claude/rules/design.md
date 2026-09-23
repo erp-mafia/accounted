@@ -1,7 +1,7 @@
 ---
 paths:
-  - "app/**"
-  - "components/**"
+  - "src/app/**"
+  - "src/components/**"
 ---
 
 # Design Context & Design System
@@ -37,17 +37,17 @@ WCAG AA (4.5:1 text, 3:1 UI). Keyboard-navigable + visible focus rings. Respect 
 
 ## Locked UI-migration conventions
 
-Decided during the 2026-07 concept work (dev_docs/ui_migration_plan.md); they apply system-wide and override anything below that conflicts.
+Decided during the 2026-07 concept work; they apply system-wide and override anything below that conflicts.
 
-1. **Frame layout.** The page is a rounded panel (12px) on a warm-toned frame (`--frame`). The panel keeps `--background`; the sidebar is borderless on the frame.
-2. **Page title is exactly 24px/32px** Hedvig Letters Serif (`text-2xl leading-8` via PageHeader).
+1. **Frame layout.** The page is a rounded panel (12px) on a warm-toned frame (`--frame`). The panel keeps `--background`; the sidebar is borderless on the frame. The panel is full-bleed: no centered max-width column, 24px side padding (16px on a phone), and content starts directly under a 48px top bar.
+2. **The page title lives in the top bar.** PageHeader renders as the panel's sticky 48px top bar: 13px/500 Geist title, the `?` help beside it, the primary action on the right, the description hidden. The restyle is the `.page-header` CSS in `app/globals.css`; pages keep using PageHeader (or its `page-header*` class hooks on a hand-rolled header) and never draw a second title.
 3. **Buttons are pills.** Radius 99px, default padding 7px 16px, 13px text. Set once in `components/ui/button.tsx`, app-wide, never per page.
 4. **Table rows are one line.** Secondary info (descriptions, OCR, roles) belongs in the detail view or a click-popup, never as sub-rows in lists.
 5. **Chips mark exceptions.** Normal states render as muted text; Badge only when the row deviates. Same chip on every row means the chip is wrong.
 6. **Attention is one ochre sentence**, not a banner: the `.attn` pattern (12.5px, `--warning` tone, single line, optionally with an embedded action link). Max one per page. Addendum 2026-08-19: a page may show at most one global notice line sourced from `lib/notices` (highest priority wins, additional active notices collapse behind a quiet "+N till" inline expander) plus at most one page-domain attn line.
 7. **Help text lives behind a "?"** right after the H1: a small (17px) circular button opening a popover anchored at the button. No instructional copy in the page flow.
 8. **One context picker per page, far right in the toolbar**: fiscal year or account/source as a chip-dropdown with a check on the active choice. A chip that looks like a picker must be a picker.
-9. **The primary action lives in the page header**, right side. Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
+9. **The primary action lives in the page header**, right side: that header is the top bar, so the action sits top-right of the panel. Multiple create paths collapse into a split button whose caret menu remembers the last-used mode (persisted in `user_preferences`, not localStorage).
 10. **Confirm up front, don't comment afterwards.** Actions that post or send open a small confirm dialog describing the outcome ("Bokförs som verifikat A-217 ...") instead of writing outcome text into the page afterwards.
 11. **Content lands with stagger.** `.stagger-enter` is the standard entry for list/table content, on server render and on client-fetch completion alike.
 12. **Status colors are data, not chrome**: sage/ochre/terracotta only in numbers, exception chips and `.attn`.
@@ -87,17 +87,18 @@ Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail ca
 **Layout (frame layout).**
 - The dashboard wrapper is `bg-frame` (`--frame: 40 18% 96%` light, `0 0% 5%` dark). `<main>` is the page panel: `bg-background rounded-xl border border-border`, 10px margin against the frame, own inner scroll (`md:h-[calc(100vh-20px)] md:overflow-y-auto`). Defined once as `MAIN_PANEL_CLASS` in `app/(dashboard)/layout.tsx`; never restyle per page.
 - The panel is the desktop scroll container: `position: sticky` binds to it automatically; never assume `window` scroll on dashboard pages. Scroll reset on navigation lives in `MainContainer`.
-- Sidebar width: `md:w-64` (256px), borderless and transparent on the frame. Panel offset: `md:ml-64`.
-- Main container: `max-w-5xl mx-auto px-5 py-8 md:px-8 md:py-10` (via `components/dashboard/MainContainer.tsx`).
+- Sidebar width: `--nav-w` (220px, set in `app/globals.css`), `md:w-[var(--nav-w)]` in `components/dashboard/SidebarV2.tsx`, borderless and transparent on the frame. Panel offset: `md:ml-[var(--nav-w)]`.
+- Main container: `px-4 pb-8 pt-4 md:px-6`, no max-width (via `components/dashboard/MainContainer.tsx`); `/e/*` and `/chat` render full-bleed without padding. The top padding is what the sticky top bar pulls back over, so it moves in step with the `.page-header` CSS.
 - Page root: `<div className="space-y-8">`.
 - Mobile keeps the pre-frame layout: full-width document flow, bottom nav; the panel styles are `md:`-gated.
+- Mobile bottom nav height: `--bottom-nav-h` (`app/globals.css`: 4rem tab row + safe-area inset, 0px from `md`). The nav sizes itself from it, and every fixed or sticky surface pinned to the bottom of a page offsets by it (`bottom-[calc(var(--bottom-nav-h)+1rem)]` for a floating bar, `bottom-[var(--bottom-nav-h)]` for a sticky one) instead of `bottom-4` or a hand-rolled `4rem`: a bar at `bottom-4` is fully covered by the nav on a phone (#2738). The bottom-edge z ladder is documented beside the token; bars sit below the nav on purpose.
 
 **Primitives: always use these, don't hand-roll.**
 
 | Need | Component | Notes |
 |---|---|---|
 | Page title + action | `components/ui/page-header.tsx` `PageHeader` | Use this, not bespoke `<h1>` + `<p>` blocks. Drop the `description` prop when it just paraphrases the title. |
-| Data table, **page-level list** | `components/ui/dry-table.tsx` `TH_CLASS` / `TD_CLASS` on a plain `<table className="w-full border-collapse text-[13px]">`, rows `hover:bg-secondary/35` | The concept list table: borderless, straight on the panel, 13px rows, hairline heads. This is what every migrated list page uses. Add `tabular-nums` to numeric cells. Hover-revealed row controls use `HOVER_REVEAL_CLASS` from the same file, never a hand-rolled `opacity-0 group-hover:opacity-100` (coarse pointers never hover, so the control would be unreachable on touch). |
+| Data table, **page-level list** | `components/ui/dry-table.tsx` `TH_CLASS` / `TD_CLASS` on a plain `<table className="w-full border-collapse text-[13px]">`, rows `hover:bg-secondary/35` | The concept list table: borderless, straight on the panel, 13px rows, hairline heads. This is what every migrated list page uses. Add `tabular-nums` to numeric cells. Hover-revealed row controls use `HOVER_REVEAL_CLASS` from the same file, never a hand-rolled `opacity-0 group-hover:opacity-100` (coarse pointers never hover, so the control would be unreachable on touch). Budget the columns before adding one: the content column is the viewport minus the 220px sidebar, the frame gutter and 48px of padding (about 1000px on a 1280-wide laptop, less with the assistant docked), so a nowrap column that does not fit makes the wrapper scroll sideways and squeezes the flexible name column to its header width (#2125, #2262); drop or shorten a column before reaching for a breakpoint. |
 | Data table, **dialog or report view** | `components/ui/table.tsx` `Table / TableHeader / TableHead / TableRow / TableCell` | Header style is baked in: `text-[11px] font-medium uppercase tracking-wider text-muted-foreground`. Wrap in `<CardContent className="p-0">` when the table is a card's primary content. `TableCell` is `px-4 py-3` on `text-sm`, so a page-level list built from this primitive comes out ~15% taller with a different hover tint: use the dry-table row above instead. |
 | Status indicator | `components/ui/badge.tsx` `<Badge variant>` | Chips mark exceptions only: normal states (Aktiv, Bokförd, Betald-i-tid) render as muted text (`text-muted-foreground text-xs`); Badge is reserved for rows that deviate (Utkast, Förfallen, Ej bokförd). A table where every row carries the same chip is wrong. Variants: `default / secondary / success / warning / destructive / outline`. **Never** use raw Tailwind colors (`bg-blue-100`, `bg-emerald-500/10`, etc.) for status. Map status → variant via a small `Record` per feature. |
 | No-data state | `components/ui/empty-state.tsx` `EmptyState` | Don't hand-roll `<div className="flex flex-col items-center py-12">…</div>`. Preset variants exist (`EmptyCustomers`, `EmptyByraClients`). |
@@ -123,7 +124,7 @@ Never render raw `{x.invoice_date}` directly: always route through `formatDate()
 **Currency.** `formatCurrency(n, currency?)` from `lib/utils.ts`. Default SEK.
 
 **Typography.**
-- Page title: use `PageHeader` (renders `font-display text-2xl leading-8 tracking-tight`, exactly 24px/32px, locked). Do not hand-roll an `<h1>`.
+- Page title: use `PageHeader`. Its base classes (`font-display text-2xl leading-8 tracking-tight`) are restyled into the 13px/500 top-bar title by `.page-header-title` in `app/globals.css` (convention 2). Do not hand-roll an `<h1>`.
 - Card title: `<CardTitle className="text-base">` for sections, default for primary cards. The primitive already drops `font-medium`: do not add it back.
 - Section divider header inside a page: `<h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">`.
 - Headline number: `font-display text-xl tabular-nums`. No `font-medium`: Hedvig's natural weight carries the gravitas.

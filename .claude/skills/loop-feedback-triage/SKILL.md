@@ -1,13 +1,13 @@
 ---
 name: loop-feedback-triage
-description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix PRs for clearly-scoped bugs. Never merges, never files GitHub issues on its own. Run LOCALLY (needs the Supabase MCP). Follows dev_docs/loops.md.
+description: Weekly loop that reads new gnubok_feedback reports (agent.feedback rows in prod event_log) past a sequence watermark, verifies each against current main, appends a dated digest to dev_docs/mcp_feedback_digest.md, and opens small fix PRs for clearly-scoped bugs. Never merges, never files GitHub issues on its own. Run LOCALLY (needs the Supabase MCP). Follows .claude/loops.md.
 ---
 
 # loop-feedback-triage
 
 **Goal:** every `gnubok_feedback` report is read within a week of being written, classified against
 current `main`, and either fixed (small PR), recorded as a known gap, or marked already-fixed. The tool
-promises the product team reads it; this loop is what makes that true. Read `dev_docs/loops.md` first.
+promises the product team reads it; this loop is what makes that true. Read `.claude/loops.md` first.
 
 Background: the first full triage (2026-08-17, `dev_docs/mcp_feedback_triage_2026_08.md`) found 40
 reports across 15 companies with **zero read surface**; the reports are high quality (exact ids, double

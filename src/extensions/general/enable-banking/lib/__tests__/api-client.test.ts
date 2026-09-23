@@ -1,0 +1,1238 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+
+// Mock jwt module before importing api-client
+const mockGenerateJWT = vi.fn().mockReturnValue('test-jwt-token')
+vi.mock('../jwt', () => ({
+  generateJWT: (...args: unknown[]) => mockGenerateJWT(...args),
+  getAuthorizationHeader: () => `Bearer ${mockGenerateJWT()}`,
+  _resetTokenCache: vi.fn(),
+}))
+
+// Mock environment
+vi.stubEnv('ENABLE_BANKING_API_URL', 'https://api.test.com')
+
+import {
+  getASPSPs,
+  getAccountBalance,
+  getAccountBalances,
+  getAccountTransactions,
+  getAllTransactions,
+  getAllTransactionsWithRaw,
+  AspspUnavailableError,
+  parseRetryAfter,
+  convertTransaction,
+  extractBban,
+  deleteSession,
+  probeSessionHealth,
+  startAuthorization,
+  createSession,
+  type Transaction,
+} from '../api-client'
+
+describe('api-client', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+  })
+
+  // -------------------------------------------------------------------------
+  // Timeout
+  // -------------------------------------------------------------------------
+  describe('timeout', () => {
+    it('aborts fetch after timeout', async () => {
+      fetchSpy.mockImplementation(
+        () => new Promise((_, reject) => {
+          // Simulate a hanging request: the AbortController will fire
+          setTimeout(() => reject(new DOMException('Aborted', 'AbortError')), 100)
+        })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow('Aborted')
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Balance-type selection
+  // -------------------------------------------------------------------------
+  describe('getAccountBalance', () => {
+    function balancesResponse(balances: unknown[]): Response {
+      return new Response(JSON.stringify({ balances }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
+
+    it('returns booked (closingBooked) plus available (interimAvailable) from one response', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'interimAvailable', balance_amount: { amount: '900.50', currency: 'SEK' } },
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('accepts ISO 20022 codes (CLBD/ITAV) case-insensitively', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'ITAV', balance_amount: { amount: '450.25', currency: 'SEK' } },
+          { balance_type: 'CLBD', balance_amount: { amount: '500.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(500)
+      expect(result?.available).toBe(450.25)
+    })
+
+    it('returns available: null when the bank reports no available type', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'closingBooked', balance_amount: { amount: '1000.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+    })
+
+    it('falls back to the first balance for booked, never to an available type by preference', async () => {
+      // Only an unknown type: the pre-existing first-entry fallback applies.
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '42.00', currency: 'SEK' }, reference_date: '2026-08-31' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+    })
+
+    it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'somethingElse', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(3)
+    })
+
+    it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {
+      fetchSpy.mockResolvedValueOnce(balancesResponse([]))
+      const result = await getAccountBalance('acc-1')
+      expect(result).toBeNull()
+    })
+
+    it('prefers expected over the first entry when closingBooked is missing', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([
+          { balance_type: 'other', balance_amount: { amount: '1.00', currency: 'SEK' } },
+          { balance_type: 'expected', balance_amount: { amount: '2.00', currency: 'SEK' }, reference_date: '2026-09-01' },
+        ])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result?.amount).toBe(2)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Retry
+  // -------------------------------------------------------------------------
+  describe('retry', () => {
+    it('retries on 503 and succeeds', async () => {
+      const failResponse = new Response('Service Unavailable', { status: 503 })
+      const successResponse = new Response(JSON.stringify({ balances: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      fetchSpy
+        .mockResolvedValueOnce(failResponse)
+        .mockResolvedValueOnce(failResponse)
+        .mockResolvedValueOnce(successResponse)
+
+      const result = await getAccountBalances('acc-1')
+      expect(result).toEqual([])
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+    })
+
+    it('retries on AbortError (timeout) and succeeds', async () => {
+      const abortError = new DOMException('Aborted', 'AbortError')
+      const successResponse = new Response(JSON.stringify({ aspsps: [{ name: 'TestBank', country: 'SE' }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      fetchSpy
+        .mockRejectedValueOnce(abortError)
+        .mockResolvedValueOnce(successResponse)
+
+      const result = await getASPSPs('SE')
+      expect(result).toEqual([{ name: 'TestBank', country: 'SE' }])
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not retry a 429 whose body signals a daily quota', async () => {
+      // PSD2 unattended consents cap balance calls per DAY (observed body:
+      // "Consent daily limit 4 is exceeded"). A retry a second later cannot
+      // succeed against a daily quota, so it must fail fast.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      fetchSpy.mockResolvedValueOnce(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', { status: 429 })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow(
+        'Failed to get account balances (429)'
+      )
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it("types Svea's 429 ASPSP_RATE_LIMIT_EXCEEDED as a quota, after ONE call, with no body in the log", async () => {
+      // The reported failure: the transport retried twice, then the route
+      // answered 500.
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response(
+          JSON.stringify({ code: 429, message: 'limit for SE4550000000058398257466', error: 'ASPSP_RATE_LIMIT_EXCEEDED' }),
+          { status: 429 }
+        )
+      )
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+
+      expect(error).toBeInstanceOf(AspspUnavailableError)
+      expect(error).toMatchObject({ status: 429, reason: 'rate-limited', rateLimit: { dailyQuota: true } })
+      expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const retryLog = warnSpy.mock.calls.filter((c) => String(c[0]).includes('429 for '))
+      expect(retryLog).toHaveLength(1)
+      expect(JSON.stringify(retryLog)).not.toContain('SE45')
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('does not retry a 429 without Retry-After: a blind retry only spends more quota', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429 }))
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow('Failed to get account balances (429)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('does not retry a daily quota even when the bank names a short Retry-After', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', { status: 429, headers: { 'Retry-After': '1' } })
+      )
+
+      await expect(getAccountBalances('acc-1')).rejects.toThrow('(429)')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('waits out a short Retry-After inside the request, then succeeds', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      vi.useFakeTimers()
+      try {
+        fetchSpy
+          .mockResolvedValueOnce(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': '2' } }))
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify({ balances: [] }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+
+        const pending = getAccountBalances('acc-1')
+        await vi.advanceTimersByTimeAsync(1999)
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        await vi.advanceTimersByTimeAsync(1)
+        await expect(pending).resolves.toEqual([])
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+      } finally {
+        vi.useRealTimers()
+        warnSpy.mockRestore()
+      }
+    })
+
+    it('does not sit out a Retry-After longer than the inline budget, and reads an HTTP-date', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const inTwoHours = new Date(Date.now() + 2 * 60 * 60_000).toUTCString()
+      fetchSpy.mockResolvedValue(
+        new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': inTwoHours } })
+      )
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      expect(error).toMatchObject({ reason: 'rate-limited', rateLimit: { dailyQuota: false } })
+      expect(error.rateLimit.retryAfterSeconds).toBeGreaterThan(7100)
+      expect(error.rateLimit.retryAfterSeconds).toBeLessThanOrEqual(7200)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('treats a malformed Retry-After as missing', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(new Response('Too Many Requests', { status: 429, headers: { 'Retry-After': 'soon' } }))
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch((e) => e)
+
+      expect(error).toMatchObject({ reason: 'rate-limited' })
+      expect(error.rateLimit.retryAfterSeconds).toBeUndefined()
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('does not retry on 400 errors', async () => {
+      const badRequest = new Response('Bad Request', { status: 400 })
+      fetchSpy.mockResolvedValueOnce(badRequest)
+
+      // getAccountTransactions throws on non-ok response
+      await expect(getAccountTransactions('acc-1')).rejects.toThrow('Failed to get transactions')
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // Pagination cap
+  // -------------------------------------------------------------------------
+  describe('pagination cap', () => {
+    it('stops at MAX_PAGINATION_PAGES', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      // Every response returns a continuation_key
+      fetchSpy.mockImplementation(() => {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }],
+              continuation_key: 'keep-going',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+      })
+
+      const result = await getAllTransactions('acc-1', '2024-01-01', '2024-12-31')
+
+      // Should have exactly 100 transactions (1 per page, 100 pages)
+      expect(result).toHaveLength(100)
+      expect(fetchSpy).toHaveBeenCalledTimes(100)
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Pagination cap reached')
+      )
+
+      warnSpy.mockRestore()
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // getAllTransactionsWithRaw
+  // -------------------------------------------------------------------------
+  describe('getAllTransactionsWithRaw', () => {
+    it('returns both transactions and raw pages', async () => {
+      const page1 = {
+        transactions: [{ transaction_amount: { amount: '100', currency: 'SEK' } }],
+        continuation_key: 'page2',
+      }
+      const page2 = {
+        transactions: [{ transaction_amount: { amount: '200', currency: 'SEK' } }],
+      }
+
+      fetchSpy
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(page1), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(page2), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        )
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+
+      expect(result.transactions).toHaveLength(2)
+      expect(result.rawPages).toHaveLength(2)
+      expect(JSON.parse(result.rawPages[0])).toEqual(page1)
+      expect(JSON.parse(result.rawPages[1])).toEqual(page2)
+    })
+
+    it('appends strategy=longest to the request URL when supplied', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+
+      await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31', 'longest')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const requestedUrl = fetchSpy.mock.calls[0][0] as string
+      expect(requestedUrl).toContain('strategy=longest')
+      expect(requestedUrl).toContain('date_from=2024-01-01')
+      expect(requestedUrl).toContain('date_to=2024-12-31')
+    })
+
+    it('omits the strategy param when not supplied', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+
+      await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+
+      const requestedUrl = fetchSpy.mock.calls[0][0] as string
+      expect(requestedUrl).not.toContain('strategy=')
+    })
+
+    it('falls back to no-strategy on 400 and retries the same page', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(
+          new Response('Invalid strategy', { status: 400 })
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ transactions: [{ transaction_amount: { amount: '50', currency: 'SEK' } }] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31', 'longest')
+
+      expect(result.transactions).toHaveLength(1)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+      const firstUrl = fetchSpy.mock.calls[0][0] as string
+      const secondUrl = fetchSpy.mock.calls[1][0] as string
+      expect(firstUrl).toContain('strategy=longest')
+      expect(secondUrl).not.toContain('strategy=')
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[enable-banking] strategy rejected by API, retrying without strategy',
+        expect.objectContaining({ strategy: 'longest' })
+      )
+
+      warnSpy.mockRestore()
+    })
+
+    // Danske Bank rejects a history window beyond its ~90-day PSD2 limit with a
+    // blanket ASPSP_ERROR rather than clamping. The window must be narrowed.
+    const ASPSP_ERROR_BODY =
+      '{"code":400,"message":"Error interacting with ASPSP","detail":"Unknown error","error":"ASPSP_ERROR"}'
+
+    it('narrows date_from when the ASPSP rejects the history window', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        // strategy=longest, full 120-day window → ASPSP_ERROR
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 }))
+        // strategy dropped, still full window → ASPSP_ERROR (window is the problem)
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 }))
+        // narrowed to 90 days before date_to → success
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ transactions: [{ transaction_amount: { amount: '42', currency: 'SEK' } }] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', 'longest')
+
+      expect(result.transactions).toHaveLength(1)
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('date_from=2026-02-07')
+      expect(urls[0]).toContain('strategy=longest')
+      expect(urls[1]).toContain('date_from=2026-02-07')
+      expect(urls[1]).not.toContain('strategy=')
+      // 90 days before 2026-06-07
+      expect(urls[2]).toContain('date_from=2026-03-09')
+      expect(urls[2]).toContain('date_to=2026-06-07')
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[enable-banking] ASPSP rejected history window, retrying with narrower date_from',
+        expect.objectContaining({ previousDateFrom: '2026-02-07', nextDateFrom: '2026-03-09' })
+      )
+
+      warnSpy.mockRestore()
+    })
+
+    it('steps through successive narrower windows until one succeeds', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // 90 days
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // 60 days
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ transactions: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ) // 30 days → success
+
+      await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(4)
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('date_from=2026-02-07')
+      expect(urls[1]).toContain('date_from=2026-03-09') // 90 days before date_to
+      expect(urls[2]).toContain('date_from=2026-04-08') // 60 days
+      expect(urls[3]).toContain('date_from=2026-05-08') // 30 days
+
+      warnSpy.mockRestore()
+    })
+
+    it('does not narrow the window on a non-ASPSP 400', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('{"error":"INVALID_REQUEST"}', { status: 400 }))
+
+      await expect(
+        getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+      ).rejects.toThrow('Failed to get transactions (400)')
+
+      // No strategy to drop + not an ASPSP error → fail fast, no retries.
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws once every narrower window is exhausted', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      // Fresh Response per call: a body can only be read once.
+      fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+      const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07').catch((e) => e)
+      expect(failure).toBeInstanceOf(AspspUnavailableError)
+      expect(failure.message).toContain('Failed to get transactions (400)')
+      // Every narrower window refused too: the bank is refusing, not the width.
+      expect(failure.reason).toBe('ladder-exhausted')
+
+      // full window + 90 + 60 + 30 = 4 attempts, then give up
+      expect(fetchSpy).toHaveBeenCalledTimes(4)
+
+      warnSpy.mockRestore()
+      errorSpy.mockRestore()
+    })
+
+    it('reports the requested and the effective date_from, and whether the window was narrowed', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      fetchSpy
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ transactions: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ) // 90 days → success
+
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+      expect(result).toMatchObject({
+        requestedDateFrom: '2026-02-07',
+        effectiveDateFrom: '2026-03-09',
+        narrowed: true,
+      })
+      warnSpy.mockRestore()
+    })
+
+    it('reports narrowed: false when the first call succeeds', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({ transactions: [] }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      )
+      const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07')
+      expect(result).toMatchObject({
+        requestedDateFrom: '2026-02-07',
+        effectiveDateFrom: '2026-02-07',
+        narrowed: false,
+      })
+    })
+
+    // Issue #2202: Länsförsäkringar answered a 4-month window at 23:07 (after
+    // narrowing to 06-26) and refused every rung of the same request at
+    // 23:14. ASPSP_ERROR is the same string for "too wide" and "the bank is
+    // refusing right now"; what the account has accepted before is the
+    // signal that tells them apart.
+    describe('accepted history width', () => {
+      it('a rejected window no wider than the accepted width stops after ONE call, as the bank being unavailable', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        // 2026-02-07 .. 2026-06-07 is 120 days; the bank has answered 120 before.
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(failure.reason).toBe('window-already-accepted')
+        expect(failure.dateFrom).toBe('2026-02-07')
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+      })
+
+      it('a rejected wider window jumps straight to the accepted width, then stops', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        // Accepted 54 days before; asking for 120. No 90/60/30 ladder walk.
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 54,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(failure.reason).toBe('window-already-accepted')
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+        expect(urls[0]).toContain('date_from=2026-02-07')
+        expect(urls[1]).toContain('date_from=2026-04-14') // 54 days before 2026-06-07
+        warnSpy.mockRestore()
+      })
+
+      it('a rejected wider window that succeeds at the accepted width is reported as narrowed to it', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy
+          .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 }))
+          .mockResolvedValueOnce(
+            new Response(JSON.stringify({ transactions: [] }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+
+        const result = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 54,
+        })
+        expect(result).toMatchObject({ effectiveDateFrom: '2026-04-14', narrowed: true })
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        warnSpy.mockRestore()
+      })
+
+      it('still drops an unsupported strategy before judging the window', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        const failure = await getAllTransactionsWithRaw('acc-1', '2026-02-07', '2026-06-07', 'longest', {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        // strategy=longest, then the same window without strategy, then stop.
+        expect(fetchSpy).toHaveBeenCalledTimes(2)
+        warnSpy.mockRestore()
+      })
+
+      it('getAllTransactions applies the same policy', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+        fetchSpy.mockImplementation(() => Promise.resolve(new Response(ASPSP_ERROR_BODY, { status: 400 })))
+
+        const failure = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', undefined, {
+          acceptedHistoryDays: 120,
+        }).catch((e) => e)
+
+        expect(failure).toBeInstanceOf(AspspUnavailableError)
+        expect(fetchSpy).toHaveBeenCalledTimes(1)
+        warnSpy.mockRestore()
+        errorSpy.mockRestore()
+      })
+    })
+  })
+
+  // -------------------------------------------------------------------------
+  // getAllTransactions: same first-page fallbacks via the paginated path
+  // -------------------------------------------------------------------------
+  describe('getAllTransactions fallbacks', () => {
+    const ASPSP_ERROR_BODY =
+      '{"code":400,"message":"Error interacting with ASPSP","detail":"Unknown error","error":"ASPSP_ERROR"}'
+
+    it('types a 429 as a rate limit, with the quota kind and Retry-After', async () => {
+      // An untyped 429 used to reach the cron as a plain Error, which parks
+      // the connection in 'error': a state no cron run selects again.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      fetchSpy.mockResolvedValue(
+        new Response('{"message":"Consent daily limit 4 is exceeded"}', {
+          status: 429,
+          headers: { 'Retry-After': '120' },
+        })
+      )
+
+      const error = await getAllTransactions('acc-1', '2026-06-01', '2026-06-07').catch(e => e)
+
+      expect(error).toBeInstanceOf(AspspUnavailableError)
+      expect(error).toMatchObject({
+        status: 429,
+        reason: 'rate-limited',
+        rateLimit: { dailyQuota: true, retryAfterSeconds: 120 },
+      })
+      errorSpy.mockRestore()
+    })
+
+    it('narrows the window when the ASPSP rejects the history range', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // full window
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({ transactions: [{ transaction_amount: { amount: '10', currency: 'SEK' } }] }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        ) // narrowed to 90 days → success
+
+      const result = await getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
+
+      expect(result).toHaveLength(1)
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('date_from=2026-02-07')
+      expect(urls[1]).toContain('date_from=2026-03-09') // 90 days before date_to
+
+      warnSpy.mockRestore()
+    })
+
+    it('drops the strategy then narrows the window (Danske flow)', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // strategy=longest
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // no strategy, full window
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ transactions: [] }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        ) // narrowed to 90 days → success
+
+      await getAllTransactions('acc-1', '2026-02-07', '2026-06-07', 'longest')
+
+      expect(fetchSpy).toHaveBeenCalledTimes(3)
+      const urls = fetchSpy.mock.calls.map((c: unknown[]) => c[0] as string)
+      expect(urls[0]).toContain('strategy=longest')
+      expect(urls[1]).not.toContain('strategy=')
+      expect(urls[1]).toContain('date_from=2026-02-07')
+      expect(urls[2]).toContain('date_from=2026-03-09')
+
+      warnSpy.mockRestore()
+    })
+
+    it('does not rewrite the query mid-pagination', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      fetchSpy
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              transactions: [{ transaction_amount: { amount: '5', currency: 'SEK' } }],
+              continuation_key: 'page2',
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        ) // page 1 ok, hands back a continuation_key
+        .mockResolvedValueOnce(new Response(ASPSP_ERROR_BODY, { status: 400 })) // page 2 fails
+
+      // A continuation_key is scoped to its window, so page 2 must not narrow:
+      // it fails fast instead.
+      await expect(
+        getAllTransactions('acc-1', '2026-02-07', '2026-06-07')
+      ).rejects.toThrow('Failed to get transactions (400)')
+      expect(fetchSpy).toHaveBeenCalledTimes(2)
+
+      errorSpy.mockRestore()
+    })
+  })
+})
+
+// -------------------------------------------------------------------------
+// JWT cache tests
+// -------------------------------------------------------------------------
+describe('JWT cache', () => {
+  it('reuses cached token within validity window', async () => {
+    // Reset mocks and re-import to test cache behavior
+    vi.resetModules()
+    const jwtCallCount = { count: 0 }
+
+    vi.doMock('../jwt', () => ({
+      generateJWT: () => {
+        jwtCallCount.count++
+        return 'cached-token'
+      },
+      getAuthorizationHeader: () => {
+        // Simulate cached behavior: first call generates, subsequent calls reuse
+        jwtCallCount.count++
+        return `Bearer cached-token`
+      },
+      _resetTokenCache: vi.fn(),
+    }))
+
+    // The actual cache test is in jwt.ts: we verify the cache function exists
+    const jwt = await import('../jwt')
+    expect(typeof jwt._resetTokenCache).toBe('function')
+  })
+})
+
+describe('convertTransaction', () => {
+  function makeTx(overrides: Partial<Transaction> = {}): Transaction {
+    return {
+      transaction_amount: { amount: '250.00', currency: 'SEK' },
+      credit_debit_indicator: 'DBIT',
+      booking_date: '2024-06-15',
+      ...overrides,
+    }
+  }
+
+  it('uses remittance_information when present', () => {
+    const tx = makeTx({ remittance_information: ['Faktura 123', ' '] })
+    expect(convertTransaction(tx, 'SEK').description).toBe('Faktura 123')
+  })
+
+  it('falls back to the counterparty name when remittance is empty', () => {
+    const out = makeTx({ remittance_information: ['   '], creditor_name: 'Telia AB' })
+    expect(convertTransaction(out, 'SEK').description).toBe('Telia AB')
+  })
+
+  it('derives a Swedish label from bank_transaction_code when remittance and counterparty are both absent', () => {
+    const tx = makeTx({ bank_transaction_code: 'PMNT-CCRD-POSD', merchant_category_code: '5411' })
+    // MCC 5411 wins (most specific).
+    expect(convertTransaction(tx, 'SEK').description).toBe('Inköp dagligvaror')
+  })
+
+  it('uses the ISO family label when only bank_transaction_code is present', () => {
+    const tx = makeTx({ bank_transaction_code: 'PMNT/CCRD' })
+    expect(convertTransaction(tx, 'SEK').description).toBe('Kortköp')
+  })
+
+  it('falls back to the Swedish neutral (never English "Unknown") when nothing is recognized', () => {
+    const tx = makeTx({})
+    expect(convertTransaction(tx, 'SEK').description).toBe('Okänd transaktion')
+  })
+
+  it('carries the ISO codes through onto the converted transaction', () => {
+    const tx = makeTx({ bank_transaction_code: 'PMNT/RCDT', proprietary_bank_transaction_code: 'XB' })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBe('PMNT/RCDT')
+    expect(out.proprietary_bank_transaction_code).toBe('XB')
+  })
+
+  // Enable Banking's real payload: bank_transaction_code is an object. Until
+  // 2026-09 the object went straight through, so the ledger column received
+  // its JSON text ('{"description":"Card purchase",...}') and the label
+  // derivation never matched anything.
+  it('flattens the object-shaped bank_transaction_code to a string', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: 'Card purchase', code: 'PMNT', sub_code: 'CCRD' },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBe('PMNT/CCRD')
+    expect(out.description).toBe('Kortköp')
+  })
+
+  it('keeps the description when the ASPSP sends no ISO code (the Swedish norm) and labels from it', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: 'Card purchase', code: null, sub_code: null },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBe('Card purchase')
+    expect(out.description).toBe('Kortköp')
+  })
+
+  it('drops an empty object instead of storing its JSON', () => {
+    const tx = makeTx({
+      bank_transaction_code: { description: '', code: null, sub_code: null },
+      proprietary_bank_transaction_code: { description: null, code: null, sub_code: null },
+    })
+    const out = convertTransaction(tx, 'SEK')
+    expect(out.bank_transaction_code).toBeUndefined()
+    expect(out.proprietary_bank_transaction_code).toBeUndefined()
+    expect(out.description).toBe('Okänd transaktion')
+  })
+
+  // Enable Banking has no `bban` key on AccountIdentification: a Swedish
+  // BBAN arrives as other.identification with scheme_name BBAN. The earlier
+  // `.bban` read was always undefined, so domestic counterparties were lost.
+  it('reads a Swedish BBAN counterparty from other.identification', () => {
+    const tx = makeTx({
+      credit_debit_indicator: 'CRDT',
+      debtor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+    })
+    expect(convertTransaction(tx, 'SEK').counterparty_account).toBe('50001234567')
+  })
+
+  it('prefers IBAN over a domestic identifier, and a Bankgiro from the additional list over nothing', () => {
+    const withIban = makeTx({
+      creditor_account: { iban: 'SE4550000000058398257466', other: { identification: '1234567', scheme_name: 'BGNR' } },
+    })
+    expect(convertTransaction(withIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const bgOnly = makeTx({
+      creditor_account_additional_identification: [{ identification: '5050-1234', scheme_name: 'BGNR' }],
+    })
+    expect(convertTransaction(bgOnly, 'SEK').counterparty_account).toBe('5050-1234')
+  })
+
+  it('takes a supplementary IBAN over a primary BBAN, and never persists a card PAN or other non-account scheme', () => {
+    const bbanWithIban = makeTx({
+      creditor_account: { other: { identification: '50001234567', scheme_name: 'BBAN' } },
+      creditor_account_additional_identification: [{ identification: 'SE4550000000058398257466', scheme_name: 'IBAN' }],
+    })
+    expect(convertTransaction(bbanWithIban, 'SEK').counterparty_account).toBe('SE4550000000058398257466')
+
+    const cardOnly = makeTx({
+      creditor_account: { other: { identification: '4571********1234', scheme_name: 'CPAN' } },
+      creditor_account_additional_identification: [{ identification: '12345', scheme_name: 'CUST' }],
+    })
+    expect(convertTransaction(cardOnly, 'SEK').counterparty_account).toBeUndefined()
+  })
+})
+
+describe('extractBban', () => {
+  it('returns the primary BBAN without whitespace', () => {
+    expect(extractBban({ account_id: { other: { identification: '5000 1234567', scheme_name: 'BBAN' } } }))
+      .toBe('50001234567')
+  })
+
+  it('falls back to all_account_ids when the primary identifier is an IBAN', () => {
+    expect(extractBban({
+      account_id: { iban: 'SE4550000000058398257466' },
+      all_account_ids: [
+        { identification: 'SE4550000000058398257466', scheme_name: 'IBAN' },
+        { identification: '50001234567', scheme_name: 'BBAN' },
+      ],
+    })).toBe('50001234567')
+  })
+
+  it('is undefined when the ASPSP sent no BBAN', () => {
+    expect(extractBban({ account_id: { iban: 'SE4550000000058398257466' } })).toBeUndefined()
+    expect(extractBban({ account_id: { other: { identification: '1234567', scheme_name: 'BGNR' } } })).toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// probeSessionHealth: nightly liveness check
+// ---------------------------------------------------------------------------
+
+describe('probeSessionHealth', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+  })
+
+  function respond(status: number, body: unknown) {
+    fetchSpy.mockResolvedValue(
+      new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }),
+    )
+  }
+
+  it('reports alive for an authorized session', async () => {
+    respond(200, { session_id: 's1', status: 'AUTHORIZED' })
+    expect(await probeSessionHealth('s1')).toBe('alive')
+  })
+
+  it('reports dead for a session the bank closed', async () => {
+    respond(200, { session_id: 's1', status: 'CLOSED' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports dead when the session record is gone', async () => {
+    respond(404, { message: 'Not found' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports dead on a 401 carrying a session-expiry signal', async () => {
+    respond(401, { error: 'SESSION_EXPIRED' })
+    expect(await probeSessionHealth('s1')).toBe('dead')
+  })
+
+  it('reports unknown for an unrecognized status rather than expiring a live connection', async () => {
+    respond(200, { session_id: 's1', status: 'SOMETHING_NEW' })
+    expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+
+  it('reports unknown on a bare 401 (app credentials, not a dead consent)', async () => {
+    respond(401, 'Unauthorized')
+    expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+
+  it('reports unknown when the request itself fails', async () => {
+    fetchSpy.mockRejectedValue(new Error('network down'))
+    expect(await probeSessionHealth('s1')).toBe('unknown')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Connector mode (self-host routes upstream through the hosted bank proxy)
+// ---------------------------------------------------------------------------
+describe('connector mode', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  const okJson = (body: unknown) =>
+    new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // A self-host with a connector key and no own EB credentials. The
+    // own-credentials env vars must stay unset for bankConnectorMode() to
+    // engage (key present AND no own credentials).
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', 'gnubok_ck_testsecret')
+    vi.stubEnv('GNUBOK_CONNECT_URL', 'https://app.test.example')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY', '')
+    vi.stubEnv('ENABLE_BANKING_PRIVATE_KEY_PRODUCTION', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID', '')
+    vi.stubEnv('ENABLE_BANKING_APP_ID_PRODUCTION', '')
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    vi.unstubAllEnvs()
+  })
+
+  const lastCall = () => {
+    const call = fetchSpy.mock.calls[fetchSpy.mock.calls.length - 1]
+    const url = String(call[0])
+    const init = (call[1] ?? {}) as RequestInit
+    const headers = (init.headers ?? {}) as Record<string, string>
+    return { url, init, headers }
+  }
+
+  it('routes reads through the proxy with the connector key, never the EB JWT', async () => {
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    expect(url).toContain('https://app.test.example/api/connect/bank/aspsps')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+    expect(headers['Authorization']).not.toContain('jwt')
+    // The JWT signer must not run: the instance holds no EB private key.
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('sends X-Connector-Company on /auth so the proxy can meter the company quota', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/auth')
+    expect(init.method).toBe('POST')
+    expect(headers['X-Connector-Company']).toBe('company-42')
+    expect(headers['Authorization']).toBe('Bearer gnubok_ck_testsecret')
+  })
+
+  it('sends prefilled credentials with autosubmit off, and neither field when there is nothing to prefill', async () => {
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5568098239' })
+    const withCredentials = JSON.parse(String(lastCall().init.body))
+    expect(withCredentials.credentials).toEqual({ companyId: '5568098239' })
+    expect(withCredentials.credentials_autosubmit).toBe(false)
+    expect(withCredentials.auth_method).toBe('BANKID')
+
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a2' }))
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-2', 'business', 'BANKID', 'company-42', {})
+    const without = JSON.parse(String(lastCall().init.body))
+    expect(without).not.toHaveProperty('credentials')
+    expect(without).not.toHaveProperty('credentials_autosubmit')
+  })
+
+  it('retries once without credentials when the upstream rejects the prefilled ones with a 4xx', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fetchSpy
+      .mockResolvedValueOnce(new Response('{"error":"companyId 8501011234 not accepted"}', { status: 400 }))
+      .mockResolvedValueOnce(okJson({ url: 'https://bank/auth', authorization_id: 'a-retry' }))
+    const result = await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' })
+    expect(result.authorization_id).toBe('a-retry')
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const first = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    const second = JSON.parse(String(fetchSpy.mock.calls[1][1]?.body))
+    expect(first.credentials).toEqual({ companyId: '8501011234' })
+    expect(second).not.toHaveProperty('credentials')
+    expect(second).not.toHaveProperty('credentials_autosubmit')
+    expect(second.state).toBe('oauth-state-1')
+    expect(second.auth_method).toBe('BANKID')
+    // The warning names the keys, never the value (a sole trader's is a personnummer).
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain('8501011234')
+    warnSpy.mockRestore()
+  })
+
+  it('does not retry a 5xx, and the failure log never carries the credential value', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // An upstream that echoes the submitted value back in its body.
+    fetchSpy.mockResolvedValue(new Response('companyId 8501011234 not accepted', { status: 503 }))
+    await expect(
+      startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '8501011234' }),
+    ).rejects.toThrow('503')
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('8501011234')
+    expect(JSON.stringify(errorSpy.mock.calls)).toContain('[redacted]')
+    errorSpy.mockRestore()
+  })
+
+  it('binds /sessions to the signed connector_state when one is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code', 'signed-connector-state')
+    const { url, init } = lastCall()
+    expect(url).toBe('https://app.test.example/api/connect/bank/sessions')
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code', connector_state: 'signed-connector-state' })
+  })
+
+  it('omits connector_state from /sessions when none is passed', async () => {
+    fetchSpy.mockResolvedValue(okJson({ session_id: 's1', accounts: [], access: { valid_until: '2027-01-01' } }))
+    await createSession('auth-code')
+    const { init } = lastCall()
+    expect(JSON.parse(String(init.body))).toEqual({ code: 'auth-code' })
+  })
+
+  it('does not engage when the instance has its own EB credentials (own-credentials seam)', async () => {
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ aspsps: [] }))
+    await getASPSPs('SE')
+    const { url, headers } = lastCall()
+    // Direct EB base (captured at import), never the connector proxy.
+    expect(url).not.toContain('/api/connect/bank')
+    expect(url).toContain('enablebanking.com')
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+
+  it('never sends X-Connector-Company on the direct path, even with companyId passed', async () => {
+    // Own EB credentials → direct path. companyId is always set on hosted /auth,
+    // so the header must be gated on connector mode, not on companyId: leaking
+    // the internal company UUID to the real Enable Banking API is a regression.
+    vi.stubEnv('ENABLE_BANKING_APP_ID', 'own-app-id')
+    fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
+    await startAuthorization('Bank', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', undefined, 'company-42')
+    const { url, headers } = lastCall()
+    expect(url).toContain('enablebanking.com')
+    expect(headers['X-Connector-Company']).toBeUndefined()
+    expect(headers['Authorization']).toBe('Bearer test-jwt-token')
+  })
+})
+
+/**
+ * Log levels for the two conditions that are expected rather than broken.
+ *
+ * A PSD2 consent that ran out and a session Enable Banking has already dropped
+ * are both handled: the sync flips the connection to 'expired' and asks for a
+ * re-authorization, and the disconnect carries on regardless. Logging them at
+ * error filled the production error panel with events nobody could act on and
+ * buried the genuine ASPSP failures next to them. The thrown errors are
+ * unchanged: only the level moves.
+ */
+describe('expected-condition log levels', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  let warnSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    errorSpy.mockRestore()
+    warnSpy.mockRestore()
+  })
+
+  it('logs an expired bank session at warn, and still throws SessionExpiredError', async () => {
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({ code: 'EXPIRED_SESSION' }), { status: 401 })
+    )
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Bank session expired')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs a genuine ASPSP failure at error', async () => {
+    // 500 is retried before it gives up; every attempt is the same failure.
+    fetchSpy.mockResolvedValue(new Response('{"message":"internal error"}', { status: 500 }))
+
+    await expect(
+      getAllTransactionsWithRaw('acc-1', '2024-01-01', '2024-12-31')
+    ).rejects.toThrow('Failed to get transactions')
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  it('logs a session that is already gone at Enable Banking at warn', async () => {
+    fetchSpy.mockResolvedValue(new Response('', { status: 404 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(warnSpy).toHaveBeenCalled()
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still logs an unexpected revoke failure at error', async () => {
+    fetchSpy.mockResolvedValue(new Response('{"message":"boom"}', { status: 500 }))
+
+    await expect(deleteSession('session-1')).rejects.toThrow('Failed to revoke session')
+
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
+  describe('parseRetryAfter', () => {
+    const now = Date.parse('2026-09-20T10:00:00Z')
+
+    it('reads delay-seconds', () => {
+      expect(parseRetryAfter('120', now)).toBe(120_000)
+      expect(parseRetryAfter(' 0 ', now)).toBe(0)
+    })
+
+    it('reads an HTTP-date relative to now, and a past date as zero', () => {
+      expect(parseRetryAfter('Sun, 20 Sep 2026 10:30:00 GMT', now)).toBe(30 * 60_000)
+      expect(parseRetryAfter('Sun, 20 Sep 2026 09:00:00 GMT', now)).toBe(0)
+    })
+
+    it('returns null for missing, malformed and absurd values', () => {
+      expect(parseRetryAfter(null, now)).toBeNull()
+      expect(parseRetryAfter('', now)).toBeNull()
+      expect(parseRetryAfter('soon', now)).toBeNull()
+      expect(parseRetryAfter('-5', now)).toBeNull()
+      expect(parseRetryAfter('1.5', now)).toBeNull()
+      // Beyond a day is not a reset time anyone should obey verbatim.
+      expect(parseRetryAfter('999999999', now)).toBeNull()
+      expect(parseRetryAfter('Fri, 01 Jan 2100 00:00:00 GMT', now)).toBeNull()
+    })
+  })
+})

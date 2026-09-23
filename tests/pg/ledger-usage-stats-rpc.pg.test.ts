@@ -143,7 +143,9 @@ async function insertSupplierWithInvoices(params: {
         arrival++,
         `SI-${arrival}`,
         inv.invoiceDate,
-        inv.status ?? 'registered',
+        // A credit note rests at 'credited' (never a payable): the CHECK
+        // supplier_invoices_credit_note_not_payable refuses 'registered'.
+        inv.status ?? (inv.isCreditNote ? 'credited' : 'registered'),
         inv.vatTreatment ?? 'standard_25',
         inv.isCreditNote ?? false,
       ],

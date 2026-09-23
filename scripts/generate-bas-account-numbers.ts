@@ -10,9 +10,9 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { BAS_REFERENCE } from '../lib/bookkeeping/bas-data'
+import { BAS_REFERENCE } from '../src/lib/bookkeeping/bas-data'
 
-const OUT = path.resolve(__dirname, '..', 'lib', 'bookkeeping', 'bas-account-numbers.ts')
+const OUT = path.resolve(__dirname, '..', 'src', 'lib', 'bookkeeping', 'bas-account-numbers.ts')
 
 export function renderBasAccountNumbers(numbers: readonly string[]): string {
   const sorted = [...new Set(numbers)].sort()
@@ -45,7 +45,7 @@ if (require.main === module) {
   if (process.argv.includes('--check')) {
     const current = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8') : ''
     if (current !== rendered) {
-      console.error('lib/bookkeeping/bas-account-numbers.ts is stale: run npx tsx scripts/generate-bas-account-numbers.ts')
+      console.error('src/lib/bookkeeping/bas-account-numbers.ts is stale: run npx tsx scripts/generate-bas-account-numbers.ts')
       process.exit(1)
     }
     console.log('bas-account-numbers.ts is up to date')

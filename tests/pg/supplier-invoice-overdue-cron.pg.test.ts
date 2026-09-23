@@ -128,20 +128,21 @@ describe('update_overdue_supplier_invoices()', () => {
     expect(await statusOf(id)).toBe('overdue')
   })
 
-  it('never marks a credit note overdue (remaining 0, status registered)', async () => {
+  it('never marks a credit note overdue (remaining 0, status credited)', async () => {
     const { userId, companyId } = await seedCompany()
     const supplierId = await insertSupplier(userId, companyId)
-    // Mirrors how the credit routes create a credit note: registered, fully
-    // settled (remaining 0), due today (here: long past).
+    // Mirrors how the credit routes create a credit note since 20260904190000:
+    // resting at 'credited' (a reversal is never a payable), fully settled
+    // (remaining 0), due today (here: long past).
     const id = await insertSupplierInvoice({
       userId, companyId, supplierId,
-      status: 'registered', dueDate: PAST, total: 1000, remaining: 0,
+      status: 'credited', dueDate: PAST, total: 1000, remaining: 0,
       isCreditNote: true,
     })
 
     await getPool().query('SELECT public.update_overdue_supplier_invoices()')
 
-    expect(await statusOf(id)).toBe('registered')
+    expect(await statusOf(id)).toBe('credited')
   })
 
   it('never marks a fully-paid (remaining ~0) invoice overdue', async () => {
@@ -251,18 +252,21 @@ describe('overdue backfill (migration 20260607120000)', () => {
     await getPool().query(SYMMETRIC_FUNCTION_SQL)
   })
 
-  it('reverts a credit note wrongly stuck on overdue back to registered', async () => {
+  it('has nothing left to revert for credit notes: they can no longer reach overdue', async () => {
+    // The 20260607120000 backfill moved credit notes wrongly stuck on
+    // 'overdue' back to 'registered'. Since 20260904190000 a credit note
+    // cannot be in either state: supplier_invoices_credit_note_not_payable
+    // refuses the payable lifecycle for credit notes at the row level
+    // (tests/pg/supplier-credit-note-not-payable.pg.test.ts), so the
+    // scenario this backfill repaired is unreachable.
     const { userId, companyId } = await seedCompany()
     const supplierId = await insertSupplier(userId, companyId)
-    const id = await insertSupplierInvoice({
-      userId, companyId, supplierId,
-      status: 'overdue', dueDate: PAST, total: 1000, remaining: 0, isCreditNote: true,
-    })
-
-    // Idempotent: re-running the migration only touches status='overdue' rows.
-    await getPool().query(MIGRATION_SQL)
-
-    expect(await statusOf(id)).toBe('registered')
+    await expect(
+      insertSupplierInvoice({
+        userId, companyId, supplierId,
+        status: 'overdue', dueDate: PAST, total: 1000, remaining: 0, isCreditNote: true,
+      }),
+    ).rejects.toMatchObject({ code: '23514', constraint: 'supplier_invoices_credit_note_not_payable' })
   })
 
   it('marks a fully-paid invoice stuck on overdue as paid (and stamps paid_at)', async () => {

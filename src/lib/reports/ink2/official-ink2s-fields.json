@@ -1,0 +1,263 @@
+{
+  "source": "Skatteverket, Nyheter from beskattningsperiod 2025P4, INK2S_SKV2002-33-01-24-04.xls (valid through 2026P3), transcribed 2026-09-20",
+  "fields": {
+    "7011": {
+      "row": null,
+      "label": "Räkenskapsårets början",
+      "sign": null
+    },
+    "7012": {
+      "row": null,
+      "label": "Räkenskapsårets slut",
+      "sign": null
+    },
+    "7650": {
+      "row": "4.1",
+      "label": "Årets resultat, vinst",
+      "sign": "+",
+      "rule": "Får ej förekomma om 7750 finns med och den <> 0."
+    },
+    "7651": {
+      "row": "4.3a",
+      "label": "Bokförda kostnader som inte ska dras av: a. Skatt på årets resultat",
+      "sign": "+"
+    },
+    "7652": {
+      "row": "4.3b",
+      "label": "Bokförda kostnader som inte ska dras av: b. Nedskrivning av finansiella tillgångar",
+      "sign": "+"
+    },
+    "7653": {
+      "row": "4.3c",
+      "label": "Bokförda kostnader som inte ska dras av: c. Andra bokförda kostnader",
+      "sign": "+"
+    },
+    "7654": {
+      "row": "4.6a",
+      "label": "Intäkter som ska tas upp men som inte ingår i det redovisade resultatet a. Beräknad schablonintäkt på periodiseringsfonder vid beskattningsårets ingång",
+      "sign": "+"
+    },
+    "7655": {
+      "row": "4.6c",
+      "label": "Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: c. Mottagna koncernbidrag",
+      "sign": "+"
+    },
+    "7656": {
+      "row": "4.7b",
+      "label": "Avyttring av delägarrätter: b. Bokförd förlust",
+      "sign": "+"
+    },
+    "7657": {
+      "row": "4.7d",
+      "label": "Avyttring av delägarrätter: d. Återfört uppskov med kapitalvinst enligt blankett N4",
+      "sign": "+"
+    },
+    "7658": {
+      "row": "4.7e",
+      "label": "Avyttring av delägarrätter: e. Kapitalvinst för beskattningsåret",
+      "sign": "+"
+    },
+    "7659": {
+      "row": "4.8b",
+      "label": "Andel i handelsbolag (inkl. avyttring): b. Skattemässigt överskott enligt N3B",
+      "sign": "+"
+    },
+    "7660": {
+      "row": "4.8c",
+      "label": "Andel i handelsbolag (inkl. avyttring): c. Bokförd kostnad/förlust",
+      "sign": "+"
+    },
+    "7661": {
+      "row": "4.10",
+      "label": "Skattemässig justering av bokfört resultat vid avyttring av näringsfastighet och näringsbostadsrätt",
+      "sign": "+"
+    },
+    "7662": {
+      "row": "4.12",
+      "label": "Återföringar vid avyttring av fastighet t.ex. värdeminskningsavdrag, skogsavdrag och substansminskningsavdrag...",
+      "sign": "+"
+    },
+    "7663": {
+      "row": "4.13",
+      "label": "Andra skattemässiga justeringar av resultatet: +",
+      "sign": "+"
+    },
+    "7665": {
+      "row": "4.6e",
+      "label": "Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: e. Andra ej bokförda intäkter",
+      "sign": "+"
+    },
+    "7666": {
+      "row": "4.9",
+      "label": "Skattemässig justering av bokfört resultat för avskrivningar på byggnader och annan fast egendom samt restvärdesavskrivning på maskiner och inventarier (+)",
+      "sign": "+"
+    },
+    "7668": {
+      "row": "4.6b",
+      "label": "Beräknad schablonintäkt på fondandelar ägda vid kalenderårets ingång",
+      "sign": "+"
+    },
+    "7670": {
+      "row": "4.15",
+      "label": "Överskott (flyttas till p. 1.1 på sid. 1)",
+      "sign": "+",
+      "rule": "Får ej förekomma om 7770 finns med och 7770 <> 0."
+    },
+    "7671": {
+      "row": "4.14b",
+      "label": "Reduktion av outnyttjat underskott med hänsyn till beloppsspärr, ackord eller konkurs",
+      "sign": "+"
+    },
+    "7672": {
+      "row": "4.14c",
+      "label": "Reduktion av outnyttjat underskott med hänsyn till koncernbidragsspärr, fusionsspärr m.m. (beloppet ska också tas upp vid p. 1.2. på sid. 1)",
+      "sign": "+"
+    },
+    "7673": {
+      "row": "4.6d",
+      "label": "Intäkter som ska tas upp men som inte ingår i det redovisade resultatet: d. Uppräknat belopp vid återföring av periodiseringsfond",
+      "sign": "+"
+    },
+    "7750": {
+      "row": "4.2",
+      "label": "Årets resultat, förlust",
+      "sign": "-",
+      "rule": "Får ej förekomma om 7650 finns med och den <> 0."
+    },
+    "7751": {
+      "row": "4.4a",
+      "label": "Kostnader som ska dras av men som inte ingår i det redovisade resultatet: a. Lämnade koncernbidrag",
+      "sign": "-"
+    },
+    "7752": {
+      "row": "4.5a",
+      "label": "Bokförda intäkter som inte ska tas upp: a. Ackordsvinster",
+      "sign": "-"
+    },
+    "7753": {
+      "row": "4.5b",
+      "label": "Bokförda intäkter som inte ska tas upp: b. Utdelning",
+      "sign": "-"
+    },
+    "7754": {
+      "row": "4.5c",
+      "label": "Bokförda intäkter som inte ska tas upp: c. Andra bokförda intäkter",
+      "sign": "-"
+    },
+    "7755": {
+      "row": "4.7a",
+      "label": "Avyttring av delägarrätter: a. Bokförd vinst",
+      "sign": "-"
+    },
+    "7756": {
+      "row": "4.7c",
+      "label": "Avyttring av delägarrätter: c. Uppskov med kapitalvinst enligt blankett N4",
+      "sign": "-"
+    },
+    "7757": {
+      "row": "4.7f",
+      "label": "Avyttring av delägarrätter: f. Kapitalförlust som ska dras av",
+      "sign": "-"
+    },
+    "7758": {
+      "row": "4.8a",
+      "label": "Andel i handelsbolag (inkl. avyttring): a. Bokförd intäkt/vinst",
+      "sign": "-"
+    },
+    "7759": {
+      "row": "4.8d",
+      "label": "Andel i handelsbolag (inkl. avyttring): d. Skattemässigt underskott enligt N3B",
+      "sign": "-"
+    },
+    "7760": {
+      "row": "4.10",
+      "label": "Skattemässig korrigering av bokfört resultat vid avyttring av näringsfastighet och näringsbostadsrätt: -",
+      "sign": "-"
+    },
+    "7761": {
+      "row": "4.11",
+      "label": "Skogs-/substansminskningsavdrag (specificeras på blankett N8)",
+      "sign": "-"
+    },
+    "7762": {
+      "row": "4.13",
+      "label": "Andra skattemässiga justeringar av resultatet: -",
+      "sign": "-"
+    },
+    "7763": {
+      "row": "4.14a",
+      "label": "Underskott: a. Outnyttjat underskott från föregående år",
+      "sign": "-"
+    },
+    "7764": {
+      "row": "4.4b",
+      "label": "Kostnader som ska dras av men som inte ingår i det redovisade resultatet: b. Andra ej bokförda kostnader",
+      "sign": "-"
+    },
+    "7765": {
+      "row": "4.9",
+      "label": "Skattemässig justering av bokfört resultat för avskrivningar på byggnader och annan fast egendom samt restvärdesavskrivning på maskiner och inventarier (-)",
+      "sign": "-"
+    },
+    "7770": {
+      "row": "4.16",
+      "label": "Underskott (flyttas till p. 1.2 på sid. 1)",
+      "sign": "-",
+      "rule": "Får ej förekomma om 7670 finns med och 7670 <> 0."
+    },
+    "8020": {
+      "row": "4.17",
+      "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende byggnader.",
+      "sign": "*"
+    },
+    "8021": {
+      "row": "4.18",
+      "label": "Årets begärda och tidigare års medgivna värdeminskningsavdrag som finns vid beskattningsårets utgång avseende markanläggningar.",
+      "sign": "*"
+    },
+    "8022": {
+      "row": "4.21",
+      "label": "Pensionskostnader (som ingår i p. 3.8)",
+      "sign": "*"
+    },
+    "8023": {
+      "row": "4.19",
+      "label": "Vid restvärdesavskrivning: återförda belopp för av- och nedskrivning, försäljning, utrangering",
+      "sign": "*"
+    },
+    "8026": {
+      "row": "4.20",
+      "label": "Lån från aktieägare (fysisk person) vid räkenskapsårets utgång",
+      "sign": "*"
+    },
+    "8028": {
+      "row": "4.22",
+      "label": "Koncernbidragsspärrat och fusionsspärrat underskott m.m. (frivillig uppgift)",
+      "sign": "*"
+    },
+    "8040": {
+      "row": null,
+      "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsredovisningen: Ja",
+      "sign": null,
+      "rule": "Får ej förekomma om 8041 finns med."
+    },
+    "8041": {
+      "row": null,
+      "label": "Uppdragstagare (t.ex. redovisningskonsult) har biträtt vid upprättandet av årsredovisningen: Nej",
+      "sign": null,
+      "rule": "Får ej förekomma om 8040 finns med."
+    },
+    "8044": {
+      "row": null,
+      "label": "Årsredovisningen har varit föremål för revision: Ja",
+      "sign": null,
+      "rule": "Får ej förekomma om 8045 finns med."
+    },
+    "8045": {
+      "row": null,
+      "label": "Årsredovisningen har varit föremål för revision: Nej",
+      "sign": null,
+      "rule": "Får ej förekomma om 8044 finns med."
+    }
+  }
+}

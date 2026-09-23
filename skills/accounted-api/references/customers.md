@@ -27,18 +27,20 @@ Returns the company's articles ordered by name. Pass ?include_inactive=true to i
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `include_inactive` | query | `"true" \| "false"` | no | true also returns inactive articles. Default: active only. |
 
 Response `200`:
 ```ts
 {
   data: {
-    articles: { id: string, article_number: string, name: string, name_en: string, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string, cost_price: number, ean: string, housework_type: string, notes: string, active: boolean, created_at: string, updated_at: string }[]
+    articles: { id: string, article_number: string | null, name: string, name_en: string | null, type: "vara" | "tjanst", unit: string, price_excl_vat: number, currency: string, vat_rate: number, revenue_account: string | null, cost_price: number | null, ean: string | null, housework_type: string | null, notes: string | null, active: boolean, created_at: string, updated_at: string }[]
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -92,21 +94,27 @@ Returns active customers in created-first order. Pass ?include_archived=true to 
 
 **Pitfalls:**
 - Archived customers are hidden by default; the dashboard makes the same choice.
-- org_number is included so callers can match against external CRM identifiers; for sole traders (enskild firma) it equals the personnummer.
+- org_number is included so callers can match against external CRM identifiers, except where it is a natural person's identity number: a sole trader (enskild firma) has no org number of its own, so its org_number and vat_number come back null in the list. Read the record with GET /customers/{id} for the full value.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `customer_type` | query | `"individual" \| "swedish_business" \| "eu_business" \| "non_eu_business"` | no | Only customers of this type. |
+| `search` | query | `string` | no | Case-insensitive match on the name (anywhere) or the org number (prefix), 1-200 characters. |
+| `include_archived` | query | `"true" \| "false"` | no | true also returns archived customers. Default: false. |
+| `cursor` | query | `string` | no | Opaque cursor from the previous page's meta.next_cursor. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). Larger values are clamped to 100. |
 
 Response `200`:
 ```ts
 {
-  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string, org_number: string, vat_number: string, default_payment_terms: number, archived_at: string, created_at: string }[],
+  data: { id: string, name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", email: string | null, org_number: string | null, vat_number: string | null, default_payment_terms: number, party_id?: string | null, archived_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -120,7 +128,7 @@ Example response `200`:
     {
       "id": "a8f1…",
       "name": "Acme AB",
-      "customer_type": "business",
+      "customer_type": "swedish_business",
       "email": "finance@acme.example",
       "org_number": "556677-8899",
       "vat_number": "SE556677889901",
@@ -153,7 +161,7 @@ Creates a new customer for the company. Requires Idempotency-Key (UUID). Support
 - Idempotency-Key is mandatory: calls without it return 400 VALIDATION_ERROR.
 - org_number uniqueness is enforced at the database level; duplicate inserts return 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
 - A personnummer-shaped org_number on customer_type=individual is treated as the personnummer submitted in the wrong field: it is stored encrypted as personal_number, returned masked (********-1234), and org_number is left empty. Prefer passing it as personal_number. Next to a different personal_number in the same body it is a 400.
-- An org_number shaped like a Swedish personnummer is rejected for business customer_types: create the customer as customer_type=individual with personal_number so the number is masked and protected.
+- An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: a sole trader (enskild firma) has no separate org number, so its owner's personnummer is the firm's identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business, which cannot have one.
 - personal_number is accepted only for customer_type=individual, stored encrypted, and returned in the masked form ********-1234.
 - If default_payment_terms is omitted, it defaults to the company setting invoice_default_days, falling back to 30.
 - VIES validation runs only on commit. Dry-run skips the external call and leaves vat_number_validated=false in the preview.
@@ -161,18 +169,19 @@ Creates a new customer for the company. Requires Idempotency-Key (UUID). Support
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
   name: string,
   customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
-  customer_number?: string,
-  contact_person?: string,
+  customer_number?: string | null,
+  contact_person?: string | null,
   email?: string,
   phone?: string,
-  invoice_email_cc_addresses?: string[],
-  invoice_email_bcc_addresses?: string[],
+  invoice_email_cc_addresses?: string[] | null,
+  invoice_email_bcc_addresses?: string[] | null,
   address_line1?: string,
   address_line2?: string,
   postal_code?: string,
@@ -180,7 +189,7 @@ Request body:
   country?: string,
   org_number?: string,
   vat_number?: string,
-  personal_number?: string,
+  personal_number?: string | null,
   language?: "sv" | "en",
   default_payment_terms?: number,
   notes?: string
@@ -202,35 +211,36 @@ Response `200`:
 ```ts
 {
   data: {
-    id: string,
+    id: string | null,
     name: string,
     customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
-    customer_number: string,
-    contact_person: string,
-    email: string,
-    phone: string,
-    invoice_email_cc_addresses: string[],
-    invoice_email_bcc_addresses: string[],
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    customer_number: string | null,
+    contact_person: string | null,
+    email: string | null,
+    phone: string | null,
+    invoice_email_cc_addresses: string[] | null,
+    invoice_email_bcc_addresses: string[] | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
+    org_number: string | null,
+    vat_number: string | null,
     vat_number_validated: boolean,
-    personal_number: string,
+    personal_number: string | null,
     default_payment_terms: number,
-    notes: string,
-    archived_at: string,
-    created_at: string,
-    updated_at: string
+    notes: string | null,
+    archived_at: string | null,
+    created_at: string | null,
+    updated_at: string | null
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -266,7 +276,7 @@ Example response `200`:
 **Retrieve a single customer by id.**
 `scope:customers:read · risk:low · idempotent`
 
-Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response.
+Returns the full customer record. Pass ?expand=invoices to embed any open invoices (sent / partially_paid / overdue) for the customer in the same response. Pass ?expand=party to embed the party (motpart) behind the customer: legal name, org and VAT number, country, the SCB company-register summary and what the ledger has seen for it. Private individuals have no party.
 
 **Use when:** You need the full customer record: address, payment terms, VAT validation status, contact details: before invoicing or syncing to another system.
 **Do not use for:** Listing customers (use the list endpoint). Looking up arbitrary supplier or employee records (different resources).
@@ -280,6 +290,7 @@ Returns the full customer record. Pass ?expand=invoices to embed any open invoic
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `expand` | query | `string` | no | Comma-separated related records to embed: invoices, party. An unknown key returns 400 VALIDATION_ERROR. |
 
 Response `200`:
 ```ts
@@ -288,32 +299,35 @@ Response `200`:
     id: string,
     name: string,
     customer_type: string,
-    customer_number: string,
-    contact_person: string,
-    email: string,
-    phone: string,
-    invoice_email_cc_addresses: string[],
-    invoice_email_bcc_addresses: string[],
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    customer_number: string | null,
+    contact_person: string | null,
+    email: string | null,
+    phone: string | null,
+    invoice_email_cc_addresses: string[] | null,
+    invoice_email_bcc_addresses: string[] | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
+    org_number: string | null,
+    vat_number: string | null,
     vat_number_validated: boolean,
-    personal_number: string,
+    personal_number: string | null,
     default_payment_terms: number,
-    notes: string,
-    archived_at: string,
+    notes: string | null,
+    party_id: string | null,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
+    archived_at: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -361,24 +375,25 @@ Patches the customer with the supplied fields. All fields optional. Idempotent (
 - org_number uniqueness is enforced at DB level: 23505 → 409 CUSTOMER_DUPLICATE_ORG_NUMBER.
 - VIES re-validation is best-effort and runs only on commit. A VIES timeout does not fail the update.
 - personal_number: a plaintext value is stored encrypted (individual customers only); the masked form a read returned (********-1234) means "leave unchanged" and is never stored; null clears it. Changing customer_type away from individual clears any stored personal_number.
-- An org_number shaped like a Swedish personnummer is rejected for business customer_types (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL). On an individual it is the personnummer in the wrong field: it is stored encrypted as personal_number and org_number is cleared; next to a different personal_number in the same body it is 400 CUSTOMER_PERSONAL_NUMBER_CONFLICT.
+- An org_number shaped like a Swedish personnummer is accepted on customer_type=swedish_business: an enskild firma has no separate org number, so it is the firm's identifier, and the list endpoint masks it. It is rejected for eu_business and non_eu_business (400 CUSTOMER_ORG_NUMBER_IS_PERSONAL). On an individual it is the personnummer in the wrong field: it is stored encrypted as personal_number and org_number is cleared; next to a different personal_number in the same body it is 400 CUSTOMER_PERSONAL_NUMBER_CONFLICT.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
   name?: string,
   customer_type?: "individual" | "swedish_business" | "eu_business" | "non_eu_business",
-  customer_number?: string,
-  contact_person?: string,
+  customer_number?: string | null,
+  contact_person?: string | null,
   email?: string,
   phone?: string,
-  invoice_email_cc_addresses?: string[],
-  invoice_email_bcc_addresses?: string[],
+  invoice_email_cc_addresses?: string[] | null,
+  invoice_email_bcc_addresses?: string[] | null,
   address_line1?: string,
   address_line2?: string,
   postal_code?: string,
@@ -386,7 +401,7 @@ Request body:
   country?: string,
   org_number?: string,
   vat_number?: string,
-  personal_number?: string,
+  personal_number?: string | null,
   language?: "sv" | "en",
   default_payment_terms?: number,
   notes?: string
@@ -408,32 +423,35 @@ Response `200`:
     id: string,
     name: string,
     customer_type: string,
-    customer_number: string,
-    contact_person: string,
-    email: string,
-    phone: string,
-    invoice_email_cc_addresses: string[],
-    invoice_email_bcc_addresses: string[],
-    address_line1: string,
-    address_line2: string,
-    postal_code: string,
-    city: string,
+    customer_number: string | null,
+    contact_person: string | null,
+    email: string | null,
+    phone: string | null,
+    invoice_email_cc_addresses: string[] | null,
+    invoice_email_bcc_addresses: string[] | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
     country: string,
-    org_number: string,
-    vat_number: string,
+    org_number: string | null,
+    vat_number: string | null,
     vat_number_validated: boolean,
-    personal_number: string,
+    personal_number: string | null,
     default_payment_terms: number,
-    notes: string,
-    archived_at: string,
+    notes: string | null,
+    party_id: string | null,
+    party?: { id: string, display_name: string, legal_name: string | null, org_number: string | null, vat_number: string | null, country: string | null, kind: string, status: "confirmed" | "suggested", roles: { supplier_id: string | null, customer_id: string | null }, registry: { legal_name: string | null, legal_form: string | null, status: { label: string, active: boolean } | null, warning: string | null, registrations: { f_tax: boolean | null, vat: boolean | null, employer: boolean | null }, industry: { code: string, label: string } | null, seat: string | null, registered_at: string | null, active_since: string | null, active_until: string | null, employees_band: string | null, turnover: { band: string, year: string | null } | null, workplaces: number | null, contact: { email: string | null, phone: string | null, address: { co: string | null, street: string | null, postal_code: string | null, city: string | null } | null }, vat_number: string | null, fetched_at: string | null } | null, ledger: { occurrences: number, expense_sek: number, revenue_sek: number, first_seen: string | null, last_seen: string | null, dominant_account: string | null } | null, identities: { scheme: string, value: string, status: string, seen_count: number }[] } | null,
+    archived_at: string | null,
     created_at: string,
     updated_at: string
   },
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -477,6 +495,7 @@ Sets archived_at on the customer; the record is preserved (invoices and audit hi
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Response `204`.
 
@@ -501,11 +520,12 @@ Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 
 Request body:
 ```ts
 {
-  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string, contact_person?: string, email?: string, phone?: string, invoice_email_cc_addresses?: string[], invoice_email_bcc_addresses?: string[], address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string, language?: "sv" | "en", default_payment_terms?: number, notes?: string }[],
+  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string | null, contact_person?: string | null, email?: string, phone?: string, invoice_email_cc_addresses?: string[] | null, invoice_email_bcc_addresses?: string[] | null, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string | null, language?: "sv" | "en", default_payment_terms?: number, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```
@@ -538,8 +558,9 @@ Response `200`:
   meta: {
     request_id: string,
     api_version: string,
-    next_cursor?: string,
+    next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }

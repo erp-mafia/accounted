@@ -1,11 +1,11 @@
 ---
 paths:
-  - "lib/bookkeeping/**"
-  - "lib/core/**"
-  - "lib/reports/**"
-  - "lib/vat/**"
-  - "lib/invoices/**"
-  - "lib/salary/**"
+  - "src/lib/bookkeeping/**"
+  - "src/lib/core/**"
+  - "src/lib/reports/**"
+  - "src/lib/vat/**"
+  - "src/lib/invoices/**"
+  - "src/lib/salary/**"
 ---
 
 # Bookkeeping Domain Reference

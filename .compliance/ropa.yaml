@@ -382,6 +382,47 @@ processing_activities:
       - rls_company_scoped
       - tls_to_bedrock
 
+  - id: calibration.anonymous_statistics
+    name: Anonymiserad statistik för automatisk kontering
+    purpose: >-
+      Mäta och förbättra den automatiska konteringen. Två utflöden: (1)
+      konteringsutfall (modellens säkerhet, föreslaget och bokfört BAS-konto,
+      om de stämde överens) som skrivs av POST /api/agent/categorize/outcome
+      och läses av scripts/fit-categorize-calibration.ts; (2) sammanslagna
+      mönster över flera företag, framtagna först när samma mönster finns hos
+      ett tillräckligt antal företag för att inget enskilt företags bokföring
+      ska kunna utläsas. Resultatet i båda fallen är anonymt.
+    lawful_basis: art_6_1_f   # the anonymisation step; the output is not personal data
+    special_category_basis: null
+    controller: accounted
+    processor: null
+    data_subjects:
+      - business_owner
+    data_categories:
+      - user.financial                # BAS account numbers only, no amounts, no free text
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: >-
+        Lagras i samma EU-region som övrig data (eu-north-1, Stockholm) och
+        lämnar aldrig Accounted.
+    retention:
+      duration: indefinite
+      basis: anonymous_after_write
+      stored_in:
+        - categorize_calibration_samples
+    security_measures:
+      - no_company_id_stored          # 20260922173222 dropped company_id and amount
+      - no_free_text_stored
+      - append_only_no_update_delete
+      - service_role_read_only        # no RLS SELECT policy for tenants
+      - k_threshold_on_aggregates     # pooled patterns require several companies
+      - never_used_for_marketing
+
   - id: mcp.telemetry
     name: MCP/agent-telemetri i event_log
     purpose: >-
@@ -817,6 +858,48 @@ processing_activities:
       - claim_based_once_per_day_dedup
       - company_name_header_injection_sanitized
       - cron_secret_authenticated_trigger
+
+  - id: bookkeeping.duplicate_dismissal_history
+    name: Behandlingshistorik för åsidosatt dubblettkontroll
+    purpose: >-
+      Bevara en oföränderlig post i behandlingshistoriken (processing_history,
+      händelsetyp BankTransactionDuplicateDismissed) när en användare eller en
+      API-nyckel bokför en banktransaktion trots att dubblettkontrollen visade
+      att bokförda verifikat redan förklarar den (force=true i dashboarden,
+      i MCP-verktyget eller vid godkännande av en väntande operation). Posten
+      gör beslutet rekonstruerbart för revisor och Skatteverket: vilka
+      verifikat som åsidosattes, belopp, konto, datum och vem som fattade
+      beslutet. Innehåller endast interna id:n, verifikationsnummer, belopp
+      och datum; aldrig motpartsnamn, transaktionsbeskrivningar eller
+      personnummer.
+    lawful_basis: art_6_1_c   # BFL 5 kap. 11 § + BFNAR 2013:2 p. 9.16 (behandlingshistorik)
+    special_category_basis: null
+    controller: gnubok-tenant
+    processor: supabase
+    data_subjects:
+      - company_member          # the user (or API-key owner) who honoured the override
+    data_categories:
+      - user.activity_timestamp
+      - user.financial.transaction   # amount + settlement account of the bank row, no counterparty
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+    retention:
+      duration: through_seventh_calendar_year_after_fiscal_year_end
+      basis: bfl_7_kap_and_gdpr_storage_limitation
+      stored_in:
+        - processing_history
+    security_measures:
+      - rls_company_scoped
+      - service_role_insert_only_no_update_or_delete_triggers
+      - personnummer_pattern_rejected_at_append
+      - ids_labels_amounts_dates_only_never_descriptions_or_counterparties
+      - actor_recorded_as_pseudonymous_user_or_api_key_id
+      - written_only_after_the_booking_succeeded
 
   - id: documents.own_company_supplier_guard
     name: Egenbolagskontroll vid dokumentextraktion

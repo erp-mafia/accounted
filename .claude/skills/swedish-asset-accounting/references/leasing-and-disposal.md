@@ -25,7 +25,7 @@ Classifies leases as **financial** or **operating** using IAS 17 criteria:
 5. Specialized asset
 
 **Financial leases are capitalized:**
-- Asset: **1260 Leasade tillgångar** (depreciated via 7836 / 1269)
+- Asset: **1227 Finansiellt leasade inventarier** (ej för produktion) or **1217 Finansiellt leasade maskiner** (för produktion), depreciated via 7836 onto 1229 / 1219. BAS 2026 removed 1260 Leasade tillgångar; 1260/1269 are free accounts now.
 - Liability: **2391** (short-term) / **2350** (long-term leasingskuld)
 - Payments split: interest (8410) + amortization via effective interest method
 
@@ -38,7 +38,7 @@ Classifies leases as **financial** or **operating** using IAS 17 criteria:
 All leases on balance sheet via right-of-use model:
 
 **Recognition:**
-- **Nyttjanderättstillgång (ROU asset):** 1260, at PV of lease payments
+- **Nyttjanderättstillgång (ROU asset):** 1227 (or 1217 för produktion), at PV of lease payments
 - **Leasingskuld:** 2350 (long-term) / 2391 (short-term)
 - Discount rate: implicit rate in lease, or marginal borrowing rate
 
@@ -66,7 +66,8 @@ Regardless of whether the lease is capitalized in accounting.
 |---|---|---|---|---|---|
 | Financial on BS | Never | Optional (20.29) | Mandatory | Mandatory | Not required |
 | Operating treatment | All leases | All (if 20.29 used) | Operating only | Short-term + low-value only | All (expense) |
-| Asset account | N/A | 1260 | 1260 | 1260 | N/A |
+| Asset account | N/A | 1227 / 1217 | 1227 / 1217 | 1227 / 1217 | N/A |
+| Accumulated | N/A | 1229 / 1219 | 1229 / 1219 | 1229 / 1219 | N/A |
 | Depreciation account | N/A | 7836 | 7836 | 7836 | N/A |
 
 ---
