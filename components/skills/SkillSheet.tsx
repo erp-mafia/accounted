@@ -90,42 +90,48 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
 
   return (
     <div className={styles.sheetBody}>
-      <div className={styles.dtTop}>
-        {id && <SkillMarks id={id} />}
-        <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
-        <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
-      </div>
-      <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
-      {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
-      <div className={styles.promptbox}>
-        <span>{t('say_label')}</span>
-        <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
-      </div>
-      {locked ? (
-        <div className="flex flex-col gap-3">
-          <p className={styles.lockedline}>{t('locked_line')}</p>
-          <div className={styles.nightBtns}>
-            {AI_CLIENTS.map((c, i) => (
-              <button key={c.id} type="button" className={i === 0 ? styles.pill : `${styles.pill} ${styles.pillGhost}`} onClick={() => onConnect(c.id)}>
-                {i === 0 ? t('connect_client', { client: c.name }) : c.name}
-              </button>
-            ))}
-          </div>
+      <div className={styles.sheetHead}>
+        <div className={styles.dtTop}>
+          {id && <SkillMarks id={id} />}
+          <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
+          <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
         </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <div className={styles.nightBtns}>
-            <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
-            {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} aria-expanded={showFull} onClick={() => setShowFull((v) => !v)}>{t(showFull ? 'hide_full' : 'show_full')}</button>}
-            {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
-            {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
-          </div>
-          {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
-          {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
-          {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+        <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
+      </div>
+      <div className={styles.sheetMain}>
+        {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
+        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <pre className={styles.fullText} data-ph-mask={own ? '' : undefined}>{body.data ?? ''}</pre>)}
+      </div>
+      <div className={styles.sheetFoot}>
+        <div className={styles.promptbox}>
+          <span>{t('say_label')}</span>
+          <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
         </div>
-      )}
-      {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <pre className={styles.fullText} data-ph-mask={own ? '' : undefined}>{body.data ?? ''}</pre>)}
+        {locked ? (
+          <div className="flex flex-col gap-3">
+            <p className={styles.lockedline}>{t('locked_line')}</p>
+            <div className={styles.nightBtns}>
+              {AI_CLIENTS.map((c, i) => (
+                <button key={c.id} type="button" className={i === 0 ? styles.pill : `${styles.pill} ${styles.pillGhost}`} onClick={() => onConnect(c.id)}>
+                  {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <div className={styles.nightBtns}>
+              <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
+              {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} aria-expanded={showFull} onClick={() => setShowFull((v) => !v)}>{t(showFull ? 'hide_full' : 'show_full')}</button>}
+              {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
+              {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
+            </div>
+            {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
+            {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
+            {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+          </div>
+        )}
+      </div>
       {own && (
         <DestructiveConfirmDialog
           open={confirmDelete}
