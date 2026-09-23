@@ -2,7 +2,7 @@
 
 # Employees endpoints
 
-The employee register plus absence (frånvaro), vacation balances and year close, and payroll cutover opening balances. Running payroll itself: salary-runs.md.
+The employee register plus absence (frånvaro), worked days (tidrapport for hourly staff and OB), benefits (förmåner), recurring lines (standing monthly rows), vacation balances and year close, payroll cutover opening balances, and the company salary settings (pay day, avvikelseperiod, payment file format). Running payroll itself: salary-runs.md.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -40,6 +40,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -186,6 +187,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -294,6 +296,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -444,6 +447,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -519,6 +523,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -560,7 +565,8 @@ Expands [from, to] (max 92 days) to per-day rows and upserts them on the natural
 - Weekends are skipped by default: pass include_weekends=true for schedules that span them.
 - Upsert REPLACES the (date, type) rows in the range: hours/notes are overwritten, not merged.
 - A day whose combined absence + worked hours exceed 24h returns 409 ABSENCE_HOURS_CONFLICT and the whole range is rejected (atomic).
-- Registering absence does not recompute an open salary run: call POST /salary-runs/{id}/calculate afterwards.
+- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- Registering absence does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -601,6 +607,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -637,11 +644,12 @@ Example response `200`:
 Deletes per-day absence rows between ?from and ?to (inclusive), optionally filtered by ?type. Returns deleted_count (200, not 204) so callers can verify how many rows went.
 
 **Use when:** An absence event was registered by mistake or ended early: "Anna came back Thursday, delete Thu-Fri sick days".
-**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows already consumed by a BOOKED run: deleting them does not un-book the run; use the run correction flow.
+**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.
 
 **Pitfalls:**
 - Without ?type, ALL absence types in the range are deleted.
 - deleted_count: 0 with a 200 means nothing matched: not an error.
+- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -661,6 +669,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -682,12 +691,332 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/employees/{id}/benefits`
+
+**List the benefits (förmåner) registered on an employee.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns every benefit row on the employee, active and inactive, newest validity window first (valid_from descending, then created_at). Optional ?active=true|false filter. No cursor pagination: an employee carries a handful of rows.
+
+**Use when:** You need to see which förmåner the salary engine will derive for an employee (bilförmån, kostförmån, cykelförmån, bostad, friskvård, annat), reconcile against an HR system, or find the employee_benefit_id to update or remove.
+**Do not use for:** The derived payslip line and its tax effect: that lives on the salary run after :calculate. Standing deductions (bruttolöneavdrag, fackavgift): the recurring-lines register.
+
+**Pitfalls:**
+- The monthly förmånsvärde is added to the tax and arbetsgivaravgift basis when a run is calculated (POST /salary-runs/{id}/calculate); it is never paid out.
+- A run picks a row up when is_active is true and valid_from <= payment_date <= valid_to (valid_to null = open-ended). Rows outside that window are listed here but derive nothing.
+- annual_market_value is populated for bike benefits only (read from the stored calculation inputs); other types carry null.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `active` | query | `"true" \| "false"` | no | true returns only rows with is_active=true, false only inactive rows. Default: both. |
+
+Response `200`:
+```ts
+{
+  data: { employee_benefit_id: string, benefit_type: "bike" | "car" | "meals" | "housing" | "wellness" | "other", description: string, monthly_value: number, annual_market_value: number | null, valid_from: string, valid_to: string | null, is_active: boolean, metadata: Record<string, unknown>, created_at: string, updated_at: string }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "employee_benefit_id": "ben_4f2a…",
+      "benefit_type": "car",
+      "description": "Bilförmån Volvo XC40",
+      "monthly_value": 4275,
+      "annual_market_value": null,
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "is_active": true,
+      "metadata": {},
+      "created_at": "2026-01-05T09:12:00Z",
+      "updated_at": "2026-01-05T09:12:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/employees/{id}/benefits`
+
+**Register a benefit (förmån) on an employee.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Creates a standing monthly förmånsvärde row. benefit_type is one of bike, car, meals, housing, wellness, other. Every type except bike takes monthly_value: the schablon value you already know. bike takes annual_market_value and the server derives monthly_value = max(0, annual_market_value - 3000) / 12 (Skatteverket schablon, 3 000 kr/year tax-free), storing the inputs in metadata. Mandatory Idempotency-Key. Dry-runnable: the preview is the row that would be inserted, with the derived values.
+
+**Use when:** "Anna gets a company car from January": register the schablon value once and every run inside the window derives the line. Also when migrating an employee register from another payroll system.
+**Do not use for:** Computing a bilförmån from the car (nybilspris, miljöbil, fordonsskatt): do that with Skatteverket's calculator and send the result. Standing deductions such as a bruttolöneavdrag for the same car: the recurring-lines register. One-off taxable additions: edit the payslip lines on the run.
+
+**Pitfalls:**
+- The förmånsvärde is added to the employee's tax and arbetsgivaravgift basis when the run is calculated (POST /salary-runs/{id}/calculate): skatteavdrag and avgifter go up, nothing is paid out. Registering a benefit does not recompute an open run; call :calculate afterwards.
+- car (bilförmån) is supplied as the monthly schablon value you computed (Skatteverket's bilförmånsberäkning, including miljöbil and 30 000 km reductions); the API does not compute it from the car.
+- bike takes annual_market_value, not monthly_value: the server derives the monthly value with the 3 000 kr/year tax-free allowance. A monthly_value sent next to annual_market_value on a bike row is ignored.
+- valid_from / valid_to gate which runs pick the row up: a run derives the line when valid_from <= payment_date <= valid_to (valid_to omitted = open-ended). Both dates are inclusive; valid_to before valid_from is 400 VALIDATION_ERROR.
+- To stop a benefit that already fed a calculated run, PATCH is_active=false or set valid_to; DELETE on such a row keeps and deactivates it rather than removing it. Either way the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  benefit_type: "bike" | "car" | "meals" | "housing" | "wellness" | "other",
+  description: string,
+  monthly_value?: number,
+  annual_market_value?: number,
+  valid_from: string,
+  valid_to?: string,
+  metadata?: Record<string, unknown>,
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "benefit_type": "bike",
+  "description": "Cykelförmån",
+  "annual_market_value": 15000,
+  "valid_from": "2026-03-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    employee_benefit_id: string,
+    benefit_type: "bike" | "car" | "meals" | "housing" | "wellness" | "other",
+    description: string,
+    monthly_value: number,
+    annual_market_value: number | null,
+    valid_from: string,
+    valid_to: string | null,
+    is_active: boolean,
+    metadata: Record<string, unknown>,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_benefit_id": "ben_91d2…",
+    "benefit_type": "bike",
+    "description": "Cykelförmån",
+    "monthly_value": 1000,
+    "annual_market_value": 15000,
+    "valid_from": "2026-03-01",
+    "valid_to": null,
+    "is_active": true,
+    "metadata": {
+      "annual_market_value": 15000,
+      "annual_taxable": 12000,
+      "tax_free_portion": 3000
+    },
+    "created_at": "2026-02-20T10:00:00Z",
+    "updated_at": "2026-02-20T10:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/employees/{id}/benefits/{benefitId}`
+
+**Partially update a benefit (förmån) on an employee.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Patches the supplied fields: description, monthly_value, valid_from, valid_to (null clears it), is_active, metadata, and for bike rows annual_market_value (the server re-derives monthly_value). benefit_type is not patchable: delete and recreate to change the kind. Mandatory Idempotency-Key. Dry-runnable: the preview is the merged row.
+
+**Use when:** The förmånsvärde changes (new schablon for the year, a new bike price), the benefit ends (set valid_to), or you want to pause it without losing the row (is_active=false).
+**Do not use for:** Changing the benefit kind (delete + create). Editing the derived line on one specific run: edit the payslip line on that run instead, the register stays as is.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory; calls without it return 400.
+- valid_from and valid_to are checked against the MERGED stored+patched pair: a valid_to-only patch that predates the stored valid_from is 400 VALIDATION_ERROR (field valid_to).
+- annual_market_value is accepted on bike rows only (400 otherwise) and overrides any monthly_value in the same body.
+- The förmånsvärde is added to the tax and arbetsgivaravgift basis at :calculate; a change here does not recompute an open run. Call POST /salary-runs/{id}/calculate afterwards.
+- To stop a benefit that a calculated run already consumed, set is_active=false or valid_to here; DELETE on such a row also keeps and deactivates it rather than removing it. Either way the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `benefitId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  description?: string,
+  monthly_value?: number,
+  annual_market_value?: number,
+  valid_from?: string,
+  valid_to?: string | null,
+  metadata?: Record<string, unknown>,
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "valid_to": "2026-06-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    employee_benefit_id: string,
+    benefit_type: "bike" | "car" | "meals" | "housing" | "wellness" | "other",
+    description: string,
+    monthly_value: number,
+    annual_market_value: number | null,
+    valid_from: string,
+    valid_to: string | null,
+    is_active: boolean,
+    metadata: Record<string, unknown>,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_benefit_id": "ben_4f2a…",
+    "benefit_type": "car",
+    "description": "Bilförmån Volvo XC40",
+    "monthly_value": 4275,
+    "annual_market_value": null,
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-06-30",
+    "is_active": true,
+    "metadata": {},
+    "created_at": "2026-01-05T09:12:00Z",
+    "updated_at": "2026-06-02T14:40:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/employees/{id}/benefits/{benefitId}`
+
+**Remove a benefit (förmån) from an employee.**
+`scope:payroll:write · risk:medium · idempotent · dry-run`
+
+Removes the benefit from the employee, the same operation the dashboard performs. A row that no payslip line derives from is hard-deleted; a row that a calculated run already derived a line from is kept and switched off (is_active=false) so the line keeps its provenance. Answers 200 with the outcome, 404 NOT_FOUND when no such row exists on the employee. Mandatory Idempotency-Key. Dry-runnable: the preview is the row that would be removed.
+
+**Use when:** A benefit was registered by mistake, or it ends and you do not need it listed as active any more. If it has been used by a calculated run it is deactivated rather than deleted.
+**Do not use for:** Ending a benefit on a date while keeping it active until then: PATCH valid_to. Removing the derived line from one run: edit that run's payslip lines.
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- Answers 200 with { employee_benefit_id, deleted, deactivated }. A benefit that a payslip line already derives from is never hard-deleted: it is kept and switched off (deleted=false, deactivated=true), so the chain from a booked verifikat back to its förmån stays intact (BFL 5 kap 6-7 §). A second DELETE of a gone id returns 404 NOT_FOUND; a second DELETE of a deactivated row answers deactivated=true again.
+- Removing or deactivating a benefit does not recompute an open run: the derived line stays on a draft run until POST /salary-runs/{id}/calculate is called again, which drops it (#2695). A booked run is never changed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `benefitId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { employee_benefit_id: string, deleted: boolean, deactivated: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_benefit_id": "ben_9c2e…",
+    "deleted": true,
+    "deactivated": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/employees/{id}/opening-balances`
 
 **Get an employee's payroll cutover opening balances.**
 `scope:payroll:read · risk:low · idempotent`
 
-Returns the opening balances set for a mid-year migration (YTD gross/tax/net, vacation balances, opening semesterlöneskuld, karens adjustment) plus the lock state: locked=true once the employee has a booked salary run.
+Returns the opening balances set for a mid-year migration (YTD gross/tax/net, the five vacation pools Betalda/Sparade per år/Obetalda/Förskott/Extra betalda with their as-of date, opening semesterlöneskuld and förskottsskuld, karens adjustment) plus the lock state: locked=true once the employee has a booked salary run. ytd_net is null when the previous system could not export historical net pay.
 
 **Use when:** Verifying cutover state before the first calculated run, or checking whether balances can still be edited (locked=false).
 **Do not use for:** The live vacation liability (GET /reports/vacation-liability includes the opening terms). Pre-cutover absence history: GET /employees/{id}/absence.
@@ -710,13 +1039,18 @@ Response `200`:
     cutover_date: string,
     ytd_gross: number,
     ytd_tax: number,
-    ytd_net: number,
+    ytd_net: number | null,
     vacation_paid_days_remaining: number,
     vacation_days_taken_this_year: number,
     vacation_saved_days_by_year: Record<string, number>,
     opening_semester_liability: number,
     opening_semester_liability_avgifter: number,
     karens_periods_adjustment: number,
+    vacation_as_of_date: string | null,
+    vacation_unpaid_days_remaining: number,
+    vacation_advance_days_remaining: number,
+    vacation_extra_paid_days_remaining: number,
+    opening_advance_vacation_debt: number,
     locked: boolean,
     locked_by_run_id: string | null
   },
@@ -725,6 +1059,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -755,15 +1090,18 @@ Example response `200`:
 **Set an employee's payroll cutover opening balances.**
 `scope:payroll:write · risk:medium · idempotent · dry-run · reversible`
 
-Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, paid vacation days remaining, paid days already taken this vacation year, sparade dagar keyed by origin year (5-year rule), opening semesterlöneskuld SEK (+avgifter), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.
+Full-replace upsert of the cutover state: YTD gross/tax/net for the cutover year, the vacation pools in the previous system's own terms (vacation_paid_days_remaining = Betalda, vacation_saved_days_by_year = Sparade per år, vacation_unpaid_days_remaining = Obetalda, vacation_advance_days_remaining = Förskott, vacation_extra_paid_days_remaining = Extra betalda), paid days already taken this vacation year, vacation_as_of_date (the day those pools are struck per), opening semesterlöneskuld SEK (+avgifter), opening_advance_vacation_debt (förskottsskuld SEK), and karens periods not covered by imported absence rows. cutover_date must be the first of a month in the current or previous year, on/after employment_start.
 
-**Use when:** Onboarding one employee during a mid-year migration from Fortnox/Visma/etc. For whole-company onboarding, prefer the bulk PUT /employees/opening-balances.
+**Use when:** Onboarding one employee during a mid-year migration from Fortnox/Azets/Visma/etc. For whole-company onboarding, prefer the bulk PUT /employees/opening-balances.
 **Do not use for:** SIE opening balances on the LEDGER (2920/2940 arrive via the SIE import). Ongoing sick cases: import pre-cutover days via PUT /employees/{id}/absence instead.
 
 **Pitfalls:**
-- Full replace: omitted numeric fields reset to 0 (their defaults). Send the complete state every time.
+- Full replace: omitted numeric fields reset to 0 (their defaults) and an omitted vacation_as_of_date resets to null. Send the complete state every time.
+- vacation_as_of_date defaults to the day before cutover_date. Booked runs whose avvikelseperiod ends on or before it are treated as already inside the balance and not deducted again, so with salary_deviation_period = previous_month send the last day BEFORE the month the first run deducts (cutover 2026-09-01, first run deducts August: send 2026-07-31) or August's leave is never deducted.
+- ytd_net: send null when the previous system cannot export historical net pay; the payslip prints "Underlag saknas" instead of a false 0. Never send gross minus tax as net.
 - 409 OPENING_BALANCES_LOCKED once the employee has a booked run; correcting that run unlocks.
-- The opening liability is NOT booked by Accounted: it only feeds the vacation-liability report.
+- The opening liability and the förskottsskuld are NOT booked by Accounted: they only feed the vacation-liability report (the förskottsskuld as its own row, subtracted from the net liability).
+- Extra betalda join the paid pool: the ledger's entitled days = Betalda + Extra betalda + days already taken. Obetalda lapse at the vacation-year close; Förskott days taken reduce the next year's entitlement.
 - YTD affects payslip display and reports only; per-month tax and avgifter caps never read it.
 
 | Parameter | In | Type | Required | Notes |
@@ -778,29 +1116,40 @@ Request body:
   cutover_date: string,
   ytd_gross?: number,
   ytd_tax?: number,
-  ytd_net?: number,
+  ytd_net?: number | null,
   vacation_paid_days_remaining?: number,
   vacation_days_taken_this_year?: number,
   vacation_saved_days_by_year?: Record<string, number>,
   opening_semester_liability?: number,
   opening_semester_liability_avgifter?: number,
-  karens_periods_adjustment?: number
+  karens_periods_adjustment?: number,
+  vacation_as_of_date?: string | null,
+  vacation_unpaid_days_remaining?: number,
+  vacation_advance_days_remaining?: number,
+  vacation_extra_paid_days_remaining?: number,
+  opening_advance_vacation_debt?: number
 }
 ```
 
 Example request:
 ```json
 {
-  "cutover_date": "2026-07-01",
-  "ytd_gross": 210000,
-  "ytd_tax": 48000,
-  "ytd_net": 162000,
+  "cutover_date": "2026-09-01",
+  "ytd_gross": 280000,
+  "ytd_tax": 64000,
+  "ytd_net": 216000,
+  "vacation_as_of_date": "2026-07-31",
   "vacation_paid_days_remaining": 12.5,
+  "vacation_days_taken_this_year": 10,
+  "vacation_extra_paid_days_remaining": 2,
   "vacation_saved_days_by_year": {
     "2025": 5
   },
+  "vacation_unpaid_days_remaining": 0,
+  "vacation_advance_days_remaining": 3,
   "opening_semester_liability": 42000,
   "opening_semester_liability_avgifter": 13196.4,
+  "opening_advance_vacation_debt": 4500,
   "karens_periods_adjustment": 1
 }
 ```
@@ -814,13 +1163,18 @@ Response `200`:
     cutover_date: string,
     ytd_gross: number,
     ytd_tax: number,
-    ytd_net: number,
+    ytd_net: number | null,
     vacation_paid_days_remaining: number,
     vacation_days_taken_this_year: number,
     vacation_saved_days_by_year: Record<string, number>,
     opening_semester_liability: number,
     opening_semester_liability_avgifter: number,
     karens_periods_adjustment: number,
+    vacation_as_of_date: string | null,
+    vacation_unpaid_days_remaining: number,
+    vacation_advance_days_remaining: number,
+    vacation_extra_paid_days_remaining: number,
+    opening_advance_vacation_debt: number,
     locked: boolean,
     locked_by_run_id: string | null
   },
@@ -829,6 +1183,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -852,12 +1207,329 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/employees/{id}/recurring-lines`
+
+**List recurring payslip lines for an employee.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the employee's standing monthly payslip rows (gross and net deductions such as a benefit bike bruttolöneavdrag, a union fee, or a net deduction for a benefit the employee pays for), newest valid_from first. Both active and deactivated lines are returned unless ?active filters them.
+
+**Use when:** You need to see what the salary engine will derive for an employee every month, to reconcile with an HR system, or to find the employee_recurring_line_id to update or delete.
+**Do not use for:** The derived payslip rows of one run: those are on the salary run detail after :calculate. Taxable benefits in kind (bilförmån, kostförmån): use the employee benefits endpoints.
+
+**Pitfalls:**
+- Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
+- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
+- Deactivated lines (is_active=false) are listed too: a line that a booked run derived from cannot be deleted, only deactivated, so history keeps it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `active` | query | `"true" \| "false"` | no | true returns active lines only, false deactivated lines only. Default: every line. |
+
+Response `200`:
+```ts
+{
+  data: { employee_recurring_line_id: string, item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other", description: string, amount: number, account_number: string | null, valid_from: string, valid_to: string | null, is_active: boolean, metadata: Record<string, unknown>, created_at: string, updated_at: string }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "employee_recurring_line_id": "erl_5b1c…",
+      "item_type": "gross_deduction_other",
+      "description": "Förmånscykel bruttolöneavdrag",
+      "amount": -670.17,
+      "account_number": null,
+      "valid_from": "2026-01-01",
+      "valid_to": null,
+      "is_active": true,
+      "metadata": {}
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/employees/{id}/recurring-lines`
+
+**Create a recurring payslip line for an employee.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Adds a standing monthly payslip row. From the next :calculate on, every salary run whose payment_date falls inside valid_from..valid_to derives a payslip line from it, with flags (taxable, avgift basis, gross vs net deduction) fixed by item_type. Amounts are kept to whole öre. Requires an Idempotency-Key header.
+
+**Use when:** An employee starts a benefit bike bruttolöneavdrag, a union fee, a monthly net deduction for a benefit they pay for, or any other deduction that repeats every month until further notice.
+**Do not use for:** One-off deductions on a single payslip: add a line on the salary run instead. Additions (a monthly allowance paid in cash): not supported as recurring lines; add them per run. Taxable benefits in kind: use the employee benefits endpoints.
+
+**Pitfalls:**
+- Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
+- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
+- valid_to must be on or after valid_from (inclusive); omit it for an open-ended line.
+- Creating a line does not recompute an open salary run: call POST /salary-runs/{id}/calculate afterwards.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+  description: string,
+  amount: number,
+  account_number?: string,
+  valid_from: string,
+  valid_to?: string,
+  metadata?: Record<string, unknown>,
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "item_type": "gross_deduction_other",
+  "description": "Förmånscykel bruttolöneavdrag",
+  "amount": -670.17,
+  "valid_from": "2026-01-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    employee_recurring_line_id: string,
+    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+    description: string,
+    amount: number,
+    account_number: string | null,
+    valid_from: string,
+    valid_to: string | null,
+    is_active: boolean,
+    metadata: Record<string, unknown>,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_recurring_line_id": "erl_5b1c…",
+    "item_type": "gross_deduction_other",
+    "description": "Förmånscykel bruttolöneavdrag",
+    "amount": -670.17,
+    "account_number": null,
+    "valid_from": "2026-01-01",
+    "valid_to": null,
+    "is_active": true,
+    "metadata": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/employees/{id}/recurring-lines/{lineId}`
+
+**Update a recurring payslip line.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Patches description, amount, account_number, valid_from, valid_to, is_active or metadata on a recurring line. The amount sign is re-checked against the stored item_type and the validity period against the merged (stored + patched) dates. item_type cannot change: delete and recreate instead. Requires an Idempotency-Key header.
+
+**Use when:** The monthly deduction changed (new bike lease amount), the line ends on a known date (set valid_to), or it should pause without losing history (is_active=false).
+**Do not use for:** Changing the kind of line (gross to net deduction): DELETE and POST a new one. Fixing one payslip only: edit the salary run line instead.
+
+**Pitfalls:**
+- Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
+- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
+- A patch that leaves valid_to before valid_from on the merged row is rejected with 400 VALIDATION_ERROR on field valid_to; send valid_to: null to make the line open-ended again.
+- Runs already calculated keep their derived rows until they are recalculated; booked runs are never touched.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `lineId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  description?: string,
+  amount?: number,
+  account_number?: string | null,
+  valid_from?: string,
+  valid_to?: string | null,
+  metadata?: Record<string, unknown>,
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "amount": -700,
+  "valid_to": "2026-12-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    employee_recurring_line_id: string,
+    item_type: "gross_deduction_pension" | "gross_deduction_other" | "net_deduction_union" | "net_deduction_benefit_payment" | "net_deduction_other",
+    description: string,
+    amount: number,
+    account_number: string | null,
+    valid_from: string,
+    valid_to: string | null,
+    is_active: boolean,
+    metadata: Record<string, unknown>,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_recurring_line_id": "erl_5b1c…",
+    "item_type": "gross_deduction_other",
+    "description": "Förmånscykel bruttolöneavdrag",
+    "amount": -700,
+    "account_number": null,
+    "valid_from": "2026-01-01",
+    "valid_to": "2026-12-31",
+    "is_active": true,
+    "metadata": {}
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/employees/{id}/recurring-lines/{lineId}`
+
+**Delete a recurring payslip line, or deactivate it if a run already used it.**
+`scope:payroll:write · risk:low · idempotent · dry-run`
+
+Removes the line when no salary run has derived a payslip row from it. Once a run has (the derived row references the line), the database refuses the delete and the line is deactivated instead (is_active=false): the payslip row keeps its provenance, the next :calculate of a draft run drops the derived row, and nothing is re-derived. Returns 200 with deleted: true or deleted: false + deactivated: true so the caller knows which happened. Requires an Idempotency-Key header.
+
+**Use when:** The deduction ends and there is no end date to keep (a union fee stops, the bike lease is returned), or the line was created by mistake.
+**Do not use for:** Ending a line on a future date: PATCH valid_to instead, so the remaining months still derive. Removing a derived row from one draft payslip: DELETE the salary run line.
+
+**Pitfalls:**
+- Rows are re-derived on every :calculate for runs whose payment_date falls inside valid_from..valid_to (valid_to null = open-ended). Hand edits to a derived payslip row are overwritten by the next :calculate.
+- The amount sign follows the item type: every supported type is a deduction and must be negative (e.g. -670.17 for a benefit bike bruttolöneavdrag). The API rejects the wrong sign with 400 VALIDATION_ERROR on field amount.
+- account_number overrides the default BAS account for the derived payslip row; null lets the engine use its item-type mapping.
+- Draft-only per-run edits (a one-off change on one payslip) still go through the salary-runs lines endpoints, not through recurring lines.
+- deleted: false with deactivated: true is a success, not an error: a run already derived from the line, so it is kept for history and switched off.
+- A lineId under another employee or company answers 404 NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `lineId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { employee_recurring_line_id: string, deleted: boolean, deactivated?: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "employee_recurring_line_id": "erl_5b1c…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/employees/{id}/vacation-balance`
 
 **Get an employee's current vacation balance.**
 `scope:payroll:read · risk:low · idempotent`
 
-Returns the open vacation-ledger row (recomputed on every booking): entitled/taken/remaining days, sparade dagar keyed by origin year (Semesterlagen 5-year rule), forced-payout days from expired savings, and a computed SEK estimate of the individual semesterlöneskuld.
+Returns the open vacation-ledger row (recomputed on every booking): entitled/taken/remaining paid days, sparade dagar still held per origin year (Semesterlagen 5-year rule; saved_days_taken shows what saved vacation lines consumed this year), the unpaid (Obetalda) and advance (Förskott) pools from the cutover import, forced-payout days from expired savings, and a computed SEK estimate of the individual semesterlöneskuld.
 
 **Use when:** Answering "how many vacation days does Anna have left", pre-payroll review, or preparing the year-close.
 **Do not use for:** The company-wide liability report: GET /reports/vacation-liability. Closing the year: POST /salary/vacation-year-close.
@@ -866,6 +1538,7 @@ Returns the open vacation-ledger row (recomputed on every booking): entitled/tak
 - 404 VACATION_BALANCE_NOT_FOUND until the first booking (or year-close) touches the employee: the ledger seeds lazily.
 - remaining_days can go negative if more days were taken than entitled: surface it, do not clamp.
 - The SEK estimate uses the year-close day valuation (simplified BFNAR 2016:10); the booked 2920 is reconciled only at year-close.
+- unpaid_days and advance_days are the cutover pools minus unpaid/advance vacation lines in booked runs; both read 0 for companies that never loaded categorized balances and outside the cutover year (unpaid days lapse at close, förskott is a one-time grant).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -885,6 +1558,9 @@ Response `200`:
     remaining_days: number,
     saved_days: Record<string, number>,
     saved_days_total: number,
+    saved_days_taken: Record<string, number>,
+    unpaid_days: number,
+    advance_days: number,
     forced_payout_days: number,
     estimated_liability_sek: number
   },
@@ -893,6 +1569,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -923,6 +1600,214 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/employees/{id}/worked-days`
+
+**List worked days (hours per date) for an employee in a date range.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the per-day worked-hours rows (tidrapport) between ?from and ?to (inclusive, max 92 days): hours, optional shift window (start_time/end_time) and notes. No cursor pagination: the bounded range is the page.
+
+**Use when:** You need what is registered for an hourly employee before running payroll, to reconcile with an external time-tracking system, or to verify the hours the salary engine will pick up.
+**Do not use for:** Absence (sick, vab, parental): GET /employees/{id}/absence. The derived pay (hourly gross, OB lines): that lives on the run after POST /salary-runs/{id}/calculate.
+
+**Pitfalls:**
+- Ranges over 92 days return 400 VALIDATION_ERROR with details.max_days = 92: iterate quarters instead.
+- POST /salary-runs/{id}/calculate reads these rows by the run's deviation window (deviation_period_start..deviation_period_end), not the pay month: register hours on the dates they were worked and check the run's window.
+- One row per date: an hourly employee with two shifts on the same day has ONE row with the combined hours (and the shift window of the OB-relevant one).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `from` | query | `string` | yes | YYYY-MM-DD. First day of the range (inclusive). Required. |
+| `to` | query | `string` | yes | YYYY-MM-DD. Last day of the range (inclusive), not before from. Required. |
+
+Response `200`:
+```ts
+{
+  data: { salary_worked_day_id: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, created_at: string, updated_at: string }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "salary_worked_day_id": "wd_91d2…",
+      "work_date": "2026-03-02",
+      "hours": 8,
+      "start_time": "22:00:00",
+      "end_time": "06:00:00",
+      "notes": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/employees/{id}/worked-days`
+
+**Register worked hours per day for an employee (bulk upsert).**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Upserts 1..92 explicit per-day rows on the natural key (employee, work_date) in one atomic statement. A date already registered is overwritten with the new hours, shift window and notes (omitted optional fields are cleared, not carried forward). Idempotent by construction: replaying the same PUT converges on the same rows. Each work_date may appear once per request.
+
+**Use when:** An external time-tracking or payroll system pushes an hourly employee's tidrapport for a period, including shift start/end times for OB (obekväm arbetstid) premiums, before the salary run is calculated.
+**Do not use for:** Absence: PUT /employees/{id}/absence. Monthly-salaried staff without OB rules: their gross comes from the employee profile, not from this register.
+
+**Pitfalls:**
+- POST /salary-runs/{id}/calculate reads these rows by the run's deviation window (deviation_period_start..deviation_period_end), not the pay month: register the hours on the dates they were actually worked, and check the run's window before calculating.
+- For hourly employees the run's gross is derived from these rows (hourly_rate x sum(hours)): PATCH /salary-runs/{id}/employees/{employeeId} monthly_salary is irrelevant for them.
+- start_time/end_time feed the OB/shift-premium rules: a row without them is priced as an assumed 08:00-17:00 day, so a night or weekend shift earns no premium. Times are HH:MM or HH:MM:SS; end_time before start_time means the shift crosses midnight.
+- Worked hours plus absence hours on one date may not exceed 24 (DB trigger, shared with absence): the whole PUT is rejected with 409 ABSENCE_HOURS_CONFLICT, nothing is written.
+- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- Registering hours does not recompute a draft salary run: call POST /salary-runs/{id}/calculate afterwards.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  days: { work_date: string, hours: number, start_time?: string, end_time?: string, notes?: string }[]
+}
+```
+
+Example request:
+```json
+{
+  "days": [
+    {
+      "work_date": "2026-03-02",
+      "hours": 8,
+      "start_time": "22:00",
+      "end_time": "06:00"
+    },
+    {
+      "work_date": "2026-03-03",
+      "hours": 4,
+      "notes": "Halvdag"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    count: number,
+    days: { salary_worked_day_id?: string, work_date: string, hours: number, start_time: string | null, end_time: string | null, notes: string | null, created_at?: string, updated_at?: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "count": 2,
+    "days": [
+      {
+        "salary_worked_day_id": "wd_91d2…",
+        "work_date": "2026-03-02",
+        "hours": 8,
+        "start_time": "22:00:00",
+        "end_time": "06:00:00",
+        "notes": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/employees/{id}/worked-days`
+
+**Delete worked days for an employee in a date range.**
+`scope:payroll:write · risk:low · idempotent · dry-run`
+
+Deletes the per-day worked-hours rows between ?from and ?to (inclusive). Returns deleted_count (200, not 204) so callers can verify how many rows went. Single day = from == to.
+
+**Use when:** Hours were pushed for the wrong employee or the wrong dates, or a time-tracking re-sync needs a clean period before a fresh PUT.
+**Do not use for:** Correcting hours on a day: PUT the day again instead. Rows a calculated, approved, paid or booked run has already read: the delete is refused (409 SALARY_REGISTER_DATES_LOCKED_BY_RUN); use the run correction flow.
+
+**Pitfalls:**
+- deleted_count: 0 with a 200 means nothing matched: not an error.
+- Dates inside the avvikelseperiod (deviation window, deviation_period_start..deviation_period_end, NULL = the pay month) of a run that is already calculated (review), approved, paid or booked are locked: 409 SALARY_REGISTER_DATES_LOCKED_BY_RUN naming the run (details.salary_run_id, details.status, details.locked_dates), nothing written, dry runs included. The way out is to revert that run to draft (dashboard) or, for a booked run, POST /salary-runs/{id}/correct and register the days against the correction run. Draft runs never lock.
+- Hours a draft run has already summed stay in the run until POST /salary-runs/{id}/calculate is called again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `from` | query | `string` | yes | YYYY-MM-DD. First day of the range (inclusive). Required. |
+| `to` | query | `string` | yes | YYYY-MM-DD. Last day of the range (inclusive), not before from. Required. |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted_count: number },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted_count": 2
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `PUT /api/v1/companies/{companyId}/employees/opening-balances`
 
 **Bulk-set payroll cutover opening balances (atomic).**
@@ -935,8 +1820,11 @@ Upserts opening balances for up to 200 employees in one call. Validation is all-
 
 **Pitfalls:**
 - Atomic: one bad item fails everything. The error details carry item_errors[{index, employee_id, code, message}]: fix and resubmit the full set.
-- Full replace per employee: resubmitting with fewer fields resets the omitted ones to 0.
+- Full replace per employee: resubmitting with fewer fields resets the omitted ones to 0 (vacation_as_of_date to null).
 - Duplicate employee_id within items is rejected outright.
+- Vacation pools map one to one onto Fortnox/Azets: vacation_paid_days_remaining = Betalda, vacation_saved_days_by_year = Sparade per år, vacation_unpaid_days_remaining = Obetalda, vacation_advance_days_remaining = Förskott, vacation_extra_paid_days_remaining = Extra betalda; opening_advance_vacation_debt is the förskottsskuld in SEK.
+- vacation_as_of_date is the day the pools are struck per (default: the day before cutover_date). Under salary_deviation_period = previous_month the first run deducts the month before cutover, so send the last day before that month or its leave is treated as already deducted.
+- ytd_net: null when the previous system cannot export historical net pay (payslip prints "Underlag saknas"); never gross minus tax.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -946,7 +1834,7 @@ Upserts opening balances for up to 200 employees in one call. Validation is all-
 Request body:
 ```ts
 {
-  items: { employee_id: string, cutover_date: string, ytd_gross?: number, ytd_tax?: number, ytd_net?: number, vacation_paid_days_remaining?: number, vacation_days_taken_this_year?: number, vacation_saved_days_by_year?: Record<string, number>, opening_semester_liability?: number, opening_semester_liability_avgifter?: number, karens_periods_adjustment?: number }[]
+  items: { employee_id: string, cutover_date: string, ytd_gross?: number, ytd_tax?: number, ytd_net?: number | null, vacation_paid_days_remaining?: number, vacation_days_taken_this_year?: number, vacation_saved_days_by_year?: Record<string, number>, opening_semester_liability?: number, opening_semester_liability_avgifter?: number, karens_periods_adjustment?: number, vacation_as_of_date?: string | null, vacation_unpaid_days_remaining?: number, vacation_advance_days_remaining?: number, vacation_extra_paid_days_remaining?: number, opening_advance_vacation_debt?: number }[]
 }
 ```
 
@@ -956,10 +1844,20 @@ Example request:
   "items": [
     {
       "employee_id": "emp_77b2…",
-      "cutover_date": "2026-07-01",
-      "ytd_gross": 210000,
-      "ytd_tax": 48000,
-      "ytd_net": 162000
+      "cutover_date": "2026-09-01",
+      "ytd_gross": 280000,
+      "ytd_tax": 64000,
+      "ytd_net": null,
+      "vacation_as_of_date": "2026-07-31",
+      "vacation_paid_days_remaining": 12.5,
+      "vacation_days_taken_this_year": 10,
+      "vacation_saved_days_by_year": {
+        "2025": 5
+      },
+      "vacation_unpaid_days_remaining": 0,
+      "vacation_advance_days_remaining": 3,
+      "vacation_extra_paid_days_remaining": 2,
+      "opening_advance_vacation_debt": 4500
     }
   ]
 }
@@ -977,6 +1875,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }
@@ -998,6 +1897,204 @@ Example response `200`:
   },
   "meta": {
     "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/salary/settings`
+
+**Get the company payroll settings.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the payroll settings that drive new salary runs: pay day (salary_pay_day), avvikelseperiod (salary_deviation_period: which month a run reads absence and worked days from), salary payment file format (preferred_payment_format), the bank whose upload instructions are pre-selected (salary_default_bank), öresavrundning of net pay (salary_net_rounding), the calculation conventions (salary_calculation_policy: partial_month, sick_rate, long_leave, leave_context, net_rounding, one_off_tax_rounding, every key always present) and the voucher series salary runs book into (salary_voucher_series). A company that has no settings row yet answers with the defaults the engine would apply (pay day 25, same_month, pain001, no bank, no rounding, every convention at its default, series A).
+
+**Use when:** You are provisioning or auditing a customer for payroll and need to know how new salary runs will be dated, which month their deviations are read from, which calculation conventions the engine applies, which payment file the bank expects, or which voucher series the salary vouchers land in.
+**Do not use for:** Invoice payment and contact details (PATCH /api/v1/companies/{companyId}/settings). Per-run values such as payment_date or deviation window (GET /salary-runs/{id}: they are snapshotted on the run). The conventions a calculated run actually used (GET /salary-runs/{id}: calculation_params.salary_calculation_policy). Employee-level pay settings (GET /employees/{id}).
+
+**Pitfalls:**
+- salary_deviation_period is snapshotted onto each salary run at creation: changing it never moves a run that already exists. Set it before the first run of a new month. Switching later makes the next run's deviation window overlap the previous run's window, and that run is refused with 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (pass explicit deviation_period_start/end on that one run to bridge the switch).
+- salary_pay_day only drives the default payment_date of NEW runs (the day of the pay month, 1-28 so it exists in every month). Existing runs keep their payment_date; override per run on POST /salary-runs.
+- salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
+- preferred_payment_format: pain001 (ISO 20022) is the default; bg_lb (Bankgirot Leverantörsbetalningar / Lön) is being retired by the banks during 2026, so only pick it for a customer whose bank still accepts LB files.
+- salary_calculation_policy holds the company's calculation conventions (beräkningsprinciper). Every key defaults to the historical Accounted behaviour; a customer migrated from Fortnox usually wants partial_month=annual_calendar_days (månadslön × 12 / 365 per calendar day employed), sick_rate=annual_hourly (timlön = månadslön × 12 / (52 × veckoarbetstid) for sjuklön), long_leave=calendar_after_five_workdays (leave longer than five working days deducted per calendar day at månadslön × 12 / 365, a whole month = the monthly salary) and, with salary_net_rounding, net_rounding=nearest. Compare one historical payslip before switching.
+- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all six keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
+- long_leave=calendar_after_five_workdays is a five-day-week rule: :calculate refuses (400 VALIDATION_ERROR) a monthly employee whose workdays_per_week is not 5 while it is on. leave_context only matters under that convention.
+- one_off_tax_rounding governs engångsskatt on payslip lines that carry one_off_tax_percent (POST /salary-runs/{id}/employees/{employeeId}/lines); truncate (öretal bortfaller) is the statutory rule, nearest exists to reproduce another system's history.
+- A company without a settings row reports series A (the engine fallback). The first PATCH creates the row with the standard series set, where salary_payment is K, unless salary_voucher_series is supplied in that same call: send it explicitly when provisioning so the letter never changes under you.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    company_id: string,
+    salary_pay_day: number,
+    salary_deviation_period: "same_month" | "previous_month",
+    preferred_payment_format: "pain001" | "bg_lb",
+    salary_default_bank: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
+    salary_net_rounding: boolean,
+    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
+    salary_voucher_series: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "salary_pay_day": 25,
+    "salary_deviation_period": "previous_month",
+    "preferred_payment_format": "pain001",
+    "salary_default_bank": "swedbank",
+    "salary_net_rounding": true,
+    "salary_calculation_policy": {
+      "partial_month": "annual_calendar_days",
+      "sick_rate": "annual_hourly",
+      "long_leave": "calendar_after_five_workdays",
+      "leave_context": "all_registered",
+      "net_rounding": "nearest",
+      "one_off_tax_rounding": "truncate"
+    },
+    "salary_voucher_series": "K"
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/salary/settings`
+
+**Partially update the company payroll settings.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (same_month | previous_month), preferred_payment_format (pain001 | bg_lb), salary_default_bank (swedbank | seb | handelsbanken | nordea | other | null), salary_net_rounding (boolean), salary_calculation_policy (an object with any of partial_month: workdays | annual_calendar_days, sick_rate: daily_divisor | annual_hourly, long_leave: workdays | calendar_after_five_workdays, leave_context: all_registered | through_deviation_end, net_rounding: up | nearest, one_off_tax_rounding: truncate | nearest; merged key by key into the stored policy) and salary_voucher_series (one letter A-Z). All fields optional; at least one must be supplied; unknown fields are rejected. Upserts: a company without a settings row gets one created with the supplied values and DB defaults for the rest. Returns the full resource after the write. Idempotent (mandatory Idempotency-Key). Dry-runnable: ?dry_run=true returns the merged resource without writing.
+
+**Use when:** You are onboarding a customer for payroll over the API (set the pay day, avvikelseperiod, calculation conventions, payment file format, bank and voucher series before the first run), a customer changes bank or pay day, or a customer migrated from Fortnox needs the same partial-month, sick-pay and long-leave conventions as their old payslips.
+**Do not use for:** Invoice payment and contact details (PATCH /api/v1/companies/{companyId}/settings). Changing the payment date or deviation window of an existing run (PATCH /salary-runs/{id}, or explicit deviation_period_start/end on POST). Changing the conventions of a run that is already calculated (recalculate the draft, or :correct a booked run). Tax and legal profile changes (not on the public API).
+
+**Pitfalls:**
+- Idempotency-Key is mandatory; calls without it return 400.
+- At least one field must be supplied; an empty body returns 400. Unknown fields return 400 (strict body), also inside salary_calculation_policy.
+- salary_deviation_period is snapshotted onto each salary run at creation: changing it never moves a run that already exists. Set it before the first run of a new month. Switching later makes the next run's deviation window overlap the previous run's window, and that run is refused with 409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP (pass explicit deviation_period_start/end on that one run to bridge the switch).
+- salary_pay_day only drives the default payment_date of NEW runs (the day of the pay month, 1-28 so it exists in every month). Existing runs keep their payment_date; override per run on POST /salary-runs.
+- salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
+- preferred_payment_format: pain001 (ISO 20022) is the default; bg_lb (Bankgirot Leverantörsbetalningar / Lön) is being retired by the banks during 2026, so only pick it for a customer whose bank still accepts LB files.
+- salary_calculation_policy holds the company's calculation conventions (beräkningsprinciper). Every key defaults to the historical Accounted behaviour; a customer migrated from Fortnox usually wants partial_month=annual_calendar_days (månadslön × 12 / 365 per calendar day employed), sick_rate=annual_hourly (timlön = månadslön × 12 / (52 × veckoarbetstid) for sjuklön), long_leave=calendar_after_five_workdays (leave longer than five working days deducted per calendar day at månadslön × 12 / 365, a whole month = the monthly salary) and, with salary_net_rounding, net_rounding=nearest. Compare one historical payslip before switching.
+- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all six keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
+- long_leave=calendar_after_five_workdays is a five-day-week rule: :calculate refuses (400 VALIDATION_ERROR) a monthly employee whose workdays_per_week is not 5 while it is on. leave_context only matters under that convention.
+- one_off_tax_rounding governs engångsskatt on payslip lines that carry one_off_tax_percent (POST /salary-runs/{id}/employees/{employeeId}/lines); truncate (öretal bortfaller) is the statutory rule, nearest exists to reproduce another system's history.
+- salary_default_bank: null clears the bank; omitting the field leaves it unchanged. The bank only pre-selects upload instructions, it does not change the payment file format.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  salary_pay_day?: number,
+  salary_deviation_period?: "same_month" | "previous_month",
+  preferred_payment_format?: "bg_lb" | "pain001",
+  salary_default_bank?: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
+  salary_net_rounding?: boolean,
+  salary_calculation_policy?: {
+    partial_month?: "workdays" | "annual_calendar_days",
+    sick_rate?: "daily_divisor" | "annual_hourly",
+    long_leave?: "workdays" | "calendar_after_five_workdays",
+    leave_context?: "all_registered" | "through_deviation_end",
+    net_rounding?: "up" | "nearest",
+    one_off_tax_rounding?: "truncate" | "nearest"
+  },
+  salary_voucher_series?: string
+}
+```
+
+Example request:
+```json
+{
+  "salary_pay_day": 25,
+  "salary_deviation_period": "previous_month",
+  "salary_default_bank": "swedbank",
+  "salary_net_rounding": true,
+  "salary_calculation_policy": {
+    "partial_month": "annual_calendar_days",
+    "sick_rate": "annual_hourly",
+    "long_leave": "calendar_after_five_workdays",
+    "net_rounding": "nearest"
+  },
+  "salary_voucher_series": "K"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    company_id: string,
+    salary_pay_day: number,
+    salary_deviation_period: "same_month" | "previous_month",
+    preferred_payment_format: "pain001" | "bg_lb",
+    salary_default_bank: "swedbank" | "seb" | "handelsbanken" | "nordea" | "other" | null,
+    salary_net_rounding: boolean,
+    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
+    salary_voucher_series: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "salary_pay_day": 25,
+    "salary_deviation_period": "previous_month",
+    "preferred_payment_format": "pain001",
+    "salary_default_bank": "swedbank",
+    "salary_net_rounding": true,
+    "salary_calculation_policy": {
+      "partial_month": "annual_calendar_days",
+      "sick_rate": "annual_hourly",
+      "long_leave": "calendar_after_five_workdays",
+      "leave_context": "all_registered",
+      "net_rounding": "nearest",
+      "one_off_tax_rounding": "truncate"
+    },
+    "salary_voucher_series": "K"
+  },
+  "meta": {
+    "request_id": "req_...",
     "api_version": "2026-05-12"
   }
 }
@@ -1047,6 +2144,7 @@ Response `200`:
     api_version: string,
     next_cursor?: string | null,
     audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
     partial_expansions?: string[],
     coverage?: Record<string, unknown>
   }

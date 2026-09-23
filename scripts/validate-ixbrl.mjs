@@ -25,7 +25,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)))
 const TAXONOMY_PACKAGE = resolve(
   ROOT,
-  'dev_docs/bokslut/taxonomi/taxonomi-paket-2024-09-12_rev20250312.zip',
+  'docs/reference/bokslut/taxonomi/taxonomi-paket-2024-09-12_rev20250312.zip',
 )
 
 const fileArg = process.argv[2]

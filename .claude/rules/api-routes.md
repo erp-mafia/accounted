@@ -1,6 +1,6 @@
 ---
 paths:
-  - "app/api/**"
+  - "src/app/api/**"
 ---
 
 # API Route Pattern
@@ -33,6 +33,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 )
 ```
 
+- Writing a table whose RLS write policy is `user_is_company_admin(...)` (`company_settings`, `companies`, `company_members`, `company_invitations`, `api_keys`, `invoice_payee_defaults`)? Gate with `{ requireAdmin: true }`, not `requireWrite`. A `member` passes `requireWrite`, and RLS then refuses silently: the UPDATE matches zero rows with no error, which `.single()` turns into a 500. `requireAdmin` asks the database that same predicate, so the route and the policy cannot disagree; the contract is pinned in `tests/pg/company-settings-admin-gate.pg.test.ts`.
 - Dynamic route params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16, params are async). With `withRouteContext`, pass that shape as the generic and destructure `params` from the 3rd handler arg.
 - Response shapes: `{ data }` for success; failures are the canonical `{ error: { code, message, message_en?, requestId? } }` envelope (thrown errors → `errorResponse`). Don't hand-build `{ error: 'string' }`.
 - Zod schemas in `lib/api/schemas.ts`: 100+ schemas with shared primitives (uuid, isoDate, accountNumber, nonNegativeAmount).

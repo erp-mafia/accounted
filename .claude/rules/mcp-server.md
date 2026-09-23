@@ -1,6 +1,6 @@
 ---
 paths:
-  - "extensions/general/mcp-server/**"
+  - "src/extensions/general/mcp-server/**"
   - "packages/accounted-mcp/**"
   - "packages/gnubok-mcp/**"
 ---

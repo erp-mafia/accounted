@@ -264,7 +264,7 @@ export function findSekLabelledFxAmounts(root) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   const args = process.argv.slice(2)
   const json = args.includes('--json')
-  const root = args.find((a) => !a.startsWith('--')) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const root = args.find((a) => !a.startsWith('--')) ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
   const findings = findSekLabelledFxAmounts(root)
   if (json) {
     console.log(JSON.stringify(findings, null, 2))

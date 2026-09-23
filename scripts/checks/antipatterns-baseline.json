@@ -7,10 +7,13 @@
     ]
   },
   "naiveOreRound": {
-    "count": 615
+    "count": 602
   },
   "handRolledInvariants": {
-    "count": 113
+    "count": 103
+  },
+  "literalLegalForm": {
+    "count": 79
   },
   "ledgerScanningReports": {
     "count": 4,
@@ -38,13 +41,12 @@
     "files": []
   },
   "providerHosts": {
-    "count": 22,
+    "count": 21,
     "files": [
       "app/api/connect/bank/[...path]/route.ts",
       "extensions/general/bolagsverket/lib/client.ts",
       "extensions/general/enable-banking/index.ts",
       "extensions/general/enable-banking/lib/api-client.ts",
-      "extensions/general/mail/lib/gmail-client.ts",
       "extensions/general/skatteverket/index.ts",
       "extensions/general/skatteverket/lib/connector-mode.ts",
       "extensions/general/skatteverket/lib/ombud-client.ts",

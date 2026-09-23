@@ -163,7 +163,7 @@ async function main() {
   // with "Your project's URL and Key are required" while the script's own
   // client (built after dotenv) works. First run on 2026-09-14 hit exactly that.
   const { refreshMigratedSupplierPaymentState } = await import(
-    '../../extensions/general/arcim-migration/lib/refresh-migrated-payment-state'
+    '../../src/extensions/general/arcim-migration/lib/refresh-migrated-payment-state'
   )
   const result = await refreshMigratedSupplierPaymentState({
     supabase,

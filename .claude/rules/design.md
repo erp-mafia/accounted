@@ -1,7 +1,7 @@
 ---
 paths:
-  - "app/**"
-  - "components/**"
+  - "src/app/**"
+  - "src/components/**"
 ---
 
 # Design Context & Design System
@@ -91,6 +91,7 @@ Compact metric cards (e.g. dashboard tiles, salary KPI row) use `p-4`. Detail ca
 - Main container: `px-4 pb-8 pt-4 md:px-6`, no max-width (via `components/dashboard/MainContainer.tsx`); `/e/*` and `/chat` render full-bleed without padding. The top padding is what the sticky top bar pulls back over, so it moves in step with the `.page-header` CSS.
 - Page root: `<div className="space-y-8">`.
 - Mobile keeps the pre-frame layout: full-width document flow, bottom nav; the panel styles are `md:`-gated.
+- Mobile bottom nav height: `--bottom-nav-h` (`app/globals.css`: 4rem tab row + safe-area inset, 0px from `md`). The nav sizes itself from it, and every fixed or sticky surface pinned to the bottom of a page offsets by it (`bottom-[calc(var(--bottom-nav-h)+1rem)]` for a floating bar, `bottom-[var(--bottom-nav-h)]` for a sticky one) instead of `bottom-4` or a hand-rolled `4rem`: a bar at `bottom-4` is fully covered by the nav on a phone (#2738). The bottom-edge z ladder is documented beside the token; bars sit below the nav on purpose.
 
 **Primitives: always use these, don't hand-roll.**
 
