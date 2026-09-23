@@ -2252,7 +2252,9 @@ function ArticlesFlow() {
 // CSV/Excel Data Import Wizard, entity selector + sub-flow
 // ============================================================
 
-type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
+const SubledgerImport = dynamic(() => import('@/components/import/SubledgerImport'), { loading: ImportStepLoading })
+
+type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles' | 'subledger'
 
 const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
   { value: 'opening_balance', label: 'Ingående balanser' },
@@ -2262,12 +2264,14 @@ const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
 ]
 
 function CSVDataImportWizard() {
+  const subledgerT = useTranslations('subledgerImport')
+  const { company } = useCompany()
   const [entity, setEntity] = useState<CSVDataEntity | null>('opening_balance')
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3">
-        {ENTITY_OPTIONS.map((opt) => {
+        {[...ENTITY_OPTIONS, { value: 'subledger' as const, label: subledgerT('title') }].map((opt) => {
           const selected = entity === opt.value
           return (
             <div key={opt.value} className="relative">
@@ -2313,6 +2317,7 @@ function CSVDataImportWizard() {
       {entity === 'customers' && <CustomersFlow key="cust-flow" />}
       {entity === 'suppliers' && <SuppliersFlow key="supp-flow" />}
       {entity === 'articles' && <ArticlesFlow key="art-flow" />}
+      {entity === 'subledger' && <SubledgerImport key={company?.id} />}
     </div>
   )
 }

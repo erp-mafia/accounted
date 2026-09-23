@@ -1141,6 +1141,7 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'sales_order_items', file: 'sales_order_items.json', orderBy: 'created_at' },
   { name: 'webshop_store_settings', file: 'webshop_store_settings.json' },
   { name: 'transaction_voucher_links', file: 'transaction_voucher_links.json' },
+  { name: 'subledger_file_imports', file: 'subledger_file_imports.json', orderBy: 'created_at' },
   { name: 'bank_file_imports', file: 'bank_file_imports.json', orderBy: 'created_at' },
   { name: 'cash_accounts', file: 'cash_accounts.json' },
   // Which bank account customer invoices pay to, per currency; the payee

@@ -95,6 +95,7 @@ const RETAINED = new Set([
   'sie_account_mappings.user_id',
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
+  'subledger_file_imports.user_id', // Company-owned file import provenance.
   'migration_jobs.user_id', // Company import provenance and recovery.
   'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
   'bokio_supplier_completion_work.user_id', // Company supplier recovery and attribution.

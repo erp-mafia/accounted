@@ -2774,6 +2774,112 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
 }
 
 const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
+  SUBLEDGER_FILE_INVALID: {
+    httpStatus: 400,
+    message_sv: "Använd en CSV- eller XLSX-fil med mallens kolumner, högst 500 fakturor och 10 MB. Belopp anges utan tusentalsavgränsare.",
+    message_en: "Use a CSV or XLSX template with up to 500 invoices and 10 MB. Amounts must not contain thousands separators.",
+  },
+  SUBLEDGER_INPUT_INVALID: {
+    httpStatus: 400,
+    message_sv: "Kontrollera datum och belopp. Endast öppna SEK-fakturor stöds.",
+    message_en: "Check dates and amounts. Only outstanding SEK invoices are supported.",
+  },
+  SUBLEDGER_COMPANY_CHANGED: {
+    httpStatus: 409,
+    message_sv: "Aktivt företag har ändrats. Börja om importen.",
+    message_en: "The active company changed. Restart the import.",
+  },
+  SUBLEDGER_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: "Du saknar behörighet att importera reskontra.",
+    message_en: "You cannot import subledger records.",
+  },
+  SUBLEDGER_COMPANY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: "Företaget finns inte eller är arkiverat.",
+    message_en: "Company not found or archived.",
+  },
+  SUBLEDGER_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: "Ingen räkenskapsperiod omfattar avstämningsdatumet.",
+    message_en: "No fiscal period covers the snapshot date.",
+  },
+  SUBLEDGER_IMPORT_BUSY: {
+    httpStatus: 409,
+    message_sv: "En annan import pågår. Vänta tills den är klar.",
+    message_en: "Another import is in progress. Wait for it to finish.",
+  },
+  SUBLEDGER_NUMBERING_EXHAUSTED: {
+    httpStatus: 409,
+    message_sv: "Fakturanummerserien är slut. Välj ett nytt prefix och startnummer i fakturainställningarna före importen.",
+    message_en: "The invoice number sequence is exhausted. Choose a new prefix and starting number in invoice settings before importing.",
+  },
+  SUBLEDGER_ACCRUAL_REQUIRED: {
+    httpStatus: 400,
+    message_sv: "Reskontraimporten kräver faktureringsmetoden och redan bokförda fakturor.",
+    message_en: "Subledger import requires accrual accounting and already posted invoices.",
+  },
+  SUBLEDGER_SNAPSHOT_OUTDATED: {
+    httpStatus: 409,
+    message_sv: "Det finns senare bokföring på reskontrakontot. Använd en aktuell reskontralista och avstämningsdag.",
+    message_en: "Later control-account entries exist. Use a current subledger and snapshot date.",
+  },
+  SUBLEDGER_EXISTING_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv: "Befintlig reskontra innehåller poster som inte kan stämmas av av denna import.",
+    message_en: "The existing subledger contains unsupported records.",
+  },
+  SUBLEDGER_ROW_INVALID: {
+    httpStatus: 400,
+    message_sv: "En fakturarad innehåller ogiltiga eller oförenliga uppgifter.",
+    message_en: "An invoice row contains invalid or inconsistent values.",
+  },
+  SUBLEDGER_PARTY_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: "En kund eller leverantör saknas eller är tvetydig. Importera registret först eller använd postens ID.",
+    message_en: "A counterparty is missing or ambiguous. Import master records first or use its ID.",
+  },
+  SUBLEDGER_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: "Fakturan finns redan eller förekommer flera gånger i filen. Befintliga fakturor skrivs inte över.",
+    message_en: "An invoice already exists or is repeated in the file. Existing invoices are never overwritten.",
+  },
+  SUBLEDGER_VOUCHER_UNRESOLVED: {
+    httpStatus: 400,
+    message_sv: "Originalverifikatet saknas eller kan inte matchas entydigt. Kontrollera serie, nummer och räkenskapsårets startår.",
+    message_en: "The original voucher is missing or ambiguous. Check series, number and fiscal-year start year.",
+  },
+  SUBLEDGER_VOUCHER_AMOUNT: {
+    httpStatus: 400,
+    message_sv: "Originalverifikatets belopp på 1510 eller 2440 stämmer inte med fakturans totalbelopp.",
+    message_en: "The original voucher amount on 1510 or 2440 differs from the invoice total.",
+  },
+  SUBLEDGER_VOUCHER_USED: {
+    httpStatus: 409,
+    message_sv: "Originalverifikatet är redan kopplat till en faktura.",
+    message_en: "The original voucher is already linked to an invoice.",
+  },
+  SUBLEDGER_PREVIEW_STALE: {
+    httpStatus: 409,
+    message_sv: "Underlaget har ändrats sedan granskningen. Förhandsgranska igen.",
+    message_en: "The underlying data changed. Preview again.",
+  },
+  SUBLEDGER_UNRECONCILED: {
+    httpStatus: 409,
+    message_sv: "Reskontrans restbelopp stämmer inte med huvudboken. Kontrollera differensen.",
+    message_en: "Outstanding balances do not reconcile with the general ledger.",
+  },
+  SUBLEDGER_RECEIPT_STALE: {
+    httpStatus: 409,
+    message_sv: 'Registret har ändrats efter importen. Kontakta support innan du importerar samma underlag igen.',
+    message_en: 'The register changed after this import. Contact support before importing the same source again.',
+  },
+  SUBLEDGER_FAILED: {
+    httpStatus: 500,
+    message_sv: "Reskontraimporten kunde inte slutföras. Försök igen; redan importerade poster skapas inte dubbelt.",
+    message_en: "Subledger import failed. Retry safely; completed imports are not duplicated.",
+  },
+
   REG_IMPORT_NO_FILE: {
     httpStatus: 400,
     message_sv: 'Ingen fil bifogad.',

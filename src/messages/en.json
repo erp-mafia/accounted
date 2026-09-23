@@ -10763,5 +10763,37 @@
       "annual_report": "Annual report",
       "other": "Other"
     }
+  },
+  "subledgerImport": {
+    "numbering": "Next customer invoice number: {before} before import, {after} after import.",
+    "rowError": "Row {row}:",
+    "title": "Subledger",
+    "kind": "Subledger",
+    "customer": "Customer subledger",
+    "supplier": "Supplier subledger",
+    "date": "Snapshot date",
+    "file": "CSV or Excel file",
+    "template": "Download template",
+    "preview": "Preview",
+    "import": "Import subledger",
+    "working": "Working...",
+    "ledger_balance": "General ledger",
+    "existing_balance": "Existing subledger",
+    "imported_balance": "File outstanding balance",
+    "difference": "Difference",
+    "invoice": "Invoice",
+    "party": "Counterparty",
+    "invoiceDate": "Invoice date",
+    "dueDate": "Due date",
+    "total": "Total",
+    "vat": "VAT",
+    "remaining": "Outstanding",
+    "completed": "Imported {count} invoices. No new bookkeeping was created.",
+    "alreadyImported": "This import of {count} invoices was already completed. No new records were created.",
+    "unreconciled": "Import is blocked until outstanding balances reconcile with the general ledger.",
+    "confirmTitle": "Import already posted invoices",
+    "confirmDescription": "Import {count} invoices with outstanding balance {amount} into {company}. Existing vouchers will be linked. No bookkeeping or invoice delivery is created.",
+    "cancel": "Cancel",
+    "help": "Import outstanding, already posted SEK invoices under accrual accounting, including partial payments. Credit notes, foreign currencies and cash accounting are not supported here. Import counterparties first. Use the template headers: counterparty is an ID, exact name, organization number or customer number; dates use YYYY-MM-DD; voucher_year is the fiscal-year start year and series/number identify the original SIE voucher. vat_treatment: standard_25, reduced_12, reduced_6, reverse_charge, export or exempt. No thousands separators in amounts. Maximum 500 invoices per file. This step preserves invoice headers and outstanding balances; detailed invoice lines and PDF documents are not imported."
   }
 }

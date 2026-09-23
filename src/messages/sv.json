@@ -10763,5 +10763,37 @@
       "annual_report": "Årsredovisning",
       "other": "Övrigt"
     }
+  },
+  "subledgerImport": {
+    "numbering": "Nästa kundfakturanummer: {before} före importen, {after} efter importen.",
+    "rowError": "Rad {row}:",
+    "title": "Reskontra",
+    "kind": "Reskontra",
+    "customer": "Kundreskontra",
+    "supplier": "Leverantörsreskontra",
+    "date": "Avstämningsdag",
+    "file": "CSV- eller Excel-fil",
+    "template": "Hämta mall",
+    "preview": "Förhandsgranska",
+    "import": "Importera reskontra",
+    "working": "Arbetar...",
+    "ledger_balance": "Huvudbok",
+    "existing_balance": "Befintlig reskontra",
+    "imported_balance": "Restbelopp i filen",
+    "difference": "Differens",
+    "invoice": "Faktura",
+    "party": "Motpart",
+    "invoiceDate": "Fakturadatum",
+    "dueDate": "Förfallodag",
+    "total": "Totalt",
+    "vat": "Moms",
+    "remaining": "Restbelopp",
+    "completed": "{count} fakturor importerade. Ingen ny bokföring har skapats.",
+    "alreadyImported": "Denna import med {count} fakturor är redan genomförd. Inga nya poster skapades.",
+    "unreconciled": "Importen är stoppad tills restbeloppen stämmer med huvudboken.",
+    "confirmTitle": "Importera redan bokförda fakturor",
+    "confirmDescription": "Importera {count} fakturor med restbelopp {amount} till {company}. Befintliga verifikat länkas. Ingen bokföring eller fakturautskick skapas.",
+    "cancel": "Avbryt",
+    "help": "Importera öppna, redan bokförda SEK-fakturor med faktureringsmetoden. Även delbetalningar stöds. Kreditfakturor, andra valutor och kontantmetoden stöds inte här. Importera kunder/leverantörer först. Använd mallens rubriker: counterparty är ID, exakt namn, organisationsnummer eller kundnummer; datum anges YYYY-MM-DD; voucher_year är räkenskapsårets startår och serie/nummer avser originalverifikatet i SIE. vat_treatment: standard_25, reduced_12, reduced_6, reverse_charge, export eller exempt. Belopp utan tusentalsavgränsare. En fil får innehålla högst 500 fakturor. Importen bevarar fakturahuvud och restbelopp; specificerade fakturarader och PDF-underlag importeras inte i detta steg."
   }
 }
