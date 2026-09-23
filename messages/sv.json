@@ -10283,7 +10283,8 @@
           "Föreslår kopplingen, du godkänner",
           "Visar vad som fortfarande saknas"
         ],
-        "say": "Hitta kvittona som saknas."
+        "say": "Hitta kvittona som saknas.",
+        "note": "Har du Claude i Chrome? Då hämtar Kvittojakten även fakturor från portaler som AWS, Google Ads och OpenAI, och kan ställa in att de skickas till Accounted automatiskt."
       },
       "reconcile-month": {
         "name": "Stäm av månaden",

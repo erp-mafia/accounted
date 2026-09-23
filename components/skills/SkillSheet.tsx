@@ -114,6 +114,7 @@ function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect
           <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
         </div>
         <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
+        {id && t.has(`skills.${id}.note`) && <p className={styles.dtNote}>{t(`skills.${id}.note`)}</p>}
         {usage && <p className={styles.usesLine}>{t('uses_line', { count: usage.count, date: formatDateLong(usage.last_at, locale) })}</p>}
       </div>
       <div className={styles.sheetMain}>

@@ -10283,7 +10283,8 @@
           "Proposes the link, you approve",
           "Shows what is still missing"
         ],
-        "say": "Find the missing receipts."
+        "say": "Find the missing receipts.",
+        "note": "Using Claude in Chrome? Kvittojakten then also fetches invoices from portals like AWS, Google Ads and OpenAI, and can set them up to arrive in Accounted automatically."
       },
       "reconcile-month": {
         "name": "Reconcile the month",

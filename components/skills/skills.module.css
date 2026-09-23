@@ -387,6 +387,7 @@
 .dtTop .x { flex: none; align-self: flex-start; }
 .sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; text-wrap: balance; }
 .dtD { font-size: 14px; line-height: 21px; color: hsl(var(--muted-foreground)); max-width: 52ch; }
+.dtNote { max-width: 52ch; font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); padding-left: 10px; border-left: 2px solid var(--rbd); }
 /* the steps run down a line: each number a small key, each step a card */
 .steps { position: relative; margin: 0; padding: 0 0 0 40px; list-style: none; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
 .steps::before { content: ""; position: absolute; left: 12px; top: 20px; bottom: 20px; width: 1px; background: hsl(var(--border)); }
