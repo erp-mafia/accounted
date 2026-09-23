@@ -55,9 +55,11 @@ Individual recurring costs below **5,000 SEK** that don't fluctuate >20% year-ov
 | Byggnader | **7821** | **1119** |
 | Markanläggningar | **7824** | **1129** |
 | Maskiner | **7831** | **1219** |
-| Inventarier | **7832** | **1229** |
-| Bilar/transportmedel | **7834** | **1249** |
-| Datorer | **7833** | **1259** |
+| Inventarier (1220) | **7832** | **1229** |
+| Bilar/transportmedel, ej för produktion (1226) | **7832** | **1229** |
+| Datorer, ej för produktion (1224) | **7832** | **1229** |
+
+BAS 2026 splits kontogrupp 12 by production use, not by asset kind: every 122x asset (1220 inventarier, 1224 datorer, 1226 bilar, 1227 finansiellt leasade inventarier) accumulates on 1229 and depreciates through 7832; a car or computer used for production sits on 1216/1214 with 1219 and 7831. 7833/7834 are not BAS accounts, and 1230, 1240/1249, 1250/1259, 1260/1269 are free accounts with no prescribed meaning. See the swedish-asset-accounting skill, references/accounts-and-registry.md.
 
 ### K2 vs K3 depreciation
 - **K2**: Schablonmässiga nyttjandeperioder allowed (5 years for inventarier, tax rates for buildings). Component depreciation FORBIDDEN.

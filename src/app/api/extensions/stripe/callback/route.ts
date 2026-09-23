@@ -1,0 +1,237 @@
+import { createServiceClient } from '@/lib/supabase/server'
+import { NextResponse } from 'next/server'
+import { ensureInitialized } from '@/lib/init'
+import { eventBus } from '@/lib/events/bus'
+import { hashAuthCode } from '@/lib/auth/oauth-codes'
+import {
+  requireFlowInitiator,
+  FLOW_INITIATOR_MISMATCH_MESSAGE,
+} from '@/lib/auth/oauth-flow-binding'
+import {
+  exchangeCodeForAccount,
+  fetchAccountDisplayName,
+} from '@/extensions/general/stripe/lib/connect'
+
+// This route emits stripe.connected (audit trail). ensureInitialized() must
+// run at module load so the event_log handler has subscribed before the first
+// emit on a cold instance.
+ensureInitialized()
+
+/**
+ * GET /api/extensions/stripe/callback
+ *
+ * OAuth callback for Stripe Connect authorization. Must be a real Next.js
+ * route (not an extension dispatcher handler) because Stripe redirects the
+ * user's browser to this URL directly.
+ */
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+
+  const code = searchParams.get('code')
+  const state = searchParams.get('state')
+  const error = searchParams.get('error')
+  const errorDescription = searchParams.get('error_description')
+
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  // The Stripe surface lives on the import page (?mode=stripe opens the panel
+  // directly); appended params below must use '&' since the base has a query.
+  const returnUrl = `${baseUrl}/import?mode=stripe`
+
+  if (error) {
+    const errorMessage = errorDescription || error
+    // access_denied is the user cancelling at Stripe: an expected outcome.
+    const logDenied = error === 'access_denied' ? console.warn : console.error
+    logDenied('[stripe] Connect authorization denied', {
+      error,
+      error_description: errorDescription,
+      has_state: !!state,
+    })
+
+    if (state) {
+      try {
+        const supabase = await createServiceClient()
+        await supabase
+          .from('stripe_connections')
+          .update({ status: 'error', error_message: errorMessage, oauth_state: null })
+          .eq('oauth_state', state)
+          .eq('status', 'pending')
+      } catch (cleanupError) {
+        console.error('[stripe] Failed to clean up pending connection:', cleanupError)
+      }
+    }
+
+    return NextResponse.redirect(
+      `${returnUrl}&stripe_error=${encodeURIComponent(errorMessage)}`,
+    )
+  }
+
+  if (!code || !state) {
+    return NextResponse.redirect(`${returnUrl}&stripe_error=missing_parameters`)
+  }
+
+  const supabase = await createServiceClient()
+
+  try {
+    // Locate the connection awaiting this callback by oauth_state (CSRF-safe:
+    // the token is a single-use random UUID written before the redirect and
+    // cleared below).
+    const { data: pendingConnection, error: findError } = await supabase
+      .from('stripe_connections')
+      .select('id, user_id, company_id')
+      .eq('oauth_state', state)
+      .eq('status', 'pending')
+      .single()
+
+    if (findError || !pendingConnection) {
+      console.error('[stripe] No pending connection for oauth_state', {
+        findError: findError
+          ? { message: findError.message, code: findError.code }
+          : null,
+        hasCode: !!code,
+      })
+      return NextResponse.redirect(
+        `${returnUrl}&stripe_error=${encodeURIComponent('invalid_state')}`,
+      )
+    }
+
+    // The state token proves this callback belongs to a flow we started; it
+    // says nothing about WHO is completing it. Bind the completion to the
+    // initiator's own cookie session BEFORE the code is burned below:
+    // otherwise a victim lured into approving a Stripe Connect someone else
+    // started would have their Stripe account attached to that someone's
+    // company. Stripe's redirect is a top-level navigation, so the
+    // initiator's cookies are present on the legitimate path.
+    const initiator = await requireFlowInitiator(request, pendingConnection.user_id, {
+      flow: 'stripe.callback',
+    })
+    if (!initiator.ok) {
+      if (initiator.reason === 'no_session') {
+        // Session expired mid-flow: sign in and the callback re-runs with
+        // the same (still unused) code + state. The row is untouched.
+        return initiator.response
+      }
+      // A different user completed it. Refuse without exchanging the code
+      // and without marking the row: it stays pending for its initiator.
+      return NextResponse.redirect(
+        `${returnUrl}&stripe_error=${encodeURIComponent(FLOW_INITIATOR_MISMATCH_MESSAGE)}`,
+      )
+    }
+
+    // Replay protection (OAuth 2.1 §4.1.2): a code may be exchanged once.
+    // The PRIMARY KEY on oauth_used_codes rejects a second insert.
+    const { error: replayError } = await supabase
+      .from('oauth_used_codes')
+      .insert({ code_hash: hashAuthCode(code) })
+    if (replayError) {
+      console.error('[stripe] Authorization code already used', {
+        connectionId: pendingConnection.id,
+        code: replayError.code,
+      })
+      return NextResponse.redirect(
+        `${returnUrl}&stripe_error=${encodeURIComponent('invalid_state')}`,
+      )
+    }
+
+    const { stripeAccountId, livemode } = await exchangeCodeForAccount(code)
+    const displayName = await fetchAccountDisplayName(stripeAccountId)
+
+    // Seed the balance-transaction cursor with the connection moment. Money
+    // that moved before the merchant connected is already in the books from
+    // the bank side, so a first sync that reached further back would only
+    // manufacture duplicates (#2631). Reaching further back is an explicit
+    // choice: POST /api/extensions/ext/stripe/backfill with a start date.
+    const connectedAt = new Date().toISOString()
+    const { data: updatedConnection, error: updateError } = await supabase
+      .from('stripe_connections')
+      .update({
+        stripe_account_id: stripeAccountId,
+        livemode,
+        display_name: displayName,
+        status: 'active',
+        connected_at: connectedAt,
+        last_balance_txn_synced_at: connectedAt,
+        error_message: null,
+        oauth_state: null, // Clear to prevent replay
+        // Feed-only product: connecting Stripe means fetching its
+        // transactions, so the nightly feed starts on by default. The panel
+        // toggle remains as the opt-out.
+        transaction_sync_enabled: true,
+      })
+      .eq('id', pendingConnection.id)
+      .select('id, company_id, user_id, stripe_account_id, livemode')
+      .single()
+
+    if (updateError || !updatedConnection) {
+      // 23505 = one of the partial unique indexes: this Stripe account is
+      // already actively connected (to this or another company), or the
+      // company connected in a parallel tab. Both are user-facing conflicts.
+      const isConflict = updateError?.code === '23505'
+      console.error('[stripe] Failed to activate connection', {
+        connectionId: pendingConnection.id,
+        error: updateError
+          ? { message: updateError.message, code: updateError.code }
+          : null,
+      })
+      await supabase
+        .from('stripe_connections')
+        .update({
+          status: 'error',
+          error_message: isConflict
+            ? 'Stripe-kontot är redan anslutet till ett företag.'
+            : 'Anslutningen kunde inte slutföras.',
+          oauth_state: null,
+        })
+        .eq('id', pendingConnection.id)
+      return NextResponse.redirect(
+        `${returnUrl}&stripe_error=${encodeURIComponent(
+          isConflict ? 'account_already_connected' : 'activation_failed',
+        )}`,
+      )
+    }
+
+    try {
+      await eventBus.emit({
+        type: 'stripe.connected',
+        payload: {
+          connectionId: updatedConnection.id,
+          stripeAccountId: updatedConnection.stripe_account_id!,
+          livemode: updatedConnection.livemode,
+          userId: updatedConnection.user_id,
+          companyId: updatedConnection.company_id,
+        },
+      })
+    } catch (emitError) {
+      // Non-fatal: the DB state (source of truth) is already committed.
+      console.error('[stripe] Failed to emit stripe.connected event', {
+        connectionId: updatedConnection.id,
+        error: emitError instanceof Error ? emitError.message : String(emitError),
+      })
+    }
+
+    return NextResponse.redirect(`${returnUrl}&stripe_connected=true`)
+  } catch (error) {
+    console.error('[stripe] Callback error', {
+      message: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : undefined,
+      hasCode: !!code,
+    })
+
+    try {
+      await supabase
+        .from('stripe_connections')
+        .update({
+          status: 'error',
+          error_message: 'Anslutningen kunde inte slutföras.',
+          oauth_state: null,
+        })
+        .eq('oauth_state', state)
+        .eq('status', 'pending')
+    } catch (cleanupError) {
+      console.error('[stripe] Callback cleanup failed:', cleanupError)
+    }
+
+    return NextResponse.redirect(
+      `${returnUrl}&stripe_error=${encodeURIComponent('connection_failed')}`,
+    )
+  }
+}

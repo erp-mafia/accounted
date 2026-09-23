@@ -1,0 +1,529 @@
+import type {
+  SalesInvoiceDto, SalesInvoiceLineDto, InvoiceStatusCode,
+  LegalMonetaryTotalDto, PaymentStatusDto,
+  SupplierInvoiceDto, SupplierInvoiceLineDto,
+  CustomerDto, SupplierDto,
+  JournalDto, AccountingEntryDto,
+  AccountingAccountDto, AccountType,
+  CompanyInformationDto,
+  AmountType, PartyDto, CreditedInvoiceRefDto,
+} from '../dto';
+import { creditNoteTypeCode } from '../dto';
+import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
+import { sourceVoucherFromParts } from '../source-voucher';
+import { roundOre } from '@/lib/money';
+
+/**
+ * A row amount net of VAT.
+ *
+ * Fortnox prices an invoice either excluding or including VAT, and says which
+ * with the invoice-level `VATIncluded` flag: when it is true the row `Price`
+ * and `Total` are the amounts the customer saw, VAT inside, and the net is
+ * the amount divided by (1 + rate). Newer payloads also carry the net on the
+ * row (`TotalExcludingVAT`, `PriceExcludingVAT`), which callers prefer when
+ * present; this is the fallback for the ones that do not. Without a stated
+ * rate the amount cannot be split and is returned as it is, and the
+ * consumer's rows-versus-header check reports the disagreement.
+ *
+ * Found on Profilio (2026-09-05): 345 VAT-inclusive invoices whose rows were
+ * stored as if net, so the rows summed to the gross and carried 25 % VAT on
+ * top of it, beside a header that was right.
+ */
+function netOfVat(amount: number, vatIncluded: boolean, ratePercent: number | undefined): number {
+  if (!vatIncluded || ratePercent === undefined) return amount;
+  const rate = ratePercent > 1 ? ratePercent / 100 : ratePercent;
+  return roundOre(amount / (1 + rate));
+}
+
+/**
+ * Fortnox splits its invoice payloads in two. `GET /3/invoices` answers with
+ * the short form (`InvoiceShort`): DocumentNumber, dates, customer, `Total`,
+ * `Balance` and the status flags, but no `Net`, no `TotalVAT` and no
+ * `InvoiceRows`. Those three live only on the detail form (`InvoiceFull`)
+ * behind `GET /3/invoices/{DocumentNumber}`.
+ *
+ * The migration used to map the list form alone, so `Net` was always absent
+ * and defaulted to `Total`; VAT, derived as gross minus net, came out 0 on
+ * every migrated Fortnox invoice. Hydrating the detail (see
+ * `hydrateSalesInvoiceDetails` in provider-data-fetcher.ts) is what makes
+ * these fields available; the readers below keep "absent" distinguishable
+ * from "zero" for the invoices that are not hydrated.
+ */
+const FORTNOX_NET_KEYS = ['Net'] as const;
+const FORTNOX_VAT_KEYS = ['TotalVAT'] as const;
+
+function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
+  return { value: value ?? 0, currencyCode: currency };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function providerEmailAddresses(
+  raw: Record<string, unknown>,
+  field: string,
+): string[] | undefined {
+  if (!(field in raw)) return undefined;
+
+  const value = raw[field];
+  const parts = Array.isArray(value)
+    ? value.flatMap((item) => typeof item === 'string' ? item.split(/[\n,;]+/) : [])
+    : typeof value === 'string'
+      ? value.split(/[\n,;]+/)
+      : [];
+  const seen = new Set<string>();
+
+  return parts.flatMap((part) => {
+    const address = part.trim();
+    const key = address.toLocaleLowerCase('en-US');
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [address];
+  });
+}
+
+/**
+ * Single source of truth for "is this invoice fully settled?", used by BOTH
+ * deriveInvoiceStatus and the paymentStatus.paid flag so they can never diverge.
+ * Numeric, not strict === 0, so a residual öre / float drift still reads as paid.
+ * Number(undefined ?? NaN) = NaN and NaN <= 0 is false, so an ABSENT Balance is
+ * treated as NOT paid (the supplier-invoice list payload omits Balance); only an
+ * explicit FullyPaid flag or a present non-positive Balance counts as paid.
+ */
+function isFullyPaid(raw: Record<string, unknown>): boolean {
+  return raw['FullyPaid'] === true || Number(raw['Balance'] ?? NaN) <= 0;
+}
+
+/**
+ * Whether Fortnox flags the document as a credit invoice.
+ *
+ * Fortnox's field reference describes `Credit` as a boolean, but its OpenAPI
+ * schema types it as a STRING ("true" / "false"), and so do client libraries
+ * written against the live API. The flag also exists only on the detail form
+ * (`InvoiceFull`), never on the list form. The old test,
+ * `raw['Credit'] === true`, is consistent with never having fired: on
+ * 2026-09-20 production held 3 200 Fortnox invoices with a negative total and
+ * not one with status 'credited'. Every credit note had fallen through to
+ * isFullyPaid (a credit invoice's balance is never positive) and was imported
+ * as a PAID invoice with a negative paid amount (#2789). Both spellings are
+ * read; the negative total covers the list form (see creditNoteTypeCode).
+ */
+function isFlaggedCredit(raw: Record<string, unknown>): boolean {
+  const flag = raw['Credit'];
+  return flag === true || (typeof flag === 'string' && flag.trim().toLowerCase() === 'true');
+}
+
+/**
+ * The invoice a Fortnox credit invoice credits, from `CreditInvoiceReference`
+ * (sales) or `CreditReference` (supplier invoices, numbered by `GivenNumber`).
+ *
+ * Fortnox documents the field as "reference to the credit invoice, if one
+ * exists", which is the debit invoice's side of the link. On the credit
+ * invoice itself the same field is read here as the debit invoice's number.
+ * That direction is NOT confirmed against a live payload (the repo holds no
+ * Fortnox credit fixture and chunk payloads are sealed), so everything
+ * downstream is built to be safe if it is wrong: the field is read only on a
+ * document typed 381, a reference to the document itself is dropped, and the
+ * importer pairs only with a different invoice that exists under that number
+ * and never by amount. An absent or empty reference leaves the credit note
+ * unpaired with the gap disclosed on the row, exactly as before.
+ *
+ * Fortnox sends the value as a string or a number, "0" / 0 when there is
+ * none, and an invoice's document number is both its id and its printed
+ * number.
+ */
+function creditedInvoiceRefOf(
+  raw: Record<string, unknown>,
+  referenceKey: 'CreditInvoiceReference' | 'CreditReference' = 'CreditInvoiceReference',
+  ownNumberKey: 'DocumentNumber' | 'GivenNumber' = 'DocumentNumber',
+): CreditedInvoiceRefDto | undefined {
+  const value = raw[referenceKey];
+  const reference = typeof value === 'number' ? String(value) : typeof value === 'string' ? value.trim() : '';
+  if (!reference || reference === '0' || reference === String(raw[ownNumberKey] ?? '')) return undefined;
+  return { id: reference, invoiceNumber: reference };
+}
+
+function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean): InvoiceStatusCode {
+  if (raw['Cancelled'] === true) return 'cancelled';
+  if (isCreditNote) return 'credited';
+  if (isFullyPaid(raw)) return 'paid';
+  if (raw['Booked'] === true) return 'booked';
+  if (raw['Sent'] === true) return 'sent';
+  return 'draft';
+}
+
+function buildParty(name: string, orgNumber?: string, address?: Record<string, unknown>): PartyDto {
+  return {
+    name,
+    identifications: orgNumber ? [{ id: orgNumber, schemeId: 'SE:ORGNR' }] : [],
+    postalAddress: address ? {
+      streetName: (address['Address1'] ?? address['Address']) as string | undefined,
+      additionalStreetName: address['Address2'] as string | undefined,
+      cityName: (address['City'] ?? address['CityName']) as string | undefined,
+      postalZone: (address['ZipCode'] ?? address['PostalCode']) as string | undefined,
+      countryCode: address['Country'] as string | undefined,
+    } : undefined,
+    legalEntity: orgNumber ? {
+      registrationName: name,
+      companyId: orgNumber,
+      companyIdSchemeId: 'SE:ORGNR',
+    } : undefined,
+    contact: {
+      name: nonEmptyString(address?.['YourReference']),
+      // EmailInvoice is the delivery address. Email is the general contact
+      // fallback and must not override an invoice-specific address.
+      email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
+      telephone: nonEmptyString(address?.['Phone1']),
+    },
+  };
+}
+
+/** Header-level charges Fortnox keeps outside InvoiceRows, as rows. */
+const FORTNOX_HEADER_CHARGES = [
+  { id: 'freight', amountKey: 'Freight', vatKey: 'FreightVAT', description: 'Frakt' },
+  { id: 'administration-fee', amountKey: 'AdministrationFee', vatKey: 'AdministrationFeeVAT', description: 'Administrationsavgift' },
+] as const;
+
+function headerChargeLines(
+  raw: Record<string, unknown>,
+  vatIncluded: boolean,
+  currency: string,
+): SalesInvoiceLineDto[] {
+  const lines: SalesInvoiceLineDto[] = [];
+  for (const charge of FORTNOX_HEADER_CHARGES) {
+    const stated = readNumber(raw, [charge.amountKey]);
+    if (!stated) continue;
+    const vatAmount = readNumber(raw, [charge.vatKey]) ?? 0;
+    const net = vatIncluded ? roundOre(stated - vatAmount) : stated;
+    // The rate is not stated for a charge; it follows from the two amounts.
+    const taxPercent = net !== 0 ? Math.round((vatAmount / net) * 100) : 0;
+    lines.push({
+      id: charge.id,
+      description: charge.description,
+      quantity: 1,
+      unitPrice: amount(net, currency),
+      lineExtensionAmount: amount(net, currency),
+      taxPercent,
+      taxAmount: amount(vatAmount, currency),
+      itemName: charge.description,
+    });
+  }
+  return lines;
+}
+
+export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
+  const currency = (raw['Currency'] as string) ?? 'SEK';
+  const total = raw['Total'] as number ?? 0;
+  // Default an ABSENT Balance to the full total (= fully unpaid), never 0, so a
+  // missing Balance never silently reads as paid. A present Balance (incl. 0) is
+  // used as-is. Mirrors the supplier path; paid-ness comes from isFullyPaid().
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
+  // 381 for a kreditfaktura: the one signal the importer reads (dto.ts).
+  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), total);
+
+  // Whether the row amounts include VAT. Absent on the list form, where there
+  // are no rows anyway; false is the default when the detail form omits it.
+  const vatIncluded = raw['VATIncluded'] === true;
+
+  const rows = (raw['InvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
+  const lines: SalesInvoiceLineDto[] = rows.map((row, idx) => {
+    // `VAT` on a row is the rate in percent (25), not an amount. `Total` and
+    // `Price` are net only when the invoice is priced excluding VAT; see
+    // netOfVat for the VATIncluded case.
+    const taxPercent = readNumber(row, ['VAT']);
+    const lineNet = readNumber(row, ['TotalExcludingVAT'])
+      ?? netOfVat(readNumber(row, ['Total']) ?? 0, vatIncluded, taxPercent);
+    const rawPrice = readNumber(row, ['Price']);
+    const unitPrice = readNumber(row, ['PriceExcludingVAT'])
+      ?? (rawPrice !== undefined ? netOfVat(rawPrice, vatIncluded, taxPercent) : undefined);
+    const lineVat = lineVatFromPercent(lineNet, taxPercent);
+
+    return {
+      id: String(row['RowId'] ?? idx + 1),
+      description: row['Description'] as string | undefined,
+      // Fortnox serialises the quantity as a string ("14"); read it as a number.
+      quantity: readNumber(row, ['DeliveredQuantity']),
+      unitCode: row['Unit'] as string | undefined,
+      unitPrice: unitPrice !== undefined ? amount(unitPrice, currency) : undefined,
+      lineExtensionAmount: amount(lineNet, currency),
+      taxPercent,
+      // Fortnox states the rate per row but not the money. Deriving it here is
+      // what lets the migration write a per-line vat_amount: the booking engine
+      // sums those to post 2611, so a line left at 0 posts no output VAT.
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['AccountNumber'] != null ? String(row['AccountNumber']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+      itemName: row['Description'] as string | undefined,
+    };
+  });
+
+  // Freight and administration fee live on the header, not in InvoiceRows,
+  // and Fortnox's `Net` excludes them while `TotalVAT` and `Total` include
+  // them. Verified on live payloads (Profilio 295 and 242, 2026-09-05):
+  // `Freight` is the fee as the customer saw it (gross when VATIncluded,
+  // net otherwise) and `FreightVAT` is the VAT AMOUNT on it, not a rate
+  // (88 and 22 on a 25 % invoice). The same pair exists for the fee. Without
+  // these as rows, the rows sum to less than the header by exactly the
+  // charge and the migration's rows-versus-header check refuses the invoice.
+  lines.push(...headerChargeLines(raw, vatIncluded, currency));
+
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, FORTNOX_NET_KEYS),
+    vat: readNumber(raw, FORTNOX_VAT_KEYS),
+  });
+
+  const legalMonetaryTotal: LegalMonetaryTotalDto = {
+    // Undefined when the payload is the list form: the net was not stated and
+    // must not be assumed equal to the gross.
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
+    payableAmount: amount(total, currency),
+  };
+
+  const paymentStatus: PaymentStatusDto = {
+    paid,
+    balance: amount(balance, currency),
+  };
+
+  return {
+    id: String(raw['DocumentNumber'] ?? ''),
+    invoiceNumber: String(raw['DocumentNumber'] ?? ''),
+    issueDate: (raw['InvoiceDate'] as string) ?? '',
+    dueDate: raw['DueDate'] as string | undefined,
+    invoiceTypeCode,
+    // Amounts stay as Fortnox states them, negative on a credit invoice: the
+    // importer resolves the sign convention once for every provider.
+    creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw) : undefined,
+    currencyCode: currency,
+    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    supplier: buildParty(
+      (raw['CompanyName'] ?? '') as string,
+      raw['OrganisationNumber'] as string | undefined,
+    ),
+    customer: buildParty(
+      (raw['CustomerName'] ?? '') as string,
+      raw['OrganisationNumber'] as string | undefined,
+      raw as Record<string, unknown>,
+    ),
+    lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
+    legalMonetaryTotal,
+    paymentStatus,
+    paymentTerms: raw['TermsOfPayment'] as string | undefined,
+    note: raw['Remarks'] as string | undefined,
+    buyerReference: raw['YourReference'] as string | undefined,
+    orderReference: raw['YourOrderNumber'] as string | undefined,
+    // The booking voucher, present on the detail form of a booked invoice.
+    // `VoucherYear` is deliberately not read: the invoice date resolves the
+    // fiscal year on our side, and the source's year id is not ours.
+    sourceVoucher: sourceVoucherFromParts(raw['VoucherSeries'], raw['VoucherNumber']) ?? undefined,
+    updatedAt: raw['@LastModified'] as string | undefined,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
+  const currency = (raw['Currency'] as string) ?? 'SEK';
+  const total = raw['Total'] as number ?? 0;
+  // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
+  // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
+  // Balance must not be mistaken for "settled": that would flip a genuinely
+  // open payable to paid downstream. A present Balance (incl. 0) is used as-is.
+  // When paid, force balance to 0 so the DTO is internally consistent
+  // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
+  // would otherwise leave balance = total alongside paid = true.
+  const paid = isFullyPaid(raw);
+  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
+  // 381 for a supplier kreditfaktura: the one signal the importer reads
+  // (dto.ts). Fortnox's schema types `Credit` as a boolean here and as a
+  // string on the sales side, so both spellings are read. The negative total
+  // is the signal production proves: on 2026-09-21 it held 26 Fortnox
+  // supplier documents with a negative `Total`, and not one of them had been
+  // read as credited by the old `Credit === true` test (all 26 landed as
+  // 'paid', #2838). `Total` is read as a number whether Fortnox serialises it
+  // as one or as a string.
+  const invoiceTypeCode = creditNoteTypeCode(isFlaggedCredit(raw), readNumber(raw, ['Total']) ?? 0);
+
+  const rows = (raw['SupplierInvoiceRows'] as Record<string, unknown>[] | undefined) ?? [];
+  const lines: SupplierInvoiceLineDto[] = rows.map((row, idx) => {
+    const lineNet = readNumber(row, ['Total']) ?? 0;
+    const taxPercent = readNumber(row, ['VAT']);
+    const lineVat = lineVatFromPercent(lineNet, taxPercent);
+
+    return {
+      id: String(row['RowId'] ?? idx + 1),
+      description: row['Description'] as string | undefined,
+      quantity: row['Quantity'] as number | undefined,
+      unitPrice: row['Price'] != null ? amount(row['Price'] as number, currency) : undefined,
+      lineExtensionAmount: amount(lineNet, currency),
+      taxPercent,
+      taxAmount: lineVat !== undefined ? amount(lineVat, currency) : undefined,
+      accountNumber: row['Account'] != null ? String(row['Account']) : undefined,
+      articleNumber: row['ArticleNumber'] as string | undefined,
+    };
+  });
+
+  const vat = resolveVatTriple({
+    gross: total,
+    net: readNumber(raw, FORTNOX_NET_KEYS),
+    vat: readNumber(raw, FORTNOX_VAT_KEYS),
+  });
+
+  const legalMonetaryTotal: LegalMonetaryTotalDto = {
+    lineExtensionAmount: vat.net !== undefined ? amount(vat.net, currency) : undefined,
+    taxInclusiveAmount: amount(total, currency),
+    payableAmount: amount(total, currency),
+  };
+
+  const paymentStatus: PaymentStatusDto = {
+    paid,
+    balance: amount(balance, currency),
+  };
+
+  return {
+    id: String(raw['GivenNumber'] ?? ''),
+    invoiceNumber: String(raw['GivenNumber'] ?? ''),
+    issueDate: (raw['InvoiceDate'] as string) ?? '',
+    dueDate: raw['DueDate'] as string | undefined,
+    invoiceTypeCode,
+    // Amounts stay as Fortnox states them, negative on a credit invoice: the
+    // importer resolves the sign convention once for every provider. The
+    // reference is read only on a credit note; its direction on the credit
+    // invoice itself is as unconfirmed as on the sales side (see
+    // creditedInvoiceRefOf), and the importer pairs only with a different,
+    // existing, ordinary invoice of the same supplier.
+    creditedInvoiceRef: invoiceTypeCode ? creditedInvoiceRefOf(raw, 'CreditReference', 'GivenNumber') : undefined,
+    currencyCode: currency,
+    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    supplier: buildParty(
+      (raw['SupplierName'] ?? '') as string,
+      raw['OrganisationNumber'] as string | undefined,
+    ),
+    buyer: buildParty(''),
+    lines,
+    taxTotal: vat.vat !== undefined ? { taxAmount: amount(vat.vat, currency) } : undefined,
+    legalMonetaryTotal,
+    paymentStatus,
+    ocrNumber: raw['OCR'] as string | undefined,
+    sourceVoucher: sourceVoucherFromParts(raw['VoucherSeries'], raw['VoucherNumber']) ?? undefined,
+    updatedAt: raw['@LastModified'] as string | undefined,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToCustomer(raw: Record<string, unknown>): CustomerDto {
+  const name = (raw['Name'] as string) ?? '';
+  const orgNumber = raw['OrganisationNumber'] as string | undefined;
+
+  return {
+    id: String(raw['CustomerNumber'] ?? ''),
+    customerNumber: String(raw['CustomerNumber'] ?? ''),
+    type: raw['Type'] === 'PRIVATE' ? 'private' : 'company',
+    party: buildParty(name, orgNumber, raw),
+    invoiceEmailCcAddresses: providerEmailAddresses(raw, 'EmailInvoiceCC'),
+    invoiceEmailBccAddresses: providerEmailAddresses(raw, 'EmailInvoiceBCC'),
+    active: raw['Active'] !== false,
+    vatNumber: raw['VATNumber'] as string | undefined,
+    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    note: raw['Comments'] as string | undefined,
+    updatedAt: raw['@LastModified'] as string | undefined,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToSupplier(raw: Record<string, unknown>): SupplierDto {
+  const name = (raw['Name'] as string) ?? '';
+  const orgNumber = raw['OrganisationNumber'] as string | undefined;
+
+  return {
+    id: String(raw['SupplierNumber'] ?? ''),
+    supplierNumber: String(raw['SupplierNumber'] ?? ''),
+    party: buildParty(name, orgNumber, raw),
+    active: raw['Active'] !== false,
+    vatNumber: raw['VATNumber'] as string | undefined,
+    bankAccount: raw['BankAccountNumber'] as string | undefined,
+    bankGiro: raw['BG'] as string | undefined,
+    plusGiro: raw['PG'] as string | undefined,
+    defaultPaymentTermsDays: raw['TermsOfPayment'] != null ? Number(raw['TermsOfPayment']) : undefined,
+    note: raw['Comments'] as string | undefined,
+    updatedAt: raw['@LastModified'] as string | undefined,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToJournal(raw: Record<string, unknown>): JournalDto {
+  const voucherRows = (raw['VoucherRows'] as Record<string, unknown>[] | undefined) ?? [];
+  const entries: AccountingEntryDto[] = voucherRows.map((row) => ({
+    accountNumber: String(row['Account'] ?? ''),
+    accountName: row['AccountDescription'] as string | undefined,
+    debit: (row['Debit'] as number) ?? 0,
+    credit: (row['Credit'] as number) ?? 0,
+    transactionDate: row['TransactionDate'] as string | undefined,
+    description: row['Description'] as string | undefined,
+  }));
+
+  return {
+    id: `${raw['VoucherSeries'] ?? ''}-${raw['VoucherNumber'] ?? ''}`,
+    journalNumber: String(raw['VoucherNumber'] ?? ''),
+    series: raw['VoucherSeries'] ? {
+      id: String(raw['VoucherSeries']),
+      description: raw['VoucherSeriesDescription'] as string | undefined,
+    } : undefined,
+    description: raw['Description'] as string | undefined,
+    registrationDate: (raw['TransactionDate'] as string) ?? '',
+    fiscalYear: raw['Year'] != null ? Number(raw['Year']) : undefined,
+    entries,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToAccountingAccount(raw: Record<string, unknown>): AccountingAccountDto {
+  let type: AccountType | undefined;
+  const num = Number(raw['Number']);
+  if (num >= 1000 && num < 2000) type = 'asset';
+  else if (num >= 2000 && num < 3000) type = 'liability';
+  else if (num >= 3000 && num < 4000) type = 'revenue';
+  else if (num >= 4000 && num < 9000) type = 'expense';
+
+  return {
+    accountNumber: String(raw['Number'] ?? ''),
+    name: (raw['Description'] as string) ?? '',
+    type,
+    vatCode: raw['VATCode'] as string | undefined,
+    active: raw['Active'] !== false,
+    balanceBroughtForward: raw['BalanceBroughtForward'] as number | undefined,
+    balanceCarriedForward: raw['BalanceCarriedForward'] as number | undefined,
+    sruCode: raw['SRU'] != null ? String(raw['SRU']) : undefined,
+    _raw: raw,
+  };
+}
+
+export function mapFortnoxToCompanyInformation(raw: Record<string, unknown>): CompanyInformationDto {
+  return {
+    companyName: (raw['CompanyName'] as string) ?? '',
+    organizationNumber: raw['OrganizationNumber'] as string | undefined,
+    legalEntity: {
+      registrationName: (raw['CompanyName'] as string) ?? '',
+      companyId: raw['OrganizationNumber'] as string | undefined,
+      companyIdSchemeId: 'SE:ORGNR',
+    },
+    address: {
+      streetName: raw['Address'] as string | undefined,
+      cityName: raw['City'] as string | undefined,
+      postalZone: raw['ZipCode'] as string | undefined,
+      countryCode: raw['Country'] as string | undefined,
+    },
+    contact: {
+      email: raw['Email'] as string | undefined,
+      telephone: raw['Phone1'] as string | undefined,
+      website: raw['WWW'] as string | undefined,
+    },
+    _raw: raw,
+  };
+}

@@ -78,6 +78,11 @@ const RETAINED = new Set([
   'depreciation_schedules.user_id',
   'document_attachments.uploaded_by',
   'document_attachments.user_id',
+  'document_classifications.decided_by_user_id', // Who settled a document's type or relevance.
+  'agents.user_id', // The person behind a review of an Arkiv record.
+  'document_links.created_by_user_id', // Who tied a document to a party, agreement or asset.
+  'company_facts.approved_by_user_id', // Who approved an agent's fact proposal.
+  'arkiv_findings.resolved_by_user_id', // Who closed a lint finding.
   'event_log.user_id',
   'fiscal_period_tax_adjustments.user_id',
   'fiscal_periods.user_id',
@@ -90,6 +95,10 @@ const RETAINED = new Set([
   'sie_account_mappings.user_id',
   'sie_imports.user_id',
   'sie_imports.execution_actor_id',
+  'migration_jobs.user_id', // Company import provenance and recovery.
+  'invoice_completion_work.user_id', // Company invoice recovery, no personal payloads.
+  'bokio_supplier_completion_work.user_id', // Company supplier recovery and attribution.
+  'migration_source_records.user_id', // Stable provider identities.
   'sie_import_chunks.user_id', // Import provenance and resumable accounting work.
   'sie_duplicate_repair_items.user_id', // Reviewed corrections and their immutable receipts.
   'skattekonto_file_imports.user_id',
@@ -129,6 +138,7 @@ const RETAINED = new Set([
   'expense_claims.user_id',
   'expense_payout_batches.user_id',
   'mileage_trips.user_id',
+  'salary_payment_files.user_id', // Archived bank payment files: BFL 7 kap. 1 §, seven-year retention.
   'salary_payslip_deliveries.user_id',
   'salary_payslip_links.user_id',
   'salary_runs.approved_by',

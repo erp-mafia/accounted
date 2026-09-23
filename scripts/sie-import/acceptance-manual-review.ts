@@ -17,9 +17,9 @@ const client = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.S
 const company = await client.from('companies').select('name').eq('id', fixture.company).single()
 assert.ok(company.data?.name.startsWith('SIE acceptance'))
 assert.ok(fixture.email.endsWith('@test.invalid'))
-const { createJournalEntry } = await import('../../lib/bookkeeping/engine')
-const { submitSIEJob, requestSIEJobAction } = await import('../../lib/import/sie-jobs')
-const { runSIEWorker } = await import('../../lib/import/sie-job-worker')
+const { createJournalEntry } = await import('../../src/lib/bookkeeping/engine')
+const { submitSIEJob, requestSIEJobAction } = await import('../../src/lib/import/sie-jobs')
+const { runSIEWorker } = await import('../../src/lib/import/sie-job-worker')
 const reportPath = '.env.sie-manual-review.json'
 let report: { sourcePeriod:string; nextPeriod:string; openingEntry:string; job?:string; staleMs?:number }
 if (existsSync(reportPath)) report = JSON.parse(readFileSync(reportPath, 'utf8'))

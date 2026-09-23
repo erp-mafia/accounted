@@ -102,7 +102,7 @@ describe('EXTRA_JOBS', () => {
         expect(job.schedule.trim().split(/\s+/).length, `${job.path} needs a 5-field schedule`).toBe(5)
         expect(scheduled.has(job.path), `${job.path} is now in vercel.json: drop the extra entry`).toBe(false)
         expect(
-          existsSync(join(ROOT, 'app', ...job.path.split('/').filter(Boolean), 'route.ts')),
+          existsSync(join(ROOT, 'src', 'app', ...job.path.split('/').filter(Boolean), 'route.ts')),
           `${job.path} has no route.ts`,
         ).toBe(true)
       }
@@ -237,7 +237,7 @@ function findCronRoutes(dir: string, urlPrefix: string): string[] {
 
 describe('every cron route has a schedule', () => {
   it('leaves no unscheduled cron route undocumented', () => {
-    const routes = findCronRoutes(join(ROOT, 'app', 'api'), '/api')
+    const routes = findCronRoutes(join(ROOT, 'src', 'app', 'api'), '/api')
     const scheduled = new Set([
       ...crons.map((c) => c.path),
       ...VARIANTS.flatMap((variant) => EXTRA_JOBS[variant].map((job) => job.path)),
@@ -252,7 +252,7 @@ describe('every cron route has a schedule', () => {
   })
 
   it('lists no route in INTENTIONALLY_UNSCHEDULED that has since been scheduled or deleted', () => {
-    const routes = new Set(findCronRoutes(join(ROOT, 'app', 'api'), '/api'))
+    const routes = new Set(findCronRoutes(join(ROOT, 'src', 'app', 'api'), '/api'))
     const scheduled = new Set(crons.map((c) => c.path))
 
     for (const [path, reason] of Object.entries(INTENTIONALLY_UNSCHEDULED)) {
