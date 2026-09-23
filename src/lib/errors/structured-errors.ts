@@ -2289,6 +2289,11 @@ const FX: Record<string, StructuredErrorEntry> = {
 }
 
 const REPORT: Record<string, StructuredErrorEntry> = {
+  CASH_FLOW_TAX_ALLOCATION_REQUIRED: {
+    httpStatus: 422,
+    message_sv: 'Kassaflödesanalysen kan inte beräkna betald inkomstskatt säkert från periodens skattebokningar. Inkomstskatt behöver skiljas från övriga skatter i rapportunderlaget. Bokföringen behöver inte ändras.',
+    message_en: 'The cash flow statement cannot reliably calculate income tax paid from this period\'s tax postings. Income tax must be separated from other taxes in the report working papers. No bookkeeping changes are required.',
+  },
   REPORT_PERIOD_REQUIRED: {
     httpStatus: 400,
     message_sv: 'period_id krävs.',

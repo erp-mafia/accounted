@@ -7603,6 +7603,7 @@
   },
   "reports": {
     "title": "Reports",
+    "cash_flow_tax_allocation_required": "The cash flow statement cannot reliably calculate income tax paid from this period's tax postings. Income tax must be separated from other taxes in the report working papers. No bookkeeping changes are required.",
     "vat_filing_section": "Filed?",
     "vat_filing_filed_on": "Filed {date}",
     "vat_filing_source_skatteverket": "Confirmed by Skatteverket through the connection.",

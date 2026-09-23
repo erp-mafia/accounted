@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { generateIncomeStatement } from './income-statement'
+import { calculateCashFlowTax } from './cash-flow-tax'
 import type { TrialBalanceRow } from '@/types'
 
 /**
@@ -22,7 +23,9 @@ import type { TrialBalanceRow } from '@/types'
  *   24xx  Kortfristiga skulder (leverantörsskulder)  → operating (Δ payables)
  *   26xx  Moms och punktskatter                      → operating (Δ VAT)
  *   29xx  Upplupna kostnader/förutbetalda intäkter   → operating (Δ accruals)
- *   2510  Skatteskuld (income tax)                   → operating (skatt betald)
+ *   1630  Skattekonto                              → operating (working capital)
+ *   1640, 2510/12/17/18  Current income tax         → operating (skatt betald)
+ *   2513/14/15  Other tax liabilities              → operating (working capital)
  *
  *   10xx-13xx  Anläggningstillgångar (capital goods) → investing
  *
@@ -34,9 +37,8 @@ import type { TrialBalanceRow } from '@/types'
  *
  * The reconciliation invariant: total_cash_flow MUST equal
  *   closing(19xx) - opening(19xx)
- * within 1 öre. Any mismatch signals a bookkeeping invariant violation
- * (e.g., journal entry posted to an account class we haven't mapped) and is
- * surfaced as a warning in the report so a human can investigate.
+ * within 1 öre. A mismatch can reflect an unsupported report classification;
+ * it does not by itself mean that the underlying bookkeeping is incorrect.
  */
 
 export type KassaflodesanalysReport = {
@@ -130,7 +132,7 @@ export async function generateKassaflodesanalys(
   // Fetch period info for the report header.
   const { data: period, error: periodError } = await supabase
     .from('fiscal_periods')
-    .select('period_start, period_end')
+    .select('period_start, period_end, opening_balance_entry_id')
     .eq('id', fiscalPeriodId)
     .eq('company_id', companyId)
     .single()
@@ -139,19 +141,15 @@ export async function generateKassaflodesanalys(
   if (!period) throw new Error('Fiscal period not found')
 
   // Trial balance gives us opening + closing per account for the period.
-  // We pass excludeYearEndClosing=true so that the working-capital movements
-  // reflect actual transactional activity, not the year-end reclassification
-  // entries that move resultaträkning balances into equity (8999 → 2099).
-  // Without this filter, the closing entry for class 3-8 would inflate
-  // "övriga ej-kassaflödesposter" and break the reconciliation.
+  // Preserve the operational-report convention: exclude all year_end entries
+  // and their correction chains, including native provisions. The income
+  // statement below uses the same scope; changing that policy is separate.
   const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     closingEntry: 'exclude-all-year-end',
   })
 
-  // Net result before tax (resultat efter finansiella poster) comes from the
-  // P&L generator, which already excludes 8999 (year-end closing account)
-  // and applies the K2/K3 sign convention. We then subtract any tax expense
-  // (8910, periodiseringsfond moves, etc.) to land at *before-tax* result.
+  // Keep the existing pre-tax starting result and operational closing filter.
+  // Current tax is accounted for separately by the expense-to-payment bridge.
   const incomeStatement = await generateIncomeStatement(supabase, companyId, fiscalPeriodId)
 
   // Resultat efter finansiella poster = total_revenue - total_expenses + total_financial
@@ -190,34 +188,36 @@ export async function generateKassaflodesanalys(
   // patterns. Kept in the type so the structure is stable.
   const ovrigaEjKassaflodesposter = 0
 
-  // Δ Kortfristiga fordringar (15xx). Increase in receivables = cash NOT
+  // Receivables include skattekonto (1630). Depositing bank funds there is
+  // a cash outflow; a later tax charge reduces this receivable and must not
+  // count as a second bank outflow. Income-tax receivables (1640) belong to
+  // the tax bridge instead, so they are not counted twice.
+  // Increase in receivables = cash NOT
   // received yet → cash outflow → NEGATE the debit-side delta.
   // Positive delta on a debit-normal account means asset grew → subtract.
-  const deltaKortfristigaFordringar = r2(-sumDeltaByPrefix(rows, ['15']))
+  const deltaKortfristigaFordringar = r2(-sumDeltaByPrefix(rows, ['15', '1630']))
 
   // Δ Varulager (14xx). Same sign as receivables: stock grew → cash out.
   const deltaVarulager = r2(-sumDeltaByPrefix(rows, ['14']))
 
-  // Δ Kortfristiga skulder (24xx, 26xx, 29xx) EXCLUDING tax skulder (2510).
+  const tax = await calculateCashFlowTax(
+    supabase, companyId, fiscalPeriodId, period.opening_balance_entry_id ?? null, rows,
+  )
+
+  // Working-capital liabilities include property/pension/yield taxes. Their
+  // expenses already reduce operating profit; they are not income-tax payments.
+  // Δ Kortfristiga skulder (24xx, 26xx, 29xx) EXCLUDING current income tax.
   // 24xx = leverantörsskulder; 26xx = moms; 29xx = upplupna kostnader.
   // These are credit-normal accounts: increase → cash retained → ADD the
   // credit-side delta. debitSideDelta returns the *debit*-side delta which
   // is the inverse, so we negate.
-  //
-  // 25xx is excluded because we handle skatt separately (line below).
   const deltaKortfristigaSkulder = r2(
-    -sumDeltaByPrefix(rows, ['24', '26', '29'])
+    -sumDeltaByPrefix(rows, ['24', '26', '29']) + tax.otherTaxLiabilityChange
   )
 
-  // Skatt betald: actual cash tax outflow over the period. Approximated as
-  // the negative of the change in 2510 (income tax payable). If 2510 went
-  // down, tax was paid → negative cash flow. The current-year tax expense
-  // (8910) was already netted into resultat efter finansiella; here we only
-  // capture the cash side.
-  // Sign: 2510 is credit-normal. Decrease in liability = cash outflow.
-  // debitSideDelta(2510): if liability dropped (UB credit < IB credit),
-  // delta is positive. We want that as a negative cash flow.
-  const skattBetald = r2(-sumDeltaByPrefix(rows, ['2510']))
+  // The starting result excludes tax expense. An unpaid provision therefore
+  // needs expense and liability movement to cancel; a payment remains negative.
+  const skattBetald = tax.paidIncomeTax
 
   const totalLopande = r2(
     resultatEfterFinansiella +
