@@ -21,7 +21,7 @@ export type RegisterResult = {
 }
 
 interface RegisterResultStepProps {
-  entity: 'customers' | 'suppliers' | 'articles'
+  entity: 'customers' | 'suppliers' | 'articles' | 'employees'
   result: RegisterResult
   onNewImport: () => void
 }
@@ -38,6 +38,12 @@ const ENTITY_COPY = {
     failTitle: 'Importen misslyckades',
     listLabel: 'Visa alla leverantörer',
     listHref: '/suppliers',
+  },
+  employees: {
+    successTitle: 'Anställda importerade',
+    failTitle: 'Importen misslyckades',
+    listLabel: 'Visa alla anställda',
+    listHref: '/salary/employees',
   },
   articles: {
     successTitle: 'Artiklar importerade',

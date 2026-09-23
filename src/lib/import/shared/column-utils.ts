@@ -1,6 +1,6 @@
 /**
  * Shared column-detection helpers for register imports
- * (customers, suppliers, articles).
+ * (customers, suppliers, articles, employees).
  *
  * Matching is scored, not first-substring-wins: every untaken header is graded
  * against the field's keywords (exact header > whole word inside it > bare
@@ -8,6 +8,8 @@
  * what let "Supplier number" become the name column and "Corporate identity
  * number" become address line 2 in Visma and Spiris exports (#2548).
  */
+
+import { roundOre } from '@/lib/money'
 
 export function normalize(header: string): string {
   return header
@@ -193,4 +195,27 @@ export function normalizeEmail(value: string | null): string | null {
 export function normalizeNameKey(value: string | null): string | null {
   if (!value) return null
   return value.trim().toLowerCase() || null
+}
+
+/**
+ * Parse a decimal cell ("45 000", "45000,50", 45000.5) into a number with
+ * öre precision. Returns null for an empty or non-numeric cell so the caller
+ * can tell "not given" from 0. Percent signs are stripped so "80 %" reads 80.
+ */
+export function parseDecimal(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? roundOre(value) : null
+  }
+  const str = String(value).trim()
+  if (str === '' || str === '-') return null
+  const cleaned = str
+    .replace(/%/g, '')
+    .replace(/(kr|sek)$/i, '')
+    .replace(/\s/g, '')
+    .replace(/\.(?=\d{3}(\D|$))/g, '')
+    .replace(',', '.')
+  if (!/^-?\d+(\.\d+)?$/.test(cleaned)) return null
+  const num = parseFloat(cleaned)
+  return Number.isFinite(num) ? roundOre(num) : null
 }
