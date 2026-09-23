@@ -4773,6 +4773,13 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  ASSET_OPENING_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgångens ingående avskrivning har ändrats. Beräkna avskrivningsförslaget på nytt innan du bokför.',
+    message_en:
+      'The asset opening depreciation has changed. Recalculate the depreciation proposal before posting.',
+  },
   ASSET_DELETE_BLOCKED: {
     httpStatus: 409,
     message_sv:

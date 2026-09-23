@@ -469,7 +469,12 @@ export async function commitAnnualPostings(
           source_type: 'year_end',
           lines,
         },
-        { asset_id: item.asset.id, planned_depreciation: item.amount },
+        {
+          asset_id: item.asset.id,
+          planned_depreciation: item.amount,
+          opening_accumulated_depreciation: Number(item.asset.opening_accumulated_depreciation ?? 0),
+          opening_depreciation_date: item.asset.opening_depreciation_date ?? null,
+        },
       )
       posted.push({ assetId: item.asset.id, entry, scheduleId })
     } catch (error) {

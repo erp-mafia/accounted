@@ -266,6 +266,15 @@ export class CurrencyRevaluationAlreadyExistsError extends Error {
  */
 export type AssetDepreciationRefusal = 'already_posted' | 'asset_not_found'
 
+/** Recalculate the proposal instead of posting against an edited opening balance. */
+export class AssetOpeningChangedError extends Error {
+  readonly code = 'ASSET_OPENING_CHANGED'
+  constructor() {
+    super('Asset opening depreciation changed: recalculate the proposal before posting')
+    this.name = 'AssetOpeningChangedError'
+  }
+}
+
 export class AssetDepreciationRefusedError extends Error {
   readonly code = ASSET_DEPRECIATION_REFUSED
   constructor(public readonly reason: AssetDepreciationRefusal) {

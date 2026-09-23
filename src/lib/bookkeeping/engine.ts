@@ -6,6 +6,7 @@ import { createLogger } from '@/lib/logger'
 import {
   AccountsNotInChartError,
   AssetDepreciationRefusedError,
+  AssetOpeningChangedError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
   CannotEditNonDraftError,
@@ -992,6 +993,9 @@ export interface AssetDepreciationLink {
   /** The amount the register row records. The RPC refuses it unless it equals
    *  what the draft voucher actually books. */
   planned_depreciation: number
+  /** Opening snapshot used to calculate this proposal, checked under the row lock. */
+  opening_accumulated_depreciation: number
+  opening_depreciation_date: string | null
 }
 
 /**
@@ -1024,6 +1028,8 @@ export async function createAssetDepreciationEntry(
     p_entry_id: draft.id,
     p_fiscal_period_id: draft.fiscal_period_id,
     p_planned_depreciation: link.planned_depreciation,
+    p_expected_opening_amount: link.opening_accumulated_depreciation,
+    p_expected_opening_date: link.opening_depreciation_date,
     p_actor_type: actor?.type ?? null,
     p_actor_label: actor?.label ?? null,
   })
@@ -1051,6 +1057,9 @@ export async function createAssetDepreciationEntry(
     // on its lock). A bad draft is 22023 and falls through as a real error.
     if (pgCode === '23505') throw new AssetDepreciationRefusedError('already_posted')
     if (pgCode === 'P0002') throw new AssetDepreciationRefusedError('asset_not_found')
+    if (pgCode === 'PT409' && error.message === 'ASSET_OPENING_CHANGED') {
+      throw new AssetOpeningChangedError()
+    }
 
     log.error('commit_asset_depreciation RPC failed', error, {
       operation: 'commit_asset_depreciation',

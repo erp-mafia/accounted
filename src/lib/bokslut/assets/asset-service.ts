@@ -579,6 +579,9 @@ export async function updateAsset(
     .select('*')
     .single()
   if (error || !data) {
+    if (error?.code === 'PT409' && error.message === 'ASSET_CORRECTION_BLOCKED') {
+      throw new AssetCorrectionBlockedError('depreciation_posted')
+    }
     throw new Error(`Failed to update asset: ${error?.message ?? 'unknown'}`)
   }
   return data as Asset

@@ -293,7 +293,7 @@ describe('validateOpeningDepreciation', () => {
 
 type Captured = { insert: Record<string, unknown> | null; update: Record<string, unknown> | null; tables: string[] }
 
-function mockSupabase(asset: Asset | null, opts: { postedCount?: number } = {}) {
+function mockSupabase(asset: Asset | null, opts: { postedCount?: number; updateError?: { code: string; message: string } } = {}) {
   const captured: Captured = { insert: null, update: null, tables: [] }
   const supabase = {
     from: vi.fn((table: string) => {
@@ -322,7 +322,7 @@ function mockSupabase(asset: Asset | null, opts: { postedCount?: number } = {}) 
       })
       chain.single = vi.fn(async () => ({
         data: { ...(asset ?? {}), ...(captured.insert ?? {}), ...(captured.update ?? {}) },
-        error: null,
+        error: captured.update ? opts.updateError ?? null : null,
       }))
       return chain
     }),
@@ -365,6 +365,17 @@ describe('createAsset with an opening balance', () => {
 })
 
 describe('updateAsset with an opening balance', () => {
+  it('maps a posting that won the update race to the same 409 correction refusal', async () => {
+    const { supabase } = mockSupabase(makeAsset(), {
+      postedCount: 0,
+      updateError: { code: 'PT409', message: 'ASSET_CORRECTION_BLOCKED' },
+    })
+    await expect(updateAsset(supabase, 'co', 'asset-1', {
+      opening_accumulated_depreciation: 60000,
+      opening_depreciation_date: '2024-12-31',
+    })).rejects.toBeInstanceOf(AssetCorrectionBlockedError)
+  })
+
   it('sets the opening pair while nothing is posted, without the ledger scan', async () => {
     const { supabase, captured } = mockSupabase(makeAsset(), { postedCount: 0 })
     await updateAsset(supabase, 'co', 'asset-1', {
