@@ -29,6 +29,7 @@ import {
 } from '@/lib/invoices/matchable-statuses'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
+import { accountNeedsVatReview } from '@/lib/vat/account-vat-review'
 import type { ExpensePayoutDue, SkattekontoPaymentDue, SuggestedMatch } from './types'
 
 // Canonical home is lib/worklist/types.ts (dependency-free, client-safe);
@@ -308,6 +309,41 @@ export async function countMissedAgreementPayments(supabase: SupabaseClient, com
     .eq('status', 'missed')
   if (error) return logAndZero('agreement_payment_missed', companyId, error)
   return count ?? 0
+}
+
+/**
+ * Active class 3-6 accounts whose momskod the Kontoplan lists under "Att
+ * granska": the name points at another momsruta than the one the amounts
+ * land in (accountNeedsVatReview, the same predicate the page filters on).
+ * Reads the chart rows and applies the predicate here: the rule is the
+ * account-name suggestion, which has no SQL mirror. A chart is at most a few
+ * hundred class 3-6 rows.
+ */
+export async function countAccountsNeedingVatReview(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  try {
+    const rows = await fetchAllRows<{
+      account_number: string
+      account_name: string
+      account_class: number
+      default_vat_rate: number | string | null
+      default_vat_treatment: string | null
+    }>(({ from, to }) =>
+      supabase
+        .from('chart_of_accounts')
+        .select('account_number, account_name, account_class, default_vat_rate, default_vat_treatment')
+        .eq('company_id', companyId)
+        .eq('is_active', true)
+        .in('account_class', [3, 4, 5, 6])
+        .order('account_number', { ascending: true })
+        .range(from, to),
+    )
+    return rows.filter(accountNeedsVatReview).length
+  } catch (err) {
+    return logAndZero('account_vat_review', companyId, err as { message?: string })
+  }
 }
 
 /** Overdue customer invoices (not credited). */

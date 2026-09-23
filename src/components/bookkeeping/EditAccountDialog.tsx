@@ -320,6 +320,11 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           <AccountVatTreatmentSelect
             value={defaultVatTreatment}
             accountClass={account.account_class}
+            account={{
+              accountNumber: account.account_number,
+              accountName,
+              vatRate: defaultVatRate === 'none' ? null : Number(defaultVatRate),
+            }}
             onValueChange={(treatment) => {
               setDefaultVatTreatment(treatment)
               if (treatment !== 'none' && defaultVatRate === 'none') {

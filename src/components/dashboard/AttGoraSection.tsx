@@ -29,6 +29,7 @@ import {
   Inbox,
   Landmark,
   Loader2,
+  Percent,
   ReceiptText,
   Scale,
   ShieldCheck,
@@ -271,7 +272,8 @@ export default function AttGoraSection({
     counts.document_relevance > 0 ||
     counts.document_unclassified > 0 ||
     counts.document_field_review > 0 ||
-    counts.arkiv_finding > 0
+    counts.arkiv_finding > 0 ||
+    counts.account_vat_review > 0
   const bevakaRows =
     counts.overdue_invoice > 0 ||
     counts.deadline_action > 0 ||
@@ -565,6 +567,15 @@ export default function AttGoraSection({
                         label={t('row_arkiv_finding')}
                         detail={t('row_arkiv_finding_detail')}
                         count={counts.arkiv_finding}
+                      />
+                    )}
+                    {counts.account_vat_review > 0 && (
+                      <WorklistRow
+                        href="/chart-of-accounts?vat=review"
+                        icon={Percent}
+                        label={t('row_account_vat_review')}
+                        detail={t('row_account_vat_review_detail')}
+                        count={counts.account_vat_review}
                       />
                     )}
                   </div>

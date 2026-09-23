@@ -167,6 +167,15 @@ export const WORKLIST_CATEGORIES = [
    * the person applies or dismisses it, or the next lint no longer sees it.
    */
   'arkiv_finding',
+  /**
+   * Accounts whose momskod needs a look ("N konton med momskod att granska").
+   * Pending:  an active class 3-6 chart_of_accounts row whose name points at
+   *           another momsruta than the one its amounts land in
+   *           (accountNeedsVatReview in lib/vat/account-vat-review.ts).
+   * Done:     the momskod (or the name) is changed in the account dialog so
+   *           the two agree, or the account is deactivated.
+   */
+  'account_vat_review',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]

@@ -95,6 +95,23 @@ export function resolveRevenueVatBox(row: VatAccountClassificationRow): MomsBox 
   return ACCOUNT_TO_BOX[row.account_number] ?? null
 }
 
+/**
+ * The momsdeklaration box an account's amounts land in, with the same
+ * precedence fetchDynamicVatAccounts applies: a configured treatment wins,
+ * then the static BAS map, then (class 3 only) the ruta 05 fallback for an
+ * account whose rate resolves to a taxable sats. Null when the account feeds
+ * no box. Read-only: the declaration itself still classifies through
+ * fetchDynamicVatAccounts; this exists so a surface can say where an
+ * account's amounts go without re-deriving the rule.
+ */
+export function resolveAccountVatBox(row: VatAccountClassificationRow): MomsBox | null {
+  const box = resolveRevenueVatBox(row)
+  if (box || isAccountVatTreatment(row.default_vat_treatment)) return box
+  if (accountClassOf(row) !== 3 || RUTA_05_EXCLUDED_ACCOUNTS.has(row.account_number)) return null
+  const rate = resolveEffectiveVatRate(row)
+  return rate !== null && TAXABLE_RATES.includes(rate) ? '05' : null
+}
+
 export interface DynamicVatAccounts {
   accounts: string[]
   mappingByAccount: Map<string, AccountVatRutaMapping>

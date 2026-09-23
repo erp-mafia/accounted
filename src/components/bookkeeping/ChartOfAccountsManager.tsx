@@ -2,7 +2,9 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -43,6 +45,8 @@ import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { accountVatReviewFinding, type AccountVatReviewFinding } from '@/lib/vat/account-vat-review'
+import { isAccountVatTreatment } from '@/lib/vat/account-vat-treatment'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -94,6 +98,61 @@ function UsageCount({ accountNumber, count }: { accountNumber: string; count: nu
   )
 }
 
+/**
+ * Column-header filter on "Momskod" (crm#104). "review" lists the accounts
+ * whose name points at another momsruta than the one their amounts land in
+ * (accountVatReviewFinding), the same predicate as the Att göra row that
+ * links here with ?vat=review.
+ */
+type VatFilter = 'all' | 'review'
+
+/**
+ * The account's momskod as the edit dialog names it, or "BAS-standard" when
+ * it has none of its own. Classes 1-2 and 7-8 take no momskod and stay empty.
+ * A flagged account carries one exception chip that opens the dialog, the
+ * only place a momskod is edited.
+ */
+function VatTreatmentCell({
+  account,
+  finding,
+  onReview,
+}: {
+  account: BASAccount
+  finding: AccountVatReviewFinding | undefined
+  onReview: () => void
+}) {
+  const t = useTranslations('chart_of_accounts')
+  if (account.account_class < 3 || account.account_class > 6) return null
+  const treatment = account.default_vat_treatment
+  const label = isAccountVatTreatment(treatment)
+    ? t(`vat_treatment_${treatment}`)
+    : t('vat_col_bas_default')
+  const hint = finding
+    ? t('vat_review_hint', { suggested: t(`vat_treatment_${finding.suggestedTreatment}`) })
+    : undefined
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        className={cn('truncate', !isAccountVatTreatment(treatment) && 'text-muted-foreground')}
+        title={label}
+      >
+        {label}
+      </span>
+      {finding && (
+        <button
+          type="button"
+          onClick={onReview}
+          title={hint}
+          aria-label={`${t('vat_review_chip')}: ${hint}`}
+          className="shrink-0"
+        >
+          <Badge variant="warning">{t('vat_review_chip')}</Badge>
+        </button>
+      )}
+    </span>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -134,6 +193,11 @@ export default function ChartOfAccountsManager() {
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
   const [showInactive, setShowInactive] = useState(false)
   const [usageFilter, setUsageFilter] = useState<UsageFilter>('all')
+  // Opened pre-filtered from the Att göra row (/chart-of-accounts?vat=review).
+  const searchParams = useSearchParams()
+  const [vatFilter, setVatFilter] = useState<VatFilter>(
+    searchParams.get('vat') === 'review' ? 'review' : 'all',
+  )
   // Row selection for the bulk inactivate (#2186), keyed by account number
   // (the PUT/deactivate routes key on it too). Cleared on view switch.
   const [selectedNumbers, setSelectedNumbers] = useState<Set<string>>(new Set())
@@ -484,6 +548,18 @@ export default function ChartOfAccountsManager() {
   // Filtered & grouped data
   // -------------------------------------------
 
+  // Momskod findings for active accounts only: the Att göra count reads
+  // active accounts, and a deactivated account takes no new bookings.
+  const vatFindings = useMemo(() => {
+    const map = new Map<string, AccountVatReviewFinding>()
+    for (const a of accounts) {
+      if (!a.is_active) continue
+      const finding = accountVatReviewFinding(a)
+      if (finding) map.set(a.account_number, finding)
+    }
+    return map
+  }, [accounts])
+
   const filteredAccounts = useMemo(() => {
     const q = searchQuery.toLowerCase()
     return accounts.filter((a) => {
@@ -493,9 +569,10 @@ export default function ChartOfAccountsManager() {
       // Absence from the usage map means never posted to (see /usage).
       if (usageFilter === 'unused' && usageCounts.has(a.account_number)) return false
       if (usageFilter === 'used' && !usageCounts.has(a.account_number)) return false
+      if (vatFilter === 'review' && !vatFindings.has(a.account_number)) return false
       return true
     })
-  }, [accounts, searchQuery, usageFilter, usageCounts])
+  }, [accounts, searchQuery, usageFilter, usageCounts, vatFilter, vatFindings])
 
   const visibleNumbers = useMemo(
     () => filteredAccounts.map((a) => a.account_number),
@@ -646,6 +723,29 @@ export default function ChartOfAccountsManager() {
         )}
       </div>
 
+      {/* One ochre sentence (convention 6), the way back to the momskod
+          review an import's mapping step showed once. */}
+      {!loading && view === 'my-accounts' && vatFilter === 'all' && vatFindings.size > 0 && (
+        <AttnLine
+          action={{ label: t('vat_review_notice_action'), onClick: () => setVatFilter('review') }}
+        >
+          {t('vat_review_notice', { count: vatFindings.size })}
+        </AttnLine>
+      )}
+      {/* While filtered, the way out: the header filter is hidden below lg. */}
+      {!loading && view === 'my-accounts' && vatFilter === 'review' && (
+        <p className="text-[12.5px] leading-5 text-muted-foreground">
+          {t('vat_review_filtered', { count: vatFindings.size })}{' '}
+          <button
+            type="button"
+            onClick={() => setVatFilter('all')}
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            {t('vat_filter_all')}
+          </button>
+        </p>
+      )}
+
       {loading ? (
         <div className="space-y-2 py-2">
           {[1, 2, 3, 4, 5, 6].map((i) => (
@@ -655,7 +755,11 @@ export default function ChartOfAccountsManager() {
       ) : view === 'my-accounts' ? (
         filteredAccounts.length === 0 ? (
           <p className="px-1 py-12 text-center text-sm text-muted-foreground">
-            {searchQuery || usageFilter !== 'all' ? t('no_matches') : t('no_accounts')}
+            {vatFilter === 'review' && !searchQuery && usageFilter === 'all' && vatFindings.size === 0
+              ? t('vat_review_none')
+              : searchQuery || usageFilter !== 'all' || vatFilter !== 'all'
+                ? t('no_matches')
+                : t('no_accounts')}
           </p>
         ) : (
           <div>
@@ -702,6 +806,36 @@ export default function ChartOfAccountsManager() {
                   <th className={cn(TH_CLASS, 'w-full')}>{t('col_name')}</th>
                   <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>{t('col_sru')}</th>
                   <th className={cn(TH_CLASS, 'hidden md:table-cell')}>{t('col_type')}</th>
+                  <th className={cn(TH_CLASS, 'hidden lg:table-cell')}>
+                    {/* Same header-as-filter as Verifikat: all accounts, or
+                        the ones whose momskod is to be reviewed. */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label={t('vat_filter_label')}
+                          className={cn(
+                            'inline-flex items-center gap-1 whitespace-nowrap transition-colors duration-150 hover:text-foreground',
+                            vatFilter !== 'all' && 'text-foreground',
+                          )}
+                        >
+                          {vatFilter === 'all' ? t('col_vat_treatment') : t('vat_filter_review', { count: vatFindings.size })}
+                          <ListFilter className="h-3 w-3" aria-hidden />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start">
+                        <DropdownMenuRadioGroup
+                          value={vatFilter}
+                          onValueChange={(v) => setVatFilter(v as VatFilter)}
+                        >
+                          <DropdownMenuRadioItem value="all">{t('vat_filter_all')}</DropdownMenuRadioItem>
+                          <DropdownMenuRadioItem value="review">
+                            {t('vat_filter_review', { count: vatFindings.size })}
+                          </DropdownMenuRadioItem>
+                        </DropdownMenuRadioGroup>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </th>
                   <th className={cn(TH_CLASS, 'hidden text-right sm:table-cell')}>
                     {/* The header is the filter (#2186): pick all / never
                         posted to / posted to, the way the verifikat list
@@ -747,7 +881,7 @@ export default function ChartOfAccountsManager() {
                     const open = !collapsedMyClasses.has(classNum) || !!searchQuery
                     return (
                       <Fragment key={cls}>
-                        {bandRow(classNum, open, () => toggleMyClass(classNum), 8)}
+                        {bandRow(classNum, open, () => toggleMyClass(classNum), 9)}
                         {open &&
                           classAccounts.map((account) => (
                             <tr
@@ -805,6 +939,13 @@ export default function ChartOfAccountsManager() {
                               </td>
                               <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-muted-foreground md:table-cell')}>
                                 {typeLabel(account.account_type)}
+                              </td>
+                              <td className={cn(TD_CLASS, 'hidden max-w-[240px] overflow-hidden whitespace-nowrap lg:table-cell')}>
+                                <VatTreatmentCell
+                                  account={account}
+                                  finding={vatFindings.get(account.account_number)}
+                                  onReview={() => setEditAccount(account)}
+                                />
                               </td>
                               <td className={cn(TD_CLASS, 'hidden whitespace-nowrap text-right tabular-nums text-muted-foreground sm:table-cell')}>
                                 <UsageCount

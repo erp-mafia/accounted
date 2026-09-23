@@ -13,6 +13,7 @@ vi.mock('../categories', () => ({
   countDocumentFieldReviews: vi.fn().mockResolvedValue(0),
   countMissedAgreementPayments: vi.fn().mockResolvedValue(0),
   countArkivFindings: vi.fn().mockResolvedValue(0),
+  countAccountsNeedingVatReview: vi.fn().mockResolvedValue(2),
   countOverdueInvoices: vi.fn().mockResolvedValue(5),
   countDeadlinesNeedingAction: vi.fn().mockResolvedValue(1),
   countPendingOperations: vi.fn().mockResolvedValue(2),
@@ -50,6 +51,7 @@ describe('getWorklistCounts', () => {
       document_field_review: 0,
       agreement_payment_missed: 0,
       arkiv_finding: 0,
+      account_vat_review: 2,
     })
   })
 
@@ -89,7 +91,8 @@ describe('getWorklistCounts', () => {
   it('excludes suggested_match from the total (subset of book_transaction)', async () => {
     const { total } = await getWorklistCounts(supabase, 'company-1')
     // 4 + 7 + 6 + 1 + 3 + 5 + 1 + 2 + 1 + 2 (people owed for utlägg) + 1
-    // (skattekonto payment), without the 2 suggested matches.
-    expect(total).toBe(33)
+    // (skattekonto payment) + 2 (accounts with a momskod to review), without
+    // the 2 suggested matches.
+    expect(total).toBe(35)
   })
 })
