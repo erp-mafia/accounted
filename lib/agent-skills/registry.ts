@@ -2,8 +2,8 @@ import { kvittojaktenSkillSlug, type AiClient } from '@/lib/onboarding/ai-client
 import type { WorklistCategory } from '@/lib/worklist/types'
 
 /**
- * The ten skills the Skills page shows, in display order. The first three
- * are free and lit from the start; the other seven light up once an AI
+ * The ten skills the Skills page shows, in display order. The first two
+ * are free and lit from the start; the other eight light up once an AI
  * client is connected. The swedish-* rule packs and the other workflow
  * skills stay background knowledge the agent loads on its own.
  *
@@ -27,7 +27,7 @@ export type RegistrySkillId = (typeof REGISTRY_SKILLS)[number]['id']
 export type RegistrySkillGroup = (typeof REGISTRY_SKILLS)[number]['group']
 
 /** How many skills are free before an AI is connected. */
-export const FREE_SKILLS = 3
+export const FREE_SKILLS = 2
 
 /**
  * The slug the agent loads. Kvittojakten has one body per client (the

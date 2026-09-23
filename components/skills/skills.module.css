@@ -42,7 +42,7 @@
   gap: 32px;
 }
 
-/* ── the panel: Stockholm strata, three burning keys ── */
+/* ── the panel: Stockholm strata, two burning keys and the create key ── */
 .hero {
   position: relative;
   overflow: hidden;
@@ -128,7 +128,7 @@
 }
 .card[data-lit]:hover::before { inset: -18px; }
 
-/* Skapa din egen: a glass key on the photo, dashed until touched, beside the three burning ones */
+/* Skapa din egen: a glass key on the photo, dashed until touched, beside the two burning ones */
 @keyframes plusglow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(var(--rf), .5); } 50% { box-shadow: 0 0 18px 5px rgba(var(--rf), 1); } }
 .createFace {
   position: relative;
