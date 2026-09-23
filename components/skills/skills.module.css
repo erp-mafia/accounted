@@ -373,9 +373,9 @@
 .sheetBody { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: inherit; overflow-y: auto; }
 /* a white head; the steps sit on a soft tray that takes up the spare height */
 .sheetHead { display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; border-bottom: 1px solid hsl(var(--border)); }
-.sheetMain { flex: 1 0 auto; display: flex; flex-direction: column; gap: 16px; padding: 24px; background: hsl(var(--frame)); }
+.sheetMain { flex: 1 0 auto; display: flex; flex-direction: column; gap: 16px; padding: clamp(28px, 5vh, 48px) 24px 24px; background: hsl(var(--frame)); }
 /* the phrase and the buttons follow the steps on the tray, so the spare height falls below them */
-.sheetFoot { display: flex; flex-direction: column; gap: 14px; padding-top: 12px; }
+.sheetFoot { display: flex; flex-direction: column; gap: 14px; padding-top: clamp(24px, 6vh, 56px); }
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
 .x:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }
