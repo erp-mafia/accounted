@@ -370,7 +370,9 @@
 /* ── the sheet: still, on the page background. It renders in a portal
       outside .page, so it uses only global tokens ── */
 .sheet { --rf: 176, 198, 228; --rb: #B8CAE4; --rbd: #8FA9CF; background: hsl(var(--background)) !important; color: hsl(var(--foreground)); }
-.sheetBody { flex: 1; overflow-y: auto; padding: 20px 28px 28px; display: flex; flex-direction: column; gap: 24px; }
+/* the sheet is as tall as its content, not the window */
+.sheet { bottom: auto; width: 440px; max-height: calc(100dvh - 36px); }
+.sheetBody { flex: 1; overflow-y: auto; padding: 20px 24px 24px; display: flex; flex-direction: column; gap: 20px; }
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
 .x:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }
@@ -382,10 +384,10 @@
 .sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; text-wrap: balance; }
 .dtD { font-size: 14px; line-height: 21px; color: hsl(var(--muted-foreground)); max-width: 52ch; }
 /* the steps run down a line: each number a small key, each step a card */
-.steps { position: relative; margin: 0; padding: 0 0 0 42px; list-style: none; display: flex; flex-direction: column; gap: 12px; counter-reset: s; }
-.steps::before { content: ""; position: absolute; left: 13px; top: 24px; bottom: 24px; width: 1px; background: hsl(var(--border)); }
-.steps li { position: relative; padding: 13px 16px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--background)); box-shadow: 3px 3px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-size: 15px; line-height: 22px; counter-increment: s; }
-.steps li::before { content: counter(s); position: absolute; left: -43px; top: 10px; width: 27px; height: 27px; display: grid; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 2px 2px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; }
+.steps { position: relative; margin: 0; padding: 0 0 0 40px; list-style: none; display: flex; flex-direction: column; gap: 10px; counter-reset: s; }
+.steps::before { content: ""; position: absolute; left: 12px; top: 20px; bottom: 20px; width: 1px; background: hsl(var(--border)); }
+.steps li { position: relative; padding: 10px 14px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--background)); box-shadow: 3px 3px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-size: 14px; line-height: 21px; counter-increment: s; }
+.steps li::before { content: counter(s); position: absolute; left: -40px; top: 8px; width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid hsl(var(--border)); border-radius: 6px; background: hsl(var(--background)); box-shadow: 2px 2px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; }
 .promptbox { border: 1px solid hsl(var(--border)); border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: hsl(var(--frame)); }
 .promptbox span { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .promptbox p { font-family: var(--font-display); font-size: 18px; line-height: 25px; }
