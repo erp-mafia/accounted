@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 import {
   insertAuthUser,
-  insertBalancedLines,
   insertCompany,
   insertCompanyMember,
   insertDraftJournalEntry,
@@ -78,7 +77,8 @@ async function insertEntryAtStatus(params: {
     fiscalPeriodId: params.fiscalPeriodId,
     voucherNumber: params.voucherNumber,
   })
-  await insertBalancedLines(entryId)
+  await getPool().query(`INSERT INTO journal_entry_lines(journal_entry_id, account_number, debit_amount, credit_amount)
+    VALUES ($1, '4000', 1000, 0), ($1, '1930', 0, 1000)`, [entryId])
   if (params.correctionOfId) {
     await getPool().query(
       `UPDATE public.journal_entries SET correction_of_id = $2 WHERE id = $1`,

@@ -11,6 +11,8 @@ import { describe, it, expect } from 'vitest'
 import { getPool } from './setup'
 import {
   insertAuthUser,
+  insertTransaction,
+  insertPostedBankJournalEntry,
   insertCompany,
   insertFiscalPeriod,
   insertPostedJournalEntry as insertAtomicPostedJournalEntry,
@@ -32,7 +34,7 @@ async function insertPostedJournalEntry(params: {
   // Balanced pair on 1930 + 2091 (balanserad vinst/förlust, the realistic
   // carried-forward counterpart for an IB on a bank account; harmless for the
   // other source_types where the test only cares about the 1930 side).
-  return insertAtomicPostedJournalEntry({
+  const entry = {
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
@@ -44,7 +46,12 @@ async function insertPostedJournalEntry(params: {
       { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
       { accountNumber: '2091', debitAmount: 0, creditAmount: amount },
     ],
-  })
+  }
+  if (params.sourceType === 'bank_transaction') {
+    const transactionId = await insertTransaction({ ...params, date: params.entryDate, amount })
+    return insertPostedBankJournalEntry({ ...entry, transactionId })
+  }
+  return insertAtomicPostedJournalEntry(entry)
 }
 
 describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
@@ -160,14 +167,14 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     // Window covers only the second voucher. Use named notation so we don't have
     // to repeat the '1930' default just to reach the date params.
     const { rows } = await getPool().query(
-      `SELECT entry_date FROM public.get_unlinked_gl_lines(
+      `SELECT entry_date::text AS entry_date FROM public.get_unlinked_gl_lines(
          p_company_id => $1, p_date_from => $2, p_date_to => $3
        ) ORDER BY entry_date`,
       [companyId, '2026-07-01', '2026-12-31'],
     )
 
     expect(rows).toHaveLength(1)
-    expect(rows[0].entry_date.toISOString().slice(0, 10)).toBe('2026-08-01')
+    expect(rows[0].entry_date).toBe('2026-08-01')
   })
 
   it('scopes to the requested company only', async () => {

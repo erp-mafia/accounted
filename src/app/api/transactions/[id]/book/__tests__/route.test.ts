@@ -31,6 +31,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const mockResolveSettlementAccount = vi.fn().mockResolvedValue('1930')
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({
+  resolveSettlementAccount: (...args: unknown[]) => mockResolveSettlementAccount(...args),
+}))
+
 const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
@@ -77,6 +82,7 @@ describe('POST /api/transactions/[id]/book', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveSettlementAccount.mockResolvedValue('1930')
     reset()
     eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
@@ -229,6 +235,8 @@ describe('POST /api/transactions/[id]/book', () => {
       description: 'Test booking',
       source_type: 'bank_transaction',
       source_id: 'tx-1',
+      bank_booking_context: [{ transaction_id: tx.id, cash_account_id: null, settlement_account: '1930',
+        date: tx.date, amount: tx.amount, currency: tx.currency }],
       lines: validBody.lines,
     })
 
@@ -370,6 +378,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
 
+    mockResolveSettlementAccount.mockResolvedValue('1940')
     const request = createMockRequest('/api/transactions/tx-1/book', {
       method: 'POST',
       body: {
@@ -382,6 +391,10 @@ describe('POST /api/transactions/[id]/book', () => {
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
 
+    expect(mockCreateJournalEntry.mock.calls[0][3].bank_booking_context).toEqual([{
+      transaction_id: tx.id, cash_account_id: 'ca-orphan', target_cash_account_id: 'ca-live',
+      settlement_account: '1940', date: tx.date, amount: tx.amount, currency: tx.currency,
+    }])
     expect(response.status).toBe(200)
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
     expect(findCalls('transactions', 'update')).toContainEqual([

@@ -329,6 +329,7 @@ describe('pending_operations stuck-committing recovery (pg-real)', () => {
     const bookedTx = await insertTransaction({
       companyId,
       userId,
+      amount: 1000,
       journalEntryId,
       externalId: `recovery-booked-${randomUUID()}`,
     })

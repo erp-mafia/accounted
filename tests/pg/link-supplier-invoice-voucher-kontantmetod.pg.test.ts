@@ -17,8 +17,8 @@
  *     attach_supplier_invoice_settlement_voucher;
  *   - that the 244x side still answers as before. The byte-for-byte pin of that
  *     side is the existing suites running against this body:
- *     tests/pg/link-voucher-fx-residual.pg.test.ts (replays this migration
- *     last), tests/pg/link-voucher-rpcs-tenant-guard.pg.test.ts and
+ *     tests/pg/link-voucher-fx-residual.pg.test.ts (current applied schema),
+ *     tests/pg/link-voucher-rpcs-tenant-guard.pg.test.ts and
  *     lib/invoices/__tests__/link-voucher-currency.pg.test.ts.
  */
 import { describe, it, expect } from 'vitest'
@@ -117,7 +117,8 @@ async function seedVoucher(params: {
     voucherNumber: Math.floor(Math.random() * 1_000_000),
     entryDate: params.entryDate ?? '2026-04-28',
     description: 'Betalning leverantör',
-    sourceType: params.sourceType ?? 'bank_transaction',
+    // These are existing vouchers, without a source bank transaction fixture.
+    sourceType: params.sourceType ?? 'manual',
     lines: params.lines,
   })
 }
@@ -142,7 +143,7 @@ async function seedVoucherWithLabelledBankLine(params: {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, status)
-       VALUES ($1, $2, $3, $4, $5, 'A', '2026-04-28', 'Betalning leverantör', 'bank_transaction', 'draft')`,
+       VALUES ($1, $2, $3, $4, $5, 'A', '2026-04-28', 'Betalning leverantör', 'manual', 'draft')`,
       [
         id, params.company.userId, params.company.companyId, params.company.fiscalPeriodId,
         Math.floor(Math.random() * 1_000_000),

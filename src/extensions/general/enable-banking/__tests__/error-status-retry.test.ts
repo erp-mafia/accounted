@@ -69,6 +69,12 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock): Exte
   })
 
   const supabase = {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        updateSpy(name === 'persist_bank_sync_result'
+          ? { p_completed_at: args.p_completed_at, p_accounts: args.p_accounts, p_session_id: args.p_session_id }
+          : { p_status: args.p_status, p_message: args.p_message, p_session_id: args.p_session_id })
+        return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
+      }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }),
     },
@@ -113,6 +119,15 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     vi.clearAllMocks()
   })
 
+  it.each(['active', 'error'])('returns a reloadable conflict without changing %s connection state', async status => {
+    vi.mocked(syncAccountTransactions).mockRejectedValue(Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }))
+    const updateSpy = vi.fn()
+    const response = await syncRoute.handler(makeRequest(), makeContext(makeConnection({ status }), updateSpy))
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { code: 'CONFLICT' } })
+    expect(updateSpy).not.toHaveBeenCalled()
+  })
+
   it('allows sync from status=error and restores active + clears error_message on success', async () => {
     // Regression: a transient ASPSP failure parked the connection in 'error',
     // but the old status gate rejected everything but 'active', so the UI's
@@ -136,9 +151,8 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     expect(syncAccountTransactions).toHaveBeenCalledTimes(1)
     expect(updateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'active',
-        error_message: null,
-        last_synced_at: expect.any(String),
+        p_completed_at: expect.any(String),
+        p_accounts: [{ uid: 'acc-1' }],
       })
     )
   })
@@ -205,8 +219,8 @@ describe('POST /sync (enable-banking): retry from error status', () => {
 
     expect(res.status).toBe(200)
     const payload = updateSpy.mock.calls[0][0]
-    expect(payload).not.toHaveProperty('status')
-    expect(payload).toMatchObject({ error_message: null })
+    expect(payload).not.toHaveProperty('accounts_data')
+    expect(payload).toMatchObject({ p_completed_at: expect.any(String) })
   })
 
   it('maps a non-session failure to the Swedish user message and refreshes the stored error_message', async () => {
@@ -226,7 +240,7 @@ describe('POST /sync (enable-banking): retry from error status', () => {
     const body = await res.json()
     expect(body.error).toBe(SYNC_FAILED_MESSAGE)
     expect(body.error).not.toContain('ASPSP_ERROR')
-    expect(updateSpy).toHaveBeenCalledWith({ error_message: SYNC_FAILED_MESSAGE })
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ p_status: 'error', p_message: SYNC_FAILED_MESSAGE }))
   })
 
   it('answers 503 retryable without renewal advice when the connector hop fails, and leaves the row alone', async () => {

@@ -434,6 +434,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_rot_rut_payout_requests:         'invoices:read',
   // Skatteverkets utbetalning: bank row booked against its begäran (stages)
   gnubok_settle_rot_rut_payout:                'transactions:write',
+  // Existing payout verifikat linked to its begäran (stages, books nothing)
+  gnubok_link_rot_rut_payout_voucher:          'invoices:write',
   // Anläggningsregister: reads ride reports:read (register data feeds the
   // depreciation proposal); writes are bookkeeping:write like the posting.
   gnubok_list_assets:                          'reports:read',

@@ -204,8 +204,11 @@ describe('get_observed_parties (pg)', () => {
 
   it('leaves vouchers that carry a bank merchant name to the bank-keyed RPC', async () => {
     const c = await seedCompany()
-    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'bank_transaction' }
-    const withBank = await insertPostedJournalEntry({ ...base, entryDate: '2026-05-01', description: 'Loopia AB', lines: expense('6542', 99) })
+    const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }
+    const withBank = await insertPostedJournalEntry({ ...base, entryDate: '2026-05-01', description: 'Loopia AB', lines: [
+      { accountNumber: '6542', debitAmount: 99, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 99 },
+    ] })
     await insertPostedJournalEntry({ ...base, entryDate: '2026-05-02', description: 'Loopia AB', lines: expense('6542', 99) })
     const txId = await insertTransaction({
       userId: c.userId,

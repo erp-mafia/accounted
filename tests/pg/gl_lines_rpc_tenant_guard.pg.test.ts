@@ -12,7 +12,8 @@
 import { describe, it, expect } from 'vitest'
 import { getPool, withUserContext } from './setup'
 import {
-  insertPostedJournalEntry as insertAtomicPostedJournalEntry,
+  insertPostedBankJournalEntry,
+  insertTransaction,
   seedCompany,
 } from './fixtures'
 
@@ -25,14 +26,15 @@ async function insertPostedJournalEntry(params: {
   amount?: number
 }): Promise<string> {
   const amount = params.amount ?? 1500
-  return insertAtomicPostedJournalEntry({
+  const transactionId = await insertTransaction({ ...params, date: params.entryDate, amount })
+  return insertPostedBankJournalEntry({
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
     voucherNumber: params.voucherNumber,
     entryDate: params.entryDate,
     description: 'Bank tx',
-    sourceType: 'bank_transaction',
+    transactionId,
     lines: [
       { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
       { accountNumber: '2091', debitAmount: 0, creditAmount: amount },
