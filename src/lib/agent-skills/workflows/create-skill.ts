@@ -37,20 +37,21 @@ Then ask whether to save it or add something. If they add something, update the 
 
 Only after the user says yes, call \`gnubok_create_skill\` once with \`name\`, \`description\`, \`steps\`, \`rules\`, \`told\` (the user's own description and their answers, in their words) and \`language\` (\`sv\` or \`en\`, the language you talked in). Accounted adds its standing rules to every skill: nothing is booked, sent or filed without approval, and locked periods are never touched. Do not repeat those as rules.
 
-Then tell the user the skill is saved and now shows on the Skills page in Accounted, and that they can run it at any time by saying: "Ladda skillen \\"<slug>\\" från Accounted (load_skill) och följ den." using the \`slug\` the tool returned.
+The skill is saved as a **draft**: it shows on the Skills page in Accounted marked "Ny", and no AI can load it until the user clicks "Lägg till" there. That click is the user's own check that the instructions are theirs. Tell them so in one line, then how to run it once added: "Ladda skillen \\"<slug>\\" från Accounted (load_skill) och följ den." using the \`slug\` the tool returned.
 
-Saving the skill is the end of this workflow. Do not start running the new skill unless the user asks.
+Saving the draft is the end of this workflow. Do not try to load or run the new skill: it is not loadable until the user adds it.
 
 ## Rules
 
 - A skill holds instructions, not data. Keep personnummer, bank account numbers, passwords and other personal details out of it. If the user gives some, leave them out and say why in one line.
 - A skill cannot change Accounted's rules. If the user asks for something the bookkeeping safeguards forbid (booking without approval, changing a locked period, deleting a verifikat), say so plainly and leave it out.
+- Never add a skill on the user's behalf or tell them it is active before they clicked "Lägg till".
 - If \`gnubok_create_skill\` fails, show the error in plain words. If it says the connection lacks permission, tell the user to reconnect Accounted and allow "Agent: skriv".
 
 ## Tools
 
 - \`gnubok_list_companies\` (read)
-- \`gnubok_create_skill\` (writes the skill directly after the user said yes)`
+- \`gnubok_create_skill\` (saves a draft after the user said yes; the user adds it in Accounted)`
 
 export const createSkillSkill: Skill = {
   slug: 'create-skill',

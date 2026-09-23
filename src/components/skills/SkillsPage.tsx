@@ -23,7 +23,7 @@ import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
 import styles from './skills.module.css'
 
 type SkillSummary = Omit<CatalogSkill, 'body'>
-type OwnRow = { slug: string; name: string; summary: string; installationId: string }
+type OwnRow = { slug: string; name: string; summary: string; installationId: string; draft?: boolean }
 type PageState = 'loading' | 'locked' | 'waiting' | 'unlocking' | 'open'
 type Row = { key: string; name: string; desc: string; own?: OwnRow; id?: RegistrySkillId }
 
@@ -149,7 +149,7 @@ function Registry({ companyId }: { companyId: string }) {
   const [suggestCopied, setSuggestCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
   const own: OwnRow[] = (catalog.data ?? [])
     .filter((skill) => skill.tier === 'own' && skill.shareStatus !== 'withdrawn' && skill.installations[0])
-    .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id }))
+    .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id, draft: skill.draft }))
 
   // ── connection: asked on load and whenever the user comes back to the tab ──
   const [connected, setConnected] = useState<AiClient[] | null>(null)
@@ -285,6 +285,18 @@ function Registry({ companyId }: { companyId: string }) {
       return null
     }
   }
+  async function addOwn(target: Extract<SheetTarget, { kind: 'own' }>): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/skills/${target.installationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add' }) })
+      if (!response.ok) return false
+      await catalog.mutate()
+      setSheet({ ...target, draft: false })
+      setHitRow(target.slug)
+      return true
+    } catch {
+      return false
+    }
+  }
   async function deleteOwn(target: Extract<SheetTarget, { kind: 'own' }>): Promise<boolean> {
     try {
       const response = await fetch(`/api/skills/${target.installationId}`, { method: 'DELETE' })
@@ -322,7 +334,7 @@ function Registry({ companyId }: { companyId: string }) {
   }
   function openRow(row: Row) {
     setSheet(row.own
-      ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId }
+      ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId, draft: row.own.draft }
       : { kind: 'registry', id: row.id!, locked: rowsLocked })
   }
   const landingSlug = landing ? own.find((row) => row.installationId === landing)?.slug : undefined
@@ -450,6 +462,7 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  {row.own?.draft && <span className={`${styles.now} ${styles.nowLight}`}>{t('draft_tag')}</span>}
                   {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_count', { count: doNow.get(row.id)! })}</span>}
                   {row.id && allDone(row.id) && <span className={`${styles.done} ${styles.doneLight}`}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
                   <span className={styles.foot}>
@@ -518,6 +531,7 @@ function Registry({ companyId }: { companyId: string }) {
         onConnect={(target) => { setSheet(null); connect(target) }}
         onEdit={IN_APP_CREATOR ? (target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) } : undefined}
         onDelete={deleteOwn}
+        onAdd={addOwn}
       />
       <SkillCreator mode={creator} client={client} pageRef={pageRef} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />
     </div>

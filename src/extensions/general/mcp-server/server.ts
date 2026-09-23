@@ -5308,7 +5308,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_create_skill',
     title: 'Create Own Skill',
-    description: 'Save the own skill the user confirmed (create-skill). Direct write.',
+    description: 'Save the confirmed own skill as a draft the user adds in Accounted.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5342,7 +5342,7 @@ export const tools: McpTool[] = [
       SkillBodySchema.parse(skill.body)
       const { data, error } = await supabase
         .from('company_skills')
-        .insert({ company_id: companyId, team_id: null, created_by: userId, atom_id: null, name: skill.name, description: skill.description, body: skill.body })
+        .insert({ company_id: companyId, team_id: null, created_by: userId, atom_id: null, name: skill.name, description: skill.description, body: skill.body, draft: true })
         .select('id')
         .single()
       if (error) throw error

@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { ArrowUpRight, X } from 'lucide-react'
+import { ArrowUpRight, Plus, X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -16,7 +16,7 @@ import styles from './skills.module.css'
 
 export type SheetTarget =
   | { kind: 'registry'; id: RegistrySkillId; locked: boolean }
-  | { kind: 'own'; slug: string; name: string; installationId: string }
+  | { kind: 'own'; slug: string; name: string; installationId: string; draft?: boolean }
 
 /**
  * Copies the prompt and opens an empty chat. The chat opens synchronously so
@@ -40,7 +40,7 @@ async function readBody(url: string): Promise<string> {
  * copies the prompt and opens an empty chat: the prompt names a skill and
  * nothing else, but it still travels by clipboard, never in the chat URL.
  */
-export function SkillSheet({ target, companyId, client, canWrite, todo, usage, onClose, onConnect, onEdit, onDelete }: {
+export function SkillSheet({ target, companyId, client, canWrite, todo, usage, onClose, onConnect, onEdit, onDelete, onAdd }: {
   target: SheetTarget | null
   companyId: string
   client: AiClient
@@ -53,17 +53,19 @@ export function SkillSheet({ target, companyId, client, canWrite, todo, usage, o
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
+  /** Adds an AI-saved draft so agents can load it. */
+  onAdd: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   return (
     <SlideOver open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SlideOverContent aria-describedby={undefined} className={styles.sheet}>
-        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} todo={todo} usage={usage} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
+        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} todo={todo} usage={usage} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} onAdd={onAdd} />}
       </SlideOverContent>
     </SlideOver>
   )
 }
 
-function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect, onEdit, onDelete }: {
+function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect, onEdit, onDelete, onAdd }: {
   target: SheetTarget
   companyId: string
   client: AiClient
@@ -75,6 +77,8 @@ function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
+  /** Adds an AI-saved draft so agents can load it. */
+  onAdd: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   const t = useTranslations('skills_registry')
   const locale = useLocale()
@@ -83,6 +87,7 @@ function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect
   const [fullCopy, setFullCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteFailed, setDeleteFailed] = useState(false)
+  const [addState, setAddState] = useState<'idle' | 'adding' | 'failed'>('idle')
 
   const own = target.kind === 'own' ? target : null
   const id = target.kind === 'registry' ? target.id : null
@@ -113,18 +118,34 @@ function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect
           <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
           <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
         </div>
-        <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
+        <p className={styles.dtD}>{own ? t(own.draft ? 'draft_desc' : 'own_desc') : t(`skills.${id}.desc`)}</p>
         {id && t.has(`skills.${id}.note`) && <p className={styles.dtNote}>{t(`skills.${id}.note`)}</p>}
         {usage && <p className={styles.usesLine}>{t('uses_line', { count: usage.count, date: formatDateLong(usage.last_at, locale) })}</p>}
       </div>
       <div className={styles.sheetMain}>
         {steps.length > 0 && <ol className={styles.steps}>{steps.map((step, i) => <li key={i} data-ph-mask={own ? '' : undefined}>{step}</li>)}</ol>}
         <div className={styles.sheetFoot}>
-          <div className={styles.promptbox}>
-            <span>{t('say_label')}</span>
-            <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
-          </div>
-          {locked ? (
+          {!own?.draft && (
+            <div className={styles.promptbox}>
+              <span>{t('say_label')}</span>
+              <p data-ph-mask={own ? '' : undefined}>{`”${say}”`}</p>
+            </div>
+          )}
+          {own?.draft ? (
+            <div className="flex flex-col gap-2">
+              <span className={styles.goWrap}>
+                <button type="button" className={styles.go} disabled={!canWrite || addState === 'adding'} onClick={() => { setAddState('adding'); void onAdd(own).then((ok) => setAddState(ok ? 'idle' : 'failed')) }}>
+                  <Plus className="h-4 w-4" aria-hidden />
+                  {t('add_draft')}
+                </button>
+              </span>
+              <div className={styles.nightBtns}>
+                <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>
+              </div>
+              {addState === 'failed' && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+              {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
+            </div>
+          ) : locked ? (
             <div className="flex flex-col gap-3">
               <p className={styles.lockedline}>{t('locked_line')}</p>
               <div className={styles.nightBtns}>

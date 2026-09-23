@@ -35,4 +35,5 @@ export const UpdateCompanySkillSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('edit'), name: z.string().trim().min(1).max(120), description: z.string().trim().min(1).max(500), body: SkillBodySchema }).strict(),
   z.object({ action: z.literal('submit'), confirmed_no_customer_data: z.literal(true), author_handle: z.string().regex(/^[a-z0-9][a-z0-9-]{0,38}$/) }).strict(),
   z.object({ action: z.literal('withdraw') }).strict(),
+  z.object({ action: z.literal('add') }).strict(),
 ])

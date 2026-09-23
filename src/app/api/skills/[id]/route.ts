@@ -18,13 +18,16 @@ export const PATCH = withRouteContext<Params>('skills.update', async (request, {
   const row = (await loadCompanySkillRows(supabase, companyId)).find((item) => item.id === id)
   if (!row || row.atom_id) return failure(404, 'NOT_FOUND', 'Egen skill hittades inte.', 'Own skill not found.')
   const input = validation.data
-  if (input.action !== 'withdraw' && row.share_status !== 'private') return failure(409, 'CONFLICT', 'Inskickad text är låst för granskning.', 'Submitted content is frozen for review.')
+  if (input.action === 'add' && !row.draft) return failure(409, 'CONFLICT', 'Skillen är redan tillagd.', 'The skill is already added.')
+  if (input.action !== 'withdraw' && input.action !== 'add' && row.share_status !== 'private') return failure(409, 'CONFLICT', 'Inskickad text är låst för granskning.', 'Submitted content is frozen for review.')
   if (input.action === 'withdraw' && !['submitted', 'published'].includes(row.share_status)) return failure(409, 'CONFLICT', 'Skillen är inte inskickad.', 'The skill is not submitted.')
   const update = input.action === 'edit'
     ? supabase.from('company_skills').update({ name: input.name, description: input.description, body: input.body })
     : input.action === 'submit'
       ? supabase.from('company_skills').update({ share_status: 'submitted', author_handle: input.author_handle, share_confirmed_at: new Date().toISOString() })
-      : supabase.from('company_skills').update({ share_status: 'withdrawn' })
+      : input.action === 'add'
+        ? supabase.from('company_skills').update({ draft: false })
+        : supabase.from('company_skills').update({ share_status: 'withdrawn' })
   const scoped = row.team_id ? update.eq('team_id', row.team_id) : update.eq('company_id', companyId)
   const { data, error } = await scoped.eq('id', id).eq('share_status', row.share_status).select('id').maybeSingle()
   if (error) throw error

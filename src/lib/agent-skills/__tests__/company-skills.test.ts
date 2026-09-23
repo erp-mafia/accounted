@@ -20,6 +20,7 @@ describe('tenant-scoped skill resolution', () => {
   })
   it('does not expose withdrawn private content', () => {
     expect(ownSkill({ ...own, share_status: 'withdrawn' })).toBeNull()
+    expect(ownSkill({ ...own, draft: true })).toBeNull()
     expect(ownSkill(own)?.slug).toBe('own/own-id')
   })
 })

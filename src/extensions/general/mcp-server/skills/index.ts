@@ -30,7 +30,7 @@ export async function findSkill(slug: string, supabase?: SupabaseClient, company
 
 /** Workflow skills + registry-loaded atoms in one list. */
 export async function loadAllSkills(supabase: SupabaseClient, companyId?: string | null, includeAll = false): Promise<Skill[]> {
-  if (companyId) return (await loadSkillCatalog(supabase, companyId)).filter((skill) => skill.shareStatus !== 'withdrawn' && (includeAll || skill.active || skill.tier === 'community'))
+  if (companyId) return (await loadSkillCatalog(supabase, companyId)).filter((skill) => skill.shareStatus !== 'withdrawn' && !skill.draft && (includeAll || skill.active || skill.tier === 'community'))
   const atoms = await loadAtomsAsSkills(supabase)
   return [...workflowSkills, ...atoms]
 }

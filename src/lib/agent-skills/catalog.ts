@@ -9,6 +9,8 @@ export interface CatalogSkill extends Skill {
   active: boolean
   installations: Array<{ installation_id: string; scope: 'company' | 'team' }>
   shareStatus?: CompanySkillRow['share_status']
+  /** Saved by an AI, waiting for a person to add it on the Skills page. */
+  draft?: boolean
 }
 
 export async function loadSkillCatalog(supabase: SupabaseClient, companyId: string): Promise<CatalogSkill[]> {
@@ -31,22 +33,24 @@ export async function loadSkillCatalog(supabase: SupabaseClient, companyId: stri
     }),
     ...rows.flatMap((row): CatalogSkill[] => {
       const skill = ownSkill(row)
-      // Withdrawn submissions remain visible to the author in the UI, but
-      // are never returned as active or loadable to an AI.
+      // Withdrawn submissions and AI-saved drafts remain visible in the UI,
+      // but are never returned as active or loadable to an AI.
       if (!skill && (row.atom_id || !row.name || !row.body)) return []
       return [{
         ...(skill ?? { slug: `own/${row.id}`, name: row.name!, summary: row.description ?? '', body: row.body!, tags: ['own'], tier: 'own' as const, source: 'own' as const }),
-        active: row.share_status !== 'withdrawn', shareStatus: row.share_status,
+        active: row.share_status !== 'withdrawn' && !row.draft, shareStatus: row.share_status,
+        ...(row.draft ? { draft: true } : {}),
         installations: [{ installation_id: row.id, scope: row.team_id ? 'team' : 'company' }],
       }]
     }),
   ]
 }
 
-export async function loadCatalogSkill(supabase: SupabaseClient, companyId: string, slug: string, includeWithdrawn = false): Promise<Skill | null> {
+/** includeInactive: the Skills page may read withdrawn skills and drafts; an agent never may. */
+export async function loadCatalogSkill(supabase: SupabaseClient, companyId: string, slug: string, includeInactive = false): Promise<Skill | null> {
   const catalog = await loadSkillCatalog(supabase, companyId)
   const skill = catalog.find((item) => item.slug === slug)
-  if (skill) return skill.shareStatus === 'withdrawn' && !includeWithdrawn ? null : skill
+  if (skill) return (skill.shareStatus === 'withdrawn' || skill.draft) && !includeInactive ? null : skill
   // Kvittojakten is not listed (one body per client), but each body loads by its slug.
   const kvittojakten = kvittojaktenSkills.find((item) => item.slug === slug)
   if (kvittojakten) return kvittojakten

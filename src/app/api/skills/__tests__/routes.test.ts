@@ -92,6 +92,17 @@ describe('skills HTTP routes', () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
     expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
   })
+  it('adds an AI-saved draft so agents can load it', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, draft: true }])
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'add' }), params)).status).toBe(200)
+    expect(findCall('company_skills', 'update')?.[0]).toEqual({ draft: false })
+    expect(findCalls('company_skills', 'eq')).toContainEqual(['company_id', 'company-a'])
+  })
+  it('refuses to add a skill that is not a draft', async () => {
+    expect((await PATCH(request('PATCH', { action: 'add' }), params)).status).toBe(409)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
   it('withdraws without deleting submission evidence', async () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
     enqueue({ data: { id } })

@@ -15,6 +15,8 @@ export interface CompanySkillRow {
   updated_at: string
   reviewed_at: string | null
   published_atom_id: string | null
+  /** Saved by an AI and not yet added by a person: listed, never loadable. */
+  draft?: boolean
 }
 
 /** Caller must already authorize company membership. Never cache tenant data. */
@@ -31,7 +33,7 @@ export async function loadCompanySkillRows(supabase: SupabaseClient, companyId: 
 }
 
 export function ownSkill(row: CompanySkillRow): Skill | null {
-  if (row.atom_id || row.share_status === 'withdrawn' || !row.name || !row.body) return null
+  if (row.atom_id || row.share_status === 'withdrawn' || row.draft || !row.name || !row.body) return null
   return {
     slug: `own/${row.id}`, name: row.name, summary: row.description ?? '',
     body: row.body, tags: ['own'], tier: 'own', source: 'own', reviewedAt: row.reviewed_at,

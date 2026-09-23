@@ -11,6 +11,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   sync:
+    # The push to the public mirror waits for a reviewer: PUBLIC_SKILLS_SYNC_TOKEN
+    # lives on this environment, which requires approval before the job runs.
+    environment: public-skills
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

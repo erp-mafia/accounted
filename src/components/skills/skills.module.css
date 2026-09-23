@@ -265,7 +265,7 @@
 .face .now::before { background: var(--rbd); }
 .nowLight { position: absolute; top: 12px; right: 12px; pointer-events: none; border-color: rgba(var(--rf), .9); background: #EEF3FA; color: #2A4468; }
 .nowLight::before { background: var(--rbd); }
-.row[data-now] .nm { padding-right: 88px; }
+.row[data-now] .nm, .row:has(.nowLight) .nm { padding-right: 104px; }
 .row[data-now] { --edge: var(--edgeNow); --edgeHover: var(--edgeNow); }
 
 /* "Allt klart": the skill has a signal and nothing waits for it */

@@ -580,12 +580,12 @@ describe('gnubok_create_skill tool', () => {
     expect(TOOL_SCOPE_MAP.gnubok_create_skill).toBe('agent:write')
   })
 
-  it('saves a private company skill with the standing rules and returns its slug', async () => {
+  it('saves a private company skill as a draft with the standing rules and returns its slug', async () => {
     const { supabase, insert } = insertMock()
     const result = await tool().execute(args, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
     expect(result).toEqual({ company_skill_id: 'skill-1', slug: 'own/skill-1' })
     const row = (insert.mock.calls[0] as unknown[])[0] as Record<string, string | null>
-    expect(row).toMatchObject({ company_id: 'company-1', team_id: null, created_by: 'user-1', atom_id: null, name: 'Månadens fakturor' })
+    expect(row).toMatchObject({ company_id: 'company-1', team_id: null, created_by: 'user-1', atom_id: null, name: 'Månadens fakturor', draft: true })
     expect(row.body).toContain('1. Hämta fakturorna.\n2. Kolla momsen.')
     expect(row.body).toContain('- Inget bokförs, skickas eller lämnas in utan att användaren godkänt det i Accounted.')
   })
