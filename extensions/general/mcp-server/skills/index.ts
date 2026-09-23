@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Skill } from './types'
 import { workflowSkills as coreWorkflowSkills } from '@/lib/agent-skills/workflows'
-import { kvittojaktenSkills } from './kvittojakten'
+import { kvittojaktenSkills } from '@/lib/agent-skills/workflows/kvittojakten'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 import { resolveOwnSkill } from '@/lib/agent-skills/company-skills'
 import { loadSkillCatalog } from '@/lib/agent-skills/catalog'

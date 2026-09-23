@@ -1,4 +1,4 @@
-import type { Skill } from './types'
+import type { Skill } from '../types'
 
 /**
  * Kvittojakten for a connected agent: find the underlag that is missing in

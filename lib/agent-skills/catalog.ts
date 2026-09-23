@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadAtomsAsSkills, loadReferenceById } from './atoms'
 import { loadCompanySkillRows, ownSkill, type CompanySkillRow } from './company-skills'
 import { workflowSkills } from './workflows'
+import { kvittojaktenSkills } from './workflows/kvittojakten'
 import type { Skill } from './types'
 
 export interface CatalogSkill extends Skill {
@@ -46,5 +47,8 @@ export async function loadCatalogSkill(supabase: SupabaseClient, companyId: stri
   const catalog = await loadSkillCatalog(supabase, companyId)
   const skill = catalog.find((item) => item.slug === slug)
   if (skill) return skill.shareStatus === 'withdrawn' && !includeWithdrawn ? null : skill
+  // Kvittojakten is not listed (one body per client), but each body loads by its slug.
+  const kvittojakten = kvittojaktenSkills.find((item) => item.slug === slug)
+  if (kvittojakten) return kvittojakten
   return slug.startsWith('own/') ? null : loadReferenceById(supabase, slug)
 }

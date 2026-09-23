@@ -38,15 +38,6 @@ export function registrySkillSlug(id: RegistrySkillId, client: AiClient): string
 }
 
 /**
- * Whether the page can show the full instruction text. Kvittojakten lives in
- * the MCP extension, which core must not import, so /api/skills cannot
- * resolve it: the page shows its steps only.
- */
-export function registrySkillHasBody(id: RegistrySkillId): boolean {
-  return id !== 'kvittojakten'
-}
-
-/**
  * Which "Att göra" counts make a skill worth running right now. A skill is
  * tagged "Gör nu" when any of its categories has work waiting. Skills with
  * no entry are never tagged: VAT and payroll deadlines share one count

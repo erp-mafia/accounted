@@ -8,7 +8,7 @@ import { X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
-import { registrySkillHasBody, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
 
@@ -80,14 +80,12 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const say = own ? t('own_prompt', { skill: own.slug, name: own.name }) : t(`skills.${id}.say`)
   const prompt = own ? say : t('prompt', { say, skill: slug })
   const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : []
-  const hasBody = own ? true : registrySkillHasBody(id!)
   const locked = target.kind === 'registry' && target.locked
   // Fetched as the sheet opens, so the copy runs inside the click and the browser allows it.
-  const body = useSWR(hasBody && !locked ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
+  const body = useSWR(!locked ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
 
   function copyFull() {
-    // Kvittojakten's body lives in an extension core cannot read: copy the prompt that loads it.
-    const text = hasBody ? body.data : prompt
+    const text = body.data
     const copying = text && navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('Nothing to copy'))
     void copying.then(() => setFullCopy('copied'), () => setFullCopy('failed'))
   }
