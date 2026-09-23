@@ -367,7 +367,7 @@ function Registry({ companyId }: { companyId: string }) {
         help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
       />
 
-      <section className={styles.hero} data-anim="">
+      <section className={styles.hero}>
         <div className={styles.intro}>
           <h2>{t('hero_title')}</h2>
           {suggestion && (
@@ -402,8 +402,10 @@ function Registry({ companyId }: { companyId: string }) {
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
-                {uses(skill.id) > 0 && <span className={styles.uses}>{t('uses', { count: uses(skill.id) })}</span>}
-                <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                <span className={styles.foot}>
+                  {uses(skill.id) > 0 && <span className={styles.uses}>{t('uses', { count: uses(skill.id) })}</span>}
+                  <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                </span>
               </button>
             </div>
           ))}
@@ -438,11 +440,13 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
-                  {uses(row.key) > 0 && <span className={styles.uses}>{t('uses', { count: uses(row.key) })}</span>}
-                  {row.id && <SkillMarks id={row.id} />}
                   {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_count', { count: doNow.get(row.id)! })}</span>}
                   {row.id && allDone(row.id) && <span className={`${styles.done} ${styles.doneLight}`}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
-                  <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                  <span className={styles.foot}>
+                    {row.id && <SkillMarks id={row.id} />}
+                    {uses(row.key) > 0 && <span className={styles.uses}>{t('uses', { count: uses(row.key) })}</span>}
+                    <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                  </span>
                 </div>
               </li>
             ))}

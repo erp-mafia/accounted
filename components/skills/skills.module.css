@@ -16,7 +16,6 @@
 }
 @keyframes spin { to { --ang: 360deg; } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-@keyframes ignite { 0% { opacity: 0; } 30% { opacity: 1.1; } 100% { opacity: calc(.8 * var(--fire)); } }
 @keyframes hitflare { 0% { box-shadow: 0 0 0 0 rgba(var(--rf), .9); } 100% { box-shadow: 0 0 0 22px rgba(var(--rf), 0); } }
 @keyframes breathe { 0%, 100% { opacity: .5; transform: scale(.95); } 50% { opacity: .95; transform: scale(1.05); } }
 
@@ -117,7 +116,7 @@
 .faceTop .marks { margin: 0; padding: 0; }
 .led { align-self: flex-end; width: 26px; height: 3px; border-radius: 2px; background: var(--rbd); box-shadow: 0 0 8px 1px rgba(var(--rf), .9); }
 .card[data-lit] .face { opacity: 1; }
-/* Eld: a wide white light wanders the edge and spills out behind the key */
+/* Eld, held still: a soft white light spills out behind the key */
 .card[data-lit]::before {
   content: "";
   position: absolute;
@@ -125,18 +124,13 @@
   border-radius: 20px;
   z-index: 0;
   pointer-events: none;
-  background: conic-gradient(from var(--ang), transparent 0 28%, rgba(255, 255, 255, .95) 50%, transparent 72% 100%);
+  background: radial-gradient(closest-side, rgba(255, 255, 255, .9), rgba(255, 255, 255, 0));
   filter: blur(20px);
   opacity: calc(.9 * var(--fire));
-  animation: spin 5s linear infinite;
-  animation-delay: calc(var(--i) * -1.7s);
   transition: opacity .4s, inset .4s;
 }
-.hero[data-anim] .card[data-lit]::before {
-  animation: spin 5s linear infinite, ignite 1.6s ease-out;
-  animation-delay: calc(var(--i) * -1.7s), 0s;
-}
 .card[data-lit]:hover::before { inset: -22px; }
+.face .now::before, .suggestDot { animation: none; }
 
 /* Skapa din egen: a glass key on the photo, dashed until touched, beside the two burning ones */
 @keyframes plusglow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(var(--rf), .5); } 50% { box-shadow: 0 0 18px 5px rgba(var(--rf), 1); } }
@@ -282,8 +276,11 @@
 .uses { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 10.5px; letter-spacing: .04em; color: hsl(var(--muted-foreground)); }
 .usesLine { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
 
-/* a quiet "Öppna" on every key, bottom right; it darkens and its arrow steps out on hover */
-.open { position: absolute; right: 14px; bottom: 12px; font-size: 11px; line-height: 16px; letter-spacing: .02em; color: hsl(var(--muted-foreground)); transition: color .2s; pointer-events: none; }
+/* the key's bottom line: brand marks and run count on the left, a quiet "Öppna" on the right, never over the text */
+.foot { margin-top: auto; display: flex; align-items: center; gap: 10px; min-height: 24px; padding-top: 8px; }
+.foot .marks { margin: 0; padding: 0; }
+/* "Öppna" darkens and its arrow steps out on hover */
+.open { margin-left: auto; font-size: 11px; line-height: 16px; letter-spacing: .02em; color: hsl(var(--muted-foreground)); transition: color .2s; pointer-events: none; }
 .open::after { content: "\2192"; display: inline-block; margin-left: 4px; transition: transform .2s; }
 .face:hover .open, .face:focus-visible .open, .row:hover .open, .row:has(.rowMain:focus-visible) .open { color: hsl(var(--foreground)); }
 .face:hover .open::after, .face:focus-visible .open::after, .row:hover .open::after, .row:has(.rowMain:focus-visible) .open::after { transform: translateX(3px); }
