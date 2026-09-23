@@ -38,7 +38,9 @@ COMMENT ON COLUMN public.assets.opening_depreciation_date IS
 ALTER TABLE public.assets
   ADD CONSTRAINT assets_opening_depreciation_check CHECK (
     opening_accumulated_depreciation >= 0
-    AND opening_accumulated_depreciation <= acquisition_cost
+    -- Planenlig avskrivning never writes off the restvärde: the opening
+    -- amount is capped at the depreciable base.
+    AND opening_accumulated_depreciation <= acquisition_cost - salvage_value
     AND (
       (opening_accumulated_depreciation = 0 AND opening_depreciation_date IS NULL)
       OR (opening_accumulated_depreciation > 0 AND opening_depreciation_date IS NOT NULL)

@@ -124,6 +124,7 @@ export function EditAssetDialog({
       const issues = validateOpeningDepreciation({
         acquisition_cost: cost,
         acquisition_date: acquisitionDate,
+        salvage_value: Number(asset.salvage_value ?? 0),
         opening_accumulated_depreciation: Number.isFinite(opening) ? opening : -1,
         opening_depreciation_date: openingDate || null,
         k3_components: asset.k3_components,

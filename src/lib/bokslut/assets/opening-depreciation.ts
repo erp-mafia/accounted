@@ -14,6 +14,8 @@ import type { K3Component } from '@/types'
 export interface OpeningDepreciationCandidate {
   acquisition_cost: number
   acquisition_date: string
+  /** Restvärde; the depreciable base is acquisition_cost - salvage_value. */
+  salvage_value?: number | null
   opening_accumulated_depreciation?: number | null
   opening_depreciation_date?: string | null
   k3_components?: K3Component[] | null
@@ -38,7 +40,9 @@ export interface OpeningDepreciationIssue {
 
 /**
  * Rules:
- * - 0 <= amount <= acquisition cost (the DB CHECK enforces the same).
+ * - 0 <= amount <= acquisition cost - salvage value (the DB CHECK enforces
+ *   the same): planenlig avskrivning never writes off the restvärde, so an
+ *   opening amount above the depreciable base would leave a negative plan.
  * - An amount above 0 needs the date it is stated per; the date must not be
  *   after today and not before the acquisition date.
  * - Not combined with K3 components: the opening amount is not split per
@@ -60,11 +64,13 @@ export function validateOpeningDepreciation(
     })
     return issues
   }
-  if (amount > value.acquisition_cost) {
+  const depreciableBase =
+    Math.round((value.acquisition_cost - Number(value.salvage_value ?? 0)) * 100) / 100
+  if (amount > depreciableBase) {
     issues.push({
       kind: 'exceeds_cost',
       path: 'opening_accumulated_depreciation',
-      message: 'Redan avskrivet belopp får inte överstiga anskaffningsvärdet.',
+      message: 'Redan avskrivet belopp får inte överstiga anskaffningsvärdet minus restvärdet.',
     })
   }
   if (amount > 0 && !date) {

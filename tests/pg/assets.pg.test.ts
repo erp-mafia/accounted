@@ -573,6 +573,26 @@ describe('assets: opening accumulated depreciation', () => {
     ).rejects.toThrow(/assets_opening_depreciation_check/)
   })
 
+  it('CHECK caps the opening amount at the cost less the salvage value', async () => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    await getPool().query(
+      `UPDATE public.assets
+          SET salvage_value = 10000,
+              opening_accumulated_depreciation = 50000, opening_depreciation_date = '2026-12-31'
+        WHERE id = $1`,
+      [assetId],
+    )
+    await expect(
+      getPool().query(
+        `UPDATE public.assets SET opening_accumulated_depreciation = 50000.01 WHERE id = $1`,
+        [assetId],
+      ),
+    ).rejects.toThrow(/assets_opening_depreciation_check/)
+    await expect(
+      getPool().query(`UPDATE public.assets SET salvage_value = 10000.01 WHERE id = $1`, [assetId]),
+    ).rejects.toThrow(/assets_opening_depreciation_check/)
+  })
+
   it('freezes the opening pair once the asset is disposed', async () => {
     const assetId = await insertAsset({
       userId: companyA.userId,

@@ -424,6 +424,7 @@ export async function updateAsset(
     input.category !== undefined ||
     input.acquisition_date !== undefined ||
     input.acquisition_cost !== undefined ||
+    input.salvage_value !== undefined ||
     input.depreciation_method !== undefined ||
     input.bas_asset_account !== undefined ||
     input.bas_accumulated_account !== undefined ||
@@ -470,9 +471,11 @@ export async function updateAsset(
   }
 
   // ── Opening accumulated depreciation ──────────────────────────────
-  // Judged on the row as it will END UP: a patch that lowers the cost below
-  // the stored opening amount, or adds components to an asset carrying one,
-  // is refused just like a bad opening amount itself.
+  // Judged on the row as it will END UP: a patch that lowers the cost (or
+  // raises the restvärde) below the stored opening amount, or adds components
+  // to an asset carrying one, is refused just like a bad opening amount
+  // itself. When the patch touches the opening fields, finalOpening is judged
+  // as is: a cleared date must fail here, not fall back to the stored date.
   if (existing) {
     const finalOpening = touchesOpening
       ? openingColumns(
@@ -486,11 +489,13 @@ export async function updateAsset(
     const issues = validateOpeningDepreciation({
       acquisition_cost: input.acquisition_cost ?? Number(existing.acquisition_cost),
       acquisition_date: input.acquisition_date ?? existing.acquisition_date,
-      opening_accumulated_depreciation:
-        finalOpening?.opening_accumulated_depreciation ??
-        Number(existing.opening_accumulated_depreciation ?? 0),
-      opening_depreciation_date:
-        finalOpening?.opening_depreciation_date ?? existing.opening_depreciation_date ?? null,
+      salvage_value: input.salvage_value ?? Number(existing.salvage_value ?? 0),
+      opening_accumulated_depreciation: finalOpening
+        ? finalOpening.opening_accumulated_depreciation
+        : Number(existing.opening_accumulated_depreciation ?? 0),
+      opening_depreciation_date: finalOpening
+        ? finalOpening.opening_depreciation_date
+        : existing.opening_depreciation_date ?? null,
       k3_components:
         input.k3_components !== undefined ? input.k3_components : existing.k3_components,
     })

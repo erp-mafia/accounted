@@ -4782,10 +4782,13 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
   },
   INVALID_OPENING_DEPRECIATION: {
     httpStatus: 400,
+    // The thrower (AssetOpeningDepreciationInvalidError) names the failed rule
+    // in Swedish; message_sv is the fallback that lists every rule.
+    thrown_message_sv: true,
     message_sv:
-      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
+      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet minus restvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
     message_en:
-      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
+      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost less the residual value, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
   },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,

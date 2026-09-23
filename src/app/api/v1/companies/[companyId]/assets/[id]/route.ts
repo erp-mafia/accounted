@@ -48,6 +48,8 @@ const EXAMPLE_ASSET = {
   bas_accumulated_account: '1229',
   bas_expense_account: '7832',
   k3_components: null,
+  opening_accumulated_depreciation: 0,
+  opening_depreciation_date: null,
   notes: 'Serienummer C02XY…',
   disposed_at: null,
   disposal_type: null,

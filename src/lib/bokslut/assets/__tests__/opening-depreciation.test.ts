@@ -266,6 +266,12 @@ describe('validateOpeningDepreciation', () => {
     expect(kinds({ ...base, opening_accumulated_depreciation: 100_000.01, opening_depreciation_date: '2024-12-31' })).toEqual(['exceeds_cost'])
   })
 
+  it('caps the amount at the acquisition cost less the salvage value', () => {
+    const withSalvage = { ...base, salvage_value: 10_000, opening_depreciation_date: '2024-12-31' }
+    expect(kinds({ ...withSalvage, opening_accumulated_depreciation: 90_000 })).toEqual([])
+    expect(kinds({ ...withSalvage, opening_accumulated_depreciation: 90_000.01 })).toEqual(['exceeds_cost'])
+  })
+
   it('requires a date that is not after today nor before the acquisition', () => {
     expect(kinds({ ...base, opening_accumulated_depreciation: 1_000 })).toEqual(['date_required'])
     expect(kinds({ ...base, opening_accumulated_depreciation: 1_000, opening_depreciation_date: '2026-09-23' })).toEqual(['date_future'])
@@ -401,6 +407,26 @@ describe('updateAsset with an opening balance', () => {
         opening_accumulated_depreciation: 100_000.01,
         opening_depreciation_date: '2024-12-31',
       }),
+    ).rejects.toBeInstanceOf(AssetOpeningDepreciationInvalidError)
+    expect(captured.update).toBeNull()
+  })
+
+  it('refuses clearing the date while the stored amount stays above 0', async () => {
+    const { supabase, captured } = mockSupabase(makeAsset(MIGRATED))
+    const err = await updateAsset(supabase, 'co', 'asset-1', { opening_depreciation_date: null }).catch(
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(AssetOpeningDepreciationInvalidError)
+    expect((err as AssetOpeningDepreciationInvalidError).issues.map((i) => i.kind)).toEqual([
+      'date_required',
+    ])
+    expect(captured.update).toBeNull()
+  })
+
+  it('refuses raising the salvage value above cost less a stored opening amount', async () => {
+    const { supabase, captured } = mockSupabase(makeAsset(MIGRATED))
+    await expect(
+      updateAsset(supabase, 'co', 'asset-1', { salvage_value: 40_000.01 }),
     ).rejects.toBeInstanceOf(AssetOpeningDepreciationInvalidError)
     expect(captured.update).toBeNull()
   })

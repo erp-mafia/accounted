@@ -1118,7 +1118,7 @@
       "remaining": "Kvar att skriva av: {amount}",
       "locked": "Redan avskrivet belopp är låst eftersom avskrivningar har bokförts i Accounted. Återför dem (storno) först för att ändra det.",
       "error_negative": "Redan avskrivet belopp får inte vara negativt.",
-      "error_exceeds_cost": "Redan avskrivet belopp får inte överstiga anskaffningsvärdet.",
+      "error_exceeds_cost": "Redan avskrivet belopp får inte överstiga anskaffningsvärdet minus restvärdet.",
       "error_date_required": "Ange datumet som redan avskrivet belopp avser.",
       "error_date_future": "Datumet för redan avskrivet belopp får inte vara senare än i dag.",
       "error_date_before_acquisition": "Datumet för redan avskrivet belopp får inte vara före anskaffningsdatumet.",

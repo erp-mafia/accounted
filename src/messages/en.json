@@ -1118,7 +1118,7 @@
       "remaining": "Left to depreciate: {amount}",
       "locked": "The already-depreciated amount is locked because depreciation has been posted in Accounted. Reverse it (storno) first to change it.",
       "error_negative": "The already-depreciated amount cannot be negative.",
-      "error_exceeds_cost": "The already-depreciated amount cannot exceed the acquisition cost.",
+      "error_exceeds_cost": "The already-depreciated amount cannot exceed the acquisition cost less the residual value.",
       "error_date_required": "Enter the date the already-depreciated amount refers to.",
       "error_date_future": "The date of the already-depreciated amount cannot be later than today.",
       "error_date_before_acquisition": "The date of the already-depreciated amount cannot be before the acquisition date.",
