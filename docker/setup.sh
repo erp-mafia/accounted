@@ -19,6 +19,9 @@ if [ "$ok" = false ]; then
   exit 1
 fi
 
+# Run from the repository root so .env lands next to docker-compose.yml.
+cd "$(dirname "$0")/.."
+
 # ─── Create .env file ───
 if [ -f .env ]; then
   printf ".env already exists. Overwrite? [y/N] "
@@ -29,12 +32,12 @@ if [ -f .env ]; then
   esac
 fi
 
-if [ ! -f .env.docker.example ]; then
-  echo "ERROR: .env.docker.example not found. Are you in the Accounted directory?"
+if [ ! -f docker/.env.example ]; then
+  echo "ERROR: docker/.env.example not found. Are you in the Accounted directory?"
   exit 1
 fi
 
-cp .env.docker.example .env
+cp docker/.env.example .env
 
 # ─── Auto-generate CRON_SECRET ───
 if command -v openssl >/dev/null 2>&1; then

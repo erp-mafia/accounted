@@ -4,7 +4,7 @@
 # Usage:
 #   1. Set DOMAIN=app.example.com in .env (must resolve to this host's public IP)
 #   2. Open ports 80 and 443 to the public internet (LE HTTP-01 challenge needs 80)
-#   3. docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#   3. docker compose -f docker-compose.yml -f docker/compose.caddy.yml up -d
 #
 # Caddy reaches the app over the internal Docker network; the app no longer
 # binds a host port at all.

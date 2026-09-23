@@ -3,7 +3,7 @@ services:
     image: ghcr.io/erp-mafia/gnubok:${IMAGE_TAG:-latest}
     env_file: .env
     # Bound to loopback by default: put a TLS-terminating reverse proxy in
-    # front (see docker-compose.caddy.yml). Override PORT in .env to change
+    # front (see docker/compose.caddy.yml). Override PORT in .env to change
     # the host port, or use the caddy overlay to remove the host binding.
     ports:
       - "127.0.0.1:${PORT:-3000}:3000"

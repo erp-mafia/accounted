@@ -31,4 +31,4 @@ Standalone `backfill-*`, `migrate-*`, `repair-*`, and parity scripts are manual 
 
 Read a script's header before running it. Follow the repository's environment and database-write rules; `.env.local` must be treated as production. Generated reports and customer data belong outside version control. Retained synthetic benchmark results are identified in their accompanying README.
 
-The public installation entry point remains [`setup.sh`](../setup.sh). See the [self-hosting guide](../docs/SELF-HOSTING.md) for its complete workflow.
+The public installation entry point remains [`docker/setup.sh`](../docker/setup.sh). See the [self-hosting guide](../docs/SELF-HOSTING.md) for its complete workflow.
