@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { applySourceChartCsv } from '../apply-source-chart'
+import {
+  acceptSourceChartWithoutReview,
+  applySourceChartCsv,
+  nothingToOverwrite,
+  type NothingToOverwrite,
+} from '../apply-source-chart'
 import {
   applyVatTreatmentReview,
   enrichAccountMappingsWithVat,
@@ -23,6 +28,9 @@ function mapping(account: string, name: string, target = account): AccountMappin
 function csv(...rows: string[]): string {
   return '﻿' + ['IsActive;AccountNumber;AccountName;VatCodeAndPercent', ...rows].join('\r\n') + '\r\n'
 }
+
+/** A first import: the company chart carries no VAT treatment yet. */
+const FIRST = nothingToOverwrite([]) as NothingToOverwrite
 
 describe('applySourceChartCsv', () => {
   it('puts the source system momskod on the mapping as a reviewable suggestion', () => {
@@ -489,6 +497,122 @@ describe('applySourceChartCsv', () => {
     const noCodes = applySourceChartCsv(first.mappings, csv('True;3058;Försäljn varor EG momsfri;'))
     expect(noCodes.applied).toBe(false)
     expect(noCodes.mappings[0].providerVatCode).toBe('35-0%')
+  })
+
+  it('grants the no-review accept only while the company chart has no VAT treatment', () => {
+    expect(nothingToOverwrite([])).not.toBeNull()
+    expect(
+      nothingToOverwrite([{ default_vat_treatment: null }, { default_vat_treatment: null }]),
+    ).not.toBeNull()
+    // One treatment anywhere in the chart means this is not a first import:
+    // a human may have set it, and an unseen chart must not overwrite it.
+    expect(
+      nothingToOverwrite([{ default_vat_treatment: null }, { default_vat_treatment: 'standard_25' }]),
+    ).toBeNull()
+  })
+
+  it('leaves the mappings untouched for a forged proof', () => {
+    const { mappings } = applySourceChartCsv(
+      [mapping('3058', 'Försäljn varor EG momsfri')],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+    )
+    const forged = {} as NothingToOverwrite
+    expect(acceptSourceChartWithoutReview(mappings, forged)).toBe(mappings)
+  })
+
+  it('accepts a translated code without review, and only a translated one', () => {
+    // Onboarding writes the chart in the same breath as the import, so there
+    // is nothing to overwrite and nothing to confirm against. buildSIEVatDefaults
+    // only writes a treatment for a row marked reviewed, so without this the
+    // whole act imports a ledger with no momskoder at all.
+    const { mappings } = applySourceChartCsv(
+      [
+        mapping('3058', 'Försäljn varor EG momsfri'),
+        mapping('3051', 'Försäljning inrikes'),
+      ],
+      csv('True;3058;Försäljn varor EG momsfri;35-0%', 'True;3051;Försäljning inrikes;05'),
+    )
+    const accepted = acceptSourceChartWithoutReview(mappings, FIRST)
+
+    // Translated: settled, so the import writes it.
+    expect(accepted[0]).toMatchObject({
+      defaultVatTreatment: 'reverse_charge_eu_goods',
+      vatTreatmentReviewed: true,
+      vatTreatmentSuggested: false,
+    })
+    // Read but not translated: a guess is not an answer, so it stays open.
+    expect(accepted[1].providerVatCode).toBe('05')
+    expect(accepted[1].providerVatTreatment).toBeNull()
+    expect(accepted[1].vatTreatmentReviewed ?? false).toBe(false)
+  })
+
+  it('drops an accepted code when the next chart does not mention the account', () => {
+    // The accept marks rows reviewed without a person having read them, which
+    // is exactly why clearPreviousChart cannot treat that flag alone as
+    // ownership. An account the company stopped using is simply absent from
+    // the next year's chart, and its old code has to go with the file it came
+    // from rather than riding along into the import.
+    const accepted = acceptSourceChartWithoutReview(
+      applySourceChartCsv(
+        [mapping('3058', 'Försäljn varor EG momsfri')],
+        csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+      ).mappings,
+      FIRST,
+    )
+    expect(accepted[0].providerVatCode).toBe('35-0%')
+
+    const { mappings } = applySourceChartCsv(accepted, csv('True;3051;Försäljn varor 25% sv;05-25%'))
+    expect(mappings[0].providerVatCode).toBeNull()
+    // Not null afterwards: the row falls back to what its label suggests. The
+    // difference that matters is the provenance, because buildSIEVatDefaults
+    // writes only reviewed rows, so this one is asked about instead of riding
+    // into the ledger as a fact the accepted chart no longer supports.
+    expect(mappings[0].vatTreatmentReviewed).toBe(false)
+    expect(mappings[0].vatTreatmentSuggested).toBe(true)
+  })
+
+  it('lets a corrected chart still correct an accepted row', () => {
+    // Reviewed AND required is what applySourceVatCodes reads as "a human
+    // answered this", which it never overwrites. An accept that left the flag
+    // up gave every row that signature, so picking the wrong year's chart and
+    // then fixing it changed nothing: the second file reported zero applied
+    // while the first one's treatments stayed. The real pair again: 3541 is
+    // export in the 2022 chart and EU in the 2023 one.
+    const wrongYear = acceptSourceChartWithoutReview(
+      applySourceChartCsv(
+        [mapping('3541', 'Faktureringsavgifter, EU-land')],
+        csv('True;3541;Faktureringsavgifter, export;36-0%'),
+      ).mappings,
+      FIRST,
+    )
+    expect(wrongYear[0].defaultVatTreatment).toBe('export_goods')
+
+    const corrected = applySourceChartCsv(
+      wrongYear,
+      csv('True;3541;Faktureringsavgifter, EU-land;35-0%'),
+    )
+    expect(corrected.summary.treatmentsApplied).toBe(1)
+    expect(corrected.mappings[0].defaultVatTreatment).toBe('reverse_charge_eu_goods')
+    expect(corrected.mappings[0].providerVatCode).toBe('35-0%')
+  })
+
+  it('still refuses to touch a row the user answered', () => {
+    // The flag the accept clears is not the one that protects a human answer:
+    // applyVatTreatmentReview leaves requiresVatTreatmentReview as it found it.
+    const answered = applyVatTreatmentReview(
+      acceptSourceChartWithoutReview(
+        applySourceChartCsv(
+          [mapping('3058', 'Försäljn varor EG momsfri')],
+          csv('True;3058;Försäljn varor EG momsfri;35-0%'),
+        ).mappings,
+        FIRST,
+      ),
+      '3058',
+      'oss',
+      null,
+    )
+    const { mappings } = applySourceChartCsv(answered, csv('True;3058;Försäljn varor EG momsfri;42-0%'))
+    expect(mappings[0].defaultVatTreatment).toBe('oss')
   })
 
   it('does not touch a remapped row, only identity mappings', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseSourceChartCsv } from '../parse-chart-csv'
+import { SOURCE_CHART_FORMATS, sourceChartFormatForProvider } from '../formats'
 
 /** A Spiris export as it arrives: BOM, semicolons, CRLF. */
 function spirisCsv(...rows: string[]): string {
@@ -172,5 +173,27 @@ describe('parseSourceChartCsv', () => {
   it('ignores blank lines between rows', () => {
     const csv = spirisCsv('True;3051;Test;05-25%', '', 'True;3052;Test 2;05-12%')
     expect(parseSourceChartCsv(csv).accounts).toHaveLength(2)
+  })
+})
+
+describe('sourceChartFormatForProvider', () => {
+  it('answers only for the system whose export can actually be read', () => {
+    // Onboarding asks which system the books came from before any file is
+    // picked, so it can offer the chart only where there is a translator for
+    // it. Both visma and bokio need a SIE file for the ledger; only one of
+    // them has a chart format here, and offering the picker to the other
+    // promises what the parser cannot keep.
+    expect(sourceChartFormatForProvider('visma')?.label).toBe('Spiris Bokföring')
+    for (const provider of ['bokio', 'fortnox', 'bjornlunden', 'briox', 'wint', null, undefined]) {
+      expect(sourceChartFormatForProvider(provider)).toBeNull()
+    }
+  })
+
+  it('keeps every format claiming a provider, so the gate cannot go stale', () => {
+    // A format added without one would be unreachable from onboarding and
+    // nothing else would say so.
+    for (const format of SOURCE_CHART_FORMATS) {
+      expect(format.provider).toBeTruthy()
+    }
   })
 })

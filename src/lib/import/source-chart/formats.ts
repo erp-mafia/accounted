@@ -25,6 +25,14 @@ export type SourceChartFormatId = 'spiris'
 export interface SourceChartFormat {
   /** Stable id, used in code and tests, never shown. */
   id: SourceChartFormatId
+  /**
+   * The migration provider this format belongs to, so a surface that already
+   * knows which system the user is leaving can offer the chart only where it
+   * can actually be read. Onboarding asks that question up front, and offering
+   * a Spiris-only reader to someone who picked Bokio promises what the parser
+   * cannot deliver.
+   */
+  provider: 'visma'
   /** What to call it when telling the user what was read. */
   label: string
   delimiter: ';' | ','
@@ -55,6 +63,9 @@ export interface SourceChartFormat {
 export const SOURCE_CHART_FORMATS: readonly SourceChartFormat[] = [
   {
     id: 'spiris',
+    // Spiris Bokföring is the product the migration list still calls Visma
+    // eEkonomi, its name before the rename.
+    provider: 'visma',
     // The current name only. The old one is where a user who knows the product
     // by it will actually look: source_chart_help_where spells out "I Spiris
     // Bokföring, tidigare Visma eEkonomi" next to the menu path.
@@ -70,6 +81,17 @@ export const SOURCE_CHART_FORMATS: readonly SourceChartFormat[] = [
     rateFromCode: (code) => parseSpirisVatCode(code)?.rate ?? null,
   },
 ]
+
+/**
+ * The chart format for a migration provider, or null when this project cannot
+ * read that system's export. Asked by any surface that knows the provider
+ * before a file is picked.
+ */
+export function sourceChartFormatForProvider(
+  provider: string | null | undefined,
+): SourceChartFormat | null {
+  return SOURCE_CHART_FORMATS.find((format) => format.provider === provider) ?? null
+}
 
 /** Every format's label, for telling the user what a file could have been. */
 export function supportedFormatLabels(): string[] {

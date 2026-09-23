@@ -271,3 +271,81 @@ export function applySourceChartCsv(
     },
   }
 }
+
+/**
+ * Accept the source system's answer without a review step.
+ *
+ * The mapping step leaves every code the chart translated as a SUGGESTION, so
+ * the user confirms it before syncMappedAccounts writes it: a code they never
+ * saw must not overwrite a treatment they set in Accounted on a later re-sync.
+ *
+ * Onboarding is the one place that premise does not hold. The company chart is
+ * created in the same breath as the import, so there is nothing to overwrite,
+ * and the act exists to be fast: its genomlysning offers four treatments on
+ * class 3 alone, one account at a time, and never reaches the purchase side
+ * where reverse charge and an import basis live. A file the user deliberately
+ * picked, written by the system they are leaving, is a better answer than the
+ * blank it would otherwise leave behind.
+ *
+ * Only rows this file actually translated are accepted. A row it could not
+ * read keeps whatever the label suggested and stays unreviewed, so nothing is
+ * marked settled on the strength of a guess.
+ *
+ * requiresVatTreatmentReview is cleared along with the accept, and that matters
+ * more than it looks. Reviewed AND required is the signature applySourceVatCodes
+ * reads as "a human answered this row", which it never overwrites. Leaving the
+ * flag up would give every accepted row that signature, so picking the wrong
+ * year's chart and then correcting it would change nothing at all: the second
+ * file would report zero codes applied while the first one's treatments stayed.
+ * Clearing it lands the row in the state enrichAccountMappingsWithVat produces
+ * when the company chart answers, which a later chart may still correct.
+ *
+ * The premise is checked, not assumed: the second argument is a
+ * NothingToOverwrite proof, which only nothingToOverwrite() can mint and only
+ * when the company chart carries no VAT treatment at all. A caller outside a
+ * first import (a re-import, a second pass through onboarding, any surface
+ * where a human may already have set a treatment) cannot obtain one and so
+ * cannot reach the auto-accept; it gets the reviewed mapping step instead.
+ */
+export function acceptSourceChartWithoutReview(
+  mappings: AccountMapping[],
+  proof: NothingToOverwrite,
+): AccountMapping[] {
+  // Runtime half of the type guard, for a caller that casts its way past it.
+  if (proof !== NOTHING_TO_OVERWRITE) return mappings
+  return mappings.map((mapping) =>
+    mapping.providerVatCode && mapping.providerVatTreatment
+      ? {
+          ...mapping,
+          vatTreatmentSuggested: false,
+          vatTreatmentReviewed: true,
+          requiresVatTreatmentReview: false,
+        }
+      : mapping,
+  )
+}
+
+declare const nothingToOverwriteBrand: unique symbol
+
+/**
+ * Proof that a source chart may be accepted without review: the company chart
+ * carries no default VAT treatment on any account, so no treatment a human set
+ * in Accounted can be overwritten. Minted only by nothingToOverwrite().
+ */
+export type NothingToOverwrite = { readonly [nothingToOverwriteBrand]: true }
+
+const NOTHING_TO_OVERWRITE = Object.freeze({}) as NothingToOverwrite
+
+/**
+ * The proof acceptSourceChartWithoutReview requires, or null when the company
+ * chart already carries a VAT treatment (not a first import). Pass the whole
+ * chart, inactive accounts included: a treatment on an inactive account is
+ * still one the import could overwrite.
+ */
+export function nothingToOverwrite(
+  companyAccounts: readonly Pick<BASAccount, 'default_vat_treatment'>[],
+): NothingToOverwrite | null {
+  return companyAccounts.some((account) => account.default_vat_treatment)
+    ? null
+    : NOTHING_TO_OVERWRITE
+}
