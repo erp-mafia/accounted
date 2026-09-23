@@ -622,7 +622,17 @@ export default async function DashboardLayout({
               initialAcknowledged={!!uiState.trial_expired_ack?.[companyId]}
             />
           )}
-          <LazyCommandPalette />
+          <LazyCommandPalette
+            entityType={entityType}
+            paysSalaries={paysSalaries}
+            dimensionsEnabled={dimensionsEnabled}
+            salesOrdersEnabled={salesOrdersEnabled}
+            quotesEnabled={quotesEnabled}
+            hasWebshop={hasWebshop}
+            hasMileage={hasMileage}
+            hasExpenseClaims={hasExpenseClaims}
+            arkivEnabled={isArkivEnabled(companyId)}
+          />
           <SettingsHotkey />
           {settingsModal}
         </div>
