@@ -306,8 +306,7 @@ describe('zettle extension routes', () => {
   it('POST /organization-name updates the connection and backfills order store_label', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: [{ id: 'c1' }] }) // update zettle_connections
-    enqueue({ data: null }) // update webshop_orders
+    enqueue({ data: { updated: true, backfilled: true } }) // rpc rename_zettle_store
     const res = await findRoute('POST', '/organization-name').handler(
       makeRequest('POST', { organization_name: '  Café Norr  ' }),
       makeContext(supabase),
@@ -315,13 +314,14 @@ describe('zettle extension routes', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body).toEqual({ success: true, organization_name: 'Café Norr' })
-    expect(findCall('zettle_connections', 'update')?.[0]).toEqual({
-      organization_name: 'Café Norr',
+    // Rename and backfill are one RPC (one transaction), never two
+    // PostgREST updates that concurrent renames could interleave.
+    expect(supabase.rpc).toHaveBeenCalledWith('rename_zettle_store', {
+      p_company_id: 'company-1',
+      p_name: 'Café Norr',
     })
-    expect(findCall('webshop_orders', 'update')?.[0]).toEqual({
-      store_label: 'Café Norr',
-    })
-    expect(findCall('webshop_orders', 'in')).toEqual(['connection_id', ['c1']])
+    expect(findCall('zettle_connections', 'update')).toBeUndefined()
+    expect(findCall('webshop_orders', 'update')).toBeUndefined()
   })
 
   it('POST /organization-name rejects an empty name', async () => {
@@ -337,7 +337,7 @@ describe('zettle extension routes', () => {
   it('POST /organization-name returns 404 when no active connection exists', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: [] })
+    enqueue({ data: { updated: false } })
     const res = await findRoute('POST', '/organization-name').handler(
       makeRequest('POST', { organization_name: 'Café Norr' }),
       makeContext(supabase),
@@ -348,8 +348,7 @@ describe('zettle extension routes', () => {
   it('POST /organization-name keeps the rename when order backfill fails', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
-    enqueue({ data: [{ id: 'c1' }] })
-    enqueue({ data: null, error: { message: 'backfill failed' } })
+    enqueue({ data: { updated: true, backfilled: false } })
     const res = await findRoute('POST', '/organization-name').handler(
       makeRequest('POST', { organization_name: 'Café Norr' }),
       makeContext(supabase),
@@ -361,5 +360,16 @@ describe('zettle extension routes', () => {
       organization_name: 'Café Norr',
       warning: 'Namnet sparades, men befintliga ordrar kunde inte uppdateras.',
     })
+  })
+
+  it('POST /organization-name returns 500 when the rename RPC fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    enqueue({ data: null, error: { message: 'boom' } })
+    const res = await findRoute('POST', '/organization-name').handler(
+      makeRequest('POST', { organization_name: 'Café Norr' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(500)
   })
 })

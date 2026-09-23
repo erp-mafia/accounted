@@ -103,34 +103,27 @@ async function handlePostOrganizationName(
     return NextResponse.json({ error: parsed.error }, { status: 400 })
   }
 
-  const { data: updated, error: updateError } = await auth.supabase
-    .from('zettle_connections')
-    .update({ organization_name: parsed.name })
-    .eq('company_id', auth.companyId)
-    .eq('status', 'active')
-    .select('id')
+  // One RPC, one transaction: the connection UPDATE holds the row lock while
+  // webshop_orders.store_label (Orders Butik) is backfilled, so two
+  // concurrent renames cannot leave the orders on an older name than the
+  // connection. A failed backfill still commits the rename (backfilled=false).
+  const { data: result, error: renameError } = await auth.supabase.rpc('rename_zettle_store', {
+    p_company_id: auth.companyId,
+    p_name: parsed.name,
+  })
 
-  if (updateError) {
+  if (renameError) {
     return NextResponse.json(
       { error: 'Kunde inte spara butiksnamnet. Försök igen.' },
       { status: 500 },
     )
   }
-  if (!updated || updated.length === 0) {
+  const outcome = (result ?? {}) as { updated?: boolean; backfilled?: boolean }
+  if (!outcome.updated) {
     return NextResponse.json({ error: 'Inget anslutet Zettle-konto.' }, { status: 404 })
   }
 
-  // Orders.Butik shows store_label || store_scope; keep existing rows in
-  // sync so a rename does not leave the UUID visible until the next feed.
-  const connectionIds = updated.map((row) => row.id)
-  const { error: backfillError } = await auth.supabase
-    .from('webshop_orders')
-    .update({ store_label: parsed.name })
-    .eq('company_id', auth.companyId)
-    .eq('platform', 'zettle')
-    .in('connection_id', connectionIds)
-
-  if (backfillError) {
+  if (outcome.backfilled === false) {
     return NextResponse.json(
       {
         success: true,
