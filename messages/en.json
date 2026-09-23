@@ -10200,6 +10200,23 @@
     "create": "Create skill",
     "create_prompt": "Load the skill \"create-skill\" from Accounted (load_skill) and follow it. I want to create my own skill.",
     "now_count": "{count} to do",
+    "all_done": "All done",
+    "uses": "{count, plural, one {Run once} other {Run # times}}",
+    "uses_line": "{count, plural, one {Run once} other {Run # times}} in the last six months, most recently {date}.",
+    "suggest": {
+      "bookkeep": {
+        "line": "{count, plural, one {One transaction is} other {# transactions are}} waiting to be booked.",
+        "cta": "Let {client} book {count, plural, one {it} other {them}}"
+      },
+      "kvittojakten": {
+        "line": "{count, plural, one {One document is} other {# documents are}} missing or waiting in the inbox.",
+        "cta": "Let {client} find {count, plural, one {it} other {them}}"
+      },
+      "reconcile-month": {
+        "line": "It is time to reconcile the bank account.",
+        "cta": "Let {client} reconcile"
+      }
+    },
     "sheet_todo": "{count, plural, one { item on your to-do list is} other { items on your to-do list are}} waiting for this skill.",
     "run_hint": "Copies the prompt and opens {client} in a new tab.",
     "create_card_title": "Create your own skill",

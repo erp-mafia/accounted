@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { ArrowUpRight, X } from 'lucide-react'
@@ -10,6 +10,7 @@ import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-di
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
 import { registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
+import { formatDateLong } from '@/lib/utils'
 import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
 
@@ -39,13 +40,15 @@ async function readBody(url: string): Promise<string> {
  * copies the prompt and opens an empty chat: the prompt names a skill and
  * nothing else, but it still travels by clipboard, never in the chat URL.
  */
-export function SkillSheet({ target, companyId, client, canWrite, todo, onClose, onConnect, onEdit, onDelete }: {
+export function SkillSheet({ target, companyId, client, canWrite, todo, usage, onClose, onConnect, onEdit, onDelete }: {
   target: SheetTarget | null
   companyId: string
   client: AiClient
   canWrite: boolean
   /** How many Att göra items this skill would clear. */
   todo?: number
+  /** How often agents ran it in the last half year. */
+  usage?: { count: number; last_at: string }
   onClose: () => void
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
@@ -54,24 +57,27 @@ export function SkillSheet({ target, companyId, client, canWrite, todo, onClose,
   return (
     <SlideOver open={target !== null} onOpenChange={(open) => { if (!open) onClose() }}>
       <SlideOverContent aria-describedby={undefined} className={styles.sheet}>
-        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} todo={todo} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
+        {target && <SheetBody key={target.kind === 'own' ? target.slug : target.id} target={target} companyId={companyId} client={client} canWrite={canWrite} todo={todo} usage={usage} onConnect={onConnect} onEdit={onEdit} onDelete={onDelete} />}
       </SlideOverContent>
     </SlideOver>
   )
 }
 
-function SheetBody({ target, companyId, client, canWrite, todo, onConnect, onEdit, onDelete }: {
+function SheetBody({ target, companyId, client, canWrite, todo, usage, onConnect, onEdit, onDelete }: {
   target: SheetTarget
   companyId: string
   client: AiClient
   canWrite: boolean
   /** How many Att göra items this skill would clear. */
   todo?: number
+  /** How often agents ran it in the last half year. */
+  usage?: { count: number; last_at: string }
   onConnect: (client: AiClient) => void
   onEdit?: (target: Extract<SheetTarget, { kind: 'own' }>) => void
   onDelete: (target: Extract<SheetTarget, { kind: 'own' }>) => Promise<boolean>
 }) {
   const t = useTranslations('skills_registry')
+  const locale = useLocale()
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [fullCopy, setFullCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
@@ -108,6 +114,7 @@ function SheetBody({ target, companyId, client, canWrite, todo, onConnect, onEdi
           <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
         </div>
         <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
+        {usage && <p className={styles.usesLine}>{t('uses_line', { count: usage.count, date: formatDateLong(usage.last_at, locale) })}</p>}
       </div>
       <div className={styles.sheetMain}>
         {steps.length > 0 && <ol className={styles.steps}>{steps.map((step, i) => <li key={i} data-ph-mask={own ? '' : undefined}>{step}</li>)}</ol>}

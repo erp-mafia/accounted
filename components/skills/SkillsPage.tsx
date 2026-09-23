@@ -2,20 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowRight, Plus } from 'lucide-react'
+import { ArrowRight, Check, Plus } from 'lucide-react'
 import useSWR from 'swr'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
 import type { CatalogSkill } from '@/lib/agent-skills/catalog'
 import type { WorklistCategory } from '@/lib/worklist/types'
-import { FREE_SKILLS, REGISTRY_SKILLS, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { FREE_SKILLS, REGISTRY_SKILLS, hasTodoSignal, registrySkillSlug, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import type { SkillUsage } from '@/lib/agent-skills/usage'
 import { AI_CLIENTS, aiConnectAction, aiPrefilledChatLink, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { SkillSheet, type SheetTarget } from './SkillSheet'
+import { SkillSheet, copyPromptAndOpen, type SheetTarget } from './SkillSheet'
 import { SkillCreator, type CreatorMode, type KeyRect } from './SkillCreator'
 import { SkillMarks } from './SkillMarks'
 import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
@@ -62,6 +63,13 @@ async function readWorklist(url: string): Promise<Partial<Record<WorklistCategor
   const response = await fetch(url)
   if (!response.ok) return {}
   return ((await response.json()).data as { counts: Record<WorklistCategory, number> }).counts
+}
+
+/** How often each skill was run; a failed read shows no counts. */
+async function readUsage(url: string): Promise<SkillUsage> {
+  const response = await fetch(url)
+  if (!response.ok) return {}
+  return (await response.json()).data as SkillUsage
 }
 
 async function readCatalog(url: string): Promise<SkillSummary[]> {
@@ -121,7 +129,14 @@ function Registry({ companyId }: { companyId: string }) {
   const { appName } = useBranding()
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const worklist = useSWR(['/api/worklist/counts', companyId], ([url]) => readWorklist(url))
+  const usage = useSWR(['/api/skills/usage', companyId], ([url]) => readUsage(url))
   const doNow = skillsToDoNow(worklist.data ?? {})
+  // "Allt klart": the skill has a signal and the loaded worklist has nothing for it
+  const allDone = (id: RegistrySkillId) => !!worklist.data && hasTodoSignal(id) && !doNow.has(id)
+  const uses = (slug: string) => usage.data?.[slug]?.count ?? 0
+  // the one thing worth doing now: the skill with the most waiting
+  const suggestion = [...doNow.entries()].sort((a, b) => b[1] - a[1])[0] as [RegistrySkillId, number] | undefined
+  const [suggestCopied, setSuggestCopied] = useState<'idle' | 'copied' | 'failed'>('idle')
   const own: OwnRow[] = (catalog.data ?? [])
     .filter((skill) => skill.tier === 'own' && skill.shareStatus !== 'withdrawn' && skill.installations[0])
     .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id }))
@@ -290,6 +305,11 @@ function Registry({ companyId }: { companyId: string }) {
     else if (IN_APP_CREATOR) setCreator({ kind: 'create' })
     else openAiConnector(aiPrefilledChatLink(client, t('create_prompt')))
   }
+  function runSuggestion(id: RegistrySkillId) {
+    if (!isConnected) { setSheet({ kind: 'registry', id, locked: true }); return }
+    const prompt = t('prompt', { say: t(`skills.${id}.say`), skill: registrySkillSlug(id, client) })
+    void copyPromptAndOpen(prompt, client).then((ok) => setSuggestCopied(ok ? 'copied' : 'failed'))
+  }
   function openRow(row: Row) {
     setSheet(row.own
       ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId }
@@ -350,6 +370,17 @@ function Registry({ companyId }: { companyId: string }) {
       <section className={styles.hero} data-anim="">
         <div className={styles.intro}>
           <h2>{t('hero_title')}</h2>
+          {suggestion && (
+            <div className={styles.suggest}>
+              <span className={styles.suggestDot} aria-hidden />
+              <p>{t(`suggest.${suggestion[0]}.line`, { count: suggestion[1] })}</p>
+              <button type="button" onClick={() => runSuggestion(suggestion[0])}>
+                {t(`suggest.${suggestion[0]}.cta`, { client: clientName, count: suggestion[1] })}
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+              </button>
+              {suggestCopied !== 'idle' && <span role="status" className={styles.suggestNote}>{suggestCopied === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</span>}
+            </div>
+          )}
         </div>
         <div className={styles.cards}>
           {top.map((skill, i) => (
@@ -366,10 +397,12 @@ function Registry({ companyId }: { companyId: string }) {
                 <span className={styles.faceTop}>
                   <SkillMarks id={skill.id} />
                   {doNow.has(skill.id) && <span className={styles.now}>{t('now_count', { count: doNow.get(skill.id)! })}</span>}
+                  {allDone(skill.id) && <span className={styles.done}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
                   <span className={styles.led} aria-hidden />
                 </span>
                 <h3>{t(`skills.${skill.id}.name`)}</h3>
                 <p>{t(`skills.${skill.id}.short`)}</p>
+                {uses(skill.id) > 0 && <span className={styles.uses}>{t('uses', { count: uses(skill.id) })}</span>}
                 <span className={styles.open} aria-hidden>{t('open_hint')}</span>
               </button>
             </div>
@@ -405,8 +438,10 @@ function Registry({ companyId }: { companyId: string }) {
                     <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
                   </button>
                   <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  {uses(row.key) > 0 && <span className={styles.uses}>{t('uses', { count: uses(row.key) })}</span>}
                   {row.id && <SkillMarks id={row.id} />}
                   {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_count', { count: doNow.get(row.id)! })}</span>}
+                  {row.id && allDone(row.id) && <span className={`${styles.done} ${styles.doneLight}`}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
                   <span className={styles.open} aria-hidden>{t('open_hint')}</span>
                 </div>
               </li>
@@ -463,6 +498,7 @@ function Registry({ companyId }: { companyId: string }) {
         client={client}
         canWrite={canWrite}
         todo={sheetKey ? doNow.get(sheetKey) : undefined}
+        usage={sheet ? usage.data?.[sheet.kind === 'own' ? sheet.slug : sheet.id] : undefined}
         onClose={() => setSheet(null)}
         onConnect={(target) => { setSheet(null); connect(target) }}
         onEdit={IN_APP_CREATOR ? (target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) } : undefined}

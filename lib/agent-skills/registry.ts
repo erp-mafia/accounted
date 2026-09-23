@@ -49,6 +49,11 @@ const NOW_CATEGORIES: Partial<Record<RegistrySkillId, readonly WorklistCategory[
   'reconcile-month': ['reconciliation_due'],
 }
 
+/** Whether the skill has an Att göra signal at all, so an empty count means "all done". */
+export function hasTodoSignal(id: RegistrySkillId): boolean {
+  return id in NOW_CATEGORIES
+}
+
 /** The skills with waiting work, and how many Att göra items each would clear. */
 export function skillsToDoNow(counts: Partial<Record<WorklistCategory, number>>): Map<RegistrySkillId, number> {
   const now = new Map<RegistrySkillId, number>()

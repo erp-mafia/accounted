@@ -10200,6 +10200,23 @@
     "create": "Skapa skill",
     "create_prompt": "Ladda skillen \"create-skill\" från Accounted (load_skill) och följ den. Jag vill skapa en egen skill.",
     "now_count": "{count} att göra",
+    "all_done": "Allt klart",
+    "uses": "{count, plural, one {Körd en gång} other {Körd # gånger}}",
+    "uses_line": "{count, plural, one {Körd en gång} other {Körd # gånger}} senaste halvåret, senast {date}.",
+    "suggest": {
+      "bookkeep": {
+        "line": "{count, plural, one {En transaktion väntar} other {# transaktioner väntar}} på att bokföras.",
+        "cta": "Låt {client} bokföra {count, plural, one {den} other {dem}}"
+      },
+      "kvittojakten": {
+        "line": "{count, plural, one {Ett underlag saknas} other {# underlag saknas}} eller väntar i inkorgen.",
+        "cta": "Låt {client} leta upp {count, plural, one {det} other {dem}}"
+      },
+      "reconcile-month": {
+        "line": "Det är dags att stämma av bankkontot.",
+        "cta": "Låt {client} stämma av"
+      }
+    },
     "sheet_todo": "{count, plural, one { sak på Att göra väntar} other { saker på Att göra väntar}} på den här skillen.",
     "run_hint": "Prompten kopieras och {client} öppnas i en ny flik.",
     "create_card_title": "Skapa din egen skill",

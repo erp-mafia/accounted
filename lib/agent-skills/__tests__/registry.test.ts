@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { skillsToDoNow } from '../registry'
+import { hasTodoSignal, skillsToDoNow } from '../registry'
 
 describe('skillsToDoNow', () => {
   it('tags nothing when the worklist is empty', () => {
@@ -18,5 +18,12 @@ describe('skillsToDoNow', () => {
 
   it('ignores categories no skill answers', () => {
     expect(skillsToDoNow({ pending_operations: 4, deadline_action: 1 })).toEqual(new Map())
+  })
+})
+
+describe('hasTodoSignal', () => {
+  it('knows which skills can ever be all done', () => {
+    expect(hasTodoSignal('bookkeep')).toBe(true)
+    expect(hasTodoSignal('year-end-close')).toBe(false)
   })
 })
