@@ -62,7 +62,7 @@ const EXECUTE = process.argv.includes('--execute')
 const OPERATION_ID = arg('operation-id') ?? null
 const VERIFY_OPERATION = arg('verify-operation') ?? null
 const INSPECT_HISTORY = process.argv.includes('--inspect-history')
-const STARTED_EVENT = arg('started-event') ?? null
+const STARTED_EVENT = arg('started-event') ?? (process.argv.includes('--started-event') ? '' : null)
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -93,7 +93,7 @@ if (VERIFY_OPERATION && (EXECUTE || !COMPANY_ID || !UUID_RE.test(VERIFY_OPERATIO
 }
 
 if ((INSPECT_HISTORY && (EXECUTE || VERIFY_OPERATION)) ||
-    (STARTED_EVENT && (!INSPECT_HISTORY || !COMPANY_ID || !UUID_RE.test(STARTED_EVENT)))) {
+    (STARTED_EVENT !== null && (!INSPECT_HISTORY || !COMPANY_ID || !UUID_RE.test(STARTED_EVENT)))) {
   console.error('--inspect-history is read-only; --started-event requires --inspect-history, --company and a valid UUID')
   process.exit(1)
 }
