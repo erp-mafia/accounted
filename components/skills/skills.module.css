@@ -403,13 +403,13 @@
 .pill:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }
 .pillGhost { background: transparent; color: hsl(var(--foreground)); border-color: hsl(var(--border)); }
 .pillGhost:hover { background: hsl(var(--secondary) / .6); }
-/* in the sheet the buttons stack as wide keys that lift on hover and give when pressed */
+/* in the sheet the buttons stack as wide pills that rise a little on hover */
 .sheetFoot .nightBtns { flex-direction: column; gap: 10px; }
-.sheetFoot .nightBtns > button { justify-content: center; width: 100%; height: 48px; padding: 0 20px; border-radius: var(--radius); font-size: 14px; box-shadow: 3px 3px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 38%); transition: transform .2s cubic-bezier(.2, .8, .2, 1.3), box-shadow .2s cubic-bezier(.2, .8, .2, 1.3), background-color .18s, color .18s, border-color .18s; }
+.sheetFoot .nightBtns > button { justify-content: center; width: 100%; height: 46px; padding: 0 20px; font-size: 14px; transition: transform .2s cubic-bezier(.2, .8, .2, 1.3), box-shadow .2s, background-color .18s, color .18s, border-color .18s; }
 .sheetFoot .nightBtns > .pillGhost { background: hsl(var(--background)); }
-.sheetFoot .nightBtns > button:hover:not(:disabled) { transform: translate(-2px, -2px); box-shadow: 5px 5px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 38%); }
+.sheetFoot .nightBtns > button:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 6px 16px -8px hsl(var(--foreground) / .35); }
 .sheetFoot .nightBtns > .pillGhost:hover:not(:disabled) { border-color: hsl(var(--foreground) / .35); }
-.sheetFoot .nightBtns > button:active:not(:disabled) { transition-duration: .08s; transform: translate(2px, 2px); box-shadow: 1px 1px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 38%); }
+.sheetFoot .nightBtns > button:active:not(:disabled) { transition-duration: .08s; transform: translateY(0); box-shadow: none; }
 .nightNote { font-size: 12px; color: hsl(var(--muted-foreground)); }
 
 /* ── Helskärm: the creator, light, with the halftone skyline ── */
