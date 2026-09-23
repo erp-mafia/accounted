@@ -58,8 +58,17 @@ function simulatedClient(): AiClient | null {
   return AI_CLIENTS.find((c) => c.id === value)?.id ?? null
 }
 
+/**
+ * Dev only: `?todo=1` fakes waiting Att göra work (and a few runs) so the
+ * suggestion line, counts and run counters can be seen without writing data.
+ */
+function simulatedTodo(): boolean {
+  return process.env.NODE_ENV === 'development' && new URLSearchParams(window.location.search).get('todo') === '1'
+}
+
 /** The "Att göra" counts; a failed read tags nothing rather than breaking the page. */
 async function readWorklist(url: string): Promise<Partial<Record<WorklistCategory, number>>> {
+  if (simulatedTodo()) return { book_transaction: 14, verifikat_missing_document: 3, inbox_document: 2 }
   const response = await fetch(url)
   if (!response.ok) return {}
   return ((await response.json()).data as { counts: Record<WorklistCategory, number> }).counts
@@ -67,6 +76,7 @@ async function readWorklist(url: string): Promise<Partial<Record<WorklistCategor
 
 /** How often each skill was run; a failed read shows no counts. */
 async function readUsage(url: string): Promise<SkillUsage> {
+  if (simulatedTodo()) return { bookkeep: { count: 12, last_at: new Date().toISOString() }, 'reconcile-month': { count: 3, last_at: new Date().toISOString() } }
   const response = await fetch(url)
   if (!response.ok) return {}
   return (await response.json()).data as SkillUsage
