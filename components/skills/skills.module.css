@@ -161,7 +161,23 @@
 .lower { display: flex; flex-direction: column; gap: 24px; }
 .veilwrap { position: relative; }
 .rows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0; padding: 0; list-style: none; }
-.rows > li { display: flex; }
+.rows > li { position: relative; display: flex; }
+/* a faint Himmel light wanders behind each key, the panel's fire turned low */
+.rows > li::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+  border-radius: 14px;
+  pointer-events: none;
+  background: conic-gradient(from var(--ang), transparent 0 30%, rgba(var(--rf), .9) 50%, transparent 70% 100%);
+  filter: blur(12px);
+  opacity: .35;
+  animation: spin 7s linear infinite;
+  transition: opacity .3s;
+}
+.rows > li:nth-child(3n+2)::before { animation-delay: -2.3s; }
+.rows > li:nth-child(3n)::before { animation-delay: -4.6s; }
+.rows > li:hover::before { opacity: .6; }
 
 /*
  * The rest of the skills as small light keys: the object from the panel,
@@ -170,6 +186,7 @@
  */
 .row {
   position: relative;
+  z-index: 1;
   flex: 1;
   display: flex;
   flex-direction: column;
