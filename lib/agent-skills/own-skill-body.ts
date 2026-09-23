@@ -1,66 +1,57 @@
+import { cleanText, type CreatorSummary, type CreatorTurn } from './creator-chat'
+
 /**
- * Turns the Skills creator's answers into a private company skill. The
- * creator asks three questions; the answers become plain Markdown the agent
- * follows. The labels arrive already translated, so the skill reads in the
- * language the user wrote it in. Output must pass SkillBodySchema: no tags,
- * no braces, plain text only.
+ * Turns the creator conversation into a private company skill: plain
+ * Markdown the AI follows. The headings arrive already translated, so the
+ * skill reads in the language the user wrote it in. Every field is cleaned
+ * again here, so the output always passes SkillBodySchema.
  */
-export interface OwnSkillAnswers {
-  /** The area the skill is for, e.g. "Bokföra inköp". */
-  area: string
-  /** How the company works today. */
-  context: string[]
-  /** What the AI must never do without asking. */
-  askFirst: string[]
-}
-
 export interface OwnSkillCopy {
-  name: (area: string) => string
   intro: string
-  scopeHeading: string
-  scope: (area: string) => string
-  contextHeading: string
-  askHeading: string
-  askLine: (item: string) => string
-  lockedLine: string
+  taskHeading: string
+  stepsHeading: string
   rulesHeading: string
-  rules: string
-  noContext: string
+  approvalLine: string
+  lockedLine: string
+  toldHeading: string
+  addedLabel: string
 }
 
-/** Strip anything the Markdown validator would reject from a user-visible label. */
-function clean(text: string): string {
-  return text.replace(/[{}<>`]/g, '').replace(/\s+/g, ' ').trim()
-}
-
-export function buildOwnSkill(answers: OwnSkillAnswers, copy: OwnSkillCopy): { name: string; description: string; body: string } {
-  const area = clean(answers.area)
-  const context = answers.context.map(clean).filter(Boolean)
-  const askFirst = answers.askFirst.map(clean).filter(Boolean)
-  const name = clean(copy.name(area)).slice(0, 120)
+export function buildOwnSkill(
+  summary: CreatorSummary,
+  told: { description: string; turns: CreatorTurn[]; extra: string[] },
+  copy: OwnSkillCopy,
+): { name: string; description: string; body: string } {
+  const name = cleanText(summary.name, 120)
+  const lede = cleanText(summary.lede, 500)
+  const steps = summary.steps.map((step) => cleanText(step, 200)).filter(Boolean)
+  const rules = summary.rules.map((rule) => cleanText(rule, 200)).filter(Boolean)
   const lines = [
     `# ${name}`,
     '',
     copy.intro,
     '',
-    `## ${copy.scopeHeading}`,
+    `## ${copy.taskHeading}`,
     '',
-    copy.scope(area.toLowerCase()),
+    lede,
     '',
-    `## ${copy.contextHeading}`,
+    `## ${copy.stepsHeading}`,
     '',
-    ...(context.length ? context.map((item) => `- ${item}`) : [`- ${copy.noContext}`]),
-    '',
-    `## ${copy.askHeading}`,
-    '',
-    ...askFirst.map((item) => `- ${copy.askLine(item.toLowerCase())}`),
-    `- ${copy.lockedLine}`,
+    ...steps.map((step, i) => `${i + 1}. ${step}`),
     '',
     `## ${copy.rulesHeading}`,
     '',
-    copy.rules,
+    ...rules.map((rule) => `- ${rule}`),
+    `- ${copy.approvalLine}`,
+    `- ${copy.lockedLine}`,
+    '',
+    `## ${copy.toldHeading}`,
+    '',
+    cleanText(told.description, 2000),
+    '',
+    ...told.turns.map((turn) => `- ${cleanText(turn.question, 200)} ${cleanText(turn.answer, 400)}`),
+    ...told.extra.map((item) => `- ${copy.addedLabel} ${cleanText(item, 400)}`),
     '',
   ]
-  const description = (context.length ? context.join(', ') : copy.scope(area.toLowerCase())).slice(0, 500)
-  return { name, description, body: lines.join('\n') }
+  return { name, description: lede, body: lines.join('\n') }
 }

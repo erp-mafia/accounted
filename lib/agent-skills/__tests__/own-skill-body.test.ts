@@ -3,39 +3,46 @@ import { buildOwnSkill, type OwnSkillCopy } from '../own-skill-body'
 import { SkillBodySchema } from '../validation'
 
 const copy: OwnSkillCopy = {
-  name: (area) => `${area} hos oss`,
   intro: 'Företagets egna instruktioner.',
-  scopeHeading: 'Gäller',
-  scope: (area) => `Gäller ${area} i det här företaget.`,
-  contextHeading: 'Så arbetar vi',
-  askHeading: 'Fråga alltid först',
-  askLine: (item) => `Fråga användaren innan du ska: ${item}.`,
-  lockedLine: 'Rör aldrig låsta eller stängda perioder.',
+  taskHeading: 'Uppgift',
+  stepsHeading: 'Steg',
   rulesHeading: 'Regler',
-  rules: 'Varje skrivning föreslås och godkänns av användaren.',
-  noContext: 'Inga särskilda rutiner angivna.',
+  approvalLine: 'Inget bokförs utan att användaren godkänt det.',
+  lockedLine: 'Rör aldrig låsta eller stängda perioder.',
+  toldHeading: 'Så beskrev användaren det',
+  addedLabel: 'Tillagt:',
 }
+
+const summary = {
+  kind: 'summary' as const,
+  name: 'Månadens leverantörsfakturor',
+  lede: 'Varje månad går Claude igenom leverantörsfakturorna.',
+  steps: ['Hämta fakturorna.', 'Kolla momsen.'],
+  rules: ['Flagga fel moms.'],
+  facts: ['Varje månad'],
+}
+const told = { description: 'Gå igenom fakturorna varje månad.', turns: [{ question: 'Alla leverantörer?', answer: 'Bara återkommande.' }], extra: ['Hyran kommer den 25:e.'] }
 
 describe('buildOwnSkill', () => {
   it('writes a body that passes the skill validator', () => {
-    const skill = buildOwnSkill({ area: 'Bokföra inköp', context: ['Privata utlägg förekommer'], askFirst: ['Bokföra över 10 000 kr'] }, copy)
-    expect(skill.name).toBe('Bokföra inköp hos oss')
-    expect(skill.body).toContain('- Fråga användaren innan du ska: bokföra över 10 000 kr.')
-    expect(skill.body).toContain('Rör aldrig låsta eller stängda perioder.')
-    expect(skill.description).toBe('Privata utlägg förekommer')
+    const skill = buildOwnSkill(summary, told, copy)
+    expect(skill.name).toBe('Månadens leverantörsfakturor')
+    expect(skill.description).toBe(summary.lede)
+    expect(skill.body).toContain('1. Hämta fakturorna.\n2. Kolla momsen.')
+    expect(skill.body).toContain('- Flagga fel moms.\n- Inget bokförs utan att användaren godkänt det.\n- Rör aldrig låsta eller stängda perioder.')
+    expect(skill.body).toContain('- Alla leverantörer? Bara återkommande.')
+    expect(skill.body).toContain('- Tillagt: Hyran kommer den 25:e.')
     expect(SkillBodySchema.safeParse(skill.body).success).toBe(true)
   })
 
-  it('keeps the locked-period rule and a scope line when nothing else is chosen', () => {
-    const skill = buildOwnSkill({ area: 'Moms', context: [], askFirst: [] }, copy)
-    expect(skill.body).toContain('- Inga särskilda rutiner angivna.')
-    expect(skill.body).toContain('- Rör aldrig låsta eller stängda perioder.')
-    expect(skill.description).toBe('Gäller moms i det här företaget.')
+  it('keeps the approval and locked-period rules when the summary has none', () => {
+    const skill = buildOwnSkill({ ...summary, rules: [] }, { ...told, turns: [], extra: [] }, copy)
+    expect(skill.body).toContain('## Regler\n\n- Inget bokförs utan att användaren godkänt det.')
   })
 
-  it('strips characters the validator rejects from labels', () => {
-    const skill = buildOwnSkill({ area: 'Lön <b>{x}</b>', context: ['a `b`'], askFirst: [] }, copy)
+  it('strips what the validator rejects from what the user typed', () => {
+    const skill = buildOwnSkill({ ...summary, name: 'Lön <b>{x}</b>' }, { ...told, description: 'Kör `rm` <script>' }, copy)
     expect(SkillBodySchema.safeParse(skill.body).success).toBe(true)
-    expect(skill.name).toBe('Lön bx/b hos oss')
+    expect(skill.name).toBe('Lön bx/b')
   })
 })

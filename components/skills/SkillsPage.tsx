@@ -15,7 +15,7 @@ import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
 import { SkillSheet, type SheetTarget } from './SkillSheet'
-import { SkillCreator, type CreatorMode } from './SkillCreator'
+import { SkillCreator, type CreatorMode, type KeyRect } from './SkillCreator'
 import { SkillMarks } from './SkillMarks'
 import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
 import styles from './skills.module.css'
@@ -269,7 +269,10 @@ function Registry({ companyId }: { companyId: string }) {
       return false
     }
   }
-  function onSaved(installationId: string) {
+  // "Hem": the forged key leaves the closing creator and flies into its row.
+  const flyFrom = useRef<KeyRect | null>(null)
+  function onSaved(installationId: string, key: KeyRect | null) {
+    flyFrom.current = key
     setCreator(null)
     setSheet(null)
     setLanding(installationId)
@@ -287,7 +290,30 @@ function Registry({ companyId }: { companyId: string }) {
     const page = pageRef.current
     const anchor = rowAnchors.current.get(landingSlug)
     const button = createRef.current
+    const from = flyFrom.current
+    flyFrom.current = null
     if (!page || !anchor || !button || prefersReducedMotion() || !page.animate) { setHitRow(landingSlug); return }
+    const row = anchor.closest(`.${styles.row}`)
+    if (from && row) {
+      const to = row.getBoundingClientRect()
+      const key = document.createElement('div')
+      key.className = styles.flykey
+      key.setAttribute('aria-hidden', 'true')
+      key.textContent = from.name
+      Object.assign(key.style, { left: `${from.left}px`, top: `${from.top}px`, width: `${from.width}px`, height: `${from.height}px` })
+      document.body.appendChild(key)
+      const dx = to.left - from.left, dy = to.top - from.top, sx = to.width / from.width, sy = to.height / from.height
+      const flight = key.animate([
+        { transform: 'none' },
+        { transform: `translate(${dx}px, ${dy - 60}px) scale(${sx}, ${sy})`, offset: 0.7 },
+        { transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`, opacity: 1 },
+      ], { duration: 1100, easing: 'cubic-bezier(.6, 0, .2, 1)', fill: 'forwards' })
+      void flight.finished.catch(() => {}).finally(() => {
+        key.remove()
+        if (alive.current) setHitRow(landingSlug)
+      })
+      return
+    }
     const spark = new Spark(page, centerIn(page, button), `${styles.spark} ${styles.sparkInk}`)
     void (async () => {
       try {
@@ -441,7 +467,7 @@ function Registry({ companyId }: { companyId: string }) {
         onEdit={(target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) }}
         onDelete={deleteOwn}
       />
-      <SkillCreator mode={creator} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />
+      <SkillCreator mode={creator} client={client} pageRef={pageRef} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />
     </div>
   )
 }
