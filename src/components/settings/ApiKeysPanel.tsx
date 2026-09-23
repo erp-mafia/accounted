@@ -24,7 +24,7 @@ import {
   SettingsReveal,
 } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight } from 'lucide-react'
+import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight, Building2 } from 'lucide-react'
 import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
@@ -59,9 +59,70 @@ interface ApiKey {
   scopes: string[] | null
   rate_limit_rpm: number
   mode?: 'live' | 'test'
+  /** Per-key company allowlist; null = every company the owner belongs to. */
+  company_ids?: string[] | null
   last_used_at: string | null
   revoked_at: string | null
   created_at: string
+}
+
+/** One of the caller's companies, as GET /api/settings/api-keys lists them in `meta.companies`. */
+interface PickerCompany {
+  company_id: string
+  name: string
+  is_active: boolean
+}
+
+/**
+ * Checkbox list of the caller's companies, shared by the create dialog and
+ * the per-key edit dialog. `lockedId` keeps one row checked and disabled: the
+ * company a key is created in stays inside its allowlist.
+ */
+function CompanyPickerList({
+  companies,
+  selected,
+  lockedId,
+  onToggle,
+}: {
+  companies: PickerCompany[]
+  selected: Set<string>
+  lockedId: string | null
+  onToggle: (companyId: string, checked: boolean) => void
+}) {
+  const t = useTranslations('settings_api_keys')
+  return (
+    <div className="space-y-2">
+      {companies.map((company) => {
+        const checked = selected.has(company.company_id)
+        const locked = company.company_id === lockedId
+        return (
+          <label
+            key={company.company_id}
+            className={cn(
+              'flex items-center gap-2 rounded-lg border border-border p-2 transition-colors duration-150',
+              locked ? 'cursor-default' : 'cursor-pointer',
+              checked ? 'bg-secondary' : 'hover:bg-secondary/60',
+            )}
+          >
+            <Checkbox
+              checked={checked}
+              disabled={locked}
+              onCheckedChange={(value) => onToggle(company.company_id, value === true)}
+              className="shrink-0"
+            />
+            <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+              {company.name}
+            </span>
+            {company.is_active && (
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {t('active_company_tag')}
+              </span>
+            )}
+          </label>
+        )
+      })}
+    </div>
+  )
 }
 
 type CopyState = 'idle' | 'copied' | 'failed'
@@ -182,6 +243,32 @@ export function ApiKeysPanel() {
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
 
+  // Company allowlist. The picker only appears for a user with two or more
+  // companies; every company starts ticked, and `company_ids` is sent only
+  // for a strict subset (keeping all ticked = unrestricted, follows future
+  // memberships). The edit dialog PATCHes the same set on an existing key.
+  const [companies, setCompanies] = useState<PickerCompany[]>([])
+  const [newKeyCompanies, setNewKeyCompanies] = useState<Set<string>>(new Set())
+  const [editingKey, setEditingKey] = useState<ApiKey | null>(null)
+  const [editCompanies, setEditCompanies] = useState<Set<string>>(new Set())
+  const [isSavingCompanies, setIsSavingCompanies] = useState(false)
+  const hasCompanyPicker = companies.length >= 2
+  const activeCompanyId = companies.find((company) => company.is_active)?.company_id ?? null
+  const allCompanyIds = () => new Set(companies.map((company) => company.company_id))
+  /** Selected ids in picker order (active first), never in click order. */
+  const orderedSelection = (selected: Set<string>) =>
+    companies.filter((company) => selected.has(company.company_id)).map((company) => company.company_id)
+
+  function toggleCompany(setter: (update: (prev: Set<string>) => Set<string>) => void) {
+    return (companyId: string, checked: boolean) =>
+      setter((prev) => {
+        const next = new Set(prev)
+        if (checked) next.add(companyId)
+        else next.delete(companyId)
+        return next
+      })
+  }
+
   // Segregation-of-duties: a single key that both stages bookkeeping (any
   // STAGING_SCOPES member) AND can approve it (pending_operations:approve)
   // lets an automated agent commit financial postings with no human in the
@@ -217,6 +304,9 @@ export function ApiKeysPanel() {
       if (json.data) {
         setKeys(json.data.filter((k: ApiKey) => !k.revoked_at))
       }
+      const list: PickerCompany[] = Array.isArray(json.meta?.companies) ? json.meta.companies : []
+      setCompanies(list)
+      setNewKeyCompanies(new Set(list.map((company) => company.company_id)))
     } catch {
       toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
     } finally {
@@ -251,6 +341,9 @@ export function ApiKeysPanel() {
           scopes: Array.from(newKeyScopes),
           mode: newKeyMode,
           ...(hasSodConflict ? { acknowledge_sod: true } : {}),
+          ...(hasCompanyPicker && newKeyCompanies.size < companies.length
+            ? { company_ids: orderedSelection(newKeyCompanies) }
+            : {}),
         }),
       })
       const json = await res.json()
@@ -273,11 +366,55 @@ export function ApiKeysPanel() {
       setNewKeyName('')
       setNewKeyMode('live')
       setNewKeyScopes(new Set(ALL_SCOPES))
+      setNewKeyCompanies(allCompanyIds())
       fetchKeys()
     } catch {
       toast({ title: t('toast_create_failed'), variant: 'destructive' })
     } finally {
       setIsCreating(false)
+    }
+  }
+
+  function openCompanyEditor(key: ApiKey) {
+    const current =
+      key.company_ids && key.company_ids.length > 0 ? new Set(key.company_ids) : allCompanyIds()
+    // The key's own company is locked in the dialog, so it is always selected.
+    if (activeCompanyId) current.add(activeCompanyId)
+    setEditCompanies(current)
+    setEditingKey(key)
+  }
+
+  async function handleSaveCompanies() {
+    if (!editingKey) return
+    setIsSavingCompanies(true)
+    try {
+      const res = await fetch(`/api/settings/api-keys/${editingKey.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company_ids:
+            editCompanies.size >= companies.length ? null : orderedSelection(editCompanies),
+        }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        const message =
+          typeof json.error === 'string'
+            ? json.error
+            : json.error?.message ?? t('toast_companies_failed')
+        toast({ title: message, variant: 'destructive' })
+        return
+      }
+      const saved: string[] | null = json.data?.company_ids ?? null
+      setKeys((prev) =>
+        prev.map((k) => (k.id === editingKey.id ? { ...k, company_ids: saved } : k)),
+      )
+      setEditingKey(null)
+      toast({ title: t('toast_companies_saved') })
+    } catch {
+      toast({ title: t('toast_companies_failed'), variant: 'destructive' })
+    } finally {
+      setIsSavingCompanies(false)
     }
   }
 
@@ -569,6 +706,13 @@ export function ApiKeysPanel() {
                 : scopeCount === 0
                   ? t('no_permissions')
                   : t('permissions_count', { count: scopeCount })
+            // Only meaningful for a multi-company user: "Alla företag" on a
+            // single-company account would be noise.
+            const companySummary = hasCompanyPicker
+              ? key.company_ids && key.company_ids.length > 0
+                ? t('companies_some', { selected: key.company_ids.length, total: companies.length })
+                : t('companies_all')
+              : null
             return (
               <div
                 key={key.id}
@@ -585,6 +729,12 @@ export function ApiKeysPanel() {
                   </span>
                   <span className="min-w-0 truncate text-xs text-muted-foreground">
                     {permissionSummary}
+                    {companySummary && (
+                      <>
+                        {' · '}
+                        {companySummary}
+                      </>
+                    )}
                     {' · '}
                     <span className="font-mono">{key.key_prefix}...</span>
                   </span>
@@ -596,6 +746,17 @@ export function ApiKeysPanel() {
                       : t('never_used')}
                   </span>
                 </div>
+                {hasCompanyPicker && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => openCompanyEditor(key)}
+                    aria-label={t('companies_edit', { name: key.name })}
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -656,6 +817,23 @@ export function ApiKeysPanel() {
                 {newKeyMode === 'test' ? t('mode_test_help') : t('mode_live_help')}
               </p>
             </div>
+            {hasCompanyPicker && (
+              <div className="space-y-2">
+                <div className="flex items-baseline justify-between gap-3">
+                  <Label>{t('companies_section_title')}</Label>
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                    {t('selected_count', { selected: newKeyCompanies.size, total: companies.length })}
+                  </span>
+                </div>
+                <CompanyPickerList
+                  companies={companies}
+                  selected={newKeyCompanies}
+                  lockedId={null}
+                  onToggle={toggleCompany(setNewKeyCompanies)}
+                />
+                <p className="text-xs text-muted-foreground">{t('companies_help')}</p>
+              </div>
+            )}
             <div className="space-y-3">
               <div className="flex items-baseline justify-between gap-3">
                 <div className="space-y-1">
@@ -704,7 +882,14 @@ export function ApiKeysPanel() {
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
               {t('cancel')}
             </Button>
-            <Button onClick={handleCreate} disabled={isCreating || newKeyScopes.size === 0}>
+            <Button
+              onClick={handleCreate}
+              disabled={
+                isCreating ||
+                newKeyScopes.size === 0 ||
+                (hasCompanyPicker && newKeyCompanies.size === 0)
+              }
+            >
               {isCreating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
               {t('create')}
             </Button>
@@ -714,6 +899,50 @@ export function ApiKeysPanel() {
 
       <DestructiveConfirmDialog {...revokeDialogProps} />
       <DestructiveConfirmDialog {...sodDialogProps} />
+
+      {/* Per-key company allowlist editor */}
+      <Dialog
+        open={editingKey !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditingKey(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('companies_dialog_title')}</DialogTitle>
+            <DialogDescription>
+              {t('companies_dialog_description', { name: editingKey?.name ?? '' })}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <div className="flex items-baseline justify-between gap-3">
+              <Label>{t('companies_section_title')}</Label>
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                {t('selected_count', { selected: editCompanies.size, total: companies.length })}
+              </span>
+            </div>
+            <CompanyPickerList
+              companies={companies}
+              selected={editCompanies}
+              lockedId={activeCompanyId}
+              onToggle={toggleCompany(setEditCompanies)}
+            />
+            <p className="text-xs text-muted-foreground">{t('companies_help')}</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingKey(null)}>
+              {t('cancel')}
+            </Button>
+            <Button
+              onClick={handleSaveCompanies}
+              disabled={isSavingCompanies || editCompanies.size === 0}
+            >
+              {isSavingCompanies && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+              {t('save')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Show key once dialog */}
       <Dialog open={showKeyDialog} onOpenChange={(open) => {

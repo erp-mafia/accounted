@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
+import { createLogger } from '@/lib/logger'
 // Not lib/company/context: that module imports next/headers for the legacy
 // company cookie, and this file is reachable from bundles where that import
 // is a build error.
@@ -173,6 +174,16 @@ export async function validateApiKey(
        * block every commit for the key.
        */
       unattendedCommitLimit: number | null
+      /**
+       * Per-key company allowlist (api_key_companies, migration
+       * 20260923160100): null when the key has no rows, meaning every
+       * non-archived company the user belongs to is reachable (and future
+       * memberships follow); else the listed company ids, which every door
+       * intersects with live membership on each call. The allowlist can only
+       * narrow reach, never widen it. null also when the deployed DB has not
+       * run the migration yet.
+       */
+      allowedCompanyIds: string[] | null
     }
   | { error: string; status: number }
 > {
@@ -204,6 +215,16 @@ export async function validateApiKey(
     return { error: 'Rate limit exceeded', status: 429 }
   }
 
+  // Fail closed on an allowlist the row carries but that parses to nothing:
+  // checked before the late binding below so a refused key writes nothing.
+  const allowedCompanyIds = parseAllowedCompanyIds(row.allowed_company_ids)
+  if (allowedCompanyIds === 'invalid') {
+    createLogger('auth/api-keys').error('refusing key with an unreadable company allowlist', {
+      apiKeyId: row.api_key_id,
+    })
+    return { error: 'Invalid API key', status: 401 }
+  }
+
   const companyId: string | null =
     row.company_id ?? (await bindUnboundKey(supabase, row.user_id, row.api_key_id))
 
@@ -224,7 +245,27 @@ export async function validateApiKey(
     // month-end because a defence-in-depth read blipped would be far worse
     // than not enforcing.
     unattendedCommitLimit: parseUnattendedCommitLimit(row.unattended_commit_limit),
+    allowedCompanyIds,
   }
+}
+
+/**
+ * The key's company allowlist, null for an unrestricted key, or 'invalid'.
+ *
+ * The RPC returns NULL for a key without allowlist rows and never an empty
+ * array (array_agg over zero rows is NULL), so only an absent value (a DB
+ * that has not run the migration) or null reads as "no allowlist": the
+ * allowlist narrows a key that is already bounded by live membership, so its
+ * absence is today's behaviour. A value that IS present but yields no
+ * company id (not an array, an empty array, no non-empty strings) is
+ * 'invalid' and the key is refused: reading it as null would turn a
+ * restricted key into one that reaches every company.
+ */
+function parseAllowedCompanyIds(value: unknown): string[] | null | 'invalid' {
+  if (value === undefined || value === null) return null
+  if (!Array.isArray(value)) return 'invalid'
+  const ids = value.filter((id): id is string => typeof id === 'string' && id.length > 0)
+  return ids.length > 0 ? ids : 'invalid'
 }
 
 /**

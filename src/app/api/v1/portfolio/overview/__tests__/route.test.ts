@@ -277,6 +277,24 @@ describe('GET /api/v1/portfolio/overview', () => {
     })
   })
 
+  it('passes the key company allowlist to the resolver as restrictTo', async () => {
+    mockValidate.mockResolvedValue({
+      userId: USER_ID,
+      companyId: COMPANY_A,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'Restricted key',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: [COMPANY_A, COMPANY_B],
+    })
+    const res = await GET(makeRequest({ team: 'true' }), staticRouteContext())
+    expect(res.status).toBe(200)
+    expect(mocks.resolveCompanyScope).toHaveBeenCalledWith(supabase, USER_ID, {
+      companies: 'team',
+      restrictTo: [COMPANY_A, COMPANY_B],
+    })
+  })
+
   it('team=true selects the byrå team scope', async () => {
     const res = await GET(makeRequest({ team: 'true' }), staticRouteContext())
     expect(res.status).toBe(200)

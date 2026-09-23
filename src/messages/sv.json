@@ -2988,7 +2988,18 @@
     "sod_warning": "Den här nyckeln kan både skapa bokföring och godkänna den. Då kan en automatiserad agent committa verifikationer utan mänsklig granskning (ansvarsfördelning).",
     "sod_dialog_title": "Bekräfta kombinerad behörighet",
     "sod_dialog_description": "Nyckeln kombinerar ett skriv-scope som stagar bokföring med behörighet att godkänna stagade operationer. Då kan en automatiserad agent både skapa och godkänna verifikationer utan att en människa granskar dem. Skapa nyckeln ändå?",
-    "sod_confirm": "Skapa ändå"
+    "sod_confirm": "Skapa ändå",
+    "companies_section_title": "Företag",
+    "companies_help": "Nyckeln når de företag du bockar i. Lämnar du alla ibockade följer den även företag du blir medlem i senare.",
+    "companies_all": "Alla företag",
+    "companies_some": "{selected} av {total} företag",
+    "companies_edit": "Ändra företag för {name}",
+    "active_company_tag": "(aktivt)",
+    "companies_dialog_title": "Företag för nyckeln",
+    "companies_dialog_description": "Välj vilka företag \"{name}\" ska nå. Företaget nyckeln är skapad i kan inte bockas ur.",
+    "save": "Spara",
+    "toast_companies_saved": "Företag uppdaterade",
+    "toast_companies_failed": "Kunde inte uppdatera företag"
   },
   "settings_oauth_clients": {
     "title": "OAuth-klienter",

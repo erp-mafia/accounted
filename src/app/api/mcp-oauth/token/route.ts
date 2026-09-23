@@ -13,6 +13,7 @@ import {
 } from '@/lib/auth/api-keys'
 import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isUuid } from '@/lib/invariants/uuid'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
@@ -107,6 +108,20 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     )
   }
 
+  // A consent that ticked a strict subset of the user's companies carries
+  // that subset as companyIds; the key is then restricted to exactly those
+  // (api_key_companies rows below). Only an absent list means unrestricted:
+  // a list that is present but empty or unreadable fails closed, before the
+  // code is consumed and before any key exists.
+  const parsedAllowlist = parseCompanyAllowlist(payload.companyIds)
+  if (!parsedAllowlist.ok) {
+    return NextResponse.json(
+      { error: 'invalid_grant', error_description: 'Authorization code carried an invalid company allowlist' },
+      { status: 400 }
+    )
+  }
+  const allowlist = parsedAllowlist.allowlist
+
   const codeHash = hashAuthCode(code)
   const supabase = createServiceClientNoCookies()
 
@@ -134,10 +149,20 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   // companyless consents (signed up from the OAuth popup, issue #1814),
   // resolve the active company here instead; null leaves the key unbound and
   // validateApiKey binds it on the first call after a company exists.
-  const companyId =
+  //
+  // A restricted key's default company must be one of its allowed
+  // companies. /authorize guarantees that; it is re-checked here because the
+  // code is a boundary we treat as hostile, and a default outside the
+  // allowlist would be a key that reaches more than the user consented to.
+  const consentedCompanyId =
     typeof payload.companyId === 'string' && payload.companyId.length > 0
       ? payload.companyId
-      : await getActiveCompanyId(supabase, payload.userId)
+      : null
+  const companyId = allowlist
+    ? consentedCompanyId && allowlist.includes(consentedCompanyId)
+      ? consentedCompanyId
+      : allowlist[0]
+    : consentedCompanyId ?? (await getActiveCompanyId(supabase, payload.userId))
 
   const { key, hash, prefix } = generateApiKey()
   const refresh = generateRefreshToken()
@@ -187,34 +212,45 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
 
-  const { error: insertError } = await supabase
-    .from('api_keys')
-    .insert({
-      user_id: payload.userId,
-      company_id: companyId,
-      key_hash: hash,
-      key_prefix: prefix,
-      name: OAUTH_MCP_KEY_NAME,
-      scopes: grantedScopes,
-      refresh_token_hash: refresh.hash,
-      // Which built-in client this is (claude, chatgpt, grok, ...): the
-      // onboarding Done step and Hem show a connected state per client.
-      // The redirect URI was validated against the allowlist at /authorize
-      // and travels in the code payload; a registered client stores null.
-      client: builtInRedirectProvider(payload.redirectUri),
-      // Literal keys (null when no conflict): the no-phantom-columns scanner
-      // resolves object literals only, never spreads.
-      sod_acknowledged_at: sodAcknowledgedAt,
-      sod_acknowledged_by: sodAcknowledgedAt ? payload.userId : null,
-    })
+  // The key row and its company allowlist rows (for a restricted consent)
+  // are written by one SECURITY DEFINER RPC in one transaction. A key with
+  // no allowlist rows reaches every company its user belongs to, so the two
+  // writes must stand or fall together: two PostgREST requests with a
+  // compensating revoke in between could leave a live key that reaches more
+  // than the user ticked (migration 20260923160200). The RPC also re-checks
+  // that every allowed company is a live membership and that the default
+  // sits inside the list; a refusal fails the exchange and the client can
+  // restart consent.
+  const { error: createError } = await supabase.rpc('create_api_key_with_allowlist', {
+    p_user_id: payload.userId,
+    p_company_id: companyId,
+    p_key_hash: hash,
+    p_key_prefix: prefix,
+    p_name: OAUTH_MCP_KEY_NAME,
+    p_scopes: grantedScopes,
+    // Column default ('live'); the OAuth path never mints test keys.
+    p_mode: null,
+    // Which built-in client this is (claude, chatgpt, grok, ...): the
+    // onboarding Done step and Hem show a connected state per client.
+    // The redirect URI was validated against the allowlist at /authorize
+    // and travels in the code payload; a registered client stores null.
+    p_client: builtInRedirectProvider(payload.redirectUri),
+    p_refresh_token_hash: refresh.hash,
+    p_sod_acknowledged_at: sodAcknowledgedAt,
+    p_sod_acknowledged_by: sodAcknowledgedAt ? payload.userId : null,
+    p_unattended_commit_limit: null,
+    p_company_ids: allowlist,
+  })
 
-  if (insertError) {
+  if (createError) {
     // This 500 was silent while api_keys.company_id was NOT NULL and every
     // companyless signup died here (2026-08-26): always log the DB error.
-    console.error('[mcp-oauth/token] api key insert failed', {
-      code: insertError.code,
-      message: insertError.message,
+    console.error('[mcp-oauth/token] api key create failed', {
+      code: createError.code,
+      message: createError.message,
       companyless: companyId === null,
+      restricted: allowlist !== null,
+      keyPrefix: prefix,
     })
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to create API key' },
@@ -240,6 +276,25 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     refresh_token: refresh.token,
     scope: grantedScopes.join(' '),
   })
+}
+
+/**
+ * The company allowlist carried in the auth code.
+ *
+ * Absent (undefined or null) means the consent was unrestricted: `ok` with
+ * null. Anything else is an allowlist the consent DID set, so it must narrow
+ * the key: only UUID-shaped strings survive and duplicates collapse, and a
+ * value that is not an array, or an array that empties out after that, is
+ * `invalid`. Reading it as null would mint an unrestricted key from a
+ * consent that ticked a subset, so the caller fails the exchange instead.
+ */
+function parseCompanyAllowlist(
+  raw: unknown,
+): { ok: true; allowlist: string[] | null } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true, allowlist: null }
+  if (!Array.isArray(raw)) return { ok: false }
+  const ids = Array.from(new Set(raw.filter(isUuid)))
+  return ids.length > 0 ? { ok: true, allowlist: ids } : { ok: false }
 }
 
 async function handleRefreshTokenGrant(params: URLSearchParams) {

@@ -192,6 +192,18 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the day's other merges (peppol, SIE set-based import) under the Motparter
 // page. Same escape hatch, same reason: one expression somewhere in the files
 // the branches do not share.
+// 2026-09-19: 407 -> 409 with the per-key company allowlist (api_key_companies):
+// the OAuth token route and the settings key-creation route write the
+// allowlist as one bulk insert of { api_key_id, company_id } rows mapped from
+// the selected ids (a row per company cannot be an object literal). Both
+// columns are created by migration 20260923160100 and the same shape is
+// pinned by tests/pg/api-key-companies.pg.test.ts.
+// 2026-09-19 later: those two bulk inserts, the PATCH route's upsert array
+// and its interpolated not-in prune moved into two SECURITY DEFINER RPCs
+// (create_api_key_with_allowlist, replace_api_key_allowlist, migration
+// 20260923160200) so key + allowlist are one transaction; the count is 405.
+// The ceiling stayed at 409 as headroom; merged 2026-09-23 under the
+// Arkiv ceiling below, which already covers it.
 // 2026-09-21 Arkiv merge train (phases 1 to 5 each add their own entry below;
 // main stood at 407 of 407 when the train started). Headroom of 3 restored
 // here so a parallel merge to main does not stall the train: 407 -> 410 base.
