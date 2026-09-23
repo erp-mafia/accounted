@@ -299,14 +299,14 @@ function Build({ summary, stage, topRef }: { summary: CreatorSummary; stage: Sta
     <div className={styles.scene} aria-hidden data-orbit={stage.orbit ? '' : undefined} data-collapse={stage.collapse ? '' : undefined} data-flat={stage.flat ? '' : undefined} data-burn={stage.burn ? '' : undefined}>
       <div className={styles.rig}>
         {layers.map((l, i) => (
-          <div key={l.k} className={styles.plate} style={{ '--i': i } as CSSProperties} data-in={stage.fallen > i ? '' : undefined}>
+          <div key={l.k} className={styles.bplate} style={{ '--i': i } as CSSProperties} data-in={stage.fallen > i ? '' : undefined}>
             <div className={styles.pface}><b>{l.k}</b><div className={styles.ptags}>{l.items.map((item) => <span key={item} data-ph-mask>{item}</span>)}</div></div>
           </div>
         ))}
-        <div className={styles.plate} style={{ '--i': 2 } as CSSProperties} data-in={stage.fallen > 2 ? '' : undefined}>
+        <div className={styles.bplate} style={{ '--i': 2 } as CSSProperties} data-in={stage.fallen > 2 ? '' : undefined}>
           <div className={styles.pface}><b>{t('creator.layer_steps')}</b><ol className={styles.psteps}>{summary.steps.slice(0, 6).map((s, i) => <li key={i} data-ph-mask>{s}</li>)}</ol></div>
         </div>
-        <div ref={topRef} className={`${styles.plate} ${styles.ptop}`} style={{ '--i': 3 } as CSSProperties} data-in={stage.fallen > 3 ? '' : undefined}>
+        <div ref={topRef} className={`${styles.bplate} ${styles.ptop}`} style={{ '--i': 3 } as CSSProperties} data-in={stage.fallen > 3 ? '' : undefined}>
           <div className={styles.pface}>
             <h4 data-ph-mask>{summary.name}</h4>
             <p data-ph-mask>{summary.facts.join(' · ')}</p>

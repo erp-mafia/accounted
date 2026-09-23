@@ -620,12 +620,12 @@
 .rig { position: absolute; left: 50%; top: 62%; width: 0; height: 0; transform-style: preserve-3d; transform: rotateX(58deg) rotateZ(-38deg); transition: transform 1.3s cubic-bezier(.6, 0, .2, 1); }
 .scene[data-orbit] .rig { transform: rotateX(56deg) rotateZ(-22deg); transition-duration: 4s; transition-timing-function: ease-in-out; }
 .scene[data-flat] .rig { transform: none; transition: transform 1.2s cubic-bezier(.6, 0, .2, 1.05); }
-.plate { --z: calc(var(--i) * 105px); position: absolute; left: -160px; top: -78px; width: 320px; height: 156px; border-radius: 12px; border: 1.5px solid var(--rb); background: #1B3B49; color: #EAF0F4; transform-style: preserve-3d; backface-visibility: hidden; opacity: 0; transform: translateZ(calc(var(--z) + 520px)); transition: transform .65s cubic-bezier(.5, 0, .3, 1.35), opacity .25s, background-color .6s, border-color .6s, box-shadow .6s; }
-.plate::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--rf), .15), 0 18px 40px -14px rgba(0, 0, 0, .6); pointer-events: none; }
-.plate[data-in] { opacity: 1; transform: translateZ(var(--z)); }
-.scene[data-collapse] .plate { --z: calc(var(--i) * 9px); transition: transform .9s cubic-bezier(.7, 0, .2, 1.25), opacity .5s, background-color .6s, border-color .6s, box-shadow .6s; }
-.scene[data-flat] .plate { --z: calc(var(--i) * 1px); }
-.scene[data-flat] .plate:not(.ptop) { opacity: 0; transition-delay: .4s; }
+.bplate { --z: calc(var(--i) * 105px); position: absolute; left: -160px; top: -78px; width: 320px; height: 156px; border-radius: 12px; border: 1.5px solid var(--rb); background: #1B3B49; color: #EAF0F4; transform-style: preserve-3d; backface-visibility: hidden; opacity: 0; transform: translateZ(calc(var(--z) + 520px)); transition: transform .65s cubic-bezier(.5, 0, .3, 1.35), opacity .25s, background-color .6s, border-color .6s, box-shadow .6s; }
+.bplate::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: 0 0 0 1px rgba(var(--rf), .15), 0 18px 40px -14px rgba(0, 0, 0, .6); pointer-events: none; }
+.bplate[data-in] { opacity: 1; transform: translateZ(var(--z)); }
+.scene[data-collapse] .bplate { --z: calc(var(--i) * 9px); transition: transform .9s cubic-bezier(.7, 0, .2, 1.25), opacity .5s, background-color .6s, border-color .6s, box-shadow .6s; }
+.scene[data-flat] .bplate { --z: calc(var(--i) * 1px); }
+.scene[data-flat] .bplate:not(.ptop) { opacity: 0; transition-delay: .4s; }
 .pface { position: absolute; inset: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
 .pface > b { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 10px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: rgba(var(--rf), .9); }
 .pface h4 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 20px; line-height: 1.25; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
