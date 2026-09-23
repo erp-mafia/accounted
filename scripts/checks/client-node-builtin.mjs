@@ -39,7 +39,7 @@ export function findClientNodeBuiltins(root) {
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
   const findings = findClientNodeBuiltins(root)
   for (const f of findings) console.log(`${f.file} -> ${f.builtin}\n    ${f.chain.join('\n    > ')}`)
   console.log(`${findings.length} client file(s) reach a Node builtin`)

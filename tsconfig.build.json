@@ -9,6 +9,7 @@
   "extends": "./tsconfig.json",
   "exclude": [
     "node_modules",
+    "docs/reference",
     "dev_docs",
     "tests",
     "**/__tests__/**",

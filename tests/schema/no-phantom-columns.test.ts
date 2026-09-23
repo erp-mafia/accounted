@@ -247,11 +247,11 @@ beforeAll(() => {
   schema = buildSchemaFromMigrations(path.join(ROOT, 'supabase', 'migrations'))
   scan = scanColumnRefs(
     listSourceFiles([
-      path.join(ROOT, 'app'),
-      path.join(ROOT, 'lib'),
-      path.join(ROOT, 'components'),
-      path.join(ROOT, 'extensions'),
-      path.join(ROOT, 'hooks'),
+      path.join(ROOT, 'src', 'app'),
+      path.join(ROOT, 'src', 'lib'),
+      path.join(ROOT, 'src', 'components'),
+      path.join(ROOT, 'src', 'extensions'),
+      path.join(ROOT, 'src', 'hooks'),
       path.join(ROOT, 'scripts'),
     ]),
     schema,

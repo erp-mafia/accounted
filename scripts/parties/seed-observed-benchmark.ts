@@ -26,8 +26,8 @@ async function main() {
   const db = createClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
-  const { submitSIEJob, getSIEJob } = await import('../../lib/import/sie-jobs')
-  const { runSIEWorker } = await import('../../lib/import/sie-job-worker')
+  const { submitSIEJob, getSIEJob } = await import('../../src/lib/import/sie-jobs')
+  const { runSIEWorker } = await import('../../src/lib/import/sie-job-worker')
   async function checked<T>(query: PromiseLike<{ data: T; error: { message: string } | null }>): Promise<T> {
     const result = await query
     if (result.error) throw new Error(result.error.message)

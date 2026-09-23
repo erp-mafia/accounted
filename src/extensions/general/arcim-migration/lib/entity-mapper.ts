@@ -1,0 +1,1260 @@
+/**
+ * Maps Arcim Sync canonical DTOs to Accounted internal types.
+ *
+ * These mappers transform the normalized data from any Swedish accounting
+ * provider into the exact shapes Accounted expects for database insertion.
+ */
+
+import type { SupabaseClient } from '@supabase/supabase-js'
+import { fetchExchangeRate } from '@/lib/currency/riksbanken'
+import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
+import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
+import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import { orgNumberKey } from '@/lib/invariants/org-number'
+import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
+import { CURRENCIES, type Currency, type CustomerType, type ExchangeRate, type SupplierType, type VatTreatment } from '@/types'
+import { CREDIT_NOTE_TYPE_CODE } from '@/lib/providers/dto'
+import type {
+  AmountType,
+  CreditedInvoiceRefDto,
+  CustomerDto,
+  SupplierDto,
+  SalesInvoiceDto,
+  SalesInvoiceLineDto,
+  SupplierInvoiceDto,
+  SupplierInvoiceLineDto,
+  CompanyInformationDto,
+  PostalAddress,
+  PartyDto,
+  PaymentStatusDto,
+} from '@/lib/providers/dto'
+
+// ── Helpers ─────────────────────────────────────────────────────────
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100
+}
+
+function formatAddress(addr?: PostalAddress): {
+  address_line1: string | null
+  address_line2: string | null
+  postal_code: string | null
+  city: string | null
+  country: string | null
+} {
+  if (!addr) {
+    return { address_line1: null, address_line2: null, postal_code: null, city: null, country: null }
+  }
+  const line1 = [addr.streetName, addr.buildingNumber].filter(Boolean).join(' ') || null
+  return {
+    address_line1: line1,
+    address_line2: addr.additionalStreetName || null,
+    postal_code: addr.postalZone || null,
+    city: addr.cityName || null,
+    // customers.country is ISO 3166-1 alpha-2; some providers hand over a
+    // name (Fortnox's Country is "Sverige"), which is mapped when known and
+    // kept as-is otherwise so the periodisk report can point at it.
+    country: normalizeCountryCode(addr.countryCode) ?? addr.countryCode ?? null,
+  }
+}
+
+function getOrgNumber(party: PartyDto): string | null {
+  // Look for SE:ORGNR scheme first, then companyId in legalEntity
+  const seOrg = party.identifications?.find(i => i.schemeId === 'SE:ORGNR')
+  if (seOrg) return seOrg.id
+  return party.legalEntity?.companyId || null
+}
+
+function canonicalSupplierOrgNumber(value: string | null): string | null {
+  if (!value) return null
+  return orgNumberKey(value) ?? value
+}
+
+const EU_COUNTRIES = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'DK', 'EE', 'EL', 'ES', 'FI', 'FR', 'GR', 'HR', 'HU', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PL', 'PT', 'RO', 'SI', 'SK']
+
+/**
+ * Check if a string looks like a Swedish org number (XXXXXX-XXXX or 10 digits).
+ * Swedish org numbers are 10 digits where the third digit is >= 2 (to distinguish
+ * from personal numbers where month 01-12 appears in positions 3-4).
+ */
+function looksLikeSwedishOrgNumber(orgNumber: string | null | undefined): boolean {
+  if (!orgNumber) return false
+  const digits = orgNumber.replace(/[-\s]/g, '')
+  if (digits.length !== 10 || !/^\d+$/.test(digits)) return false
+  // Third digit >= 2 distinguishes org numbers from personal numbers
+  const thirdDigit = parseInt(digits[2], 10)
+  return thirdDigit >= 2
+}
+
+/**
+ * Check if a string looks like a Swedish identity number: an organisation
+ * number or personnummer in 10-digit form, or a personnummer in the 12-digit
+ * century-prefixed form (19xx / 20xx). Used to avoid misclassifying a domestic
+ * party as foreign just because its number isn't exactly 10 digits: a 12-digit
+ * personnummer like 19700616-7113 is Swedish, not an unknown foreign org number.
+ */
+function looksLikeSwedishIdNumber(orgNumber: string | null | undefined): boolean {
+  if (!orgNumber) return false
+  const digits = orgNumber.replace(/[-+\s]/g, '')
+  if (!/^\d+$/.test(digits)) return false
+  if (digits.length === 10) return true
+  return digits.length === 12 && /^(19|20)/.test(digits)
+}
+
+/**
+ * Company name suffixes that indicate a foreign (non-Swedish) entity.
+ * These override the default swedish_business assumption when no other
+ * signals (VAT, country code, org number) are available.
+ */
+const FOREIGN_SUFFIXES: { suffix: string; region: 'eu' | 'non_eu' }[] = [
+  // German
+  { suffix: 'gmbh', region: 'eu' },
+  { suffix: 'ag', region: 'eu' },
+  { suffix: 'e.v.', region: 'eu' },
+  { suffix: 'ohg', region: 'eu' },
+  { suffix: 'kg', region: 'eu' },
+  { suffix: 'ug', region: 'eu' },
+  // French
+  { suffix: 'sarl', region: 'eu' },
+  { suffix: 's.a.r.l.', region: 'eu' },
+  { suffix: 'sas', region: 'eu' },
+  // Dutch/Belgian
+  { suffix: 'b.v.', region: 'eu' },
+  { suffix: 'n.v.', region: 'eu' },
+  { suffix: 'bv', region: 'eu' },
+  { suffix: 'nv', region: 'eu' },
+  // Spanish/Italian
+  { suffix: 's.l.', region: 'eu' },
+  { suffix: 's.r.l.', region: 'eu' },
+  // Finnish
+  { suffix: 'oy', region: 'eu' },
+  { suffix: 'oyj', region: 'eu' },
+  // Danish/Norwegian
+  { suffix: 'a/s', region: 'eu' },
+  { suffix: 'aps', region: 'eu' },
+  // Anglo (could be UK, US, etc.: treat as non-EU since UK left)
+  { suffix: 'ltd', region: 'non_eu' },
+  { suffix: 'limited', region: 'non_eu' },
+  { suffix: 'llc', region: 'non_eu' },
+  { suffix: 'inc', region: 'non_eu' },
+  { suffix: 'corp', region: 'non_eu' },
+  { suffix: 'plc', region: 'non_eu' },
+  // Irish (EU)
+  { suffix: 'dac', region: 'eu' },
+]
+
+function inferRegionFromName(name: string | undefined): 'eu' | 'non_eu' | null {
+  if (!name) return null
+  const lower = name.toLowerCase().trim()
+  for (const { suffix, region } of FOREIGN_SUFFIXES) {
+    // Match as a word boundary at the end: "Acme GmbH" but not "Gmbhsson"
+    if (lower.endsWith(suffix) || lower.endsWith(suffix + '.')) {
+      // Check that there's a space or start before the suffix
+      const pos = lower.lastIndexOf(suffix)
+      if (pos === 0 || lower[pos - 1] === ' ') {
+        return region
+      }
+    }
+  }
+  return null
+}
+
+function inferTypeFromVatOrCountry(
+  vatNumber: string | undefined,
+  countryCode: string | undefined,
+  orgNumber?: string | null,
+  companyName?: string
+): 'swedish_business' | 'eu_business' | 'non_eu_business' {
+  // 1. VAT number prefix is the strongest signal
+  if (vatNumber) {
+    const prefix = vatNumber.substring(0, 2).toUpperCase()
+    if (prefix === 'SE') return 'swedish_business'
+    if (EU_COUNTRIES.includes(prefix)) return 'eu_business'
+    return 'non_eu_business'
+  }
+
+  // 2. Explicit country code
+  const country = countryCode?.toUpperCase()
+  if (country === 'SE') return 'swedish_business'
+  if (country && EU_COUNTRIES.includes(country)) return 'eu_business'
+  if (country) return 'non_eu_business'
+
+  // 3. Swedish-format org number is strong evidence of domestic entity
+  if (looksLikeSwedishOrgNumber(orgNumber)) return 'swedish_business'
+
+  // 4. A number that isn't a Swedish-format identity number → foreign entity.
+  //    Accepts both 10-digit and 12-digit (century-prefixed) Swedish numbers so
+  //    a domestic personnummer like 19700616-7113 isn't treated as foreign.
+  if (orgNumber) {
+    const digits = orgNumber.replace(/[-+\s]/g, '')
+    if (digits.length > 0 && !looksLikeSwedishIdNumber(orgNumber)) {
+      // Not a Swedish number: use name heuristic or default to non_eu
+      const nameRegion = inferRegionFromName(companyName)
+      if (nameRegion === 'eu') return 'eu_business'
+      return 'non_eu_business'
+    }
+  }
+
+  // 5. Company name suffix heuristic (GmbH, Ltd, etc.)
+  const nameRegion = inferRegionFromName(companyName)
+  if (nameRegion === 'eu') return 'eu_business'
+  if (nameRegion === 'non_eu') return 'non_eu_business'
+
+  // 6. No signal at all: default to swedish_business (most common in Swedish systems)
+  return 'swedish_business'
+}
+
+function inferCustomerType(dto: CustomerDto): CustomerType {
+  if (dto.type === 'private') return 'individual'
+  return inferTypeFromVatOrCountry(
+    dto.vatNumber,
+    dto.party.postalAddress?.countryCode,
+    getOrgNumber(dto.party),
+    dto.party.name
+  )
+}
+
+function inferSupplierType(dto: SupplierDto): SupplierType {
+  return inferTypeFromVatOrCountry(
+    dto.vatNumber,
+    dto.party.postalAddress?.countryCode,
+    getOrgNumber(dto.party),
+    dto.party.name
+  )
+}
+
+/**
+ * Infer customer/supplier type from a PartyDto (used by orchestrator for
+ * minimal entity creation from invoice data).
+ */
+export function inferTypeFromParty(
+  party: PartyDto,
+  vatNumber?: string
+): 'swedish_business' | 'eu_business' | 'non_eu_business' {
+  return inferTypeFromVatOrCountry(
+    vatNumber,
+    party.postalAddress?.countryCode,
+    getOrgNumber(party),
+    party.name
+  )
+}
+
+/**
+ * The VAT figures for one imported invoice, and whether they were observed.
+ *
+ * `rate` is null when nothing in the payload established one. That is the
+ * difference this type exists to carry: the old code answered "25" to that
+ * question and the record then read "25 % moms" beside "0 kr", which is not a
+ * rounding artefact but a claim the source never made.
+ */
+interface InvoiceVatResolution {
+  subtotal: number
+  vatAmount: number
+  /** Percent (25 / 12 / 6 / 0), or null when no evidence established it. */
+  rate: number | null
+  treatment: VatTreatment
+  /** True when neither a VAT total, line VAT, nor a net could be found. */
+  unresolved: boolean
+}
+
+/** Swedish statutory rates, most common first. */
+const SWEDISH_VAT_RATES = [25, 12, 6, 0] as const
+
+/**
+ * Snap an observed ratio to a statutory Swedish rate.
+ *
+ * Providers hand back both units (25 and 0.25) and their own rounding, so an
+ * invoice whose VAT divided by its net comes to 0.2499 is a 25 % invoice.
+ * A ratio matching none of the statutory rates returns null rather than the
+ * nearest one: an unrecognised rate is a fact worth surfacing, and a foreign
+ * invoice may legitimately carry 19 % or 24 %.
+ */
+function snapToSwedishRate(ratio: number): number | null {
+  const percent = ratio > 1 ? ratio : ratio * 100
+  return SWEDISH_VAT_RATES.find((rate) => Math.abs(percent - rate) < 0.5) ?? null
+}
+
+/**
+ * Treatment implied by an observed rate.
+ *
+ * A 0 % rate is genuinely ambiguous in the source data: it could be momsfritt,
+ * omvänd skattskyldighet or an export. Currency is the only signal available
+ * here, so a non-SEK invoice reads as export and a SEK one as exempt. Both
+ * post to a 0 % revenue account, which is what the numbers say; calling it
+ * `standard_25` (the old fallback) would have put a momsfri sale on 3001 and
+ * into ruta 05 of the momsdeklaration.
+ */
+function treatmentForRate(rate: number, currencyCode?: string): VatTreatment {
+  if (rate === 25) return 'standard_25'
+  if (rate === 12) return 'reduced_12'
+  if (rate === 6) return 'reduced_6'
+  return currencyCode && currencyCode !== 'SEK' ? 'export' : 'exempt'
+}
+
+/**
+ * Establish subtotal / VAT / rate for an imported invoice from evidence only.
+ *
+ * Evidence is taken in descending order of authority: the provider's own VAT
+ * total, then the sum of per-line VAT, then the gap between a stated net and
+ * the gross. When none of the three exists the invoice is marked unresolved
+ * and keeps only the figure that IS known, the gross the customer owes; the
+ * rate goes to null so no downstream reader can mistake silence for 25 %.
+ */
+/**
+ * A free-text row: no quantity, no amount, no unit price. Providers ship
+ * these as ordinary rows (Fortnox: DeliveredQuantity "0", Total 0, VAT 0);
+ * Accounted models them as `line_type = 'text'`, which the invoice page
+ * renders without amounts and the booking engine leaves out.
+ */
+interface LineShape {
+  quantity?: number
+  unitPrice?: { value: number }
+  lineExtensionAmount?: { value: number }
+}
+
+function isTextLine(line: LineShape): boolean {
+  return !line.quantity && !line.unitPrice?.value && line.lineExtensionAmount?.value === 0
+}
+
+function resolveInvoiceVat(
+  dto: { currencyCode: string; lines: readonly (LineShape & { taxPercent?: number; taxAmount?: { value: number } })[]; taxTotal?: { taxAmount: { value: number } }; legalMonetaryTotal: { lineExtensionAmount?: { value: number }; payableAmount: { value: number } } },
+): InvoiceVatResolution {
+  const total = round2(dto.legalMonetaryTotal.payableAmount.value)
+  const statedNet = dto.legalMonetaryTotal.lineExtensionAmount?.value
+  const net = statedNet !== undefined ? round2(statedNet) : undefined
+
+  const vatAmount = dto.taxTotal !== undefined
+    ? round2(dto.taxTotal.taxAmount.value)
+    : sumLineVat(dto.lines) ?? (net !== undefined ? round2(total - net) : undefined)
+
+  if (vatAmount === undefined) {
+    return {
+      subtotal: total,
+      vatAmount: 0,
+      rate: null,
+      // Nothing was observed, so nothing is asserted: `vat_rate: null` is the
+      // signal the UI and the repair query read. The treatment column is NOT
+      // NULL-typed across the codebase, so it keeps the schema default rather
+      // than widening `Invoice['vat_treatment']` through 90 call sites.
+      treatment: 'standard_25',
+      unresolved: true,
+    }
+  }
+
+  const subtotal = net ?? round2(total - vatAmount)
+
+  // A rate stated on a line beats one divided out of the totals: mixed-rate
+  // invoices divide out to a blended figure that matches no statutory rate.
+  // Distinct rates actually stated on the lines. A rate stated on a line beats
+  // one divided out of the totals, because a mixed-rate invoice divides out to
+  // a blended figure matching no statutory rate at all (25 % goods plus 6 %
+  // books lands near 21 %).
+  // A row that carries no money states no rate: Fortnox ships its free-text
+  // rows ("5 st M, 8 st L") with Total 0 and VAT 0, and counting that 0 %
+  // beside the 25 % of the priced rows made every such invoice "mixed" and
+  // nulled its header rate.
+  const statedRates = [...new Set(
+    dto.lines
+      .filter((line) => line.taxPercent != null && !isTextLine(line))
+      .map((line) => snapToSwedishRate(line.taxPercent as number) ?? (line.taxPercent as number)),
+  )]
+
+  // Mixed rates store `vat_rate: null` while keeping a treatment, matching what
+  // buildInvoiceWriteData does for a natively created mixed invoice
+  // (`isMixedRate ? null : theRate`). Labelling the whole invoice with its
+  // first line's rate would assert 25 % on an invoice that is 25 % and 6 %.
+  // The money is unaffected: the booking engine groups per ITEM rate, which is
+  // why the per-line vat_rate/vat_amount above have to be right.
+  const isMixed = statedRates.length > 1
+  const rate = isMixed
+    ? null
+    : statedRates.length === 1
+      ? snapToSwedishRate(statedRates[0])
+      : subtotal > 0
+        ? snapToSwedishRate(vatAmount / subtotal)
+        : null
+
+  // A mixed invoice still needs a treatment for the non-null column; the
+  // highest stated rate is the one that decides which revenue account the
+  // no-items fallback would reach for, and it is the safest of the set.
+  const treatmentRate = isMixed ? Math.max(...statedRates) : rate
+
+  return {
+    subtotal,
+    vatAmount,
+    rate,
+    treatment: treatmentRate !== null
+      ? treatmentForRate(treatmentRate, dto.currencyCode)
+      : 'standard_25',
+    // A VAT amount was established; only its rate could not be classified.
+    unresolved: false,
+  }
+}
+
+// ── Currency conversion ─────────────────────────────────────────────
+//
+// The provider DTOs (lib/providers/dto.ts) carry NO exchange rate and NO SEK
+// amount: an invoice exposes only `currencyCode` plus amounts already expressed
+// in that currency. So for a foreign-currency document the SEK value has to be
+// established here, at import, from the rate that was valid on the document's
+// OWN date. An imported invoice is räkenskapsinformation (BFL 7 kap): its SEK
+// value is part of the record, and stamping it with today's rate, or with a
+// fabricated 1:1, would misstate it.
+//
+// Same pattern as lib/transactions/ingest.ts: pre-resolve the unique
+// (currency, date) pairs once through fetchExchangeRate WITH the supabase
+// client (so the shared `exchange_rates` cache absorbs repeat dates) and WITH
+// the document date, then map synchronously against that index.
+
+/**
+ * Currencies Riksbanken publishes a series for (SERIES_IDS in
+ * lib/currency/riksbanken.ts). A document in any other currency has no rate
+ * source at all, so it is reported rather than written with a silent null.
+ */
+const CONVERTIBLE_CURRENCIES: readonly Currency[] = CURRENCIES
+
+/** Riksbanken fan-out bound, mirroring ingest.ts: a wide historical backfill
+ *  used to fire every pair at once and get the whole batch rate-limited. */
+const FX_FETCH_CONCURRENCY = 4
+
+function asConvertibleCurrency(code: string | undefined | null): Currency | null {
+  if (!code) return null
+  const upper = code.toUpperCase() as Currency
+  return CONVERTIBLE_CURRENCIES.includes(upper) ? upper : null
+}
+
+/** Normalize a DTO date to a plain ISO day, or null when it isn't one. */
+function isoDay(value: string | undefined | null): string | null {
+  if (!value || !/^\d{4}-\d{2}-\d{2}/.test(value)) return null
+  return value.slice(0, 10)
+}
+
+/** Pre-resolved rates, keyed by `${CURRENCY}|${YYYY-MM-DD}`. */
+export type FxRateIndex = Map<string, ExchangeRate>
+
+export function fxRateKey(currencyCode: string, isoDate: string): string {
+  return `${currencyCode.toUpperCase()}|${isoDate}`
+}
+
+/** Why a foreign-currency document could not be converted to SEK. */
+export type FxUnresolvedReason =
+  /** Currency outside Riksbanken's published series: no rate source exists. */
+  | 'unsupported_currency'
+  /** Rate source exists but no observation could be obtained for that date. */
+  | 'rate_unavailable'
+
+export interface FxUnresolved {
+  currency: string
+  /** The document's own date, i.e. the date a rate was needed for. */
+  date: string
+  reason: FxUnresolvedReason
+}
+
+interface FxResolution {
+  /** null for SEK documents (no rate applies) and for unconvertible ones. */
+  rate: number | null
+  /** Riksbanken observation date behind `rate`; null when there is no rate. */
+  rateDate: string | null
+  /** Factor to reach SEK: 1 for SEK documents, `rate` otherwise, null when
+   *  the conversion could not be established at all. */
+  sekFactor: number | null
+  /** Set ONLY when a foreign document could not be converted. */
+  unresolved: FxUnresolved | null
+}
+
+/**
+ * Fetch the rate valid on each document's own date, once per unique
+ * (currency, date) pair. SEK documents need no rate and are skipped.
+ *
+ * A pair that cannot be fetched is simply absent from the index; the mapper
+ * then reports that document as unresolved rather than inventing a number.
+ */
+export async function buildFxRateIndex(
+  supabase: SupabaseClient,
+  documents: { currencyCode?: string; issueDate?: string }[],
+): Promise<FxRateIndex> {
+  const index: FxRateIndex = new Map()
+
+  const pairs = new Map<string, { currency: Currency; date: string }>()
+  for (const doc of documents) {
+    const currency = asConvertibleCurrency(doc.currencyCode)
+    if (!currency || currency === 'SEK') continue
+    const date = isoDay(doc.issueDate)
+    if (!date) continue
+    const key = fxRateKey(currency, date)
+    if (!pairs.has(key)) pairs.set(key, { currency, date })
+  }
+  if (pairs.size === 0) return index
+
+  const entries = [...pairs.entries()]
+  for (let i = 0; i < entries.length; i += FX_FETCH_CONCURRENCY) {
+    const slice = entries.slice(i, i + FX_FETCH_CONCURRENCY)
+    const settled = await Promise.allSettled(
+      slice.map(([, { currency, date }]) => fetchExchangeRate(currency, new Date(date), supabase)),
+    )
+    for (let j = 0; j < slice.length; j++) {
+      const outcome = settled[j]
+      if (outcome.status === 'fulfilled' && outcome.value && outcome.value.rate > 0) {
+        index.set(slice[j][0], outcome.value)
+      }
+      // A miss deliberately leaves the key unset: never a made-up rate.
+    }
+  }
+
+  return index
+}
+
+/**
+ * Resolve the SEK conversion for one document.
+ *
+ * `rates` is optional so existing callers keep compiling; when it is omitted a
+ * foreign document resolves to `rate_unavailable` (reported), never to a
+ * silent 1:1. Only an actually-fetched positive rate produces a conversion.
+ */
+function resolveFx(
+  currencyCode: string | undefined,
+  issueDate: string | undefined,
+  rates?: FxRateIndex,
+): FxResolution {
+  const code = (currencyCode || 'SEK').toUpperCase()
+
+  if (code === 'SEK') {
+    // Domestic document: the ledger currency IS SEK, so there is no exchange
+    // rate to record. A plain null, not a conversion we failed to make. The
+    // SEK amount columns still get filled, via sekFactor 1.
+    return { rate: null, rateDate: null, sekFactor: 1, unresolved: null }
+  }
+
+  const currency = asConvertibleCurrency(code)
+  if (!currency) {
+    return {
+      rate: null, rateDate: null, sekFactor: null,
+      unresolved: { currency: code, date: isoDay(issueDate) ?? '', reason: 'unsupported_currency' },
+    }
+  }
+
+  const date = isoDay(issueDate)
+  if (!date) {
+    return {
+      rate: null, rateDate: null, sekFactor: null,
+      unresolved: { currency: code, date: issueDate ?? '', reason: 'rate_unavailable' },
+    }
+  }
+
+  const hit = rates?.get(fxRateKey(currency, date))
+  if (!hit || !(hit.rate > 0)) {
+    return {
+      rate: null, rateDate: null, sekFactor: null,
+      unresolved: { currency: code, date, reason: 'rate_unavailable' },
+    }
+  }
+
+  return { rate: hit.rate, rateDate: hit.date, sekFactor: hit.rate, unresolved: null }
+}
+
+/** Convert to SEK, or null when no conversion could be established. */
+function toSek(amount: number, sekFactor: number | null): number | null {
+  return sekFactor === null ? null : round2(amount * sekFactor)
+}
+
+/**
+ * A mapped invoice plus the FX verdict for it. `fxUnresolved` is non-null only
+ * for a FOREIGN document whose SEK value could not be established: the caller
+ * must surface those as needing attention instead of letting them pass as
+ * ordinary imports. They are still imported (dropping them would lose
+ * räkenskapsinformation) but carry exchange_rate = null, so every booking path
+ * refuses them loudly (SupplierInvoiceFxRateMissingError /
+ * InvoiceBookingRateMissingError) rather than posting at a fabricated 1:1.
+ */
+export interface MappedInvoice {
+  invoice: Record<string, unknown>
+  items: Record<string, unknown>[]
+  fxUnresolved: FxUnresolved | null
+  /**
+   * True when the provider payload established no VAT at all, so the invoice
+   * carries its gross as its subtotal, 0 kr of VAT and a null rate. Counted
+   * into the migration summary the same way `fxUnresolved` is, so a run that
+   * could not establish VAT says so instead of looking clean.
+   */
+  vatUnresolved: boolean
+  /**
+   * True for an imported kreditfaktura: the row AS MAPPED carries no pointer
+   * at the invoice it credits.
+   *
+   * `invoices` and `supplier_invoices` model that relation only through
+   * `credited_invoice_id`, an
+   * Accounted id the mapper cannot know: the original may be inserted in the
+   * same run, a chunk later, or by an earlier run. So the importer pairs the
+   * rows afterwards, from `creditedInvoiceRef`, when the provider named the
+   * credited invoice (Bokio's invoiceRef and Fortnox's CreditInvoiceReference
+   * do on a sales credit note, Fortnox's CreditReference on a supplier one;
+   * Visma, Briox, Björn Lundén and WINT send nothing), and counts what
+   * stayed unpaired into the migration summary
+   * (`ext_arcim_credit_notes_unlinked_detail`). Guessing the original
+   * from an amount would put a wrong pair in the AR ledger, so no reference
+   * means unpaired. The row itself is complete räkenskapsinformation either
+   * way (reversed amounts, terminal status, the credited number in notes).
+   */
+  creditNoteUnlinked: boolean
+  /**
+   * The credited invoice as the provider named it, for the importer's pairing
+   * pass. null when the row is not a credit note or the provider sent no
+   * reference.
+   */
+  creditedInvoiceRef: CreditedInvoiceRefDto | null
+}
+
+// ── Public mappers ──────────────────────────────────────────────────
+
+export function mapCustomer(dto: CustomerDto, userId: string, companyId: string): Record<string, unknown> {
+  const addr = formatAddress(dto.party.postalAddress)
+  const customerType = inferCustomerType(dto)
+  const number = getOrgNumber(dto.party)
+  // The provider exposes a single identity-number field, but Accounted stores a
+  // personnummer in `personal_number` (individuals) and an org number in
+  // `org_number` (businesses). Route it to the column the type expects: else a
+  // Privatperson's personnummer lands in org_number and is hidden by the
+  // individual customer form, which renders personal_number for individuals.
+  const isIndividual = customerType === 'individual'
+  // personal_number is an encrypted column: customers_personal_number_check
+  // (migration 20260726110000) accepts AES-256-GCM hex and nothing else, so
+  // writing the identity number in plaintext here aborts the whole import with
+  // 23514 the moment a Privatperson appears in the source data.
+  //
+  // The same check bounds the ciphertext length, which is 56 hex chars plus
+  // two per plaintext char: an identity number shorter than a personnummer
+  // (a 6-digit birth date, a customer number typed into the wrong field)
+  // encrypts to something the column rejects, and the row was lost with it
+  // (#2469). Everything the column can hold is encrypted into it, a mistyped
+  // or oddly separated personnummer included, so no personnummer-like value
+  // ever lands in plaintext. A value the column cannot hold (too short to be
+  // a personnummer, or absurdly long) is omitted: the row still imports, and
+  // an identity number is never written to a plaintext field.
+  const personalNumber = isIndividual ? number : null
+  const storablePersonalNumber =
+    personalNumber && fitsPersonalNumberColumn(personalNumber) ? personalNumber : null
+  return {
+    user_id: userId,
+    company_id: companyId,
+    name: dto.party.name,
+    customer_type: customerType,
+    contact_person: dto.party.contact?.name || null,
+    email: dto.party.contact?.email || null,
+    phone: dto.party.contact?.telephone || null,
+    invoice_email_cc_addresses: dto.invoiceEmailCcAddresses ?? null,
+    invoice_email_bcc_addresses: dto.invoiceEmailBccAddresses ?? null,
+    ...addr,
+    org_number: isIndividual ? null : number,
+    personal_number: encryptCustomerPersonalNumber(storablePersonalNumber),
+    vat_number: dto.vatNumber || null,
+    vat_number_validated: false,
+    default_payment_terms: dto.defaultPaymentTermsDays || 30,
+    notes: dto.note || null,
+  }
+}
+
+/**
+ * Whether the encrypted form of `value` satisfies customers_personal_number_check
+ * (`^[0-9a-f]{76,255}$`, migration 20260726110000). AES-256-GCM hex is 56
+ * chars plus two per plaintext char, so the column holds plaintexts of 10 to
+ * 99 chars. A shortest personnummer is 10 digits, so every personnummer-like
+ * value, mistyped or not, fits; a value below the floor cannot be one.
+ */
+export function fitsPersonalNumberColumn(value: string): boolean {
+  const length = value.trim().length
+  return length >= 10 && length <= 99
+}
+
+export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {
+  const addr = formatAddress(dto.party.postalAddress)
+  return {
+    user_id: userId,
+    company_id: companyId,
+    name: dto.party.name,
+    supplier_type: inferSupplierType(dto),
+    email: dto.party.contact?.email || null,
+    phone: dto.party.contact?.telephone || null,
+    ...addr,
+    // suppliers.org_number holds the 10-digit key (#2391); a provider sends
+    // its own spelling ('556677-8899').
+    org_number: canonicalSupplierOrgNumber(getOrgNumber(dto.party)),
+    vat_number: dto.vatNumber || null,
+    bankgiro: dto.bankGiro || null,
+    plusgiro: dto.plusGiro || null,
+    bank_account: dto.bankAccount || null,
+    // SupplierDto carries bankAccount/bankGiro/plusGiro only: it has no IBAN,
+    // BIC or default expense account, so these are honest nulls, not dropped
+    // data. The user fills them in when a foreign payment first needs them.
+    iban: null,
+    bic: null,
+    default_expense_account: null,
+    default_payment_terms: dto.defaultPaymentTermsDays || 30,
+    default_currency: 'SEK',
+    notes: dto.note || null,
+  }
+}
+
+/** Reversed sign for a kreditfaktura amount, without producing -0. */
+function negate(n: number): number {
+  return n === 0 ? 0 : -n
+}
+
+/**
+ * The same document stated in magnitudes: what it would read as if it were
+ * the invoice it reverses.
+ *
+ * Providers disagree on the sign a kreditfaktura carries: Fortnox and Visma
+ * report a credit invoice with negative amounts (lib/providers/fortnox,
+ * lib/providers/visma) while Bokio states the magnitude beside
+ * invoiceTypeCode 381. Both have to land on the single convention Accounted
+ * stores, so the amounts are resolved from the magnitudes and the credit sign
+ * is applied once, at the end. It is also what lets resolveInvoiceVat
+ * classify the rate at all: it divides VAT by subtotal, which only yields a
+ * statutory rate when both are positive.
+ *
+ * The header figures are single values, so their magnitude is their absolute
+ * value. The ROWS are not: a credit note can credit one thing and charge
+ * another on the same document (goods returned, a return fee charged), and
+ * its rows then carry both signs. 65 of the Fortnox credit notes in
+ * production on 2026-09-20 do, and for every one of them the rows as sent sum
+ * to the header. Taking each row's absolute value would turn the charge into
+ * a second credit and break rows against header, so the
+ * rows are flipped TOGETHER, by the one factor that makes their net
+ * non-negative, and keep their sign relative to each other. When all rows
+ * share a sign that is the absolute value, as before. The unit price stays a
+ * magnitude and the quantity carries the row's sign, which is how an in-app
+ * credit note is written (lib/invoices/build-credit-note-item.ts).
+ *
+ * ONE normaliser for both registers (#2838). The two DTOs share the fields
+ * read here, and the question is the same on both sides: what would this
+ * document read as if it were the invoice it reverses. Only what happens
+ * next differs, and that stays with each mapper: a sales credit note is
+ * stored with the credit sign applied (invoices has no credit flag), a
+ * supplier credit note is stored in these magnitudes beside
+ * `is_credit_note`, which is how Kreditera writes one
+ * (lib/supplier-invoices/credit-note.ts).
+ *
+ * The supplier side is also where a row net of zero is the normal case and
+ * not a corner: Fortnox sends a supplier invoice's ACCOUNTING rows (the 2440
+ * row against the cost and VAT rows; 19 of the 19 Fortnox supplier credit
+ * notes with rows in production on 2026-09-21 balance to zero). The header
+ * decides there, so the net is compared in whole öre: a float residue from
+ * summing a balanced voucher must not pick the factor.
+ */
+function withAbsoluteAmounts<T extends SalesInvoiceDto | SupplierInvoiceDto>(dto: T): T {
+  const abs = (amount: AmountType): AmountType => ({ ...amount, value: Math.abs(amount.value) })
+  const rowNet = round2(dto.lines.reduce((sum, line) => sum + line.lineExtensionAmount.value, 0))
+  // A net of zero decides nothing either way; the header's sign does.
+  const statedNegative = rowNet !== 0 ? rowNet < 0 : dto.legalMonetaryTotal.payableAmount.value < 0
+  const factor = statedNegative ? -1 : 1
+  const oriented = (amount: AmountType): AmountType => ({ ...amount, value: amount.value === 0 ? 0 : amount.value * factor })
+  return {
+    ...dto,
+    lines: dto.lines.map((line) => {
+      const lineExtensionAmount = oriented(line.lineExtensionAmount)
+      return {
+        ...line,
+        quantity: line.quantity != null
+          ? Math.abs(line.quantity) * (lineExtensionAmount.value < 0 ? -1 : 1)
+          : undefined,
+        unitPrice: line.unitPrice ? abs(line.unitPrice) : undefined,
+        lineExtensionAmount,
+        taxAmount: line.taxAmount ? oriented(line.taxAmount) : undefined,
+      }
+    }),
+    taxTotal: dto.taxTotal ? { ...dto.taxTotal, taxAmount: abs(dto.taxTotal.taxAmount) } : undefined,
+    legalMonetaryTotal: {
+      ...dto.legalMonetaryTotal,
+      lineExtensionAmount: dto.legalMonetaryTotal.lineExtensionAmount
+        ? abs(dto.legalMonetaryTotal.lineExtensionAmount)
+        : undefined,
+      payableAmount: abs(dto.legalMonetaryTotal.payableAmount),
+    },
+    // Both DTOs share every field rewritten above, so the spread keeps T.
+  } as T
+}
+
+/**
+ * The balance the mapper trusts. A provider hands over two independent
+ * signals, the paid flag and the remaining balance, and they can disagree.
+ * When the flag came from the provider's explicit payment-status enum
+ * (paymentStatus.source === 'enum') and says NOT settled, a non-positive
+ * balance beside it is a payload artefact rather than a settlement, so the
+ * open balance is the total. Company 5208b894 (Visma, 2026-09-10) imported
+ * all 53 of its unpaid supplier invoices as paid with remaining_amount 0
+ * because the zero balance was combined with the flag by OR. Without an enum
+ * the balance keeps its drift-tolerant meaning: a residual öre resolves to
+ * paid.
+ */
+function trustedBalance(paymentStatus: PaymentStatusDto, total: number): number {
+  const balance = round2(paymentStatus.balance.value)
+  if (paymentStatus.source === 'enum' && !paymentStatus.paid && balance <= 0) return total
+  return balance
+}
+
+/** What the provider's payment fields say, as the columns an invoice row carries. */
+export interface SupplierSettlement {
+  /**
+   * The status the payment state implies, or null when it implies nothing
+   * and the caller should keep the provider's lifecycle status.
+   */
+  status: 'paid' | 'partially_paid' | null
+  paidAmount: number
+  remainingAmount: number
+  /**
+   * The settlement date the provider named, or null: when `status` is null
+   * and also when the provider gave no date (Fortnox never does). Never
+   * derived from the invoice date: an unknown date stays unknown (#2719).
+   */
+  paidAt: string | null
+}
+
+/**
+ * One rule for reading a supplier invoice's payment state, shared by the
+ * migration mapper below and by the repair pass that refreshes payment state
+ * from the provider afterwards (refresh-migrated-payment-state.ts). Two
+ * copies of this rule would drift, and the repair would then contradict the
+ * import it repairs.
+ *
+ * The balance may declare a settlement on its own only when there is an
+ * amount to settle and no enum spoke. `total > 0` is the part Bokio needed:
+ * its API returns totalAmount 0 for invoices older than the register it
+ * exposes, and a zero balance beside a zero total is an amount-less record,
+ * not a payment (384 such rows across two migrated companies were written as
+ * "paid" for 0 kr on 2026-09-14). An explicit paid = false from an enum is
+ * never overridden by a zero either: see trustedBalance.
+ *
+ * The settlement date is the provider's `lastPaymentDate` or nothing. It
+ * used to fall back to the issue date, which turned "the provider did not
+ * say when" into a confident wrong date on every Fortnox-migrated invoice,
+ * rendered as fact in the UI (#2719). The invoice date is deliberately not
+ * a parameter any more so the fallback cannot creep back in.
+ */
+export function resolveSupplierSettlement(
+  paymentStatus: PaymentStatusDto,
+  total: number,
+): SupplierSettlement {
+  const balance = trustedBalance(paymentStatus, total)
+  // Treat the balance numerically (never strict === 0) so floating drift or a
+  // residual öre resolves cleanly to paid/unpaid.
+  const paidAmount = paymentStatus.paid ? total : round2(total - balance)
+  const settled =
+    paymentStatus.paid || (balance <= 0 && total > 0 && paymentStatus.source !== 'enum')
+
+  if (settled) {
+    return {
+      status: 'paid',
+      paidAmount: total,
+      remainingAmount: 0,
+      paidAt: paymentStatus.lastPaymentDate || null,
+    }
+  }
+
+  const partial = paidAmount > 0 && paidAmount < total
+  return {
+    status: partial ? 'partially_paid' : null,
+    paidAmount: Math.max(0, paidAmount),
+    remainingAmount: Math.max(0, balance),
+    paidAt: partial ? paymentStatus.lastPaymentDate || null : null,
+  }
+}
+
+export function mapSalesInvoice(
+  dto: SalesInvoiceDto,
+  userId: string,
+  companyId: string,
+  customerId: string,
+  fxRates?: FxRateIndex
+): MappedInvoice {
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
+
+  const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
+  const sign = (n: number): number => (isCreditNote ? negate(n) : n)
+
+  const total = sign(round2(amounts.legalMonetaryTotal.payableAmount.value))
+  const vat = resolveInvoiceVat(amounts)
+  const subtotal = sign(vat.subtotal)
+  const vatAmount = sign(vat.vatAmount)
+
+  // Map Arcim status to Accounted status
+  const statusMap: Record<string, string> = {
+    draft: 'draft',
+    sent: 'sent',
+    booked: 'sent', // Accounted has no 'booked' status: treat as sent
+    paid: 'paid',
+    overdue: 'overdue',
+    cancelled: 'cancelled',
+    credited: 'credited',
+  }
+
+  // A kreditfaktura is never an open or a paid receivable, so it gets a
+  // terminal status regardless of the provider's lifecycle status:
+  // invoiceTypeCode is the only signal that the document IS a credit note, and
+  // a provider is not guaranteed to also send status='credited' (Fortnox
+  // reports a settled balance, which used to read as 'paid'). Same reasoning
+  // as mapSupplierInvoice. Two source states are kept, because in neither has
+  // the credit note reduced anything: a draft the source never issued
+  // (Bokio's draft | published enum) stays a draft, the state an in-app
+  // credit note starts in, and one the source voided (makulerad) stays
+  // cancelled instead of being revived as an effective credit.
+  const status = isCreditNote
+    ? (dto.status === 'draft' || dto.status === 'cancelled' ? dto.status : 'credited')
+    : (statusMap[dto.status] || 'sent')
+
+  // Nothing is ever collected on a kreditfaktura: it reduces what the customer
+  // owes rather than settling anything. This also keeps the row clear of
+  // invoices_credit_note_not_paid, which forbids paid/partially_paid the moment
+  // the row points at the invoice it credits.
+  const balance = trustedBalance(dto.paymentStatus, total)
+  const settlement = isCreditNote
+    ? { paidAt: null as string | null, paidAmount: 0, remainingAmount: 0 }
+    : {
+        // The provider's settlement date or nothing. The old issue-date
+        // fallback wrote every Fortnox-migrated invoice as paid on the day
+        // it was issued (#2719): Fortnox never sends lastPaymentDate, Visma
+        // and WINT do. A null paid_at on a paid invoice is a state the detail
+        // page already renders honestly (classifyPaymentHistoryGap).
+        paidAt: dto.paymentStatus.paid ? dto.paymentStatus.lastPaymentDate || null : null,
+        paidAmount: dto.paymentStatus.paid ? total : round2(total - balance),
+        remainingAmount: dto.paymentStatus.paid ? 0 : Math.max(0, balance),
+      }
+
+  // SEK value of a foreign invoice, at the rate valid on its own issue date.
+  const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
+
+  const invoice: Record<string, unknown> = {
+    user_id: userId,
+    company_id: companyId,
+    customer_id: customerId,
+    // Empty string must become NULL: the UNIQUE (company_id, invoice_number)
+    // index is partial on NOT NULL, so '' from a provider payload missing the
+    // field would collide on the second invoice and reject the insert.
+    invoice_number: dto.invoiceNumber || null,
+    invoice_date: dto.issueDate,
+    due_date: dto.dueDate || dto.issueDate,
+    status,
+    currency: dto.currencyCode || 'SEK',
+    // null for a SEK invoice (no rate applies) and for a foreign invoice whose
+    // rate could not be established: that case is reported via fxUnresolved.
+    exchange_rate: fx.rate,
+    exchange_rate_date: fx.rateDate,
+    subtotal,
+    subtotal_sek: toSek(subtotal, fx.sekFactor),
+    vat_amount: vatAmount,
+    vat_amount_sek: toSek(vatAmount, fx.sekFactor),
+    total,
+    total_sek: toSek(total, fx.sekFactor),
+    vat_treatment: vat.treatment,
+    // null, not 25, when the payload established no rate. The column is
+    // nullable and defaults to 25; writing the default explicitly is what made
+    // 8 700+ migrated invoices assert "25 % moms" beside 0 kr of it.
+    vat_rate: vat.rate,
+    your_reference: null,
+    our_reference: null,
+    notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
+    // Always 'invoice'. invoices_document_type_check allows only
+    // ('invoice', 'proforma', 'delivery_note'), and Accounted models a
+    // kreditfaktura as an invoice row with reversed amounts plus
+    // credited_invoice_id, not as a document type of its own (see
+    // app/api/invoices/route.ts and .../invoices/[id]/credit/route.ts).
+    // Writing 'credit_note' here made Postgres reject every migrated
+    // kreditfaktura with a 23514, and the run counted each one as skipped.
+    document_type: 'invoice',
+    paid_at: settlement.paidAt,
+    paid_amount: settlement.paidAmount,
+    // remaining_amount is NOT NULL DEFAULT 0, so omitting it makes every
+    // migrated open invoice look fully settled in AR aging.
+    remaining_amount: settlement.remainingAmount,
+  }
+
+  const items = amounts.lines.map((line, idx) => mapSalesInvoiceLine(line, idx, vat.rate, isCreditNote))
+
+  return {
+    invoice,
+    items,
+    fxUnresolved: fx.unresolved,
+    vatUnresolved: vat.unresolved,
+    creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: isCreditNote ? (dto.creditedInvoiceRef ?? null) : null,
+  }
+}
+
+/**
+ * Durable note for a migrated kreditfaktura.
+ *
+ * ML 17 kap 22-23 § requires a kreditfaktura to reference the original
+ * invoice, and BFL 5 kap 6-7 § requires a verifikation to reference its
+ * underlag. The wizard reports what could not be paired, but a wizard result
+ * screen is not räkenskapsinformation: the reference has to be legible on
+ * the record itself, years later, to whoever opens the invoice. So the
+ * credited invoice's number is written into `notes` when the provider sent
+ * it, whether or not the pairing pass then finds that invoice here, and the
+ * absence of any reference is disclosed when it did not. Whatever note the
+ * provider sent is preserved above it.
+ */
+function creditNoteNote(
+  providerNote: string | null | undefined,
+  ref: CreditedInvoiceRefDto | null | undefined,
+): string {
+  const creditedNumber = ref?.invoiceNumber?.trim()
+  const disclosure = creditedNumber
+    ? `Kreditfaktura importerad vid systembyte. Krediterar faktura ${creditedNumber} i källsystemet.`
+    : 'Kreditfaktura importerad vid systembyte. Referens till ursprungsfakturan '
+      + 'saknas: källsystemet skickade ingen sådan referens vid migreringen.'
+  const existing = (providerNote || '').trim()
+  return existing ? `${existing}\n\n${disclosure}` : disclosure
+}
+
+/**
+ * One invoice_items row.
+ *
+ * `invoiceRate` is the rate resolved for the invoice as a whole, used only
+ * when the line itself states none. The booking engine sums `vat_amount`
+ * across items to post 2611, so a line that carried a rate but no amount used
+ * to contribute nothing: 3 451 of 4 030 migrated items at 25 % hold 0 kr.
+ * Deriving the amount from whichever rate is known fixes that at the source.
+ *
+ * invoice_items.vat_rate is stored as a PERCENT (25), unlike
+ * supplier_invoice_items.vat_rate which is a fraction (0.25).
+ */
+function mapSalesInvoiceLine(
+  line: SalesInvoiceLineDto,
+  index: number,
+  invoiceRate: number | null,
+  isCreditNote: boolean,
+): Record<string, unknown> {
+  const lineTotal = round2(line.lineExtensionAmount.value)
+  const rate = line.taxPercent != null ? snapToSwedishRate(line.taxPercent) : invoiceRate
+  const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, rate ?? undefined)
+  // A kreditfaktura reverses quantity, line total and VAT and keeps the unit
+  // price and the rate positive: exactly what buildCreditNoteItem writes for a
+  // credit note issued in-app (lib/invoices/build-credit-note-item.ts).
+  const sign = (n: number): number => (isCreditNote ? negate(n) : n)
+
+  if (isTextLine(line)) {
+    return {
+      sort_order: index + 1,
+      description: line.description || line.itemName || '',
+      quantity: 0,
+      unit: line.unitCode || 'st',
+      unit_price: 0,
+      line_total: 0,
+      vat_rate: 0,
+      vat_amount: 0,
+      line_type: 'text',
+    }
+  }
+
+  return {
+    sort_order: index + 1,
+    description: line.description || line.itemName || '',
+    quantity: sign(line.quantity || 1),
+    unit: line.unitCode || 'st',
+    unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
+    line_total: sign(lineTotal),
+    // 0 rather than the old hardcoded 25 when nothing established a rate: a
+    // 0 % line beside 0 kr of VAT is at least internally consistent.
+    vat_rate: rate ?? 0,
+    vat_amount: sign(round2(vatAmount ?? 0)),
+    line_type: 'product',
+  }
+}
+
+export function mapSupplierInvoice(
+  dto: SupplierInvoiceDto,
+  userId: string,
+  companyId: string,
+  supplierId: string,
+  fxRates?: FxRateIndex
+): MappedInvoice {
+  const isCreditNote = dto.invoiceTypeCode === CREDIT_NOTE_TYPE_CODE
+
+  // A supplier kreditfaktura is stored the way Kreditera writes one
+  // (lib/supplier-invoices/credit-note.ts): the amounts of the invoice it
+  // reverses, as magnitudes, beside is_credit_note. The flag carries the
+  // sign, and every AP consumer reads it that way (the kontantmetod cut-off
+  // negates a flagged row, the ledger and the payment paths skip it). The
+  // providers state a supplier credit note with negative amounts, and this
+  // mapper used to pass them through: a flagged row would then have been
+  // negative twice over, which is why the mappers could not type one, and an
+  // untyped one landed as an ordinary payable with a negative total (#2838).
+  // Same normaliser as the sales side, applied once, header and rows
+  // together; everything below reads `amounts`, never `dto`'s figures.
+  const amounts = isCreditNote ? withAbsoluteAmounts(dto) : dto
+
+  const total = round2(amounts.legalMonetaryTotal.payableAmount.value)
+  const vat = resolveInvoiceVat(amounts)
+  const subtotal = vat.subtotal
+  const vatAmount = vat.vatAmount
+  const vatTreatment = vat.treatment
+
+  const statusMap: Record<string, string> = {
+    draft: 'registered',
+    sent: 'registered',
+    booked: 'registered',
+    paid: 'paid',
+    overdue: 'overdue',
+    cancelled: 'credited',
+    credited: 'credited',
+  }
+
+  // Payment-derived status and amounts, by the rule the repair pass shares.
+  // Never consulted for a credit note: see `settled` below.
+  const settlement = resolveSupplierSettlement(dto.paymentStatus, total)
+
+  // Status MUST stay consistent with the payment amounts. The provider's
+  // lifecycle status (dto.status) and its payment status are computed
+  // independently upstream and can contradict each other (e.g. a Fortnox
+  // invoice that is "booked" but fully paid). Payment state wins:
+  //   fully paid           -> 'paid'
+  //   0 < paid < total     -> 'partially_paid'
+  //   otherwise            -> the mapped lifecycle status
+  const mappedStatus = statusMap[dto.status] || 'registered'
+  let resolvedStatus: string
+  if (isCreditNote) {
+    // A kreditfaktura is never an open or "paid" payable. Force a credit-note
+    // terminal status regardless of the provider's lifecycle status: the
+    // arcim gateway is the only source of invoiceTypeCode and is NOT guaranteed
+    // to also send status='credited', so trusting dto.status here could persist
+    // a credit note as 'registered'/'paid' (contradicting its amounts).
+    resolvedStatus = mappedStatus === 'reversed' ? 'reversed' : 'credited'
+  } else if (mappedStatus === 'credited' || mappedStatus === 'reversed') {
+    // Terminal states from the provider: never flipped by payment.
+    resolvedStatus = mappedStatus
+  } else {
+    resolvedStatus = settlement.status ?? mappedStatus
+  }
+
+  // Nothing is ever paid on a kreditfaktura: it reduces what is owed to the
+  // supplier rather than settling anything, so it carries no open balance
+  // either (prod: a credited Fora note landed with remaining_amount = its
+  // total). Same rule as the customer side.
+  const settled = isCreditNote
+    ? { paidAmount: 0, remainingAmount: 0 }
+    : { paidAmount: settlement.paidAmount, remainingAmount: settlement.remainingAmount }
+
+  // SEK value of a foreign invoice, at the rate valid on its own issue date.
+  const fx = resolveFx(dto.currencyCode, dto.issueDate, fxRates)
+
+  const invoice: Record<string, unknown> = {
+    user_id: userId,
+    company_id: companyId,
+    supplier_id: supplierId,
+    // Empty string must become NULL: with '' every number-less invoice from
+    // the same supplier collides on the UNIQUE
+    // (company_id, supplier_id, supplier_invoice_number) index, while NULLs
+    // are treated as distinct.
+    supplier_invoice_number: dto.invoiceNumber || null,
+    invoice_date: dto.issueDate,
+    due_date: dto.dueDate || dto.issueDate,
+    received_date: dto.issueDate,
+    delivery_date: dto.deliveryDate || null,
+    status: resolvedStatus,
+    currency: dto.currencyCode || 'SEK',
+    // null for a SEK invoice (no rate applies) and for a foreign invoice whose
+    // rate could not be established: that case is reported via fxUnresolved.
+    exchange_rate: fx.rate,
+    exchange_rate_date: fx.rateDate,
+    subtotal,
+    subtotal_sek: toSek(subtotal, fx.sekFactor),
+    vat_amount: vatAmount,
+    vat_amount_sek: toSek(vatAmount, fx.sekFactor),
+    total,
+    total_sek: toSek(total, fx.sekFactor),
+    vat_treatment: vatTreatment,
+    reverse_charge: vatTreatment === 'reverse_charge',
+    payment_reference: dto.ocrNumber || null,
+    paid_at: resolvedStatus === 'paid' || resolvedStatus === 'partially_paid'
+      ? settlement.paidAt
+      : null,
+    paid_amount: settled.paidAmount,
+    remaining_amount: settled.remainingAmount,
+    is_credit_note: isCreditNote,
+    notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
+  }
+
+  const items = dto.supplierEvidence && !dto.supplierEvidence.itemsComplete
+    ? []
+    : amounts.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
+
+  return {
+    invoice,
+    items,
+    fxUnresolved: fx.unresolved,
+    vatUnresolved: vat.unresolved,
+    // supplier_invoices carries is_credit_note, so the row reads as a
+    // kreditfaktura on its own; what it lacks as mapped is the pointer at the
+    // original (credited_invoice_id), which the importer fills afterwards
+    // from the reference when the provider named one (Fortnox's
+    // CreditReference; Visma, Bokio, Briox and Björn Lundén send none).
+    creditNoteUnlinked: isCreditNote,
+    creditedInvoiceRef: isCreditNote ? (dto.creditedInvoiceRef ?? null) : null,
+  }
+}
+
+/**
+ * One supplier_invoice_items row.
+ *
+ * `invoiceRate` (percent) is the rate resolved for the invoice as a whole and
+ * is used only when the line states none: the previous `?? 25` asserted a
+ * standard rate on every line of every provider that omits per-line VAT, and
+ * paired it with a 0 kr amount.
+ */
+function mapSupplierInvoiceLine(
+  line: SupplierInvoiceLineDto,
+  index: number,
+  invoiceRate: number | null,
+): Record<string, unknown> {
+  const lineTotal = round2(line.lineExtensionAmount.value)
+  // Foreign rates (19 % DE) must survive rather than be snapped to a Swedish
+  // one, so the line's own percent is used as stated; only the fallback comes
+  // from the invoice-level resolution.
+  const percent = line.taxPercent ?? invoiceRate ?? 0
+  const vatAmount = line.taxAmount?.value ?? lineVatFromPercent(lineTotal, percent)
+
+  return {
+    sort_order: index + 1,
+    description: line.description || line.itemName || '',
+    quantity: line.quantity || 1,
+    unit: line.unitCode || 'st',
+    unit_price: round2(line.unitPrice?.value ?? line.lineExtensionAmount.value),
+    line_total: lineTotal,
+    account_number: line.accountNumber || '4000', // Default to purchases
+    // supplier_invoice_items stores decimal fractions (0.25 = 25 %), unlike
+    // customer invoice_items which store percent.
+    vat_rate: normalizeVatRateToFraction(percent),
+    vat_amount: round2(vatAmount ?? 0),
+  }
+}
+
+export function mapCompanyInfo(dto: CompanyInformationDto): {
+  company_name: string | null
+  org_number: string | null
+  vat_number: string | null
+  fiscal_year_start_month: number
+  address_line1: string | null
+  postal_code: string | null
+  city: string | null
+  phone: string | null
+  email: string | null
+} {
+  const addr = formatAddress(dto.address)
+  // Parse fiscal year start month from "MM-DD" format
+  let fiscalYearStartMonth = 1
+  if (dto.fiscalYearStart) {
+    const month = parseInt(dto.fiscalYearStart.split('-')[0], 10)
+    if (month >= 1 && month <= 12) fiscalYearStartMonth = month
+  }
+
+  return {
+    company_name: dto.companyName || null,
+    org_number: dto.organizationNumber || null,
+    vat_number: dto.vatNumber || null,
+    fiscal_year_start_month: fiscalYearStartMonth,
+    address_line1: addr.address_line1,
+    postal_code: addr.postal_code,
+    city: addr.city,
+    phone: dto.contact?.telephone || null,
+    email: dto.contact?.email || null,
+  }
+}

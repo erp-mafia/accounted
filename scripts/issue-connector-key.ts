@@ -25,9 +25,9 @@ import { config } from 'dotenv'
 import { resolve } from 'node:path'
 config({ path: resolve(process.cwd(), '.env.local') })
 
-import { createServiceRoleClient } from '../lib/supabase/service-client'
-import { CONNECTOR_CAPABILITIES } from '../lib/entitlements/keys'
-import { generateConnectorKey } from '../lib/connect/hosted/keys'
+import { createServiceRoleClient } from '../src/lib/supabase/service-client'
+import { CONNECTOR_CAPABILITIES } from '../src/lib/entitlements/keys'
+import { generateConnectorKey } from '../src/lib/connect/hosted/keys'
 
 function arg(name: string): string | undefined {
   const idx = process.argv.indexOf(`--${name}`)

@@ -3,7 +3,7 @@
  * TypeScript module used as an emergency fallback when Skatteverket's open-data
  * API is unavailable.
  *
- * Input:  data/tax-tables/{year}/allmanna-tabeller-manad.txt
+ * Input:  scripts/data/tax-tables/{year}/allmanna-tabeller-manad.txt
  * Output: lib/salary/tax-tables-fallback.ts
  *
  * Record format (49 chars per line):
@@ -162,7 +162,7 @@ function emitModule(year: number, tables: ParsedTable[]): string {
   return `/**
  * AUTO-GENERATED: do not edit by hand.
  *
- * Source: data/tax-tables/${year}/allmanna-tabeller-manad.txt (Skatteverket SKV 434)
+ * Source: scripts/data/tax-tables/${year}/allmanna-tabeller-manad.txt (Skatteverket SKV 434)
  * Generator: scripts/import-tax-tables.ts
  *
  * Emergency fallback for lib/salary/tax-tables.ts when the Skatteverket
@@ -200,8 +200,8 @@ export const FALLBACK_TAX_TABLE_YEARS: ReadonlySet<number> = new Set([${year}])
 
 function main() {
   const { year } = parseArgs()
-  const inputPath = resolve(process.cwd(), `data/tax-tables/${year}/allmanna-tabeller-manad.txt`)
-  const outputPath = resolve(process.cwd(), 'lib/salary/tax-tables-fallback.ts')
+  const inputPath = resolve(process.cwd(), `scripts/data/tax-tables/${year}/allmanna-tabeller-manad.txt`)
+  const outputPath = resolve(process.cwd(), 'src/lib/salary/tax-tables-fallback.ts')
 
   console.log(`Reading ${inputPath}`)
   const tables = parseFile(inputPath)
