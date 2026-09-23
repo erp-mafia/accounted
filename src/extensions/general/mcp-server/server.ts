@@ -3827,11 +3827,11 @@ const ASSET_WRITE_PROPERTIES = {
   },
   opening_accumulated_depreciation: {
     type: 'number',
-    description: 'Ackumulerad avskrivning already booked in a previous system (migration), SEK, 0 to acquisition_cost - salvage_value. No voucher is posted: it is already in the imported 12x9 balance. Not with k3_components.',
+    description: 'Accumulated depreciation for this asset from the previous asset register, SEK, 0 to acquisition_cost - salvage_value. No voucher or automatic reconciliation: manually reconcile register totals with the imported ledger before depreciation or disposal. Manual ledger postings do not lock opening edits; depreciation posted through Accounted\'s asset register or disposal does. Component opening balances are unsupported; keep the component breakdown.',
   },
   opening_depreciation_date: {
     type: ['string', 'null'],
-    description: 'yyyy-MM-dd the opening amount is stated per; required when the amount is above 0, not after today',
+    description: 'yyyy-MM-dd the opening amount is stated per; required when the amount is above 0, between acquisition_date and today (Europe/Stockholm). Zero amount clears the date.',
   },
   notes: { type: 'string' },
 } as const

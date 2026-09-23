@@ -15,6 +15,7 @@
  */
 import { describe, it, expect, beforeAll } from 'vitest'
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { getPool, withUserContext } from './setup'
 import {
   insertAuthUser,
@@ -516,6 +517,56 @@ describe('assets: disposal VAT + jämkning constraints', () => {
 // 20260922214924_asset_opening_accumulated_depreciation.sql: depreciation
 // booked in a previous system before the asset entered Accounted.
 describe('assets: opening accumulated depreciation', () => {
+  it.each([50000, 50000.01])('upgrades the original preview constraint with opening amount %s', async (amount) => {
+    const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
+    const client = await getPool().connect()
+    try {
+      await client.query('BEGIN')
+      // Reproduce the cost-only cap already applied to the original preview.
+      await client.query(`
+        ALTER TABLE public.assets
+          DROP CONSTRAINT assets_opening_depreciation_check,
+          ADD CONSTRAINT assets_opening_depreciation_check CHECK (
+            opening_accumulated_depreciation >= 0
+            AND opening_accumulated_depreciation <= acquisition_cost
+            AND (
+              (opening_accumulated_depreciation = 0 AND opening_depreciation_date IS NULL)
+              OR (opening_accumulated_depreciation > 0 AND opening_depreciation_date IS NOT NULL)
+            )
+            AND (opening_depreciation_date IS NULL OR opening_depreciation_date >= acquisition_date)
+          )
+      `)
+      await client.query(
+        `UPDATE public.assets SET salvage_value = 10000,
+           opening_accumulated_depreciation = $2, opening_depreciation_date = '2025-12-31'
+         WHERE id = $1`,
+        [assetId, amount],
+      )
+      const migration = readFileSync(
+        'supabase/migrations/20260923134719_enforce_opening_depreciation_salvage_cap.sql',
+        'utf8',
+      )
+      if (amount > 50000) {
+        // Refuse inconsistent historical input instead of rewriting money.
+        await expect(client.query(migration)).rejects.toThrow(/assets_opening_depreciation_check/)
+      } else {
+        await client.query(migration)
+        const { rows } = await client.query(
+          'SELECT opening_accumulated_depreciation FROM public.assets WHERE id = $1',
+          [assetId],
+        )
+        expect(Number(rows[0].opening_accumulated_depreciation)).toBe(amount)
+        await expect(client.query(
+          'UPDATE public.assets SET opening_accumulated_depreciation = 50000.01 WHERE id = $1',
+          [assetId],
+        )).rejects.toThrow(/assets_opening_depreciation_check/)
+      }
+    } finally {
+      await client.query('ROLLBACK')
+      client.release()
+    }
+  })
+
   it('stores a valid opening pair and defaults to (0, NULL)', async () => {
     const assetId = await insertAsset({ userId: companyA.userId, companyId: companyA.companyId })
     const before = await getPool().query(

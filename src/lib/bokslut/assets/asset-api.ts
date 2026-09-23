@@ -138,7 +138,7 @@ function validateBasOverrides(
 }
 
 const OPENING_AMOUNT_DESCRIPTION =
-  'Ackumulerad avskrivning already booked in a previous system (e.g. after a migration), SEK, 0 to acquisition_cost - salvage_value. Registered only: NO voucher is posted, the amount is already in the imported 12x9 balance. The engine plans the remaining value over the remaining useful life. A positive amount cannot be combined with non-empty k3_components.'
+  'Accumulated depreciation for this asset from the previous asset register, SEK, 0 to acquisition_cost - salvage_value. No voucher or automatic reconciliation: manually reconcile register totals with the imported ledger before depreciation or disposal. Manual ledger postings do not lock opening edits; depreciation posted through Accounted\'s asset register or disposal does. The engine plans the remaining value over the remaining useful life. A positive amount cannot be combined with non-empty k3_components. Component opening balances are unsupported; keep the component breakdown.'
 const OPENING_DATE_DESCRIPTION =
   'yyyy-MM-dd the opening accumulated depreciation is stated per. Required when the amount is above 0; not after today, not before acquisition_date.'
 

@@ -101,7 +101,7 @@ export function validateOpeningDepreciation(
       kind: 'components',
       path: 'opening_accumulated_depreciation',
       message:
-        'Redan avskrivet belopp kan inte kombineras med komponentuppdelning (K3). Registrera tillgången utan komponenter.',
+        'Redan avskrivet belopp för tillgångar med K3-komponenter stöds inte ännu. Behåll komponentuppdelningen.',
     })
   }
   return issues

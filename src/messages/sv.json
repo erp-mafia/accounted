@@ -1114,7 +1114,7 @@
       "title": "Redan avskrivet (flytt från annat system)",
       "amount_label": "Ackumulerad avskrivning (kr)",
       "date_label": "Per datum",
-      "hint": "Fyll bara i om tillgången redan har skrivits av i ett tidigare bokföringssystem, till exempel efter en flytt från Bokio. Ange tillgångens ackumulerade avskrivning (saldot på 12x9-kontot) per datumet, helst sista dagen i ett räkenskapsår. Ingen verifikation skapas: beloppet finns redan i den importerade bokföringen. Det som återstår skrivs av linjärt under resterande avskrivningstid.",
+      "hint": "Ange denna tillgångs ackumulerade avskrivning från det tidigare anläggningsregistret per datumet, helst sista dagen i ett räkenskapsår. Ingen verifikation skapas och ingen automatisk avstämning görs. Stäm av registrets totalsummor manuellt mot den importerade huvudboken före avskrivning eller avyttring. Manuella bokföringsposter låser inte dessa fält; avskrivning bokförd via Accounteds anläggningsregister eller avyttring gör det. Det som återstår skrivs av linjärt under resterande avskrivningstid. Ingående avskrivningar för K3-komponenttillgångar stöds inte ännu; behåll komponentuppdelningen.",
       "remaining": "Kvar att skriva av: {amount}",
       "locked": "Redan avskrivet belopp är låst eftersom avskrivningar har bokförts i Accounted. Återför dem (storno) först för att ändra det.",
       "error_negative": "Redan avskrivet belopp får inte vara negativt.",
@@ -1122,7 +1122,7 @@
       "error_date_required": "Ange datumet som redan avskrivet belopp avser.",
       "error_date_future": "Datumet för redan avskrivet belopp får inte vara senare än i dag.",
       "error_date_before_acquisition": "Datumet för redan avskrivet belopp får inte vara före anskaffningsdatumet.",
-      "error_components": "Redan avskrivet belopp kan inte kombineras med komponentuppdelning. Stäng av komponentuppdelningen eller lämna fältet tomt."
+      "error_components": "Redan avskrivet belopp för tillgångar med K3-komponenter stöds inte ännu. Behåll komponentuppdelningen."
     },
     "disposal": {
       "title": "Avyttra tillgång",
