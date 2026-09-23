@@ -95,7 +95,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
         <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
         <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
       </div>
-      {own && <p className={styles.dtD}>{t('own_desc')}</p>}
+      <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
       {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
       <div className={styles.promptbox}>
         <span>{t('say_label')}</span>
