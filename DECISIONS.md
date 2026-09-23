@@ -714,3 +714,5 @@ Keep the current calendar month here. Archive completed months verbatim under `d
 [2026-09-23] Twin-cash merges are separated from rollout by verified Vercel and Supabase production deployment holds: merge approval is complete, while production migrations and customer repairs still need a coordinated release. Existing traffic and crons stay on the prior release.
 [2026-09-23] Legacy bank routes keep explicit source/mirror agreement: the owner-approved rollout corrects verified mappings and pauses unresolved connections before production. A mirror-only fallback would guess destinations; the approved code merges use deployment holds.
 [2026-09-23] ROT/RUT payout link: a reversal releases the settlement link by trigger on journal_entries and keeps status/decided_* (the beslut stands; settled means a live voucher), not a reverseEntry hook resetting status to submitted as planned.
+
+[2026-09-23] Skattekonto worklists omit only reciprocal, unlinked storno pairs that net to zero within comparable history. Both entries remain in balances; incomplete pairs and external dead links stay actionable. No stored reconciliation override.
