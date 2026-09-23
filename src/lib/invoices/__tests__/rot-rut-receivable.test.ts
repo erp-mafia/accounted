@@ -167,11 +167,11 @@ describe('getPayoutOreRounding', () => {
       entries: [live('je-1')],
       lines: [debit1513('je-1', 671.25)],
     })
-    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toBe(0.25)
+    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toEqual({ rounding: 0.25, invoiceCount: 1 })
   })
 
   it('returns 0 without querying when the payout is not the requested total', async () => {
-    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 600)).toBe(0)
+    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 600)).toEqual({ rounding: 0, invoiceCount: 0 })
     expect(findCall('rot_rut_payout_request_items', 'select')).toBeUndefined()
   })
 
@@ -182,7 +182,7 @@ describe('getPayoutOreRounding', () => {
       entries: [live('je-1')],
       lines: [debit1513('je-1', 600.5)],
     })
-    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toBe(0)
+    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toEqual({ rounding: 0, invoiceCount: 0 })
   })
 
   it('returns 0 when the begäran is not attributable', async () => {
@@ -191,6 +191,6 @@ describe('getPayoutOreRounding', () => {
       invoices: [{ id: 'inv-1', journal_entry_id: 'je-1' }],
       entries: [{ id: 'je-1', status: 'reversed', reversed_by_id: null }],
     })
-    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toBe(0)
+    expect(await getPayoutOreRounding(supabase, 'company-1', { id: 'req-1', requested_total: 671 }, 671)).toEqual({ rounding: 0, invoiceCount: 0 })
   })
 })

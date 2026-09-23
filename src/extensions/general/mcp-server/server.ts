@@ -18582,7 +18582,7 @@ export const tools: McpTool[] = [
         ordered.map((r) => {
           const payout = expectedRotRutPayoutAmount(r)
           return payout >= Number(r.requested_total)
-            ? getPayoutOreRounding(supabase, companyId, r, payout)
+            ? getPayoutOreRounding(supabase, companyId, r, payout).then((x) => x.rounding)
             : 0
         }),
       )

@@ -324,7 +324,7 @@ export async function settleRotRutPayoutRequest(
   // manual follow-up; only a fully paid begäran clears its öre.
   const oreRounding = fullyPaid
     ? await getPayoutOreRounding(supabase, companyId, payoutRequest, amount)
-    : 0
+    : { rounding: 0, invoiceCount: 0 }
 
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
@@ -335,7 +335,8 @@ export async function settleRotRutPayoutRequest(
       deductionType: payoutRequest.deduction_type,
       paymentDate: params.paymentDate,
       amount,
-      oreRounding,
+      oreRounding: oreRounding.rounding,
+      invoiceCount: oreRounding.invoiceCount,
       bankAccount: params.bankAccount,
     })
     journalEntryId = entry.id
@@ -536,7 +537,9 @@ export async function settleRotRutPayoutRequestSet(
   // Same rule as the single path: only a fully paid leg clears its öre.
   const oreRoundings = await Promise.all(
     legs.map((leg) =>
-      leg.fullyPaid ? getPayoutOreRounding(supabase, companyId, leg.request, leg.amount) : 0,
+      leg.fullyPaid
+        ? getPayoutOreRounding(supabase, companyId, leg.request, leg.amount)
+        : { rounding: 0, invoiceCount: 0 },
     ),
   )
 
@@ -551,7 +554,8 @@ export async function settleRotRutPayoutRequestSet(
         requestName: leg.request.name,
         deductionType: leg.request.deduction_type,
         amount: leg.amount,
-        oreRounding: oreRoundings[i],
+        oreRounding: oreRoundings[i].rounding,
+        invoiceCount: oreRoundings[i].invoiceCount,
       })),
     })
     journalEntryId = entry.id

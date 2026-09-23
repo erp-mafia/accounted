@@ -150,6 +150,14 @@ export async function getRequestReceivable(
   }
 }
 
+export interface PayoutOreRounding {
+  rounding: number
+  /** Invoices the rounding spans: each contributes under a krona. */
+  invoiceCount: number
+}
+
+const NO_ROUNDING: PayoutOreRounding = { rounding: 0, invoiceCount: 0 }
+
 /**
  * The öre rounding a fully paid leg books: the request's total remainder when
  * the payout equals the requested kronor and every invoice is attributable,
@@ -160,13 +168,13 @@ export async function getPayoutOreRounding(
   companyId: string,
   request: { id: string; requested_total: number | string },
   paidAmount: number,
-): Promise<number> {
+): Promise<PayoutOreRounding> {
   const requestedTotal = roundOre(Number(request.requested_total))
-  if (roundOre(paidAmount) !== requestedTotal) return 0
+  if (roundOre(paidAmount) !== requestedTotal) return NO_ROUNDING
   const receivable = await getRequestReceivable(supabase, companyId, request.id)
-  if (!receivable.attributable) return 0
+  if (!receivable.attributable) return NO_ROUNDING
   // The items must add up to the header, or the remainder belongs to nothing.
   const itemsTotal = roundOre(receivable.invoices.reduce((sum, inv) => sum + inv.requested, 0))
-  if (itemsTotal !== requestedTotal) return 0
-  return receivable.rounding
+  if (itemsTotal !== requestedTotal) return NO_ROUNDING
+  return { rounding: receivable.rounding, invoiceCount: receivable.invoices.length }
 }

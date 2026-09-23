@@ -42,10 +42,13 @@ export interface RotRutPayoutLeg {
   /** What Skatteverket paid for this begäran (kr). */
   amount: number
   /**
-   * The öre the invoices carry on 1513 beyond the paid kronor (0 <= x < 1).
-   * Credited to 1513 on top of amount and debited to 3740. Omit or 0 for none.
+   * The öre the invoices carry on 1513 beyond the paid kronor, under a krona
+   * per invoice. Credited to 1513 on top of amount and debited to 3740. Omit
+   * or 0 for none.
    */
   oreRounding?: number
+  /** Invoices in the begäran: bounds oreRounding (< 1 kr each). Defaults to 1. */
+  invoiceCount?: number
 }
 
 function deductionLabel(legs: Array<Pick<RotRutPayoutLeg, 'deductionType'>>): string {
@@ -83,9 +86,14 @@ export async function createRotRutPayoutSetEntry(
     amount: roundOre(leg.amount),
     oreRounding: roundOre(leg.oreRounding ?? 0),
   }))
-  // Rounding is the sub-krona truncation remainder, never a real difference.
+  // Rounding is the truncation remainder: under a krona per invoice, so a leg
+  // may reach a krona or more across several invoices (getRequestReceivable
+  // enforces the per-invoice bound). Never negative, never more per leg than
+  // the invoices it covers could leave.
   const badRounding = legs.find(
-    (leg) => leg.oreRounding < 0 || leg.oreRounding >= ORE_ROUNDING_SETTLEMENT_MAX,
+    (leg) =>
+      leg.oreRounding < 0 ||
+      leg.oreRounding >= ORE_ROUNDING_SETTLEMENT_MAX * Math.max(leg.invoiceCount ?? 1, 1),
   )
   if (badRounding) {
     throw new Error(`Invalid öre rounding ${badRounding.oreRounding} on begäran ${badRounding.requestName}`)
@@ -148,6 +156,8 @@ export async function createRotRutPayoutEntry(
     amount: number
     /** See RotRutPayoutLeg.oreRounding. */
     oreRounding?: number
+    /** See RotRutPayoutLeg.invoiceCount. */
+    invoiceCount?: number
     /** BAS 19xx account the payout landed on. Defaults to 1930. */
     bankAccount?: string
   },
@@ -162,6 +172,7 @@ export async function createRotRutPayoutEntry(
         deductionType: params.deductionType,
         amount: params.amount,
         oreRounding: params.oreRounding,
+        invoiceCount: params.invoiceCount,
       },
     ],
   })

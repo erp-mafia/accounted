@@ -114,7 +114,7 @@ beforeEach(() => {
   reset()
   mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
   mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
-  mockGetPayoutOreRounding.mockResolvedValue(0)
+  mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
 })
 
 describe('GET /api/rot-rut/eligible', () => {
@@ -432,7 +432,7 @@ describe('POST /api/rot-rut/payout-requests/[id]/settle', () => {
 
   it('books the payout and completes the request as paid', async () => {
     mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
-    mockGetPayoutOreRounding.mockResolvedValue(0.4)
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.4, invoiceCount: 1 })
     enqueue({ data: makePayoutRequestRow({ status: 'submitted' }) })
     enqueue({
       data: makePayoutRequestRow({

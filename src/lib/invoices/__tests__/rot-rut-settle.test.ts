@@ -60,7 +60,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   reset()
   mockCreatePayoutEntry.mockResolvedValue({ id: 'je-1' })
-  mockGetPayoutOreRounding.mockResolvedValue(0)
+  mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0, invoiceCount: 0 })
 })
 
 describe('settleRotRutPayoutRequest', () => {
@@ -322,7 +322,7 @@ describe('settleRotRutPayoutRequest', () => {
       data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-1', decided_total: 671 }),
     })
     enqueue({ data: [] })
-    mockGetPayoutOreRounding.mockResolvedValue(0.25)
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.25, invoiceCount: 1 })
 
     const outcome = await settleRotRutPayoutRequest(supabase, 'user-1', 'company-1', {
       requestId: REQUEST_ID,
@@ -341,7 +341,7 @@ describe('settleRotRutPayoutRequest', () => {
       expect.anything(),
       'company-1',
       'user-1',
-      expect.objectContaining({ amount: 671, oreRounding: 0.25 }),
+      expect.objectContaining({ amount: 671, oreRounding: 0.25, invoiceCount: 1 }),
     )
   })
 
@@ -474,8 +474,8 @@ describe('settleRotRutPayoutRequestSet', () => {
       paymentDate: '2026-07-10',
       bankAccount: '1930',
       legs: [
-        { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000, oreRounding: 0 },
-        { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250, oreRounding: 0 },
+        { requestId: REQUEST_ID, requestName: 'ROT 2026-07', deductionType: 'rot', amount: 3000, oreRounding: 0, invoiceCount: 0 },
+        { requestId: REQUEST_ID_2, requestName: 'RUT 2026-07', deductionType: 'rut', amount: 2250, oreRounding: 0, invoiceCount: 0 },
       ],
     })
     // The single-request writer is never used for a bundle.
@@ -630,7 +630,7 @@ describe('settleRotRutPayoutRequestSet', () => {
       ],
     })
     mockCreatePayoutSetEntry.mockResolvedValue({ id: 'je-set' })
-    mockGetPayoutOreRounding.mockResolvedValue(0.75)
+    mockGetPayoutOreRounding.mockResolvedValue({ rounding: 0.75, invoiceCount: 1 })
     enqueue({
       data: makeRequestRow({ status: 'partially_paid', settlement_journal_entry_id: 'je-set', decided_total: 2500 }),
     })

@@ -68,6 +68,32 @@ describe('createRotRutPayoutEntry öre rounding', () => {
     expect(bookedLines().map((l) => l.account)).toEqual(['1930', '1513'])
   })
 
+  it('allows a krona or more across several invoices (under a krona each)', async () => {
+    await createRotRutPayoutEntry(supabase, 'company-1', 'user-1', {
+      ...base,
+      amount: 1871,
+      oreRounding: 1.25,
+      invoiceCount: 2,
+    })
+    expect(bookedLines()).toEqual([
+      { account: '1930', debit: 1871, credit: 0 },
+      { account: '3740', debit: 1.25, credit: 0 },
+      { account: '1513', debit: 0, credit: 1872.25 },
+    ])
+    expectBalanced()
+  })
+
+  it('refuses a krona or more per invoice: that is never rounding', async () => {
+    await expect(
+      createRotRutPayoutEntry(supabase, 'company-1', 'user-1', {
+        ...base,
+        amount: 1871,
+        oreRounding: 2,
+        invoiceCount: 2,
+      }),
+    ).rejects.toThrow(/Invalid öre rounding/)
+  })
+
   it('refuses a remainder of a krona or more: that is never rounding', async () => {
     await expect(
       createRotRutPayoutEntry(supabase, 'company-1', 'user-1', { ...base, amount: 671, oreRounding: 1 }),

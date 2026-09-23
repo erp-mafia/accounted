@@ -107,7 +107,7 @@ export default function RotRutPayoutMatchDialog({
         const amount = legAmount(request)
         const rounding =
           amount >= Number(request.requested_total)
-            ? await getPayoutOreRounding(supabase, companyId, request, amount)
+            ? (await getPayoutOreRounding(supabase, companyId, request, amount)).rounding
             : 0
         return [request.id, rounding] as const
       }),
