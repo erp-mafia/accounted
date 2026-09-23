@@ -11,7 +11,7 @@ globalThis.fetch=async(input,init)=>{
   if(url.includes('/rpc/import_sie_chunk')) process.send?.({event:'chunk-start',number:++chunks})
   return originalFetch(input,init)
 }
-const {runSIEWorker}=await import('../../lib/import/sie-job-worker')
+const {runSIEWorker}=await import('../../src/lib/import/sie-job-worker')
 await runSIEWorker({importId:process.argv[2]})
 process.send?.({event:'finished'})
 }

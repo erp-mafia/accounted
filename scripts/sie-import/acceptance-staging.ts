@@ -27,8 +27,8 @@ const supabase=createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!,process.env.SU
     return response
   }},
 })
-const {submitSIEJob,requestSIEJobAction}=await import('../../lib/import/sie-jobs')
-const {runSIEWorker}=await import('../../lib/import/sie-job-worker')
+const {submitSIEJob,requestSIEJobAction}=await import('../../src/lib/import/sie-jobs')
+const {runSIEWorker}=await import('../../src/lib/import/sie-job-worker')
 const report:Record<string,unknown>={startedAt:new Date().toISOString(),project:'metjnjrhvujscngnpzdv',checks:[]}
 const checks=report.checks as string[]
 type Fixture={company:string;actor:string;period:string}

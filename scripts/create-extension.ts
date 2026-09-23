@@ -274,7 +274,7 @@ function main(): void {
   const exportName = toExportName(name)
   const displayName = toDisplayName(name)
   const entryPoint = `@/extensions/${sector}/${name}`
-  const extensionDir = path.join(ROOT, 'extensions', sector, name)
+  const extensionDir = path.join(ROOT, 'src', 'extensions', sector, name)
 
   // Check if extension already exists
   if (fs.existsSync(extensionDir)) {
@@ -292,7 +292,7 @@ function main(): void {
 
   // Create directory
   fs.mkdirSync(extensionDir, { recursive: true })
-  console.log(`  Created directory: extensions/${sector}/${name}/`)
+  console.log(`  Created directory: src/extensions/${sector}/${name}/`)
 
   // Write manifest.json
   const manifestPath = path.join(extensionDir, 'manifest.json')
@@ -301,7 +301,7 @@ function main(): void {
     generateManifest(name, sector, category, description, exportName, entryPoint),
     'utf-8'
   )
-  console.log(`  Created: extensions/${sector}/${name}/manifest.json`)
+  console.log(`  Created: src/extensions/${sector}/${name}/manifest.json`)
 
   // Write index.ts
   const indexPath = path.join(extensionDir, 'index.ts')
@@ -310,12 +310,12 @@ function main(): void {
     generateIndexTs(name, sector, exportName, displayName),
     'utf-8'
   )
-  console.log(`  Created: extensions/${sector}/${name}/index.ts`)
+  console.log(`  Created: src/extensions/${sector}/${name}/index.ts`)
 
   // Write api-routes.ts
   const apiRoutesPath = path.join(extensionDir, 'api-routes.ts')
   fs.writeFileSync(apiRoutesPath, generateApiRoutesTs(name), 'utf-8')
-  console.log(`  Created: extensions/${sector}/${name}/api-routes.ts`)
+  console.log(`  Created: src/extensions/${sector}/${name}/api-routes.ts`)
 
   // Update extensions.schema.json
   updateSchemaJson(name)
@@ -325,18 +325,18 @@ function main(): void {
 Done! Next steps:
 
   1. Edit the manifest.json to customize icon, dataPattern, and longDescription:
-     extensions/${sector}/${name}/manifest.json
+     src/extensions/${sector}/${name}/manifest.json
 
   2. Implement extension logic in index.ts:
-     extensions/${sector}/${name}/index.ts
+     src/extensions/${sector}/${name}/index.ts
 
   3. Add API routes if needed in api-routes.ts:
-     extensions/${sector}/${name}/api-routes.ts
+     src/extensions/${sector}/${name}/api-routes.ts
 
-  4. Add a static import to FIRST_PARTY_EXTENSIONS in lib/extensions/loader.ts:
+  4. Add a static import to FIRST_PARTY_EXTENSIONS in src/lib/extensions/loader.ts:
      import { ${exportName} } from '@/extensions/${sector}/${name}'
 
-  5. Add extension metadata to the sector registry in lib/extensions/sectors.ts
+  5. Add extension metadata to the sector registry in src/lib/extensions/sectors.ts
 
   6. Enable the extension in extensions.config.json:
      Add "${name}" to the extensions array

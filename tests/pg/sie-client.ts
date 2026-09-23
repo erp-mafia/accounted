@@ -14,21 +14,31 @@ export function stagingSIEClient(client:PoolClient,source:string):SupabaseClient
   function from(table:string) {
     let columns = '*'
     const values:unknown[] = [], where:string[] = [], order:string[] = []
-    let offset = 0,limit = 1000,single = false
+    let offset = 0,limit = 1000,single = false,countOnly = false
     const filter = (column:string,op:string,value:unknown) => {
       values.push(value);where.push(`${identifier(column)} ${op} $${values.length}`);return builder
     }
     const builder = {
-      select(value:string) {columns = value === '*' ? '*' : value.split(',').map(s=>identifier(s.trim())).join(',');return builder},
+      select(value:string,options?:{count?:'exact';head?:boolean}) {
+        countOnly = options?.count === 'exact' && options.head === true
+        columns = value === '*' ? '*' : value.split(',').map(s=>identifier(s.trim())).join(',');return builder},
       eq(column:string,value:unknown) {return filter(column,'=',value)},
       gte(column:string,value:unknown) {return filter(column,'>=',value)},
+      lte(column:string,value:unknown) {return filter(column,'<=',value)},
       lt(column:string,value:unknown) {return filter(column,'<',value)},
+      is(column:string,value:null) {
+        if (value !== null) throw new Error('The test client supports is(column,null) only')
+        where.push(`${identifier(column)} IS NULL`);return builder},
       order(column:string,options?:{ascending?:boolean}) {order.push(`${identifier(column)} ${options?.ascending === false ? 'DESC':'ASC'}`);return builder},
       range(start:number,end:number) {offset=start;limit=end-start+1;return builder},
       limit(value:number) {limit=value;return builder},
       maybeSingle() {single=true;return builder},
       async then(resolve:(value:unknown)=>unknown,reject?:(reason:unknown)=>unknown) {
         try {
+          if (countOnly) {
+            const counted = await client.query(`SELECT count(*)::int AS n FROM public.${identifier(table)} ${where.length?'WHERE '+where.join(' AND '):''}`,values)
+            return resolve({data:null,count:counted.rows[0].n,error:null})
+          }
           const result = await client.query(`SELECT ${columns} FROM public.${identifier(table)} ${where.length?'WHERE '+where.join(' AND '):''}
             ${order.length?'ORDER BY '+order.join(','):''} OFFSET ${offset} LIMIT ${limit}`,values)
           return resolve({data:single ? result.rows[0] ?? null : result.rows,error:null})
