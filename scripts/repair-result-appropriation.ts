@@ -43,14 +43,14 @@
 import { config } from 'dotenv'
 config({ path: '.env.local' })
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '../lib/supabase/fetch-all'
+import { fetchAllRows } from '../src/lib/supabase/fetch-all'
 import {
   assessHistoricalResultRepair,
   getHistoricalResultRepairScopeError,
   postHistoricalResultRepair,
   type HistoricalResultRepairAssessment,
   type HistoricalResultRepairReason,
-} from '../lib/core/bookkeeping/result-appropriation-repair'
+} from '../src/lib/core/bookkeeping/result-appropriation-repair'
 
 function arg(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`)

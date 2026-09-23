@@ -1,0 +1,330 @@
+/**
+ * Auto-generated API reference pages.
+ *
+ * Iterates lib/api/v1/registry.ts ENDPOINTS, groups by resource (derived
+ * from the URL path), and renders one Markdown page per resource. Stripe-
+ * style: each endpoint section has the description, useWhen, doNotUseFor,
+ * pitfalls, scope, idempotent/reversible/dryRun flags, and a worked example.
+ *
+ * To make this work, every v1 route file needs to import-side-effect call
+ * registerEndpoint(): which they all do at module load time. The doc
+ * builder triggers that load via lib/api/v1/load-routes.ts.
+ *
+ * Adding a new endpoint means editing the route file's registerEndpoint
+ * call; the docs then surface it on the next build with no manual sync.
+ */
+
+import {
+  listEndpoints,
+  queryParameters,
+  zodToJsonSchema,
+  NoBodyResponse,
+  type EndpointDefinition,
+  type HttpMethod,
+  type JsonSchema,
+} from '@/lib/api/v1/registry'
+// Side-effect import: every v1 route file's top-level registerEndpoint()
+// call runs as a result of loading this module, populating the shared
+// ENDPOINTS map that listEndpoints() reads from.
+import '@/lib/api/v1/load-routes'
+
+interface ResourceGroup {
+  /** URL slug, used in /docs/api/reference/{slug}. */
+  slug: string
+  /** Display label for headings + nav. */
+  label: string
+  /** One-line description for the resource landing card. */
+  description: string
+  /** URL pattern segment that identifies endpoints belonging to this resource. */
+  matcher: (path: string) => boolean
+}
+
+const RESOURCES: ResourceGroup[] = [
+  { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and update their payment and contact settings.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings)?$/.test(p) },
+  { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
+  { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
+  { slug: 'articles', label: 'Articles', description: 'Read the article/product catalogue used to build invoice line items.', matcher: (p) => /\/articles(\/|$)/.test(p) },
+  { slug: 'suppliers', label: 'Suppliers', description: 'AP-side counterparties. Mirrors customers on the supplier vertical.', matcher: (p) => /\/suppliers(\/|$)/.test(p) },
+  { slug: 'supplier-invoices', label: 'Supplier invoices', description: 'AP lifecycle: register, approve, mark paid, credit. With ROT/RUT and reverse-charge support.', matcher: (p) => /\/supplier-invoices(\/|$)/.test(p) },
+  { slug: 'transactions', label: 'Transactions', description: 'Bank transactions: ingest, categorise, match to invoices, reconcile.', matcher: (p) => /\/transactions(\/|$)/.test(p) },
+  { slug: 'reconciliation', label: 'Reconciliation', description: 'Run bank-to-ledger reconciliation and read the current matching status.', matcher: (p) => /\/reconciliation(\/|$)/.test(p) },
+  { slug: 'bank-accounts', label: 'Bank accounts', description: 'The company\'s bank accounts (cash accounts, whose ids filter transactions) and the bank connections that sync them.', matcher: (p) => /\/(?:cash-accounts|bank-connections)(\/|$)/.test(p) },
+  { slug: 'journal-entries', label: 'Journal entries', description: 'The bookkeeping engine surface: verifikation lifecycle (draft, commit, reverse, correct).', matcher: (p) => /\/journal-entries(\/|$)/.test(p) },
+  { slug: 'voucher-gap-explanations', label: 'Voucher gap explanations', description: 'Documented explanations for gaps in the voucher series, per BFNAR 2013:2.', matcher: (p) => /\/voucher-gap/.test(p) },
+  { slug: 'fiscal-periods', label: 'Fiscal periods', description: 'Period lifecycle: lock, close, year-end, opening balances, FX revaluation. Async via the operations substrate.', matcher: (p) => /\/fiscal-periods(\/|$)/.test(p) },
+  { slug: 'accounts', label: 'Accounts', description: 'Read the chart of accounts (BAS).', matcher: (p) => /\/accounts(\/|$)/.test(p) },
+  { slug: 'fixed-assets', label: 'Fixed assets', description: 'The anläggningsregister: register an asset (no voucher, the purchase is already booked), correct it while no depreciation is posted, and dispose it, which posts the avyttring voucher with gain or loss, VAT and jämkning.', matcher: (p) => /\/assets(\/|$)/.test(p) },
+  { slug: 'documents', label: 'Documents', description: 'Multipart upload, signed-URL download (15-min TTL), link to journal entries.', matcher: (p) => /\/documents(\/|$)/.test(p) },
+  { slug: 'inbox-items', label: 'Inbox items', description: 'Stamp incoming documents in the inbox to turn them into supplier invoices or transactions.', matcher: (p) => /\/inbox-items(\/|$)/.test(p) },
+  { slug: 'dimensions', label: 'Dimensions', description: 'Cost-centre / project dimensions and their values for tagging journal lines.', matcher: (p) => /\/dimensions(\/|$)/.test(p) },
+  { slug: 'employees', label: 'Employees', description: 'Payroll roster: CRUD with personnummer masking on list endpoints.', matcher: (p) => /\/employees(\/|$)/.test(p) },
+  { slug: 'salary-runs', label: 'Salary runs', description: 'Payroll lifecycle: create, calculate, approve, mark paid, book, generate AGI XML, and close the vacation year.', matcher: (p) => /\/salary-runs(\/|$)|\/salary\//.test(p) },
+  { slug: 'reports', label: 'Reports', description: 'Read-only reports: trial balance, P&L, balance sheet, GL, VAT, salary journal, SIE export, +9 more.', matcher: (p) => /\/reports(\/|$)/.test(p) },
+  { slug: 'imports', label: 'Imports', description: 'Bulk async ingest: SIE files (Fortnox/Visma/BL/SpeedLedger/Bokio migrations) and bank statements (12 formats).', matcher: (p) => /\/imports(\/|$)/.test(p) },
+  { slug: 'compliance', label: 'Compliance check', description: 'Pre-flight verification: voucher gaps, year-end readiness, before submitting to Skatteverket.', matcher: (p) => /\/compliance(\/|$)/.test(p) },
+  { slug: 'skatteverket', label: 'Skatteverket', description: 'Read what Skatteverket has on file for the company, such as filed VAT declarations and their decisions.', matcher: (p) => /\/skatteverket(\/|$)/.test(p) },
+  { slug: 'webhooks', label: 'Webhooks', description: 'Subscribe to events with HMAC-signed delivery, exponential retries, and dead-letter replay.', matcher: (p) => /\/webhooks|\/webhook-deliveries/.test(p) },
+  { slug: 'operations', label: 'Operations', description: 'Poll long-running async operations (year-end closing, imports, currency revaluation).', matcher: (p) => /\/operations(\/|$)/.test(p) },
+  { slug: 'health', label: 'Health', description: 'Unauthenticated liveness check.', matcher: (p) => /^\/api\/v1\/health$/.test(p) },
+]
+
+/** Discover the resource a given endpoint path belongs to. Returns null if it doesn't fit any. */
+function classifyEndpoint(path: string): ResourceGroup | null {
+  for (const r of RESOURCES) {
+    if (r.matcher(path)) return r
+  }
+  return null
+}
+
+export interface BuiltResourcePage {
+  slug: string
+  label: string
+  description: string
+  endpoints: EndpointDefinition[]
+  markdown: string
+}
+
+const METHOD_ORDER: Record<HttpMethod, number> = { GET: 0, POST: 1, PATCH: 2, PUT: 3, DELETE: 4 }
+
+function endpointAnchor(ep: EndpointDefinition): string {
+  return `${ep.method.toLowerCase()}-${ep.operation.replace(/\./g, '-')}`
+}
+
+/**
+ * Markdown table cells: a pipe would end the cell, a newline the row.
+ * Backslashes are escaped first, or a `\` already in the text (a regex in a
+ * description) would swallow the escape added in front of the next pipe.
+ */
+export function cell(text: string): string {
+  return text.replace(/\\/g, '\\\\').replace(/\|/g, '\\|').replace(/\s*\n\s*/g, ' ')
+}
+
+/** A JSON Schema condensed to the type a reader needs: `"a" | "b"`, `string | null`, `object[]`. */
+function schemaType(schema: JsonSchema): string {
+  if (Array.isArray(schema.enum)) return schema.enum.map((v) => JSON.stringify(v)).join(' | ')
+  if (schema.const !== undefined) return JSON.stringify(schema.const)
+  const union = schema.anyOf ?? schema.oneOf
+  if (union) return [...new Set(union.map(schemaType))].join(' | ')
+  if (Array.isArray(schema.type)) {
+    // The null member of `type: [T, "null"]` must not inherit T's properties,
+    // or a nullable object renders as `object | object`.
+    return schema.type.map((t) => (t === 'null' ? 'null' : schemaType({ ...schema, type: t }))).join(' | ')
+  }
+  if (schema.type === 'array') {
+    const item = schema.items ? schemaType(schema.items) : 'unknown'
+    return item.includes(' ') ? `(${item})[]` : `${item}[]`
+  }
+  if (schema.type === 'object' || schema.properties) return 'object'
+  if (schema.type === 'integer') return 'number'
+  return schema.type ?? 'unknown'
+}
+
+interface FieldRow {
+  name: string
+  type: string
+  required: boolean
+  description?: string
+}
+
+function renderTable(title: string, rows: FieldRow[], withRequired: boolean): string[] {
+  if (rows.length === 0) return []
+  const withDescription = rows.some((r) => r.description)
+  const header = ['Name', 'Type', ...(withRequired ? ['Required'] : []), ...(withDescription ? ['Description'] : [])]
+  const lines = [`**${title}**`, '', `| ${header.join(' | ')} |`, `|${header.map(() => '---').join('|')}|`]
+  for (const r of rows) {
+    const cells = [
+      `\`${r.name}\``,
+      cell(r.type),
+      ...(withRequired ? [r.required ? 'yes' : 'no'] : []),
+      ...(withDescription ? [cell(r.description ?? '')] : []),
+    ]
+    lines.push(`| ${cells.join(' | ')} |`)
+  }
+  lines.push('')
+  return lines
+}
+
+function fieldRows(schema: JsonSchema, prefix = ''): FieldRow[] {
+  const required = new Set(schema.required ?? [])
+  return Object.entries(schema.properties ?? {}).map(([name, prop]) => ({
+    name: `${prefix}${name}`,
+    type: schemaType(prop),
+    required: required.has(name),
+    description: prop.description,
+  }))
+}
+
+/**
+ * The record a response is about: the `data` object, or the items of a list
+ * (`data: [...]`, or `data: { accounts: [...] }` with a single array field),
+ * so the table lists the fields a client reads rather than the envelope.
+ */
+function responseRows(ep: EndpointDefinition): FieldRow[] {
+  if (ep.response.success === NoBodyResponse) return []
+  if (ep.response.contentType && ep.response.contentType !== 'application/json') return []
+  const data = zodToJsonSchema(ep.response.success).properties?.data
+  if (!data) return []
+  if (data.type === 'array' && data.items?.properties) return fieldRows(data.items, '[].')
+  const props = Object.entries(data.properties ?? {})
+  if (props.length === 1) {
+    const [name, only] = props[0]!
+    if (only.type === 'array' && only.items?.properties) return fieldRows(only.items, `${name}[].`)
+  }
+  return fieldRows(data)
+}
+
+function requestBodyRows(ep: EndpointDefinition): FieldRow[] {
+  if (!ep.request?.body) return []
+  return fieldRows(zodToJsonSchema(ep.request.body))
+}
+
+function renderEndpoint(ep: EndpointDefinition): string {
+  const lines: string[] = []
+  const methodBadge = ep.method
+  lines.push(`### \`${methodBadge}\` ${ep.path} {#${endpointAnchor(ep)}}`)
+  lines.push('')
+  lines.push(`**\`${ep.operation}\`**${ep.scope ? ` · scope \`${ep.scope}\`` : ' · public'}`)
+  lines.push('')
+  lines.push(ep.summary)
+  lines.push('')
+  lines.push(ep.description)
+  lines.push('')
+  lines.push(`**Use when:** ${ep.useWhen}`)
+  lines.push('')
+  lines.push(`**Don't use for:** ${ep.doNotUseFor}`)
+  lines.push('')
+  if (ep.pitfalls.length > 0) {
+    lines.push('**Pitfalls**')
+    for (const p of ep.pitfalls) lines.push(`- ${p}`)
+    lines.push('')
+  }
+  const flags: string[] = []
+  flags.push(`**Risk:** ${ep.risk}`)
+  flags.push(`**Idempotent:** ${ep.idempotent ? 'yes' : 'no'}`)
+  flags.push(`**Reversible:** ${ep.reversible ? 'yes' : 'no'}`)
+  flags.push(`**Dry-run supported:** ${ep.dryRunSupported ? 'yes' : 'no'}`)
+  lines.push(flags.join(' · '))
+  lines.push('')
+  // The same schemas the OpenAPI spec publishes, as tables: before #2515 the
+  // page carried prose and one example, and the example was the only field
+  // reference a reader had.
+  lines.push(
+    ...renderTable(
+      'Query parameters',
+      queryParameters(ep).map((p) => ({
+        name: p.name,
+        type: schemaType(p.schema),
+        required: p.required,
+        description: p.description,
+      })),
+      true,
+    ),
+  )
+  lines.push(...renderTable('Request body', requestBodyRows(ep), true))
+  lines.push(
+    ...renderTable(
+      'Response fields',
+      responseRows(ep).map((r) => (r.required ? r : { ...r, type: `${r.type} (optional)` })),
+      false,
+    ),
+  )
+  if (ep.example.request) {
+    lines.push('**Example request**')
+    lines.push('')
+    lines.push('```json')
+    lines.push(JSON.stringify(ep.example.request, null, 2))
+    lines.push('```')
+    lines.push('')
+  }
+  lines.push('**Example response**')
+  lines.push('')
+  lines.push('```json')
+  lines.push(JSON.stringify(ep.example.response, null, 2))
+  lines.push('```')
+  lines.push('')
+  return lines.join('\n')
+}
+
+// Module-level memoisation. The endpoint registry is populated once at
+// module load (via the side-effect import of load-routes) and is then
+// immutable for the process lifetime. The Markdown serialisation is
+// pure derivation: reusing a single result avoids repeated work on the
+// .md route handlers (which Next.js doesn't statically pre-render) AND
+// halves the cost on each generateMetadata + page render pair on the
+// HTML routes. (Greptile P2, round 1.)
+let cachedPages: BuiltResourcePage[] | null = null
+
+export function buildResourcePages(): BuiltResourcePage[] {
+  if (cachedPages) return cachedPages
+
+  const all = listEndpoints()
+  const byResource = new Map<string, EndpointDefinition[]>()
+  for (const ep of all) {
+    const r = classifyEndpoint(ep.path)
+    if (!r) continue
+    if (!byResource.has(r.slug)) byResource.set(r.slug, [])
+    byResource.get(r.slug)!.push(ep)
+  }
+
+  const pages = RESOURCES.map((r) => {
+    const endpoints = (byResource.get(r.slug) ?? []).sort((a, b) => {
+      const m = METHOD_ORDER[a.method] - METHOD_ORDER[b.method]
+      if (m !== 0) return m
+      return a.path.localeCompare(b.path)
+    })
+
+    const lines: string[] = []
+    lines.push(`# ${r.label}`)
+    lines.push('')
+    lines.push(`> ${r.description}`)
+    lines.push('')
+
+    if (endpoints.length === 0) {
+      lines.push('*No endpoints registered yet for this resource.*')
+    } else {
+      lines.push('## Endpoints')
+      lines.push('')
+      for (const ep of endpoints) {
+        lines.push(`- [\`${ep.method}\` \`${ep.path}\`](#${endpointAnchor(ep)}): ${ep.summary}`)
+      }
+      lines.push('')
+      lines.push('---')
+      lines.push('')
+      for (const ep of endpoints) {
+        lines.push(renderEndpoint(ep))
+        lines.push('---')
+        lines.push('')
+      }
+    }
+
+    return {
+      slug: r.slug,
+      label: r.label,
+      description: r.description,
+      endpoints,
+      markdown: lines.join('\n'),
+    }
+  })
+
+  cachedPages = pages
+  return pages
+}
+
+export function buildReferenceOverviewMd(): string {
+  const lines: string[] = []
+  lines.push('# API reference')
+  lines.push('')
+  lines.push(`> Every endpoint exposed by the Accounted REST API, grouped by resource. Auto-generated from the same Zod registry that powers the [OpenAPI 3.1 spec](/api/v1/openapi.json), the MCP tool surface, and runtime validators: there is no separate doc-source to keep in sync.`)
+  lines.push('')
+  lines.push('## Resources')
+  lines.push('')
+  for (const r of RESOURCES) {
+    lines.push(`### [${r.label}](/docs/api/reference/${r.slug})`)
+    lines.push('')
+    lines.push(r.description)
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
+export const RESOURCE_SLUGS = RESOURCES.map((r) => r.slug)

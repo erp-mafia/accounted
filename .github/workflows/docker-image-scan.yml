@@ -23,10 +23,10 @@ name: Scheduled Image Vulnerability Scan
 # severities (that exact misconfiguration shipped once; see the scan step).
 #
 # The `sca` job is the dependency-level counterpart of the image scan: a daily
-# Trivy filesystem scan of the npm lockfile. It exists because Dependabot was
-# deliberately removed (PR #1084) and two HIGH Next.js CVEs then sat
-# undetected until a manual check; this job is the automated SCA alerting
-# that replaces it.
+# Trivy filesystem scan of the npm lockfile. It was added after Dependabot was
+# removed (PR #1084) and two HIGH Next.js CVEs sat undetected until a manual
+# check. Dependabot has since been re-added (.github/dependabot.yml); this job
+# stays as the independent SCA alert.
 #
 # NOTE: GitHub only runs `schedule` and `workflow_run` triggers from the default
 # branch, so both start firing once this is merged to main.

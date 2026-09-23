@@ -6,15 +6,16 @@ import { insertAuthUser, seedCompany } from '@/tests/pg/fixtures'
 import { getPool, withUserContext } from '@/tests/pg/setup'
 
 /**
- * Locks the behavior of public.list_company_accounts (20260723170000): the
- * single-round-trip replacement for the paged fetchAllRows chart-of-accounts
- * fetch in app/api/bookkeeping/accounts.
+ * Locks the behavior of public.list_company_accounts (20260723170000,
+ * reordered in 20260911190000): the single-round-trip replacement for the
+ * paged fetchAllRows chart-of-accounts fetch in app/api/bookkeeping/accounts.
  *
  * The route treats the RPC result as a drop-in for select('*') ordered by
- * sort_order, so the critical properties are:
+ * account_number, so the critical properties are:
  *   - filter parity: p_active_only / p_account_class mirror the route's
  *     .eq('is_active', true) / .eq('account_class', n) filters
- *   - ordering: (sort_order, id); id only breaks ties deterministically
+ *   - ordering: account_number (the BAS sequence), never sort_order, which
+ *     is 0 on every seeded account
  *   - field-set parity: every element carries the exact column set of
  *     chart_of_accounts (to_json of the whole row), so response shapes
  *     do not change when the route switches paths
@@ -22,7 +23,10 @@ import { getPool, withUserContext } from '@/tests/pg/setup'
  */
 
 const MIGRATION_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260723170000_list_company_accounts_rpc.sql'),
+  join(
+    process.cwd(),
+    'supabase/migrations/20260911190000_list_company_accounts_account_number_order.sql',
+  ),
   'utf8',
 )
 
@@ -127,42 +131,49 @@ describe('list_company_accounts: filtering', () => {
 })
 
 describe('list_company_accounts: ordering', () => {
-  it('orders by (sort_order, id) with id as the deterministic tiebreaker', async () => {
+  it('orders by account_number, ignoring sort_order', async () => {
     const { userId, companyId } = await seedCompany()
+    // The seed leaves sort_order at 0 on every system account, the prod shape
+    // that made the old (sort_order, id) order put the seeded block first.
     await seedChart(companyId)
-    // Two accounts sharing a sort_order: the tie must resolve by id.
-    const tieA = await insertAccount({
-      userId,
-      companyId,
-      accountNumber: '9901',
-      accountClass: 8,
-      sortOrder: 5000,
-    })
-    const tieB = await insertAccount({
-      userId,
-      companyId,
-      accountNumber: '9902',
-      accountClass: 8,
-      sortOrder: 5000,
-    })
-
-    const rows = await callRpc(companyId)
-    const expected = await getPool().query<{ id: string }>(
-      `SELECT id FROM public.chart_of_accounts
-        WHERE company_id = $1 AND is_active
-        ORDER BY sort_order, id`,
+    const seededSortOrders = await getPool().query<{ sort_order: number }>(
+      `SELECT DISTINCT sort_order FROM public.chart_of_accounts
+        WHERE company_id = $1 AND is_system_account`,
       [companyId],
     )
-    expect(rows.map((r) => r.id)).toEqual(expected.rows.map((r) => r.id))
+    expect(seededSortOrders.rows.map((r) => r.sort_order)).toEqual([0])
 
-    // Explicit tie assertion: uuid ordering in Postgres is bytewise, which
-    // matches lexicographic order of the canonical lowercase hex form.
-    const [first, second] = [tieA, tieB].sort()
-    expect(rows.findIndex((r) => r.id === first)).toBeLessThan(
-      rows.findIndex((r) => r.id === second),
+    // User-added accounts carry sort_order = number, as the create routes
+    // write it, plus one with a sort_order far out of sequence and an imported
+    // five-digit sub-account that must land directly after its parent 1930.
+    await insertAccount({ userId, companyId, accountNumber: '1110', accountClass: 1, sortOrder: 1110 })
+    await insertAccount({ userId, companyId, accountNumber: '6540', accountClass: 6, sortOrder: 6540 })
+    await insertAccount({ userId, companyId, accountNumber: '1220', accountClass: 1, sortOrder: 99999 })
+    await insertAccount({ userId, companyId, accountNumber: '19301', accountClass: 1, sortOrder: 19301 })
+
+    const rows = await callRpc(companyId)
+    const numbers = rows.map((r) => r.account_number)
+    expect(numbers.slice(0, 3)).toEqual(['1110', '1220', '1510'])
+    expect(numbers.indexOf('19301')).toBe(numbers.indexOf('1930') + 1)
+    expect(numbers.indexOf('6540')).toBe(numbers.indexOf('6530') + 1)
+
+    const expected = await getPool().query<{ account_number: string }>(
+      `SELECT account_number FROM public.chart_of_accounts
+        WHERE company_id = $1 AND is_active
+        ORDER BY account_number`,
+      [companyId],
     )
-    // And the tied pair sits adjacent at the end (highest sort_order).
-    expect(rows.slice(-2).map((r) => r.id)).toEqual([first, second])
+    expect(numbers).toEqual(expected.rows.map((r) => r.account_number))
+  })
+
+  it('keeps account_number order inside a class filter', async () => {
+    const { userId, companyId } = await seedCompany()
+    await seedChart(companyId)
+    await insertAccount({ userId, companyId, accountNumber: '5000', accountClass: 5, sortOrder: 5000 })
+
+    const numbers = (await callRpc(companyId, true, 5)).map((r) => r.account_number)
+    expect(numbers[0]).toBe('5000')
+    expect(numbers).toEqual([...numbers].sort())
   })
 })
 

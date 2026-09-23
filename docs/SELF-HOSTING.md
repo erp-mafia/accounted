@@ -408,7 +408,7 @@ Generate VAPID keys with `npx web-push generate-vapid-keys`. Push notifications 
 
 ### Error Tracking
 
-There is no Sentry integration. `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` are not read by the app: setting them changes nothing. Error-level events go to the container logs (structured JSON on stdout/stderr); `lib/observability/sink.ts` is a provider-agnostic seam that stays a no-op until an adapter is registered with `registerObservabilitySink()`, so a self-hosted build carries no third-party error-tracking dependency. If you want alerting, ship the container logs to your log system and alert there. See [docs/security/logging-and-observability.md](security/logging-and-observability.md).
+There is no Sentry integration. `SENTRY_DSN` and `NEXT_PUBLIC_SENTRY_DSN` are not read by the app: setting them changes nothing. Error-level events go to the container logs (structured JSON on stdout/stderr); `src/lib/observability/sink.ts` is a provider-agnostic seam that stays a no-op until an adapter is registered with `registerObservabilitySink()`, so a self-hosted build carries no third-party error-tracking dependency. If you want alerting, ship the container logs to your log system and alert there. See [docs/security/logging-and-observability.md](security/logging-and-observability.md).
 
 ## Storage Buckets
 

@@ -16,12 +16,8 @@
       "items": {
         "type": "string",
         "enum": [
-          "receipt-ocr",
-          "ai-categorization",
-          "ai-chat",
           "push-notifications",
           "invoice-inbox",
-          "inbox-smart-match",
           "calendar",
           "enable-banking",
           "email",
@@ -35,7 +31,9 @@
           "woocommerce",
           "stripe",
           "shopify",
-          "zettle"
+          "zettle",
+          "mail",
+          "bolagsverket"
         ]
       },
       "description": "Extension IDs to enable. Each ID must match a manifest.json in the extensions/ directory."
