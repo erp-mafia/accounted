@@ -55,3 +55,8 @@ export function buildOwnSkill(
   ]
   return { name, description: lede, body: lines.join('\n') }
 }
+
+/** The numbered steps of an own skill's body, for the sheet's step list. */
+export function ownSkillSteps(body: string): string[] {
+  return body.split('\n').map((line) => /^\d+\.\s+(.+)$/.exec(line.trim())?.[1]).filter((step): step is string => !!step)
+}

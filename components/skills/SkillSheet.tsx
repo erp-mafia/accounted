@@ -9,6 +9,7 @@ import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
 import { registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
 import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
 
@@ -79,10 +80,10 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const title = own ? own.name : t(`skills.${id}.name`)
   const say = own ? t('own_say', { name: own.name }) : t(`skills.${id}.say`)
   const prompt = t('prompt', { say, skill: slug })
-  const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : []
   const locked = target.kind === 'registry' && target.locked
   // Fetched as the sheet opens, so the copy runs inside the click and the browser allows it.
   const body = useSWR(!locked ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
+  const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : body.data ? ownSkillSteps(body.data) : []
 
   function copyFull() {
     const text = body.data
@@ -105,7 +106,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
         <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
       </div>
       <div className={styles.sheetMain}>
-        {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}
+        {steps.length > 0 && <ol className={styles.steps}>{steps.map((step, i) => <li key={i} data-ph-mask={own ? '' : undefined}>{step}</li>)}</ol>}
         <div className={styles.sheetFoot}>
           <div className={styles.promptbox}>
             <span>{t('say_label')}</span>

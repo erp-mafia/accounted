@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildOwnSkill, type OwnSkillCopy } from '../own-skill-body'
+import { buildOwnSkill, ownSkillSteps, type OwnSkillCopy } from '../own-skill-body'
 import { SkillBodySchema } from '../validation'
 
 const copy: OwnSkillCopy = {
@@ -44,5 +44,15 @@ describe('buildOwnSkill', () => {
     const skill = buildOwnSkill({ ...summary, name: 'Lön <b>{x}</b>' }, { ...told, description: 'Kör `rm` <script>' }, copy)
     expect(SkillBodySchema.safeParse(skill.body).success).toBe(true)
     expect(skill.name).toBe('Lön bx/b')
+  })
+})
+
+describe('ownSkillSteps', () => {
+  it('reads the numbered steps back out of a built body', () => {
+    expect(ownSkillSteps(buildOwnSkill(summary, told, copy).body)).toEqual(['Hämta fakturorna.', 'Kolla momsen.'])
+  })
+
+  it('returns nothing for a body without a numbered list', () => {
+    expect(ownSkillSteps('# Namn\n\n- En regel.')).toEqual([])
   })
 })
