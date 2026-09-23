@@ -26,6 +26,7 @@ export const ENTITY_TYPES = [
   'enskild_firma',
   'aktiebolag',
   'ideell_forening',
+  'ekonomisk_forening',
 ] as const satisfies readonly EntityType[]
 
 // Compile-time proof that ENTITY_TYPES lists every member of the union.
@@ -107,6 +108,7 @@ export async function resolveCompanyEntityType(
 // ── Creation gate ────────────────────────────────────────────────────
 
 export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
+export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
 
 /**
  * One reader per `creationFlag` a profile declares. The literal
@@ -117,6 +119,7 @@ export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
  */
 const CREATION_FLAG_READERS: Readonly<Record<string, () => string | undefined>> = {
   [IDEELL_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED,
+  [EKONOMISK_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED,
 }
 
 export function creationFlagReader(flag: string): (() => string | undefined) | undefined {
@@ -221,6 +224,11 @@ export function filesIncomeReturn(entityType: EntityType): LegalFormProfile['fil
   return legalFormProfile(entityType).filings.incomeReturn
 }
 
+/** Whether the form files Inkomstdeklaration 2 (aktiebolag, ekonomisk förening). */
+export function usesInk2(entityType: EntityType): boolean {
+  return filesIncomeReturn(entityType) === 'INK2'
+}
+
 /** Whether the year-end books the year's income tax as a liability (AB 2510/8910). */
 export function booksCurrentTax(entityType: EntityType): boolean {
   return legalFormProfile(entityType).filings.booksCurrentTax
@@ -237,6 +245,21 @@ export function supportsAccountingFramework(
   framework: LegalFormProfile['filings']['frameworks'][number],
 ): boolean {
   return legalFormProfile(entityType).filings.frameworks.includes(framework)
+}
+
+/** Whether a Bolagsverket iXBRL taxonomy covers the form (the K2 taxonomy is aktiebolag-only). */
+export function supportsIxbrl(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.ixbrl
+}
+
+/** A revisor is required whatever the size (ekonomisk förening, EFL 8 kap. 1 §). */
+export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.auditorAlwaysRequired
+}
+
+/** Bound equity is member capital (2083/2084) rather than aktiekapital (2081). */
+export function supportsMemberCapital(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.memberCapital
 }
 
 /** BFL 3 kap 1 §: a fysisk person (enskild firma) is bound to the calendar year. */

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { booksCurrentTax, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { commitEntry, createDraftEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
@@ -143,6 +143,18 @@ type RuleMatchOutcome =
  * still be the __PRIMARY_SEK__ sentinel; callers resolve it against
  * cash_accounts (so the DB round trip stays out of the pure matcher).
  */
+/**
+ * A rule authored for `aktiebolag` describes juridisk-person tax mechanics
+ * (bolagsskatt and preliminärskatt on 2510, arbetsgivaravgifter), which an
+ * ekonomisk förening shares (IL 65 kap. 10 §); an `enskild_firma` rule keys
+ * on the owner's private tax and stays with that form. Unknown forms match
+ * `all` only.
+ */
+function ruleAppliesToForm(companyType: SkattekontoRuleRow['company_type'], entityType: EntityType): boolean {
+  if (companyType === 'all' || companyType === entityType) return true
+  return companyType === 'aktiebolag' && booksCurrentTax(entityType)
+}
+
 function matchSkattekontoRule(
   rules: SkattekontoRuleRow[],
   transaktionstext: string,
@@ -154,7 +166,7 @@ function matchSkattekontoRule(
   const absBelopp = belopp === undefined ? null : Math.abs(belopp)
 
   for (const rule of rules) {
-    if (rule.company_type !== 'all' && rule.company_type !== entityType) {
+    if (!ruleAppliesToForm(rule.company_type, entityType)) {
       continue
     }
 

@@ -47,6 +47,17 @@ export interface NarrativeOverrides {
    *  average over the employees table. A whole number replaces the computed
    *  value in the note and the iXBRL fact for this period. */
   medelantal_anstallda_override: number | null
+  /** ÅRL 6 kap. 3 § (ekonomisk förening): väsentliga förändringar i
+   *  medlemsantalet, free text. Required before the document is fileable. */
+  member_count_change: string | null
+  /** ÅRL 6 kap. 3 § p. 2: insatser to be repaid next fiscal year (EFL 10
+   *  kap. 11 and 16 §§). Null renders "inga". */
+  insatser_repayable_next_year: number | null
+  /** ÅRL 6 kap. 3 § p. 3: the distribution right förlagsinsatser carry. */
+  forlagsinsatser_dividend_right: string | null
+  /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
+   *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
+  forlagsinsatser_redeemable_two_years: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -85,6 +96,17 @@ export interface NarrativeRow {
   parent_company_org_number: string | null
   parent_company_city: string | null
   medelantal_anstallda_override: number | null
+  /** ÅRL 6 kap. 3 § (ekonomisk förening): väsentliga förändringar i
+   *  medlemsantalet, free text. Required before the document is fileable. */
+  member_count_change: string | null
+  /** ÅRL 6 kap. 3 § p. 2: insatser to be repaid next fiscal year (EFL 10
+   *  kap. 11 and 16 §§). Null renders "inga". */
+  insatser_repayable_next_year: number | null
+  /** ÅRL 6 kap. 3 § p. 3: the distribution right förlagsinsatser carry. */
+  forlagsinsatser_dividend_right: string | null
+  /** ÅRL 6 kap. 3 § p. 4: förlagsinsatser given notice, redeemable within
+   *  the next two fiscal years (EFL 11 kap. 7 §). Null renders "inga". */
+  forlagsinsatser_redeemable_two_years: number | null
   long_term_debt_over_five_years_confirmed: boolean
   securities_pledged_confirmed: boolean
   contingent_liabilities_confirmed: boolean
@@ -103,7 +125,7 @@ const TABLE = 'arsredovisning_narratives'
 // of API responses. GDPR Art.25.2 / ISO A.8.3 data-minimization: callers
 // only need the narrative content + last-updated timestamp.
 const NARRATIVE_API_COLUMNS =
-  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, updated_at'
+  'id, company_id, fiscal_period_id, description, important_events, resultatdisposition, proposed_dividend, agm_date, long_term_debt_over_five_years, securities_pledged, contingent_liabilities, parent_company_name, parent_company_org_number, parent_company_city, medelantal_anstallda_override, member_count_change, insatser_repayable_next_year, forlagsinsatser_dividend_right, forlagsinsatser_redeemable_two_years, long_term_debt_over_five_years_confirmed, securities_pledged_confirmed, contingent_liabilities_confirmed, parent_company_confirmed, agm_disposition_outcome, agm_disposition_decision, note_overrides, omit_kassaflodesanalys, kassaflodesanalys_omission_confirmed, updated_at'
 
 /**
  * The medelantal anställda override alone, for a period other than the one

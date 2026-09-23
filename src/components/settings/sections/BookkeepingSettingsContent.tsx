@@ -27,6 +27,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { ExternalLink } from 'lucide-react'
 import type { AccountingFramework, CompanySettings } from '@/types'
 
+import { isEntityType, preparesArsredovisning, supportsAccountingFramework } from '@/lib/company/entity-type'
 const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export function BookkeepingSettingsContent() {
@@ -91,10 +92,14 @@ export function BookkeepingSettingsContent() {
     }
   }
 
-  // K2/K3 selector is only meaningful for AB. EF stays on EF rules and never
-  // picks a framework. Use the company row (source of truth) since
+  // K2/K3 selector is only meaningful for forms that prepare an
+  // årsredovisning (aktiebolag, ekonomisk förening). EF stays on EF rules and
+  // never picks a framework. Use the company row (source of truth) since
   // company_settings.entity_type can be stale on legacy data.
-  const isAktiebolag = company?.entity_type === 'aktiebolag'
+  const preparesAnnualReport = isEntityType(company?.entity_type) && preparesArsredovisning(company.entity_type)
+  // The selector offers K2 and K3; a form the product keeps on K2 only (an
+  // ekonomisk förening today) has nothing to choose.
+  const choosesFramework = preparesAnnualReport && supportsAccountingFramework(company.entity_type, 'K3')
 
   return (
     <div>
@@ -105,7 +110,7 @@ export function BookkeepingSettingsContent() {
             series. The framework row saves through its own PATCH and opts out
             of this wrapper's dirty tracking; the rest read via FormData. */}
         <SettingsGroup label={t('group_basics')}>
-          {isAktiebolag && (
+          {choosesFramework && (
             <AccountingFrameworkForm
               current={framework}
               onSaved={(next) => setFramework(next)}

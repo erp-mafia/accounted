@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { BOOKING_TEMPLATES, getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { DEFAULT_ACCOUNTS_BY_CATEGORY } from '@/lib/bokslut/assets/asset-service'
+import { getFormSeededAccount } from '@/lib/bookkeeping/form-accounts'
 
 /**
  * Every account a booking template names must exist in BAS 2026.
@@ -30,7 +31,9 @@ describe('BOOKING_TEMPLATES reference only real BAS accounts', () => {
       for (const field of accountFields) {
         const account = (t as unknown as Record<string, string | undefined>)[field]
         if (!account) continue
-        if (!getBASReference(account)) {
+        // Form-seeded accounts (3901 Medlemsavgifter) are seeded by
+        // seed_chart_of_accounts() and restored by account-backfill.
+        if (!getBASReference(account) && !getFormSeededAccount(account)) {
           missing.push(`${t.id}.${field} = ${account}`)
         }
       }

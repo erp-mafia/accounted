@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
+import {
+  loadTaxAdjustmentSnapshot,
+  MEMBERSHIP_FEE_ACCOUNT,
+} from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
@@ -23,6 +26,7 @@ import {
 } from './types'
 import { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping } from './account-mappings'
 
+import { isEntityType, usesInk2 } from '@/lib/company/entity-type'
 // Re-exported so existing importers (ne-engine, tests) keep their paths.
 export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
 
@@ -30,7 +34,12 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  * INK2 Declaration Engine
  *
  * Generates INK2 (huvudblankett), INK2R (räkenskapsschema), and INK2S
- * (skattemässiga justeringar) for aktiebolag tax reporting.
+ * (skattemässiga justeringar) for the juridiska personer that file INK2:
+ * aktiebolag and ekonomiska föreningar (usesInk2 in lib/company/entity-type).
+ * Association-specific INK2S items (tax-exempt membership fees on 4.5c and
+ * the matching non-deductible administration cost on 4.3c, Skatteverket
+ * "Deklarera för en ekonomisk förening") are entered through the generic
+ * manual adjustments until dedicated tagging ships.
  *
  * Account mappings follow the official BAS-to-SRU mapping from
  * bas.se/kontoplaner/sru/ and Skatteverket field code spec.
@@ -254,15 +263,17 @@ export async function generateINK2Declaration(
     entityType = company?.entity_type
   }
 
-  if (entityType !== 'aktiebolag') {
-    throw new Error('INK2 declaration is only for aktiebolag (limited company)')
+  if (!isEntityType(entityType) || !usesInk2(entityType)) {
+    throw new Error(
+      'INK2 declaration is only for aktiebolag and ekonomisk förening (juridiska personer taxed under IL 65 kap. 10 §)',
+    )
   }
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
   const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
     await Promise.all([
-      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
+      loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId, entityType),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
@@ -459,6 +470,22 @@ export async function generateINK2Declaration(
     '7763': deficitCarryforward,
     '7670': taxableResult >= 0 ? taxableResult : 0,
     '7770': taxableResult < 0 ? Math.abs(taxableResult) : 0,
+  }
+
+  // An ekonomisk förening that deducts its membership fees (4.5c) must also
+  // add back the administration cost those fees cover (4.3c); the ledger
+  // cannot split that cost out, so it stays a manual figure.
+  const adjustmentItems = taxAdjustments.items ?? []
+  const membershipFees = adjustmentItems.find(
+    (item) => item.sourceKey === `account:${MEMBERSHIP_FEE_ACCOUNT}` && item.included && item.amount > 0,
+  )
+  const manualNonDeductible = adjustmentItems.find(
+    (item) => item.sourceKey === 'manual:non_deductible_expenses',
+  )
+  if (membershipFees && !(manualNonDeductible && manualNonDeductible.amount > 0)) {
+    warnings.push(
+      `Medlemsavgifter ${Math.trunc(membershipFees.amount)} kr har tagits upp som ej skattepliktiga (INK2S 4.5c). De administrationskostnader som avgifterna täcker är inte avdragsgilla och ska anges som ytterligare ej avdragsgilla kostnader (INK2S 4.3c) i bokslutets skattemässiga justeringar.`,
+    )
   }
 
   // Add warnings

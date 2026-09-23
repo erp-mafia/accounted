@@ -179,9 +179,12 @@ function SectionRows({
 }
 
 function EntityMark({ item }: { item: ReportDescriptor }) {
-  if (item.entityType === 'enskild_firma')
-    return <span className="text-xs text-muted-foreground">EF</span>
-  if (item.entityType === 'aktiebolag')
-    return <span className="text-xs text-muted-foreground">AB</span>
-  return null
+  const t = useTranslations('reports')
+  if (!item.entityType) return null
+  const forms: readonly EntityType[] = Array.isArray(item.entityType) ? item.entityType : [item.entityType]
+  return (
+    <span className="text-xs text-muted-foreground">
+      {forms.map((form) => t(`entity_mark_${form}`)).join(' / ')}
+    </span>
+  )
 }

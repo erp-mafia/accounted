@@ -27,6 +27,7 @@ import { proposeOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivning
 import { calculateOveravskrivningar } from '@/lib/bokslut/reserves/overavskrivningar-calculator'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { roundOre } from '@/lib/money'
+import { ACCOUNT_NUMBER_RE } from '@/lib/invariants'
 import { buildDispositionsProposal } from '@/lib/bokslut/dispositions-proposal-builder'
 import type { ProposedDisposition } from '@/lib/bokslut/types'
 import type { JournalEntry } from '@/types'
@@ -112,10 +113,10 @@ const PutBodySchema = z.object({
     // saving the other two without clearing anything.
     deficitCarryforward: z.number().nonnegative().max(1_000_000_000_000).default(0),
   }),
-  detectedAccounts: z.object({
-    '6992': z.boolean(),
-    '8423': z.boolean(),
-  }),
+  // Keyed by account number: the detected list depends on the legal form
+  // (tax-adjustment-service), so the shape is open and the service ignores
+  // accounts it does not detect for this company.
+  detectedAccounts: z.record(z.string().regex(ACCOUNT_NUMBER_RE), z.boolean()),
 })
 
 export const PUT = withRouteContext(

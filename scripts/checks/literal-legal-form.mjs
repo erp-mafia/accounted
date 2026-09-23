@@ -35,7 +35,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 /** Keep in sync with ENTITY_TYPES in lib/company/entity-type.ts. */
-export const LEGAL_FORM_CODES = ['enskild_firma', 'aktiebolag', 'ideell_forening']
+export const LEGAL_FORM_CODES = ['enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening']
 
 const CODE = `'(?:${LEGAL_FORM_CODES.join('|')})'`
 

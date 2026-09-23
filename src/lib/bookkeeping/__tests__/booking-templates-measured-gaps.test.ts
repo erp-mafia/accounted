@@ -88,9 +88,15 @@ describe('measured-gap templates', () => {
     expect(BOOKING_TEMPLATES.some((t) => t.debit_account.startsWith('4'))).toBe(true)
   })
 
-  it('the owner and placement templates are AB only', () => {
-    for (const id of ['share_capital_deposit', 'shareholder_contribution', 'dividend_paid', 'capital_insurance_deposit', 'securities_purchase']) {
+  it('the owner templates are AB only; placements belong to every juridisk person', () => {
+    for (const id of ['share_capital_deposit', 'shareholder_contribution', 'dividend_paid']) {
       expect(getTemplateById(id)!.entity_applicability, id).toBe('aktiebolag')
+    }
+    // Kapitalförsäkring and securities are placements of the company's own
+    // money: an ekonomisk förening makes them like an AB; an enskild firma
+    // books them privately.
+    for (const id of ['capital_insurance_deposit', 'securities_purchase']) {
+      expect(getTemplateById(id)!.entity_applicability, id).toEqual(['aktiebolag', 'ekonomisk_forening'])
     }
   })
 })

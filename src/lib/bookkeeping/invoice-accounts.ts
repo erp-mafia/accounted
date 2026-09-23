@@ -72,6 +72,7 @@ export function getRevenueAccount(vatTreatment: VatTreatment, entityType: Entity
         aktiebolag: '3004',
         enskild_firma: '3100',
         ideell_forening: '3100',
+        ekonomisk_forening: '3004',
       })
     default:
       return '3001'

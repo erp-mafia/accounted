@@ -31,13 +31,19 @@ const ENSKILD_FIRMA_VALUES = new Set<string>([
  * Ideell förening (issue #2072). Most föreningar carry an 8-series org number
  * issued by Skatteverket, so the Bolagsverket-backed lookup legitimately
  * misses them; this arm matters for the registered ones and for BankID
- * company roles. Ekonomisk förening, stiftelse and trossamfund are NOT
- * mapped: different equity, tax form and regelverk.
+ * company roles. Stiftelse and trossamfund are not mapped because their
+ * equity, tax forms and reporting frameworks differ.
  */
 const IDEELL_FORENING_VALUES = new Set<string>([
   'ideell förening',
   'ideell forening',
   'ideella föreningar',
+])
+
+const EKONOMISK_FORENING_VALUES = new Set<string>([
+  'ekonomisk förening',
+  'ekonomisk forening',
+  'ekonomiska föreningar',
 ])
 
 export function mapEntityType(ticType: string | null | undefined): EntityType | null {
@@ -46,6 +52,7 @@ export function mapEntityType(ticType: string | null | undefined): EntityType | 
   if (AKTIEBOLAG_VALUES.has(normalized)) return 'aktiebolag'
   if (ENSKILD_FIRMA_VALUES.has(normalized)) return 'enskild_firma'
   if (IDEELL_FORENING_VALUES.has(normalized)) return 'ideell_forening'
+  if (EKONOMISK_FORENING_VALUES.has(normalized)) return 'ekonomisk_forening'
   return null
 }
 
@@ -71,7 +78,6 @@ export function mapSetupEntityType(ticType: string | null | undefined): EntityTy
  * are TIC's stiftelse categories.
  */
 const PLANNED_FORM_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
-  ekonomisk_forening: new Set(['ekonomisk förening', 'ekonomisk forening', 'ekonomiska föreningar']),
   bostadsrattsforening: new Set(['bostadsrättsförening', 'bostadsrattsforening', 'brf']),
   samfallighetsforening: new Set(['samfällighetsförening', 'samfallighetsforening', 'samfällighet']),
   stiftelse: new Set(['stiftelse', 'annan stiftelse', 'familjestiftelse', 'stiftelser']),

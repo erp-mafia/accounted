@@ -52,7 +52,8 @@ export interface BookingTemplate {
   name_en: string
   group: TemplateGroup
   direction: 'expense' | 'income' | 'transfer'
-  entity_applicability: 'all' | EntityType
+  /** `all`, one legal form, or a list of forms the template is valid for. */
+  entity_applicability: 'all' | EntityType | readonly EntityType[]
   debit_account: string
   credit_account: string
   debit_account_ab?: string
@@ -80,6 +81,21 @@ export interface BookingTemplate {
    * (felkod FK004 if absent). Default 'eu_business' when unset.
    */
   reverse_charge_supplier_type?: 'eu_business' | 'non_eu_business' | 'swedish_business'
+}
+
+/**
+ * Whether a template may be used by a company of the given form. A template
+ * lists `all`, one form, or several forms; the payroll and juridisk-person
+ * templates name both the aktiebolag and the ekonomisk förening because the
+ * postings (7210/2710/2731, 2510, 7412, 1350) do not depend on the form.
+ */
+export function templateAppliesToForm(
+  template: Pick<BookingTemplate, 'entity_applicability'>,
+  entityType: EntityType,
+): boolean {
+  const scope = template.entity_applicability
+  if (scope === 'all') return true
+  return Array.isArray(scope) ? scope.includes(entityType) : scope === entityType
 }
 
 export interface TemplateGroupInfo {
@@ -699,17 +715,17 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
   },
   {
     id: 'insurance_pension_ab',
-    name_sv: 'Pensionsförsäkring (AB)',
-    name_en: 'Pension insurance (AB)',
+    name_sv: 'Pensionsförsäkring (juridisk person)',
+    name_en: 'Pension insurance (legal entity)',
     group: 'insurance',
     direction: 'expense',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '7410',
     credit_account: '1930',
     vat_treatment: 'exempt',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'AB: Pensionskostnad är en avdragsgill personalkostnad',
+    special_rules_sv: 'Aktiebolag och ekonomisk förening: pensionskostnad är en avdragsgill personalkostnad',
     mcc_codes: [],
     keywords: ['pension', 'pensionsförsäkring', 'itp', 'tjänstepension'],
     risk_level: 'NONE',
@@ -1024,7 +1040,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     name_en: 'Salary (net)',
     group: 'personnel',
     direction: 'expense',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '7210',
     credit_account: '1930',
     vat_treatment: null,
@@ -1048,7 +1064,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     name_en: 'Employer social contributions',
     group: 'personnel',
     direction: 'expense',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '2731',
     credit_account: '1930',
     vat_treatment: null,
@@ -1068,11 +1084,11 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
   },
   {
     id: 'personnel_preliminary_tax',
-    name_sv: 'Preliminärskatt (AB)',
-    name_en: 'Preliminary tax (AB)',
+    name_sv: 'Preliminärskatt (juridisk person)',
+    name_en: 'Preliminary tax (legal entity)',
     group: 'personnel',
     direction: 'expense',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '2510',
     credit_account: '1930',
     vat_treatment: null,
@@ -2048,7 +2064,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     name_en: 'Capital insurance deposit',
     group: 'financial',
     direction: 'transfer',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '1385',
     credit_account: '1930',
     vat_treatment: null,
@@ -2072,7 +2088,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     name_en: 'Purchase of shares and funds',
     group: 'financial',
     direction: 'transfer',
-    entity_applicability: 'aktiebolag',
+    entity_applicability: ['aktiebolag', 'ekonomisk_forening'],
     debit_account: '1810',
     credit_account: '1930',
     vat_treatment: null,
@@ -2190,6 +2206,90 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     description_sv: 'Utbetalning till anställd för registrerat utlägg',
     common: false,
   },
+
+  // --- EKONOMISK FÖRENING: member capital (EFL 10-11 kap.) ---
+  // Insatser are bundet eget kapital, never revenue: a paid insats credits
+  // 2083 and leaves the result and the tax base untouched (ÅRL 3 kap. 10 b §,
+  // Skatteverket "Deklarera för en ekonomisk förening"). Repayment on exit,
+  // insatsemission, förlagsinsats redemption and decided distributions need
+  // the statutory member register (EFL 5 kap.) and a stämma/board decision,
+  // so they are deliberately not templates: book them manually against the
+  // register until the member-capital module ships.
+  {
+    id: 'member_contribution_received',
+    name_sv: 'Medlemsinsats inbetald',
+    name_en: 'Member contribution received',
+    group: 'financial',
+    direction: 'transfer',
+    entity_applicability: 'ekonomisk_forening',
+    debit_account: '1930',
+    credit_account: '2083',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv:
+      'Medlemsinsatser är bundet eget kapital (ÅRL 3 kap. 10 b §), inte en intäkt, och beskattas inte hos föreningen. Stäm av mot medlemsförteckningen (EFL 5 kap.). Återbetalning vid avgång bokförs D 2083 / K 1930 först efter beslut och kontroll av utbetalningsbart belopp (EFL 10 kap. 11 §).',
+    mcc_codes: [],
+    keywords: ['medlemsinsats', 'insats', 'insatskapital', 'andel', 'medlemskapital'],
+    risk_level: 'NONE',
+    requires_review: true,
+    impact_score: 8,
+    auto_match_confidence: 0.6,
+    default_private: false,
+    fallback_category: 'income_other',
+    description_sv: 'Inbetald obligatorisk insats eller överinsats från medlem',
+    common: true,
+  },
+  {
+    id: 'debenture_contribution_received',
+    name_sv: 'Förlagsinsats inbetald',
+    name_en: 'Subordinated member contribution received',
+    group: 'financial',
+    direction: 'transfer',
+    entity_applicability: 'ekonomisk_forening',
+    debit_account: '1930',
+    credit_account: '2084',
+    vat_treatment: null,
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv:
+      'Förlagsinsatser (EFL 11 kap.) är bundet eget kapital som redovisas skilt från medlemsinsatserna (ÅRL 3 kap. 10 b §). Föreningen ska föra en förteckning över förlagsinsatserna (EFL 11 kap. 6 §); inlösen får ske tidigast efter fem år (EFL 11 kap. 7 §).',
+    mcc_codes: [],
+    keywords: ['förlagsinsats', 'förlagsandel', 'förlagsandelsbevis'],
+    risk_level: 'NONE',
+    requires_review: true,
+    impact_score: 7,
+    auto_match_confidence: 0.6,
+    default_private: false,
+    fallback_category: 'income_other',
+    description_sv: 'Inbetald förlagsinsats från medlem eller annan',
+    common: false,
+  },
+  {
+    id: 'membership_fee_received',
+    name_sv: 'Medlemsavgift',
+    name_en: 'Membership fee received',
+    group: 'revenue',
+    direction: 'income',
+    entity_applicability: 'ekonomisk_forening',
+    debit_account: '1930',
+    credit_account: '3901',
+    vat_treatment: 'exempt',
+    vat_rate: 0,
+    deductibility: 'full',
+    special_rules_sv:
+      'Medlemsavgifter som täcker föreningens administration är övriga rörelseintäkter, skattefria för föreningen och utan moms; bokslutet föreslår saldot på 3901 som avdrag i INK2S 4.5c. Motsvarande administrationskostnader är inte avdragsgilla och anges manuellt under 4.3c (Skatteverket, "Deklarera för en ekonomisk förening"). Serviceavgifter för tjänster till medlemmarna är vanlig momspliktig omsättning och bokförs med försäljningsmallarna.',
+    mcc_codes: [],
+    keywords: ['medlemsavgift', 'årsavgift', 'medlemskap', 'membership fee'],
+    risk_level: 'NONE',
+    requires_review: true,
+    impact_score: 6,
+    auto_match_confidence: 0.6,
+    default_private: false,
+    fallback_category: 'income_other',
+    description_sv: 'Medlemsavgift som täcker föreningens administration (skattefri, momsfri)',
+    common: true,
+  },
 ]
 
 // ============================================================
@@ -2279,7 +2379,7 @@ export function searchTemplates(query: string, entityType?: EntityType): Booking
 
   return BOOKING_TEMPLATES.filter((t) => {
     // Filter by entity applicability
-    if (entityType && t.entity_applicability !== 'all' && t.entity_applicability !== entityType) {
+    if (entityType && !templateAppliesToForm(t, entityType)) {
       return false
     }
 
@@ -2304,7 +2404,7 @@ export function getCommonTemplates(
 ): BookingTemplate[] {
   return BOOKING_TEMPLATES.filter((t) => {
     if (!t.common) return false
-    if (entityType && t.entity_applicability !== 'all' && t.entity_applicability !== entityType) return false
+    if (entityType && !templateAppliesToForm(t, entityType)) return false
     if (direction && t.direction !== direction) return false
     return true
   })
@@ -2319,7 +2419,7 @@ export function getAdvancedTemplates(
 ): BookingTemplate[] {
   return BOOKING_TEMPLATES.filter((t) => {
     if (t.common) return false
-    if (entityType && t.entity_applicability !== 'all' && t.entity_applicability !== entityType) return false
+    if (entityType && !templateAppliesToForm(t, entityType)) return false
     if (direction && t.direction !== direction) return false
     return true
   })
@@ -2332,11 +2432,12 @@ export function validateTemplateForEntity(
   template: BookingTemplate,
   entityType: EntityType
 ): { valid: boolean; error?: string } {
-  if (template.entity_applicability === 'all') return { valid: true }
-  if (template.entity_applicability === entityType) return { valid: true }
+  if (templateAppliesToForm(template, entityType)) return { valid: true }
+  const scope = template.entity_applicability
+  const validFor = Array.isArray(scope) ? scope.join(', ') : String(scope)
   return {
     valid: false,
-    error: `Template "${template.name_sv}" is only valid for ${template.entity_applicability}. Your entity type is ${entityType}.`,
+    error: `Template "${template.name_sv}" is only valid for ${validFor}. Your entity type is ${entityType}.`,
   }
 }
 
@@ -2427,7 +2528,7 @@ export function findMatchingTemplates(
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability
-    if (entityType && t.entity_applicability !== 'all' && t.entity_applicability !== entityType) {
+    if (entityType && !templateAppliesToForm(t, entityType)) {
       continue
     }
 

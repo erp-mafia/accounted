@@ -2,12 +2,17 @@
 // per form under lib/company/forms/ (docs/LEGAL-FORMS.md); call sites read a
 // capability through lib/company/entity-type.ts and never compare the form to
 // a string. Adding a member here fails compilation until the profile exists.
-export type EntityType = 'enskild_firma' | 'aktiebolag' | 'ideell_forening'
+export type EntityType =
+  | 'enskild_firma'
+  | 'aktiebolag'
+  | 'ideell_forening'
+  | 'ekonomisk_forening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
 // required for medium-to-large AB and permitted voluntarily for smaller ones.
-// Only meaningful for entity_type='aktiebolag'.
+// Only meaningful for legal forms that prepare an annual report. Eligibility
+// for a specific framework is resolved through lib/company/entity-type.ts.
 export type AccountingFramework = 'k2' | 'k3'
 
 // Company role for multi-tenant access
@@ -2735,8 +2740,11 @@ export type TaxDeadlineType =
   | 'skatteinbetalning'
   | 'inkomstdeklaration_ef'
   | 'inkomstdeklaration_ab'
+  | 'inkomstdeklaration_ekonomisk_forening'
   | 'arsredovisning'
+  | 'arsredovisning_ekonomisk_forening'
   | 'arsstamma'
+  | 'foreningsstamma'
   | 'periodisk_sammanstallning'
   | 'kontrolluppgifter'
   | 'rot_rut_begaran'

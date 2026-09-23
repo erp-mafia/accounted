@@ -22,7 +22,8 @@ export interface NavGateFlags {
   // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
   requiresArkiv?: boolean
   requiredCapability?: CapabilityKey
-  entityOnly?: EntityType
+  /** Show only for these legal forms (one or several). */
+  entityOnly?: EntityType | readonly EntityType[]
   byraOnly?: boolean
   hidden?: boolean
   comingSoon?: boolean
@@ -176,8 +177,8 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     icon: FileCheck,
     sub: [
       { href: '/bookkeeping/year-end', labelKey: 'year_end' },
-      { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', entityOnly: 'aktiebolag' },
-      { href: '/reports/ink2-declaration', labelKey: 'income_declaration', entityOnly: 'aktiebolag' },
+      { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
+      { href: '/reports/ink2-declaration', labelKey: 'income_declaration', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
       { href: '/reports/ne-declaration', labelKey: 'income_declaration', entityOnly: 'enskild_firma' },
     ],
   },

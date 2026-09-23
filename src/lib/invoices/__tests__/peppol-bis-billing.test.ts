@@ -400,6 +400,27 @@ describe('generatePeppolBisBillingInvoice', () => {
     ]))
   })
 
+  it('accepts an ideell förening with an organisationsnummer as supplier for the same reason', () => {
+    const input = makeValidInput()
+    input.company = makeCompanySettings({ ...input.company, entity_type: 'ideell_forening' })
+    const result = generatePeppolBisBillingInvoice(input)
+    if (!result.ok) {
+      expect(result.issues.map(({ code }) => code)).not.toContain('SUPPLIER_ENTITY_TYPE_UNSUPPORTED')
+    }
+  })
+
+  it('accepts an ekonomisk förening as supplier: its organisationsnummer is a scheme 0007 participant', () => {
+    const input = makeValidInput()
+    input.company = makeCompanySettings({ ...input.company, entity_type: 'ekonomisk_forening' })
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.xml).toContain('schemeID="0007"')
+    }
+  })
+
   it('rejects a personnummer-only buyer instead of labeling it as scheme 0007', () => {
     const input = makeValidInput()
     input.customer = makeCustomer({ ...input.customer, org_number: '800101-1231' })

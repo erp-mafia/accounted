@@ -52,6 +52,8 @@ export interface LegalFormProfile {
     hasOwners: boolean
     /** Money settled with the owner or member: EF 2013/2018, AB 2893, förening 2890. */
     settlement: { withdrawal: string; contribution: string }
+    /** Bound equity is member capital (2083/2084), not aktiekapital (ekonomisk förening). */
+    memberCapital: boolean
   }
   filings: {
     /** The return the product prepares for the form; null when none is modelled (ideell: INK3 not built). */
@@ -60,6 +62,10 @@ export interface LegalFormProfile {
     corporateTaxDispositions: boolean
     arsredovisning: boolean
     frameworks: ReadonlyArray<'K1' | 'K2' | 'K3'>
+    /** A Bolagsverket iXBRL taxonomy covers the form (K2 aktiebolag only today). */
+    ixbrl: boolean
+    /** A revisor is required whatever the size (EFL 8 kap. 1 §). */
+    auditorAlwaysRequired: boolean
   }
   /** Swedish words that differ by law. Everything else in copy stays form-neutral. */
   glossary: { entity: string; owner: string; meeting: string }

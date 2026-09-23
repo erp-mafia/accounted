@@ -214,7 +214,7 @@ interface NavItem {
   requiredCapability?: CapabilityKey
   // Statutory surfaces that only exist for one company form (INK2 vs
   // NE-bilaga, årsredovisning): hidden for the other entity type.
-  entityOnly?: EntityType
+  entityOnly?: EntityType | readonly EntityType[]
   // Byrå cockpit surfaces (WL-14): visible only to byrå team members
   // (teams.kind = 'byra'). The /clients page + API enforce server-side.
   byraOnly?: boolean
@@ -287,8 +287,8 @@ const navItems: NavItem[] = [
   { href: '/bookkeeping/periodiseringar', labelKey: 'periodiseringar', icon: CalendarRange, group: 'skatt' },
   { href: '/bookkeeping/year-end', labelKey: 'year_end', icon: FileCheck, group: 'skatt' },
   { href: '/reports/bokslutsbilagor', labelKey: 'bokslutsbilagor', icon: FolderArchive, group: 'skatt' },
-  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: 'aktiebolag' },
-  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'aktiebolag' },
+  { href: '/bookkeeping/year-end/arsredovisning', labelKey: 'annual_report', icon: ScrollText, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
+  { href: '/reports/ink2-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },
   { href: '/reports/ne-declaration', labelKey: 'income_declaration', icon: FileSpreadsheet, group: 'skatt', entityOnly: 'enskild_firma' },
 ]
 
@@ -323,6 +323,11 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   analys: 'group_analysis',
   data: 'group_data',
   skatt: 'group_tax',
+}
+
+/** `entityOnly` accepts one form or a list of forms. */
+function entityGateAllows(gate: EntityType | readonly EntityType[], entityType: EntityType): boolean {
+  return Array.isArray(gate) ? gate.includes(entityType) : gate === entityType
 }
 
 export default function DashboardNav({ companyName: _companyName, entityType, paysSalaries = false, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, arkivEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
@@ -575,7 +580,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     if (item.requiredCapability && !capabilities.includes(item.requiredCapability)) return false
     // Entity-gated statutory surfaces: INK2/ÅR for aktiebolag, NE for
     // enskild firma; the page for the other form doesn't exist.
-    if (item.entityOnly && item.entityOnly !== entityType) return false
+    if (item.entityOnly && !entityGateAllows(item.entityOnly, entityType)) return false
     // Byrå cockpit: the Klienter entry lives in the lean cockpit sidebar
     // (cockpitNavItems); in company mode the pinned back-to-clients link
     // replaces it, and non-byrå users never see it (WL-14).
