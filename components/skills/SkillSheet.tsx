@@ -9,6 +9,7 @@ import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
 import { registrySkillHasBody, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
 
 export type SheetTarget =
@@ -90,7 +91,10 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   return (
     <div className={styles.sheetBody}>
       <DialogPrimitive.Close className={styles.x} aria-label={t('close')}><X className="h-4 w-4" aria-hidden /></DialogPrimitive.Close>
-      <span className={styles.dtLed} aria-hidden />
+      <div className={styles.dtTop}>
+        <span className={styles.dtLed} aria-hidden />
+        {id && <SkillMarks id={id} />}
+      </div>
       <DialogPrimitive.Title asChild><h2 data-ph-mask={own ? '' : undefined}>{title}</h2></DialogPrimitive.Title>
       <p className={styles.dtD}>{own ? t('own_desc') : t(`skills.${id}.desc`)}</p>
       {steps.length > 0 && <ol className={styles.steps}>{steps.map((step) => <li key={step}>{step}</li>)}</ol>}

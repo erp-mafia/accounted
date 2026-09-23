@@ -365,6 +365,9 @@
 .x { align-self: flex-end; width: 40px; height: 40px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: transparent; color: hsl(var(--foreground)); display: grid; place-items: center; transition: background-color .15s; }
 .x:hover { background: hsl(var(--secondary) / .6); }
 .x:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset: 2px; }
+.dtTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+.dtTop .marks { margin: 0; padding: 0; }
+.dtTop .mark { width: 28px; height: 28px; }
 .dtLed { width: 40px; height: 4px; border-radius: 2px; background: hsl(var(--foreground)); }
 .sheet h2 { font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 35px; }
 .dtD { font-size: 14px; line-height: 21px; color: hsl(var(--muted-foreground)); max-width: 52ch; }
