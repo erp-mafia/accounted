@@ -371,8 +371,7 @@
       outside .page, so it uses only global tokens ── */
 .sheet { --rf: 176, 198, 228; --rb: #B8CAE4; --rbd: #8FA9CF; background: hsl(var(--background)) !important; color: hsl(var(--foreground)); }
 .sheetBody { flex: 1; min-height: 0; display: flex; flex-direction: column; border-radius: inherit; overflow-y: auto; }
-/* white head and foot; the steps sit on a soft tray that takes up the spare height,
-   and the full instruction opens under the buttons, scrolling the whole sheet */
+/* white head and foot; the steps sit on a soft tray that takes up the spare height */
 .sheetHead { display: flex; flex-direction: column; gap: 10px; padding: 20px 24px; border-bottom: 1px solid hsl(var(--border)); }
 .sheetMain { flex: 1 0 auto; display: flex; flex-direction: column; gap: 16px; padding: 24px; background: hsl(var(--frame)); }
 .sheetFoot { display: flex; flex-direction: column; gap: 14px; padding: 20px 24px 24px; border-top: 1px solid hsl(var(--border)); }
@@ -395,25 +394,6 @@
 .promptbox span { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .promptbox p { font-family: var(--font-display); font-size: 18px; line-height: 25px; }
 .lockedline { color: hsl(var(--muted-foreground)); }
-/* the full instruction, read as a document on a white card in the tray */
-.doc { padding: 20px 22px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--background)); box-shadow: 3px 3px 0 color-mix(in srgb, hsl(var(--border)), hsl(var(--foreground)) 16%); font-size: 13px; line-height: 20px; color: hsl(var(--foreground)); overflow-wrap: anywhere; }
-.doc > :first-child { margin-top: 0; }
-.doc > :last-child { margin-bottom: 0; }
-.doc h1 { margin: 0 0 10px; font-family: var(--font-display); font-weight: 400; font-size: 22px; line-height: 28px; }
-.doc h2, .doc h3 { margin: 22px 0 8px; font-family: var(--font-geist-mono), ui-monospace, monospace; font-weight: 500; font-size: 11px; line-height: 16px; letter-spacing: .07em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
-.doc p { margin: 0 0 10px; }
-.doc ul, .doc ol { margin: 0 0 10px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
-.doc ul { list-style: disc; }
-.doc ol { list-style: decimal; }
-.doc li::marker { color: hsl(var(--muted-foreground)); }
-.doc code { padding: 1px 5px; border-radius: 4px; background: hsl(var(--frame)); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11.5px; }
-.doc pre { margin: 0 0 10px; padding: 12px 14px; border-radius: 6px; background: hsl(var(--frame)); overflow-x: auto; }
-.doc pre code { padding: 0; background: none; }
-.doc strong { font-weight: 600; }
-.doc a { text-decoration: underline; text-underline-offset: 2px; }
-.doc table { width: 100%; margin: 0 0 10px; border-collapse: collapse; display: block; overflow-x: auto; }
-.doc th, .doc td { padding: 6px 8px; border-bottom: 1px solid hsl(var(--border)); text-align: left; vertical-align: top; }
-.doc hr { margin: 16px 0; border: 0; border-top: 1px solid hsl(var(--border)); }
 .fullText { white-space: pre-wrap; word-break: break-word; font-size: 12.5px; line-height: 19px; color: hsl(var(--muted-foreground)); border-top: 1px solid hsl(var(--border)); padding-top: 16px; margin: 0; font-family: inherit; }
 .nightBtns { display: flex; flex-wrap: wrap; gap: 8px; }
 .pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 16px; border-radius: 99px; border: 1px solid hsl(var(--primary)); background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-weight: 500; font-size: 13px; cursor: pointer; transition: background-color .15s, border-color .15s; }

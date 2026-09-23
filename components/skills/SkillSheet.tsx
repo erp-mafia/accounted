@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import dynamic from 'next/dynamic'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { SlideOver, SlideOverContent } from '@/components/ui/slide-over'
@@ -12,14 +11,6 @@ import { AI_CLIENTS, aiChatLink, openAiConnector, type AiClient } from '@/lib/on
 import { registrySkillHasBody, registrySkillSlug, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { SkillMarks } from './SkillMarks'
 import styles from './skills.module.css'
-
-// The markdown parser loads only when someone opens the full instruction.
-const MarkdownMessage = dynamic(() => import('@/components/agent/MarkdownMessage'))
-
-/** The instruction without its YAML frontmatter, which is for the AI, not the reader. */
-function withoutFrontmatter(body: string): string {
-  return body.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '').trim()
-}
 
 export type SheetTarget =
   | { kind: 'registry'; id: RegistrySkillId; locked: boolean }
@@ -66,11 +57,6 @@ export function SkillSheet({ target, companyId, client, canWrite, onClose, onCon
   )
 }
 
-/** Brings the opened instruction into view, once, as it mounts. */
-function scrollToDoc(el: HTMLDivElement | null) {
-  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-}
-
 function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onDelete }: {
   target: SheetTarget
   companyId: string
@@ -83,7 +69,7 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const t = useTranslations('skills_registry')
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const [showFull, setShowFull] = useState(false)
+  const [fullCopy, setFullCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleteFailed, setDeleteFailed] = useState(false)
 
@@ -96,7 +82,14 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
   const steps = id ? (t.raw(`skills.${id}.steps`) as string[]) : []
   const hasBody = own ? true : registrySkillHasBody(id!)
   const locked = target.kind === 'registry' && target.locked
-  const body = useSWR(showFull ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
+  // Fetched as the sheet opens, so the copy runs inside the click and the browser allows it.
+  const body = useSWR(hasBody && !locked ? ['/api/skills', companyId, slug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
+
+  function copyFull() {
+    const text = body.data
+    const copying = text && navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('Nothing to copy'))
+    void copying.then(() => setFullCopy('copied'), () => setFullCopy('failed'))
+  }
 
   function copyAndOpen() {
     void copyPromptAndOpen(prompt, client).then((ok) => setCopyState(ok ? 'copied' : 'failed'))
@@ -135,16 +128,16 @@ function SheetBody({ target, companyId, client, canWrite, onConnect, onEdit, onD
           <div className="flex flex-col gap-2">
             <div className={styles.nightBtns}>
               <button type="button" className={styles.run} onClick={copyAndOpen}>{t('run_client', { client: clientName })}</button>
-              {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} aria-expanded={showFull} onClick={() => setShowFull((v) => !v)}>{t(showFull ? 'hide_full' : 'show_full')}</button>}
+              {hasBody && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} onClick={copyFull}>{t(fullCopy === 'copied' ? 'copied_full' : 'copy_full')}</button>}
               {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => onEdit(own)}>{t('edit_answers')}</button>}
               {own && <button type="button" className={`${styles.pill} ${styles.pillGhost}`} disabled={!canWrite} onClick={() => setConfirmDelete(true)}>{t('delete')}</button>}
             </div>
             {copyState !== 'idle' && <p role="status" className={styles.nightNote}>{copyState === 'copied' ? t('copied_open', { client: clientName }) : t('copy_failed')}</p>}
             {copyState === 'failed' && <pre className={styles.fullText} data-ph-mask>{prompt}</pre>}
+            {fullCopy === 'failed' && <p role="alert" className={styles.nightNote}>{t('body_failed')}</p>}
             {deleteFailed && <p role="alert" className={styles.nightNote}>{t('save_failed')}</p>}
           </div>
         )}
-        {showFull && (body.error ? <p role="alert" className={styles.nightNote}>{t('body_failed')}</p> : <div ref={scrollToDoc} className={styles.doc} data-ph-mask={own ? '' : undefined}><MarkdownMessage text={withoutFrontmatter(body.data ?? '')} /></div>)}
       </div>
       {own && (
         <DestructiveConfirmDialog
