@@ -1,0 +1,721 @@
+{
+  "$comment": "Official BAS-to-INK2R coupling (kopplingstabell), transcribed from bas.se INK2_P1_intervall-241119.xlsx (published 2024-11-19, the newest as of 2026-09-11; Skatteverket INK2R form edition SKV2002-33). accounts use the file spelling: NNNN, NNNN-NNNN, NNNx, NNxx, NNNx-NNNx. \"(Om netto +/-)\" rows are folded: negativeCode is the field the absolute value goes to when the net is negative.",
+  "source": "https://www.bas.se/wp-content/uploads/2024/11/INK2_P1_intervall-241119.xlsx",
+  "fetchedAt": "2026-09-11",
+  "posts": [
+    {
+      "code": "7201",
+      "row": "2.1",
+      "label": "Koncessioner, patent, licenser, varumärken, hyresrätter, goodwill och liknande rättigheter",
+      "accounts": [
+        "1000-1087",
+        "1089-1099"
+      ]
+    },
+    {
+      "code": "7202",
+      "row": "2.2",
+      "label": "Förskott avseende immateriella anläggningstillgångar",
+      "accounts": [
+        "1088"
+      ]
+    },
+    {
+      "code": "7214",
+      "row": "2.3",
+      "label": "Byggnader och mark",
+      "accounts": [
+        "1100-1119",
+        "1130-1179",
+        "1190-1199"
+      ]
+    },
+    {
+      "code": "7215",
+      "row": "2.4",
+      "label": "Maskiner, inventarier och övriga materiella anläggningstillgångar",
+      "accounts": [
+        "1200-1279",
+        "1290-1299"
+      ]
+    },
+    {
+      "code": "7216",
+      "row": "2.5",
+      "label": "Förbättringsutgifter på annans fastighet",
+      "accounts": [
+        "112x"
+      ]
+    },
+    {
+      "code": "7217",
+      "row": "2.6",
+      "label": "Pågående nyanläggningar och förskott avseende materiella anläggningstillgångar",
+      "accounts": [
+        "118x",
+        "128x"
+      ]
+    },
+    {
+      "code": "7230",
+      "row": "2.7",
+      "label": "Andelar i koncernföretag",
+      "accounts": [
+        "131x"
+      ]
+    },
+    {
+      "code": "7231",
+      "row": "2.8",
+      "label": "Andelar i intresseföretag och gemensamt styrda företag",
+      "accounts": [
+        "1330-1335",
+        "1338-1339"
+      ]
+    },
+    {
+      "code": "7233",
+      "row": "2.9",
+      "label": "Ägarintresse i övriga företag och andra långfristiga värdepappersinnehav",
+      "accounts": [
+        "135x",
+        "1336",
+        "1337"
+      ]
+    },
+    {
+      "code": "7232",
+      "row": "2.10",
+      "label": "Fordringar hos koncern-, intresse- och gemensamt styrda företag",
+      "accounts": [
+        "132x",
+        "1340-1345",
+        "1348-1349"
+      ]
+    },
+    {
+      "code": "7234",
+      "row": "2.11",
+      "label": "Lån till delägare eller närstående",
+      "accounts": [
+        "136x"
+      ]
+    },
+    {
+      "code": "7235",
+      "row": "2.12",
+      "label": "Fordringar hos övriga företag som det finns ett ett ägarintresse i och Andra långfristiga fordringar",
+      "accounts": [
+        "137x",
+        "138x",
+        "1346",
+        "1347"
+      ]
+    },
+    {
+      "code": "7241",
+      "row": "2.13",
+      "label": "Råvaror och förnödenheter",
+      "accounts": [
+        "141x",
+        "142x"
+      ]
+    },
+    {
+      "code": "7242",
+      "row": "2.14",
+      "label": "Varor under tillverkning",
+      "accounts": [
+        "144x"
+      ]
+    },
+    {
+      "code": "7243",
+      "row": "2.15",
+      "label": "Färdiga varor och handelsvaror",
+      "accounts": [
+        "145x",
+        "146x"
+      ]
+    },
+    {
+      "code": "7244",
+      "row": "2.16",
+      "label": "Övriga lagertillgångar",
+      "accounts": [
+        "149x"
+      ]
+    },
+    {
+      "code": "7245",
+      "row": "2.17",
+      "label": "Pågående arbeten för annans räkning",
+      "accounts": [
+        "147x"
+      ]
+    },
+    {
+      "code": "7246",
+      "row": "2.18",
+      "label": "Förskott till leverantörer",
+      "accounts": [
+        "148x"
+      ]
+    },
+    {
+      "code": "7251",
+      "row": "2.19",
+      "label": "Kundfordringar",
+      "accounts": [
+        "151x-155x",
+        "158x"
+      ]
+    },
+    {
+      "code": "7252",
+      "row": "2.20",
+      "label": "Fordringar hos koncern-, intresse- och gemensamt styrda företag",
+      "accounts": [
+        "156x",
+        "1570-1572",
+        "1574-1579",
+        "166x",
+        "1671-1672",
+        "1674-1679"
+      ]
+    },
+    {
+      "code": "7261",
+      "row": "2.21",
+      "label": "Fordringar hos övriga företag som det finns ett ägarintresse i och Övriga fordringar",
+      "accounts": [
+        "161x",
+        "163x-165x",
+        "168x-169x",
+        "1573",
+        "1673"
+      ]
+    },
+    {
+      "code": "7262",
+      "row": "2.22",
+      "label": "Upparbetad men ej fakturerad intäkt",
+      "accounts": [
+        "162x"
+      ]
+    },
+    {
+      "code": "7263",
+      "row": "2.23",
+      "label": "Förutbetalda kostnader och upplupna intäkter",
+      "accounts": [
+        "17xx"
+      ]
+    },
+    {
+      "code": "7270",
+      "row": "2.24",
+      "label": "Andelar i koncernföretag",
+      "accounts": [
+        "186x"
+      ]
+    },
+    {
+      "code": "7271",
+      "row": "2.25",
+      "label": "Övriga kortfristiga placeringar",
+      "accounts": [
+        "1800-1859",
+        "1870-1899"
+      ]
+    },
+    {
+      "code": "7281",
+      "row": "2.26",
+      "label": "Kassa, bank och redovisningsmedel",
+      "accounts": [
+        "19xx"
+      ]
+    },
+    {
+      "code": "7301",
+      "row": "2.27",
+      "label": "Bundet eget kapital",
+      "accounts": [
+        "208x"
+      ]
+    },
+    {
+      "code": "7302",
+      "row": "2.28",
+      "label": "Fritt eget kapital",
+      "accounts": [
+        "209x"
+      ]
+    },
+    {
+      "code": "7321",
+      "row": "2.29",
+      "label": "Periodiseringsfonder",
+      "accounts": [
+        "211x-213x"
+      ]
+    },
+    {
+      "code": "7322",
+      "row": "2.30",
+      "label": "Ackumulerade överavskrivningar",
+      "accounts": [
+        "215x"
+      ]
+    },
+    {
+      "code": "7323",
+      "row": "2.31",
+      "label": "Övriga obeskattade reserver",
+      "accounts": [
+        "216x-219x"
+      ]
+    },
+    {
+      "code": "7331",
+      "row": "2.32",
+      "label": "Avsättningar för pensioner och liknande förpliktelser enligt lagen (1967:531) om tryggande av pensionsutfästelserr m.m.",
+      "accounts": [
+        "221x"
+      ]
+    },
+    {
+      "code": "7332",
+      "row": "2.33",
+      "label": "Övriga avsättningar för pensioner och liknande förpliktelser",
+      "accounts": [
+        "223x"
+      ]
+    },
+    {
+      "code": "7333",
+      "row": "2.34",
+      "label": "Övriga avsättningar",
+      "accounts": [
+        "2220-2229",
+        "2240-2299"
+      ]
+    },
+    {
+      "code": "7350",
+      "row": "2.35",
+      "label": "Obligationslån",
+      "accounts": [
+        "231x-232x"
+      ]
+    },
+    {
+      "code": "7351",
+      "row": "2.36",
+      "label": "Checkräkningskredit",
+      "accounts": [
+        "233x"
+      ]
+    },
+    {
+      "code": "7352",
+      "row": "2.37",
+      "label": "Övriga skulder till kreditinstitut",
+      "accounts": [
+        "234x-235x"
+      ]
+    },
+    {
+      "code": "7353",
+      "row": "2.38",
+      "label": "Skulder till koncern-, intresse- och gemensamt styrda företag",
+      "accounts": [
+        "2360- 2372",
+        "2374-2379"
+      ]
+    },
+    {
+      "code": "7354",
+      "row": "2.39",
+      "label": "Skulder till övriga företag som det finns ett ägarintresse i och övriga skulder",
+      "accounts": [
+        "238x-239x",
+        "2373"
+      ]
+    },
+    {
+      "code": "7360",
+      "row": "2.40",
+      "label": "Checkräkningskredit",
+      "accounts": [
+        "248x"
+      ]
+    },
+    {
+      "code": "7361",
+      "row": "2.41",
+      "label": "Övriga skulder till kreditinstitut",
+      "accounts": [
+        "241x"
+      ]
+    },
+    {
+      "code": "7362",
+      "row": "2.42",
+      "label": "Förskott från kunder",
+      "accounts": [
+        "242x"
+      ]
+    },
+    {
+      "code": "7363",
+      "row": "2.43",
+      "label": "Pågående arbeten för annans räkning",
+      "accounts": [
+        "243x"
+      ]
+    },
+    {
+      "code": "7364",
+      "row": "2.44",
+      "label": "Fakturerad men ej upparbetad intäkt",
+      "accounts": [
+        "245x"
+      ]
+    },
+    {
+      "code": "7365",
+      "row": "2.45",
+      "label": "Leverantörsskulder",
+      "accounts": [
+        "244x"
+      ]
+    },
+    {
+      "code": "7366",
+      "row": "2.46",
+      "label": "Växelskulder",
+      "accounts": [
+        "2492"
+      ]
+    },
+    {
+      "code": "7367",
+      "row": "2.47",
+      "label": "Skulder till koncern-, intresse- och gemensamt styrda företag",
+      "accounts": [
+        "2460-2472",
+        "2474-2479",
+        "2874-2879"
+      ]
+    },
+    {
+      "code": "7369",
+      "row": "2.48",
+      "label": "Skulder till övriga företag som det finns ett ägarintresse i och Övriga skulder",
+      "accounts": [
+        "2490-2491",
+        "2493-2499",
+        "2600-2859",
+        "2880-2899"
+      ]
+    },
+    {
+      "code": "7368",
+      "row": "2.49",
+      "label": "Skatteskulder",
+      "accounts": [
+        "25xx"
+      ]
+    },
+    {
+      "code": "7370",
+      "row": "2.50",
+      "label": "Upplupna kostnader och förutbetalda intäkter",
+      "accounts": [
+        "29xx"
+      ]
+    },
+    {
+      "code": "7410",
+      "row": "3.1",
+      "label": "Nettoomsättning",
+      "accounts": [
+        "30xx-37xx"
+      ]
+    },
+    {
+      "code": "7411",
+      "row": "3.2",
+      "label": "Förändring av lager av produkter i arbete, färdiga varor och pågående arbete för annans räkning",
+      "accounts": [
+        "4900-4909",
+        "4930-4959",
+        "4970-4979",
+        "4990-4999 (Om netto +)"
+      ],
+      "negativeCode": "7510",
+      "negativeSideAccounts": [
+        "4900-4909",
+        "4930-4959",
+        "4970-4979",
+        "4990-4999 (Om netto -)"
+      ]
+    },
+    {
+      "code": "7412",
+      "row": "3.3",
+      "label": "Aktiverat arbete för egen räkning",
+      "accounts": [
+        "38xx"
+      ]
+    },
+    {
+      "code": "7413",
+      "row": "3.4",
+      "label": "Övriga rörelseintäkter",
+      "accounts": [
+        "39xx"
+      ]
+    },
+    {
+      "code": "7511",
+      "row": "3.5",
+      "label": "Råvaror och förnödenheter",
+      "accounts": [
+        "40xx-47xx",
+        "4910-4920"
+      ]
+    },
+    {
+      "code": "7512",
+      "row": "3.6",
+      "label": "Handelsvaror",
+      "accounts": [
+        "40xx-47xx",
+        "496x",
+        "498x"
+      ]
+    },
+    {
+      "code": "7513",
+      "row": "3.7",
+      "label": "Övriga externa kostnader",
+      "accounts": [
+        "50xx-69xx"
+      ]
+    },
+    {
+      "code": "7514",
+      "row": "3.8",
+      "label": "Personalkostnader",
+      "accounts": [
+        "70xx-76xx"
+      ]
+    },
+    {
+      "code": "7515",
+      "row": "3.9",
+      "label": "Av- och nedskrivningar av materiella och immateriella anläggningstillgångar",
+      "accounts": [
+        "7700-7739",
+        "7750-7789",
+        "7800-7899"
+      ]
+    },
+    {
+      "code": "7516",
+      "row": "3.10",
+      "label": "Nedskrivningar av omsättningstillgångar utöver normala nedskrivningar",
+      "accounts": [
+        "774x",
+        "779x"
+      ]
+    },
+    {
+      "code": "7517",
+      "row": "3.11",
+      "label": "Övriga rörelsekostnader",
+      "accounts": [
+        "79xx"
+      ]
+    },
+    {
+      "code": "7414",
+      "row": "3.12",
+      "label": "Resultat från andelar i koncernföretag",
+      "accounts": [
+        "8000-8069",
+        "8090-8099 (Om netto +)"
+      ],
+      "negativeCode": "7518",
+      "negativeSideAccounts": [
+        "8000-8069",
+        "8090-8099 (Om netto -)"
+      ]
+    },
+    {
+      "code": "7415",
+      "row": "3.13",
+      "label": "Resultat från andelar i intresseföretag och gemensamt styrda företag",
+      "accounts": [
+        "8100-8112",
+        "8114-8117",
+        "8119-8122",
+        "8124-8132",
+        "8134-8169",
+        "8190-8199 (Om netto +)"
+      ],
+      "negativeCode": "7519",
+      "negativeSideAccounts": [
+        "8100-8112",
+        "8114-8117",
+        "8119-8122",
+        "8124-8132",
+        "8134-8169",
+        "8190-8199 (Om netto -)"
+      ]
+    },
+    {
+      "code": "7423",
+      "row": "3.14",
+      "label": "Resultat från övriga företag som det finns ett ägarintresse i",
+      "accounts": [
+        "8113",
+        "8118",
+        "8123",
+        "8133 (Om netto +)"
+      ],
+      "negativeCode": "7530",
+      "negativeSideAccounts": [
+        "8113",
+        "8118",
+        "8123",
+        "8133 (Om netto -)"
+      ]
+    },
+    {
+      "code": "7416",
+      "row": "3.15",
+      "label": "Resultat från övriga anläggningstillgångar",
+      "accounts": [
+        "8200-8269",
+        "8290-8299 (Om netto +)"
+      ],
+      "negativeCode": "7520",
+      "negativeSideAccounts": [
+        "8200-8269",
+        "8290-8299 (Om netto -)"
+      ]
+    },
+    {
+      "code": "7417",
+      "row": "3.16",
+      "label": "Övriga ränteintäkter och liknande resultatposter",
+      "accounts": [
+        "8300-8369",
+        "8390-8399"
+      ]
+    },
+    {
+      "code": "7521",
+      "row": "3.17",
+      "label": "Nedskrivningar av finansiella anläggningstillgångar och kortfristiga placeringar",
+      "accounts": [
+        "807x",
+        "808x",
+        "817x",
+        "818x",
+        "827x",
+        "828x",
+        "837x",
+        "838x"
+      ]
+    },
+    {
+      "code": "7522",
+      "row": "3.18",
+      "label": "Räntekostnader och liknande resultatposter",
+      "accounts": [
+        "84xx"
+      ]
+    },
+    {
+      "code": "7524",
+      "row": "3.19",
+      "label": "Lämnade koncernbidrag",
+      "accounts": [
+        "883x"
+      ]
+    },
+    {
+      "code": "7419",
+      "row": "3.20",
+      "label": "Mottagna koncernbidrag",
+      "accounts": [
+        "882x"
+      ]
+    },
+    {
+      "code": "7420",
+      "row": "3.21",
+      "label": "Återföring av periodiseringsfond",
+      "accounts": [
+        "8810 (Om netto +)",
+        "8819"
+      ]
+    },
+    {
+      "code": "7525",
+      "row": "3.22",
+      "label": "Avsättning till periodiseringsfond",
+      "accounts": [
+        "8810 (Om netto -)",
+        "8811"
+      ]
+    },
+    {
+      "code": "7421",
+      "row": "3.23",
+      "label": "Förändring av överavskrivningar",
+      "accounts": [
+        "885x (Om netto +)"
+      ],
+      "negativeCode": "7526",
+      "negativeSideAccounts": [
+        "885x (Om netto -)"
+      ]
+    },
+    {
+      "code": "7422",
+      "row": "3.24",
+      "label": "Övriga bokslutsdispositioner",
+      "accounts": [
+        "886x-889x (Om netto +)"
+      ],
+      "negativeCode": "7527",
+      "negativeSideAccounts": [
+        "886x-889x",
+        "884x (Om netto -)"
+      ]
+    },
+    {
+      "code": "7528",
+      "row": "3.25",
+      "label": "Skatt på årets resultat",
+      "accounts": [
+        "8900-8989"
+      ]
+    },
+    {
+      "code": "7450",
+      "row": "3.26",
+      "label": "Årets resultat, vinst (flyttas till p. 4.1)  (+)",
+      "accounts": [
+        "899x"
+      ],
+      "negativeCode": "7550"
+    }
+  ]
+}

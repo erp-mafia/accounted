@@ -2,7 +2,9 @@ import { defineConfig } from 'vitest/config'
 import path from 'path'
 
 const alias = {
-  '@': path.resolve(__dirname, '.'),
+  '@/tests': path.resolve(__dirname, 'tests'),
+  '@/scripts': path.resolve(__dirname, 'scripts'),
+  '@': path.resolve(__dirname, 'src'),
   // The connect contract is consumed from source in-repo (published separately).
   '@accounted/connect-contract': path.resolve(__dirname, 'packages/connect-contract/src/index.ts'),
   // `server-only` is a build-time guard whose real entry point always throws;

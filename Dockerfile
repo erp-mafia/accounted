@@ -51,6 +51,18 @@ ENV NEXT_PUBLIC_BRANDING_APP_NAME=__NEXT_PUBLIC_BRANDING_APP_NAME__
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
+# `next build` type-checks the whole production project (tsconfig.build.json)
+# after compiling, and that step now needs more heap than Node gives itself by
+# default. V8 caps its default old-space at about 4 GB on 64-bit whatever the
+# machine has, so a self-hosted build fails with "Ineffective mark-compacts
+# near heap limit" on a 32 GB host exactly as it would on a 4 GB one: more RAM
+# does not raise the ceiling, only this does. Measured on the current tree:
+# the check completes at 5120 MiB and dies at the default.
+#
+# Only the builder stage sets this. The runner is a separate FROM and its
+# runtime heap stays whatever the deployment chooses.
+ENV NODE_OPTIONS=--max-old-space-size=6144
+
 RUN npm run build
 
 # ── Stage 4: Runner ──
@@ -58,8 +70,11 @@ FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a55
 WORKDIR /app
 
 # Patch OS packages (libssl3/libcrypto3, …) with fixes published after the
-# pinned base digest, so CI's Trivy scan doesn't flag fixable Alpine CVEs. No
-# su-exec or curl needed: the entrypoint runs unprivileged as nextjs and the
+# pinned base digest, so CI's Trivy scan doesn't flag fixable Alpine CVEs.
+# docker-publish.yml excludes this stage from the layer cache
+# (no-cache-filters: runner); otherwise this RUN replays from cache and the
+# upgrade silently stops happening.
+# No su-exec or curl needed: the entrypoint runs unprivileged as nextjs and the
 # healthcheck uses BusyBox wget. The runtime runs `node server.js` and never
 # invokes npm, so we delete the base image's bundled npm CLI: its vendored deps
 # (picomatch, tar, brace-expansion, ip-address) are the packages Trivy flags on
@@ -108,7 +123,7 @@ COPY --from=builder --chown=nextjs:nodejs /app/public /opt/gnubok-template/publi
 RUN mkdir -p /app/.next/cache /app/public && \
     chown nextjs:nodejs /app /app/.next /app/.next/cache /app/public
 
-COPY --chmod=755 --chown=nextjs:nodejs docker-entrypoint.sh ./docker-entrypoint.sh
+COPY --chmod=755 --chown=nextjs:nodejs docker/docker-entrypoint.sh ./docker-entrypoint.sh
 
 USER nextjs
 

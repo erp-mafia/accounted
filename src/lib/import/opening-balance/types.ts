@@ -1,0 +1,70 @@
+import type { ImportNotice } from '@/lib/import/notices'
+
+/** Layout of the balance columns in the uploaded file */
+export type BalanceColumnLayout = 'net' | 'debit_credit'
+
+/** Result of auto-detecting columns in the uploaded file */
+export interface DetectedColumns {
+  account_number_col: number
+  account_name_col: number | null
+  layout: BalanceColumnLayout
+  /** Column index for net balance (used when layout === 'net') */
+  balance_col: number | null
+  /** Column index for debit amounts (used when layout === 'debit_credit') */
+  debit_col: number | null
+  /** Column index for credit amounts (used when layout === 'debit_credit') */
+  credit_col: number | null
+  /** 0-1 confidence score for the detection */
+  confidence: number
+}
+
+/** A single parsed row from the opening balance file */
+export interface ParsedOpeningBalanceRow {
+  row_index: number
+  account_number: string
+  account_name: string
+  debit_amount: number
+  credit_amount: number
+  is_valid: boolean
+  validation_errors: string[]
+  /** Matched BAS account name, if found */
+  bas_match: string | null
+}
+
+/** Full result from parsing an opening balance file */
+export interface OpeningBalanceParseResult {
+  filename: string
+  sheet_name: string
+  total_rows: number
+  detected_columns: DetectedColumns
+  /** Raw headers from the first row of the file */
+  headers: string[]
+  /** First 5 raw data rows for preview in column mapping */
+  preview_rows: string[][]
+  rows: ParsedOpeningBalanceRow[]
+  total_debit: number
+  total_credit: number
+  is_balanced: boolean
+  warnings: string[]
+  /** Structured twins of `warnings` (lib/import/notices.ts). */
+  notices?: ImportNotice[]
+  /**
+   * Bank-file format name (e.g. "Swedbank") when the file produced no account
+   * rows but matches a known bank statement format: the user most likely
+   * uploaded a bank statement to the wrong importer. Null otherwise.
+   */
+  detected_bank_format: string | null
+}
+
+/** Result of executing the opening balance import */
+export interface OpeningBalanceExecuteResult {
+  success: boolean
+  journal_entry_id: string | null
+  fiscal_period_id: string
+  lines_created: number
+  total_debit: number
+  total_credit: number
+  error?: string
+  /** Set when this was a correction: the stornoed previous IB entry id. */
+  reversed_entry_id?: string | null
+}

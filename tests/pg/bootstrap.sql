@@ -48,6 +48,12 @@ AS $$
 $$;
 
 -- auth.identities is created by GoTrue at startup, not by the Postgres
+-- image. Likewise, GoTrue's 20240214120130 migration adds is_anonymous;
+-- sandbox authorization reads this server-owned flag, not user metadata.
+ALTER TABLE auth.users
+  ADD COLUMN IF NOT EXISTS is_anonymous boolean NOT NULL DEFAULT false;
+
+-- auth.identities is created by GoTrue at startup, not by the Postgres
 -- image, and GoTrue does not run in CI. Triggers on auth.users that touch
 -- identities (20260903110000 unlink_old_address_identities) need the table
 -- to exist so an email change in a pg-real test does not fail with 42P01.

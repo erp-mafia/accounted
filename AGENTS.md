@@ -10,7 +10,7 @@ This file is the entry point for Codex and other agents that do not read `CLAUDE
 
 - **Hard Rules**: the seven accounting invariants (the two sanctioned correction paths, storno and inline rättelse; engine-only journal writes; balanced entries; period locks; document retention; money math; account numbers as strings) and the general prohibitions (migrations, extension imports, dependencies, the gnubok → Accounted rename, `.env.local`, diff scope, no em or en dashes).
 - **When Uncertain**: stop and ask; Swedish domain questions go through the `swedish-*` skills, never training data.
-- **Definition of Done**: all nine items, including the last one: the last mile is verified in-session (migration applied, PR merged, routine observed firing), or the final output states exactly what is not live yet.
+- **Definition of Done**: every item, including last-mile verification in-session (migration applied, PR merged, routine observed firing, or the final output states exactly what is not live yet) and the three answers from **Fix From First Principles** in the PR body.
 - **Commands**, **Architecture** (tenancy resolution, application-side MFA plus server-enforced session limits, event bus, Supabase clients, extensions, the 150+ MCP tools), **Repository Map**, **Testing**, and the **Decision Log** (`DECISIONS.md`).
 
 Do not copy sections from `CLAUDE.md` into this file; link to them instead.
@@ -28,9 +28,10 @@ These apply to Codex sessions run by Emil (Mattsson) and were added 2026-07-21; 
 
 The files below are the shared source of truth for path-specific guidance. Claude Code loads them through their `paths` frontmatter. Codex does not interpret that frontmatter, so before reading, editing, reviewing, or otherwise working with a matching path, read and follow the listed rule. Do not duplicate the rule bodies here.
 
-- `.claude/rules/design.md`: design system, locked tokens (`app/**`, `components/**`)
+- `.claude/rules/design.md`: design system, locked tokens (`src/app/**`, `src/components/**`)
 - `.claude/rules/i18n.md`: sv/en conventions, "stays Swedish" surfaces
-- `.claude/rules/api-routes.md`: `withRouteContext` route pattern, endpoint map (`app/api/**`)
+- `.claude/rules/api-routes.md`: `withRouteContext` route pattern, endpoint map (`src/app/api/**`)
 - `.claude/rules/database.md`: migration rules, key tables/RPCs/triggers, pg-real (`supabase/migrations/**`)
 - `.claude/rules/mcp-server.md`: MCP tool authoring, staged-operation pattern, OAuth 2.1 connector auth
-- `.claude/rules/bookkeeping.md`: BAS accounts, VAT treatments/rutor, `lib/core/` services
+- `.claude/rules/bookkeeping.md`: BAS accounts, VAT treatments/rutor, `src/lib/core/` services
+- `.claude/rules/legal-forms.md`: capability profiles, never `=== 'aktiebolag'` at call sites; contract in `docs/LEGAL-FORMS.md` (`src/lib/company/**`, templates, year-end, import)
