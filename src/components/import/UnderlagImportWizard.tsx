@@ -16,6 +16,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { FyPicker } from '@/components/common/FyPicker'
+import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
@@ -667,6 +668,10 @@ export default function UnderlagImportWizard() {
                 description={t('underlag_all_ok_body')}
               />
             )}
+
+            {/* The underlag are linked: this is where closing the imported
+                years belongs. Closing earlier would have refused the links. */}
+            <CloseImportedYearsOffer />
 
             <Button onClick={reset}>{t('underlag_new_import')}</Button>
           </CardContent>

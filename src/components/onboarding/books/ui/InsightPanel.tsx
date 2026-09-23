@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { formatCurrency } from '@/lib/utils'
-import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
+import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
 import { VerdictList, type Verdict } from './Verdicts'
 import type { BooksCtx } from '../context'
 
@@ -19,10 +20,12 @@ const VAT_PICKS: { key: VatPick; label: string }[] = [
 
 /**
  * Genomlysningen as a panel, not a step: what the books say, as verdict
- * lines under the theater once the import lands. Two things happen here
- * that the old wizard asked for up front: imported years that ended before
- * the latest one are klarmarkerade (reversible), and revenue accounts the
+ * lines under the theater once the import lands. Revenue accounts the
  * import brought in without a momskod can get one now, or later in the chart.
+ * Imported years that ended before the latest one are NOT klarmarkerade
+ * here: a closed year refuses further underlag linking (the period-lock
+ * triggers), so closing is offered as an explicit step the user takes once
+ * the old system's underlag are linked (founder decision on crm#104).
  *
  * `summary` (under the theater after an import, founder direction
  * 2026-09-14): one line with the headline numbers and how many things want
@@ -34,41 +37,10 @@ const VAT_PICKS: { key: VatPick; label: string }[] = [
 export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksCtx; base?: number; summary?: boolean }) {
   const t = useTranslations('books')
   const { state, findings, loadingFindings, loadFindings } = ctx
-  const { periods, refresh: refreshPeriods } = useFiscalPeriods()
   const { accounts, refresh: refreshAccounts } = useAccounts(true)
   const [vatOpen, setVatOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [vatSet, setVatSet] = useState<Record<string, VatPick>>({})
-  const [closedNames, setClosedNames] = useState<string[]>([])
-  const closeRan = useRef(false)
-
-  useEffect(() => {
-    if (closeRan.current || state.path !== 'migration' || !state.imported || periods.length < 2) return
-    closeRan.current = true
-    const today = new Date().toISOString().slice(0, 10)
-    const sorted = [...periods].sort((a, b) => a.period_start.localeCompare(b.period_start))
-    const latest = sorted[sorted.length - 1]
-    const targets = sorted.filter((p) => p.id !== latest.id && p.period_end < today && !p.is_closed && !p.closed_externally && !p.locked_at)
-    if (targets.length === 0) return
-    void (async () => {
-      const done: string[] = []
-      for (const p of targets) {
-        try {
-          const res = await fetch(`/api/bookkeeping/fiscal-periods/${p.id}/close-external`, { method: 'POST' })
-          if (res.ok) done.push(p.name)
-        } catch {
-          // A year that refuses to close stays open; the verdict says so.
-        }
-      }
-      if (done.length) {
-        setClosedNames(done)
-        void refreshPeriods()
-        void invalidateReferenceData('ref:fiscal-periods')
-        void loadFindings()
-      }
-    })()
-  }, [state.path, state.imported, periods, refreshPeriods, loadFindings])
-
   const vatGaps = useMemo(() => {
     if (state.importedAccounts.length === 0) return []
     const imported = new Set(state.importedAccounts)
@@ -105,9 +77,6 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
     const broken = b.periods.filter((p) => p.continuityVerified === false)
     if (broken.length > 0) out.push({ tone: 'warn', text: t('v_continuity_broken', { name: broken[0].name }), href: '/bookkeeping' })
     else if (b.periods.some((p) => p.continuityVerified === true)) out.push({ tone: 'ok', text: t('v_continuity_ok') })
-    if (closedNames.length > 0) {
-      out.push({ tone: 'ok', text: t('v_closed_years', { years: closedNames.join(closedNames.length === 2 ? ` ${t('and')} ` : ', ') }) })
-    }
     if (b.revenue !== null && b.result !== null && b.periodName) {
       out.push({ tone: 'ok', text: t('v_result', { period: b.periodName, revenue: formatCurrency(b.revenue), result: formatCurrency(b.result) }) })
     }
@@ -124,7 +93,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
     }
     if (b.uncategorizedTransactions > 0) out.push({ tone: 'warn', text: t('v_uncategorized', { count: b.uncategorizedTransactions }), href: '/transactions' })
     return out
-  }, [findings, closedNames, vatGaps.length, state.importedAccounts.length, t])
+  }, [findings, vatGaps.length, state.importedAccounts.length, t])
 
   const vatSection = vatGaps.length > 0 ? (
         <div className="vatwrap">
@@ -154,6 +123,9 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
           )}
         </div>
       ) : null
+
+  // Renders nothing unless an earlier imported year is still open.
+  const closeOffer = <CloseImportedYearsOffer showUnderlagLink onClosed={() => void loadFindings()} />
 
   if (summary) {
     const b = findings?.books
@@ -188,6 +160,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
             </DialogHeader>
             <VerdictList verdicts={verdicts} loading={loadingFindings && !findings} base={0} />
             {vatSection}
+            {closeOffer}
           </DialogContent>
         </Dialog>
       </div>
@@ -198,6 +171,7 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
     <>
       <VerdictList verdicts={verdicts} loading={loadingFindings && !findings} base={base} />
       {vatSection}
+      {closeOffer}
     </>
   )
 }
