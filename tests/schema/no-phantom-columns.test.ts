@@ -212,7 +212,15 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // behandlingshistorik.ts: valid_from/valid_to as of a date, belief window,
 // ilike on title and counterparty), which PostgREST can only express as a
 // formatted or-string.
-const UNRESOLVED_CEILING = 422
+// Unlink concurrency (+1): the bank-row retag in
+// lib/reconciliation/bank-reconciliation.ts was check-then-act, so two
+// concurrent voucher links could both read a null payable pointer and both
+// write. It is now a compare-and-set, and the predicates it re-asserts depend
+// on which pointer is being claimed, so the query is built up before its
+// terminal .select(). The scanner resolves an update payload only while it can
+// follow one unbroken chain, and a query held in a variable defeats that. The
+// payload itself is no more dynamic than before (#2673).
+const UNRESOLVED_CEILING = 423
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change
