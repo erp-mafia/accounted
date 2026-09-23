@@ -1171,6 +1171,28 @@ describe('ingestTransactions', () => {
     expect(txUpdates).toContainEqual({ cash_account_id: 'acct-A' })
   })
 
+  it.each([null, { code: 'PT409', message: 'route changed' }])('uses the checked bank adoption boundary and fails the batch on rejection', async error => {
+    const { supabase, enqueue, updates } = createQueueMockSupabase()
+    const raw = makeRaw({ date: '2026-01-02', amount: -25, description: 'Manual payment',
+      bank_connection_id: 'connection', import_source: 'enable_banking' })
+    enqueue({ data: [{ id: 'manual-id', date: raw.date, amount: raw.amount,
+      original_description: raw.description, description: raw.description, import_source: 'manual',
+      bank_connection_id: null, cash_account_id: null, currency: 'SEK' }] },
+    { data: [] }, { data: [] }, { data: cashAccountRows('cash', '1930') }, { data: error ? null : 'cash', error })
+    const run = ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      rawInsertOnly: true, settlementAccount: '1930', bankRoute: {
+        connectionId: 'connection', sessionId: 'session', accountUid: 'uid', cashAccountId: 'cash',
+        ledgerAccount: '1930', currency: 'SEK', token: 'route-token',
+      },
+    })
+    if (error) await expect(run).rejects.toThrow('Bank transaction adoption failed')
+    else expect(await run).toMatchObject({ imported: 0, duplicates: 1 })
+    expect(supabase.rpc).toHaveBeenCalledWith('bind_bank_transaction', expect.objectContaining({
+      p_route_token: 'route-token', p_transaction_id: 'manual-id', p_expected_date: raw.date, p_expected_amount: -25,
+    }))
+    expect(updates.transactions).toBeUndefined()
+  })
+
   it('does not let a Layer-1 duplicate inflate the hand-mirror symmetry count', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     // R0 is already stored (Layer-1 kills it); R1 is genuinely new. TWO booked
@@ -2379,6 +2401,38 @@ describe('ingestTransactions', () => {
     // Should NOT have attempted any post-insert operations
     expect(mockGetBestInvoiceMatch).not.toHaveBeenCalled()
     expect(mockEvaluateMappingRules).not.toHaveBeenCalled()
+  })
+
+  it.each([null, { code: 'PT409', message: 'BANK_INGEST_ROUTE_CHANGED' }])('persists bank-context rows through the checked RPC and propagates its outcome', async error => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const raw = makeRaw({ bank_connection_id: 'connection', import_source: 'enable_banking' })
+    const bankRoute = { connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+      cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route' }
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { data: cashAccountRows('cash', '1930') },
+      { data: error ? null : makeTransaction({ id: 'tx-bank', cash_account_id: 'cash' }), error })
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, [raw], {
+      rawInsertOnly: true, settlementAccount: '1930', bankRoute,
+    })
+    expect(supabase.rpc).toHaveBeenCalledWith('insert_bank_transaction', expect.objectContaining({
+      p_company_id: COMPANY_ID, p_connection_id: 'connection', p_account_uid: 'uid', p_route_token: 'checked-route',
+    }))
+    expect(inserts.transactions).toBeUndefined()
+    expect(result).toMatchObject({ imported: error ? 0 : 1, errors: error ? 1 : 0 })
+    if (error) expect(result.first_error).toMatchObject(error)
+  })
+
+  it('refuses a bank batch when the cash-account read fails instead of inserting null bindings', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    enqueue({ data: [] }, { data: [] }, { data: [] }, { error: { message: 'lookup unavailable' } })
+    await expect(ingestTransactions(supabase as never, COMPANY_ID, USER_ID,
+      [makeRaw({ bank_connection_id: 'connection' })], {
+        rawInsertOnly: true, settlementAccount: '1930', bankRoute: {
+          connectionId: 'connection', sessionId: 'session', accountUid: 'uid', currency: 'SEK',
+          cashAccountId: 'cash', ledgerAccount: '1930', token: 'checked-route',
+        },
+      })).rejects.toThrow('lookup unavailable')
+    expect(inserts.transactions).toBeUndefined()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('still deduplicates when rawInsertOnly is set', async () => {

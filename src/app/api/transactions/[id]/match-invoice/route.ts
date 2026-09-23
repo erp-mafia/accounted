@@ -1,3 +1,4 @@
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
@@ -500,6 +501,7 @@ export const POST = withRouteContext(
           description: desc,
           source_type: sourceType,
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
         })
         journalEntryId = journalEntry?.id ?? null
@@ -507,6 +509,7 @@ export const POST = withRouteContext(
         const journalEntry = await createInvoiceCashEntry(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
           entityType, invoice.customer?.name, paymentAccount,
+          transaction,
         )
         journalEntryId = journalEntry?.id ?? null
       } else {
@@ -572,6 +575,7 @@ export const POST = withRouteContext(
           description: desc,
           source_type: 'invoice_paid',
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: clearingLines,
         })
         journalEntryId = journalEntry?.id ?? null

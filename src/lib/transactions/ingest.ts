@@ -275,6 +275,13 @@ export async function ingestTransactions(
   rawTransactions: RawTransaction[],
   options?: IngestOptions
 ): Promise<IngestResult> {
+  if (options?.bankRoute) {
+    const route = options.bankRoute
+    if (options.settlementAccount !== route.ledgerAccount || rawTransactions.some(raw =>
+      raw.bank_connection_id !== route.connectionId || raw.currency?.toUpperCase() !== route.currency)) {
+      throw new Error('Bank ingest context does not match the fetched batch')
+    }
+  }
   const result: IngestResult = {
     imported: 0,
     duplicates: 0,
@@ -472,10 +479,13 @@ export async function ingestTransactions(
   let cashAccountId: string | null = null
   const physicalKeyById = new Map<string, string>()
   if (options?.settlementAccount) {
-    const { data: cashAccountRows } = await supabase
+    const { data: cashAccountRows, error: cashAccountError } = await supabase
       .from('cash_accounts')
       .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
       .eq('company_id', companyId)
+    if (cashAccountError && options.bankRoute) {
+      throw new Error(`Bank ingest account read failed: ${cashAccountError.message}`)
+    }
     type BoundRow = {
       id: string
       ledger_account: string
@@ -500,7 +510,11 @@ export async function ingestTransactions(
     // account never collects open transactions (desk crm#59). No-op for an
     // enabled account and for one a bank connection holds; refuses, binding
     // nothing, for a disabled invoice payee (owner/admin turns that on).
-    if (boundRow) await reenableIfUnused(supabase, companyId, boundRow)
+    if (options.bankRoute) {
+      if (cashAccountId !== options.bankRoute.cashAccountId) throw new Error('Bank ingest account changed; reload the route')
+    } else if (boundRow) {
+      await reenableIfUnused(supabase, companyId, boundRow)
+    }
   }
 
   // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
@@ -823,6 +837,18 @@ export async function ingestTransactions(
         consumedTwin.cashAccountId === null &&
         cashAccountId !== null
       ) {
+        if (options?.bankRoute) {
+          const route = options.bankRoute
+          const { data: adoptedId, error: adoptionError } = await supabase.rpc('bind_bank_transaction', {
+            p_company_id: companyId, p_connection_id: route.connectionId, p_account_uid: route.accountUid,
+            p_currency: route.currency, p_route_token: route.token, p_transaction_id: consumedTwin.id,
+            p_expected_date: raw.date, p_expected_amount: raw.amount,
+          })
+          if (adoptionError || !adoptedId) {
+            throw new Error(`Bank transaction adoption failed: ${adoptionError?.message ?? 'missing acknowledgement'}`)
+          }
+          continue
+        }
         try {
           const { error: stampError } = await supabase
             .from('transactions')
@@ -970,9 +996,7 @@ export async function ingestTransactions(
       ? Math.round(raw.amount * rateInfo.rate * 100) / 100
       : null
 
-    const { data: newTransaction, error: insertError } = await supabase
-      .from('transactions')
-      .insert({
+    const insertPayload = {
         company_id: companyId,
         user_id: userId,
         bank_connection_id: raw.bank_connection_id || null,
@@ -1006,9 +1030,15 @@ export async function ingestTransactions(
         bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
-      })
-      .select()
-      .single()
+    }
+    const route = options?.bankRoute
+    const { data: newTransaction, error: insertError } = route
+      ? await supabase.rpc('insert_bank_transaction', {
+          p_company_id: companyId, p_user_id: userId, p_connection_id: route.connectionId,
+          p_account_uid: route.accountUid, p_currency: route.currency, p_route_token: route.token,
+          p_transaction: insertPayload,
+        })
+      : await supabase.from('transactions').insert(insertPayload).select().single()
 
     if (insertError || !newTransaction) {
       result.errors++

@@ -1,3 +1,4 @@
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createJournalEntry, findFiscalPeriod } from './engine'
 import { resolveSekAmountOrNull, buildCurrencyMetadata } from './currency-utils'
 import { resolveBookingAccount } from './accruals/account-suggestions'
@@ -16,6 +17,7 @@ import { creditNatural } from './line-side'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
+  Transaction,
   CreateJournalEntryLineInput,
   EntityType,
   Invoice,
@@ -576,7 +578,8 @@ export async function createInvoicePaymentJournalEntry(
   exchangeRateDifference?: number,
   customerName?: string,
   paymentAmount?: number,
-  settlementAccountNumber: string = '1930'
+  settlementAccountNumber: string = '1930',
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -687,6 +690,7 @@ export async function createInvoicePaymentJournalEntry(
     description: desc,
     source_type: 'invoice_paid',
     source_id: invoice.id,
+    ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, settlementAccountNumber)] } : {}),
     lines,
   }
 
@@ -843,7 +847,8 @@ export async function createInvoiceCashEntry(
   paymentDate: string,
   entityType: EntityType = 'enskild_firma',
   customerName?: string,
-  settlementAccountNumber: string = '1930'
+  settlementAccountNumber: string = '1930',
+  bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -927,6 +932,7 @@ export async function createInvoiceCashEntry(
     description: buildInvoiceDescription('Kontantbetalning kundfaktura', invoice.invoice_number, customerName, invoice.id),
     source_type: 'invoice_cash_payment',
     source_id: invoice.id,
+    ...(bankTransaction ? { bank_booking_context: [bankBookingContext(bankTransaction, settlementAccountNumber)] } : {}),
     lines,
   }
 

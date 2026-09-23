@@ -71,7 +71,11 @@ describe('kontantmetod cut-off markers', () => {
     const end = sql.indexOf('-- backfill:end')
     expect(start).toBeGreaterThan(-1)
     expect(end).toBeGreaterThan(start)
-    return sql.slice(start + '-- backfill:begin'.length, end)
+    const statement = sql.slice(start + '-- backfill:begin'.length, end)
+    const conflict = 'ON CONFLICT (journal_entry_id) DO NOTHING;'
+    expect(statement).toContain(conflict)
+    // Keep the conversion intact, but replay only this synthetic company.
+    return statement.replace(conflict, `AND e.company_id = $1\n${conflict}`)
   }
 
   const LEGACY = [
@@ -99,10 +103,10 @@ describe('kontantmetod cut-off markers', () => {
     }
 
     const statement = backfillStatement()
-    await getPool().query(statement)
+    await getPool().query(statement, [seeded.companyId])
     // Re-running must add nothing: ON CONFLICT DO NOTHING is what makes the
     // migration replayable and keeps the writer safe afterwards.
-    await getPool().query(statement)
+    await getPool().query(statement, [seeded.companyId])
 
     const { rows } = await getPool().query<{ kind: string; journal_entry_id: string }>(
       `SELECT kind, journal_entry_id FROM public.kontantmetod_cutoff_entries
@@ -135,7 +139,7 @@ describe('kontantmetod cut-off markers', () => {
       [entryId],
     )
 
-    await getPool().query(backfillStatement())
+    await getPool().query(backfillStatement(), [seeded.companyId])
 
     const { rows } = await getPool().query<{ kind: string }>(
       `SELECT kind FROM public.kontantmetod_cutoff_entries WHERE journal_entry_id = $1`,

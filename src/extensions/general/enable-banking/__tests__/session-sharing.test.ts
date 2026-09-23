@@ -6,7 +6,6 @@ import {
   findReusableSessions,
   countLiveSiblings,
   fanOutSessionRenewal,
-  remapAccountUids,
 } from '../lib/session-sharing'
 import type { StoredAccount } from '../types'
 
@@ -27,7 +26,7 @@ function chainable(result: Record<string, unknown>): ChainStub {
   const calls: RecordedCall[] = []
   const chain = { calls } as ChainStub
   for (const method of [
-    'select', 'eq', 'neq', 'not', 'is', 'in', 'gt', 'order', 'limit', 'update', 'insert',
+    'select', 'eq', 'neq', 'not', 'is', 'in', 'gt', 'order', 'limit', 'range', 'update', 'insert',
   ]) {
     chain[method] = vi.fn((...args: unknown[]) => {
       calls.push([method, args])
@@ -41,13 +40,14 @@ function chainable(result: Record<string, unknown>): ChainStub {
   return chain
 }
 
-type MockClient = SupabaseClient & { used: Record<string, ChainStub[]> }
+type MockClient = SupabaseClient & { used: Record<string, ChainStub[]>; rpcMock: ReturnType<typeof vi.fn> }
 
 /** Per-table result queues; each from(table) shifts the next result. */
 function makeSupabase(queues: Record<string, Array<Record<string, unknown>>>): MockClient {
   const used: Record<string, ChainStub[]> = {}
+  const rpcMock = vi.fn().mockResolvedValue({ data: { applied: true, remapped: 1, unmatched: 0 }, error: null })
   const client = {
-    used,
+    used, rpcMock, rpc: rpcMock,
     from: vi.fn((table: string) => {
       const queue = queues[table] ?? []
       const result = queue.shift() ?? { data: [], error: null }
@@ -288,141 +288,56 @@ describe('countLiveSiblings', () => {
 })
 
 describe('fanOutSessionRenewal', () => {
-  it('does nothing when the session did not actually change', async () => {
+  const input = { oldSessionId: 'sess-old', newSessionId: 'sess-new', consentExpires: FUTURE, excludeConnectionId: 'conn-a',
+    sessionAccounts: [{ uid: 'new-uid', iban: 'SE4444444444444444444444', currency: 'SEK' }] }
+
+  it('does nothing when the session did not change', async () => {
     const supabase = makeSupabase({})
-    const result = await fanOutSessionRenewal(supabase, {
-      oldSessionId: 'sess-1',
-      newSessionId: 'sess-1',
-      consentExpires: FUTURE,
-      excludeConnectionId: 'conn-a',
-    })
-    expect(result.movedCount).toBe(0)
+    expect(await fanOutSessionRenewal(supabase, { ...input, newSessionId: 'sess-old' })).toEqual({ movedCount: 0 })
     expect(supabase.from).not.toHaveBeenCalled()
+    expect(supabase.rpcMock).not.toHaveBeenCalled()
   })
 
-  it('revives a dead sibling and leaves a pending_selection one pending', async () => {
-    const supabase = makeSupabase({
-      bank_connections: [
-        {
-          data: [
-            { id: 'conn-b', status: 'expired', accounts_data: [] },
-            { id: 'conn-c', status: 'pending_selection', accounts_data: [] },
-          ],
-          error: null,
-        },
-        { error: null },
-        { error: null },
-      ],
-    })
-
-    const result = await fanOutSessionRenewal(supabase, {
-      oldSessionId: 'sess-old',
-      newSessionId: 'sess-new',
-      consentExpires: FUTURE,
-      excludeConnectionId: 'conn-a',
-    })
-
-    expect(result.movedCount).toBe(2)
-
-    // The connection that just re-authorized is already correct; touching it
-    // again would be a no-op at best and a status regression at worst.
+  it('commits each sibling through one company-scoped renewal RPC', async () => {
+    const supabase = makeSupabase({ bank_connections: [{ data: [
+      { id: 'conn-b', company_id: 'company-b' }, { id: 'conn-c', company_id: 'company-c' },
+    ], error: null }] })
+    expect(await fanOutSessionRenewal(supabase, input)).toEqual({ movedCount: 2 })
+    expect(supabase.used.bank_connections).toHaveLength(1)
     expect(supabase.used.bank_connections[0].calls).toContainEqual(['neq', ['id', 'conn-a']])
-
-    const revived = supabase.used.bank_connections[1].calls
-    expect(revived).toContainEqual([
-      'update',
-      [{ session_id: 'sess-new', consent_expires: FUTURE, status: 'active', error_message: null }],
-    ])
-
-    // Still owes an account selection, so it must not be flipped to active:
-    // that would skip the picker and sync nothing.
-    const stillPending = supabase.used.bank_connections[2].calls
-    expect(stillPending).toContainEqual([
-      'update',
-      [{ session_id: 'sess-new', consent_expires: FUTURE }],
-    ])
+    expect(supabase.rpcMock).toHaveBeenCalledTimes(2)
+    for (const suffix of ['b', 'c']) {
+      expect(supabase.rpcMock).toHaveBeenCalledWith('renew_shared_bank_connection', {
+        p_company_id: `company-${suffix}`, p_connection_id: `conn-${suffix}`, p_source_connection_id: 'conn-a',
+        p_old_session_id: 'sess-old', p_new_session_id: 'sess-new', p_consent_expires: FUTURE, p_session_accounts: input.sessionAccounts,
+      })
+    }
   })
 
-  it('re-points sibling accounts at the uids the new session issued', async () => {
-    // The uid churn is the subtle half of the renewal: carrying only the
-    // session id leaves siblings calling accounts the bank has retired.
-    const supabase = makeSupabase({
-      bank_connections: [
-        {
-          data: [{
-            id: 'conn-b',
-            status: 'active',
-            accounts_data: [
-              { uid: 'old-uid', iban: 'SE4444444444444444444444', currency: 'SEK', ledger_account: '1930', enabled: true },
-            ],
-          }],
-          error: null,
-        },
-        { error: null },
-        { error: null },
-      ],
-    })
-
-    await fanOutSessionRenewal(supabase, {
-      oldSessionId: 'sess-old',
-      newSessionId: 'sess-new',
-      consentExpires: FUTURE,
-      excludeConnectionId: 'conn-a',
-      sessionAccounts: [{ uid: 'new-uid', iban: 'SE44 4444 4444 4444 4444 4444' }],
-    })
-
-    // The uid re-point is its own write, after the session move.
-    const update = supabase.used.bank_connections[2].calls.find(([m]) => m === 'update')
-    const payload = (update?.[1][0] ?? {}) as { accounts_data?: StoredAccount[] }
-    expect(payload.accounts_data?.[0].uid).toBe('new-uid')
-    // The company's own mapping choices survive the remap.
-    expect(payload.accounts_data?.[0].ledger_account).toBe('1930')
+  it('counts only committed renewals and continues after a stale or failed sibling', async () => {
+    const supabase = makeSupabase({ bank_connections: [{ data: [
+      { id: 'conn-b', company_id: 'company-b' }, { id: 'conn-c', company_id: 'company-c' }, { id: 'conn-d', company_id: 'company-d' },
+    ], error: null }] })
+    supabase.rpcMock.mockResolvedValueOnce({ data: null, error: { code: 'PT409', message: 'Changed' } })
+      .mockResolvedValueOnce({ data: { applied: false, reason: 'connection-changed' }, error: null })
+    expect(await fanOutSessionRenewal(supabase, input)).toEqual({ movedCount: 1 })
+    expect(supabase.rpcMock).toHaveBeenCalledTimes(3)
   })
 
-  it('counts only the siblings that actually moved', async () => {
-    const supabase = makeSupabase({
-      bank_connections: [
-        {
-          data: [
-            { id: 'conn-b', status: 'active', accounts_data: [] },
-            { id: 'conn-c', status: 'active', accounts_data: [] },
-          ],
-          error: null,
-        },
-        { error: { message: 'boom' } },
-        { error: null },
-      ],
-    })
-
-    const result = await fanOutSessionRenewal(supabase, {
-      oldSessionId: 'sess-old',
-      newSessionId: 'sess-new',
-      consentExpires: FUTURE,
-      excludeConnectionId: 'conn-a',
-    })
-
-    expect(result.movedCount).toBe(1)
-  })
-})
-
-describe('remapAccountUids', () => {
-  it('matches on IBAN regardless of spacing and keeps everything else', () => {
-    const { accounts, remapped } = remapAccountUids(
-      [{ uid: 'old', iban: 'SE55 5555 5555 5555 5555 5555', currency: 'SEK', enabled: false, ledger_account: '1940' }],
-      [{ uid: 'new', iban: 'SE5555555555555555555555' }],
-    )
-    expect(remapped).toBe(1)
-    expect(accounts[0]).toMatchObject({ uid: 'new', enabled: false, ledger_account: '1940' })
+  it('does not write after a failed sibling scan', async () => {
+    const supabase = makeSupabase({ bank_connections: [{ data: null, error: { message: 'Unavailable' } }] })
+    expect(await fanOutSessionRenewal(supabase, input)).toEqual({ movedCount: 0 })
+    expect(supabase.rpcMock).not.toHaveBeenCalled()
   })
 
-  it('leaves an account the new consent does not cover untouched', () => {
-    // Silently dropping a mapped account is worse than a visible sync error.
-    const { accounts, remapped, unmatched } = remapAccountUids(
-      [{ uid: 'old', iban: 'SE6666666666666666666666', currency: 'SEK' }],
-      [{ uid: 'new', iban: 'SE7777777777777777777777' }],
-    )
-    expect(remapped).toBe(0)
-    expect(unmatched).toBe(1)
-    expect(accounts[0].uid).toBe('old')
+  it('reads every page before changing the session used by the scan filter', async () => {
+    const supabase = makeSupabase({ bank_connections: [
+      { data: Array.from({ length: 1000 }, (_, i) => ({ id: `connection-${i}`, company_id: `company-${i}` })), error: null },
+      { data: [{ id: 'last-connection', company_id: 'last-company' }], error: null },
+    ] })
+    expect(await fanOutSessionRenewal(supabase, input)).toEqual({ movedCount: 1001 })
+    expect(supabase.used.bank_connections[0].calls).toContainEqual(['order', ['id']])
+    expect(supabase.used.bank_connections[1].calls).toContainEqual(['range', [1000, 1999]])
+    expect(supabase.rpcMock).toHaveBeenCalledTimes(1001)
   })
 })

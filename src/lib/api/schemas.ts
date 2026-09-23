@@ -806,6 +806,14 @@ export const RotRutReclaimSchema = z.object({
   booking_date: isoDate,
 })
 
+// Link a begäran (plus any others the same transfer paid) to an existing
+// payout verifikat. The route's [id] is always part of the set.
+export const RotRutLinkVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  request_ids: z.array(uuid).max(10).optional(),
+  dry_run: z.boolean().optional(),
+})
+
 // The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
 export const RotRutBeslutFileSchema = z.object({
   version: z.string(),
@@ -1720,6 +1728,15 @@ export const CreateJournalEntrySchema = z.object({
   description: z.string().min(1, 'Description is required'),
   source_type: JournalEntrySourceTypeSchema.default('manual'),
   source_id: z.string().optional(),
+  bank_booking_context: z.array(z.object({
+    transaction_id: uuid,
+    cash_account_id: uuid.nullable(),
+    target_cash_account_id: uuid.optional(),
+    settlement_account: accountNumber,
+    date: isoDate,
+    amount: z.number().finite(),
+    currency: z.string().regex(/^[A-Z]{3}$/),
+  })).optional(),
   voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').optional(),
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'At least two lines are required for double-entry'),

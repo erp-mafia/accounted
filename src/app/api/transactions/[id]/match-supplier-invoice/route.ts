@@ -1,3 +1,4 @@
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { NextResponse } from 'next/server'
 import {
   createSupplierInvoicePaymentEntry,
@@ -300,6 +301,7 @@ export const POST = withRouteContext(
           description: desc,
           source_type: sourceType,
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
         })
         if (journalEntry) journalEntryId = journalEntry.id
@@ -319,6 +321,7 @@ export const POST = withRouteContext(
           (isPureSek || exchangeRateDifference !== 0) && fullSettlement
             ? actualBankSek
             : undefined,
+          transaction,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else if (isPureSek) {
@@ -344,6 +347,7 @@ export const POST = withRouteContext(
           description: desc,
           source_type: 'supplier_invoice_paid',
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines,
         })
         if (journalEntry) journalEntryId = journalEntry.id
@@ -354,6 +358,7 @@ export const POST = withRouteContext(
           exchangeRateDifference !== 0 ? exchangeRateDifference : undefined,
           undefined, // supplierName (unchanged default)
           paymentAccount,
+          transaction,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }
