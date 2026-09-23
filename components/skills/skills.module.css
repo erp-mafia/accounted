@@ -171,13 +171,13 @@
   pointer-events: none;
   background: conic-gradient(from var(--ang), transparent 0 30%, rgba(143, 169, 207, 1) 50%, transparent 70% 100%);
   filter: blur(14px);
-  opacity: .75;
+  opacity: .5;
   animation: spin 7s linear infinite;
   transition: opacity .3s;
 }
 .rows > li:nth-child(3n+2)::before { animation-delay: -2.3s; }
 .rows > li:nth-child(3n)::before { animation-delay: -4.6s; }
-.rows > li:hover::before { opacity: 1; }
+.rows > li:hover::before { opacity: .75; }
 
 /*
  * The rest of the skills as small light keys: the object from the panel,
