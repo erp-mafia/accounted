@@ -2685,6 +2685,9 @@ export interface PendingOperation {
   // Stream 2 Phase 4: structured rejection so the agent can learn from "no"
   rejection_category: PendingOperationRejectionCategory | null
   rejection_reason: string | null
+  // Set by accounted_stage_across_companies: every operation staged in one
+  // cross-company call shares the id. NULL for every other staging path.
+  batch_id?: string | null
   created_at: string
   resolved_at: string | null
   updated_at: string

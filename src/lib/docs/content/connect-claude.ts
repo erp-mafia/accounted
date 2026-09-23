@@ -44,7 +44,7 @@ Keep all three parameters. \`tool_namespace=accounted\` selects the tool names t
 
 ## Path B: Claude Code (plugin)
 
-Best in the terminal. The plugin installs the connection *and* seven workflow commands that follow the Swedish bookkeeping rhythm.
+Best in the terminal. The plugin installs the connection *and* eight workflow commands that follow the Swedish bookkeeping rhythm.
 
 \`\`\`text
 /plugin marketplace add erp-mafia/accounted
@@ -62,6 +62,8 @@ Then run \`/mcp\` and sign in with Accounted (the same OAuth consent screen as P
 | \`/accounted:vat\` | Prepare and reconcile the momsdeklaration |
 | \`/accounted:payroll\` | Monthly salary run and AGI underlag |
 | \`/accounted:year-end\` | Bokslut, readiness-gated |
+| \`/accounted:clients\` | Every company on the connection in one table, urgency first |
+| \`/accounted:use\` | Pin the current folder to one company |
 
 Prefer plain MCP without the workflow commands? \`claude mcp add\` wires the same connection into Claude Code:
 
@@ -110,6 +112,14 @@ The key's scopes gate exactly which tools are callable: a key without write scop
 The API-key value still begins with \`gnubok_sk_\`. That is a stable credential
 format, not the MCP integration name. Existing \`gnubok-mcp\` configurations
 continue to work without changes.
+
+## Several companies, one connection
+
+The connection is issued to you, not to a company: one sign-in or one API key reaches every company you are a member of. \`accounted_list_companies\` lists them, with \`is_default\` marking the one used when a call names no \`company_id\`. Every tool result starts with \`company: { company_id, name, is_default }\`, so you always see whose books an answer came from.
+
+Ask about all of them at once: \`accounted_client_overview\` returns one row per company (unbooked items, inbox, next deadline, last booked entry) and \`accounted_run_across_companies\` runs one read tool per company and summarises the results. Byrå teams pass \`scope: { companies: "team" }\` to cover every client the team works on. A write for several companies stages one pending operation per company under a shared \`batch_id\`; low- and medium-risk operations can be approved together, high-risk ones one by one.
+
+In Claude Code, pin a folder to one company with \`/accounted:use <name or organisationsnummer>\`: it writes \`.accounted.json\` there, and every flow started from that folder targets that company. One folder per client is the byrå pattern; \`/accounted:clients\` shows the whole portfolio from anywhere.
 
 ## Try these prompts
 

@@ -46,6 +46,8 @@ curl https://app.gnubok.se/api/v1/companies \\
   -H "Authorization: Bearer gnubok_sk_live_..."
 \`\`\`
 
+For the cross-company view (unbooked items, inbox, next deadline and last booked entry per company) call \`GET /api/v1/portfolio/overview\`: one response covering every company the key's user belongs to.
+
 ## Core principles
 
 These four invariants hold across the entire surface: once you've internalised them you can predict the shape of any endpoint without reading the reference.

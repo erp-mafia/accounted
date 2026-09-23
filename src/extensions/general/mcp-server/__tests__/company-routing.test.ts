@@ -110,6 +110,8 @@ describe('MCP company routing', () => {
       })
     ).resolves.toEqual({
       companyId: OTHER_COMPANY_ID,
+      // No companies embed in this mock: the display name falls back to the id.
+      companyName: OTHER_COMPANY_ID,
       role: 'admin',
       isDefault: false,
     })
@@ -132,6 +134,7 @@ describe('MCP company routing', () => {
       })
     ).resolves.toEqual({
       companyId: DEFAULT_COMPANY_ID,
+      companyName: DEFAULT_COMPANY_ID,
       role: 'owner',
       isDefault: true,
     })
@@ -237,7 +240,7 @@ describe('MCP company routing', () => {
   })
 
   it('allows viewer reads but rejects viewer writes, approvals, and management', () => {
-    const context = { companyId: OTHER_COMPANY_ID, role: 'viewer' as const, isDefault: false }
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'viewer' as const, isDefault: false }
 
     expect(() => assertMcpCompanyWriteAccess(context, 'reports:read')).not.toThrow()
     expect(() => assertMcpCompanyWriteAccess(context, undefined)).not.toThrow()
@@ -256,7 +259,7 @@ describe('MCP company routing', () => {
   })
 
   it('names the read-only role and the refused scope in the viewer refusal', () => {
-    const context = { companyId: OTHER_COMPANY_ID, role: 'viewer' as const, isDefault: false }
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'viewer' as const, isDefault: false }
 
     expect(() => assertMcpCompanyWriteAccess(context, 'bookkeeping:write')).toThrow(
       expect.objectContaining({
@@ -267,7 +270,7 @@ describe('MCP company routing', () => {
   })
 
   it.each(['owner', 'admin', 'member'] as const)('lets a %s through on every scope', (role) => {
-    const context = { companyId: OTHER_COMPANY_ID, role, isDefault: false }
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role, isDefault: false }
     for (const scope of ALL_SCOPES) {
       expect(() => assertMcpCompanyWriteAccess(context, scope)).not.toThrow()
     }

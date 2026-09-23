@@ -159,6 +159,16 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
     blurb:
       'HMAC-signed event subscriptions with delivery logs, test pings, retries, and secret rotation.',
   },
+  {
+    file: 'portfolio.md',
+    title: 'Portfolio',
+    members: ['portfolio'],
+    blurb:
+      'Cross-company reads for keys that reach more than one company (consultants, byrå team ' +
+      'members, multi-company owners): one call over a membership-checked company scope instead ' +
+      'of one call per company. The scope is capped at 25 companies per call; the response names ' +
+      'the ids beyond the cap so the next call can list them explicitly.',
+  },
 ]
 
 /**
