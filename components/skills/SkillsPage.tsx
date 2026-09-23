@@ -153,8 +153,6 @@ function Registry({ companyId }: { companyId: string }) {
 
   // ── elements the spark hops between ──
   const pageRef = useRef<HTMLDivElement>(null)
-  const heroRef = useRef<HTMLElement>(null)
-  const titleRef = useRef<HTMLHeadingElement>(null)
   const cardRefs = useRef<(HTMLDivElement | null)[]>([])
   const rowAnchors = useRef(new Map<string, HTMLSpanElement>())
   const rowOrder = useRef<string[]>([])
@@ -162,43 +160,6 @@ function Registry({ companyId }: { companyId: string }) {
   const createPlusRef = useRef<HTMLSpanElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
-
-  // ── Gnista: every visit, the spark leaves the headline and lights the three keys ──
-  const [litKeys, setLitKeys] = useState(0)
-  const [ringKey, setRingKey] = useState<number | null>(null)
-  const loadIn = useRef<Promise<void> | null>(null)
-  useEffect(() => {
-    if (loadIn.current) return // Strict Mode runs effects twice in dev: one spark only.
-    const hero = heroRef.current
-    const title = titleRef.current
-    if (!hero || !title || prefersReducedMotion() || !hero.animate) {
-      setLitKeys(FREE_SKILLS)
-      loadIn.current = Promise.resolve()
-      return
-    }
-    const run = async () => {
-      const h = title.getBoundingClientRect()
-      const b = hero.getBoundingClientRect()
-      const spark = new Spark(hero, { x: h.left - b.left + 4, y: h.bottom - b.top + 8 }, styles.spark)
-      try {
-        await wait(450)
-        for (let i = 0; i < FREE_SKILLS; i++) {
-          const card = cardRefs.current[i]
-          if (!alive.current || !card) return
-          await spark.hop(card, 560, 54)
-          if (!alive.current) return
-          setLitKeys(i + 1)
-          setRingKey(i)
-          await wait(240)
-        }
-        await spark.fade()
-      } finally {
-        spark.remove()
-        if (alive.current) { setRingKey(null); setLitKeys(FREE_SKILLS) }
-      }
-    }
-    loadIn.current = run()
-  }, [])
 
   // ── Gnistan fortsätter: the spark lights the list, once after connecting ──
   const [unlocking, setUnlocking] = useState<number | null>(null)
@@ -210,7 +171,6 @@ function Registry({ companyId }: { companyId: string }) {
     startedUnlock.current = true
     setPending(null)
     setUnlocking(0)
-    await loadIn.current
     const page = pageRef.current
     const from = cardRefs.current[FREE_SKILLS - 1]
     const anchors = rowOrder.current.map((key) => rowAnchors.current.get(key)).filter((el): el is HTMLSpanElement => !!el)
@@ -387,9 +347,9 @@ function Registry({ companyId }: { companyId: string }) {
         help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
       />
 
-      <section ref={heroRef} className={styles.hero} data-anim="">
+      <section className={styles.hero} data-anim="">
         <div className={styles.intro}>
-          <h2 ref={titleRef}>{t('hero_title')}</h2>
+          <h2>{t('hero_title')}</h2>
         </div>
         <div className={styles.cards}>
           {top.map((skill, i) => (
@@ -398,8 +358,7 @@ function Registry({ companyId }: { companyId: string }) {
               ref={(el) => { cardRefs.current[i] = el }}
               className={styles.card}
               style={{ '--i': i } as CSSProperties}
-              data-lit={litKeys > i ? '' : undefined}
-              data-ring={ringKey === i ? '' : undefined}
+              data-lit=""
               data-down={sheetKey === skill.id ? '' : undefined}
               data-now={doNow.has(skill.id) ? '' : undefined}
             >

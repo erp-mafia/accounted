@@ -17,7 +17,6 @@
 @keyframes spin { to { --ang: 360deg; } }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 @keyframes ignite { 0% { opacity: 0; } 30% { opacity: 1.1; } 100% { opacity: calc(.8 * var(--fire)); } }
-@keyframes ring { from { opacity: .9; transform: translate(-50%, -50%) scale(0); } to { opacity: 0; transform: translate(-50%, -50%) scale(16); } }
 @keyframes hitflare { 0% { box-shadow: 0 0 0 0 rgba(var(--rf), .9); } 100% { box-shadow: 0 0 0 22px rgba(var(--rf), 0); } }
 @keyframes breathe { 0%, 100% { opacity: .5; transform: scale(.95); } 50% { opacity: .95; transform: scale(1.05); } }
 
@@ -128,19 +127,6 @@
   animation-delay: calc(var(--i) * -1.7s), 0s;
 }
 .card[data-lit]:hover::before { inset: -18px; }
-.card[data-ring]::after {
-  content: "";
-  position: absolute;
-  z-index: 3;
-  left: 50%;
-  top: 50%;
-  width: 20px;
-  height: 20px;
-  border-radius: 99px;
-  border: 1px solid #fff;
-  pointer-events: none;
-  animation: ring .8s ease-out forwards;
-}
 
 /* Skapa din egen: a glass key on the photo, dashed until touched, beside the three burning ones */
 @keyframes plusglow { 0%, 100% { box-shadow: 0 0 6px 1px rgba(var(--rf), .5); } 50% { box-shadow: 0 0 18px 5px rgba(var(--rf), 1); } }
