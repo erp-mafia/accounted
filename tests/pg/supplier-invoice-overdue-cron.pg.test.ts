@@ -44,12 +44,12 @@ const MIGRATION_SQL = readFileSync(
  * block in the shared test database. Keep the current definition on hand so the
  * backfill block can put it back.
  */
-const SYMMETRIC_MIGRATION_SQL = readFileSync(
-  join(process.cwd(), 'supabase/migrations/20260727160000_supplier_invoice_overdue_symmetric.sql'),
+const CURRENT_FUNCTION_SQL = readFileSync(
+  join(
+    process.cwd(),
+    'supabase/migrations/20260924204244_supplier_invoice_overdue_skip_reset_archives.sql',
+  ),
   'utf8',
-)
-const SYMMETRIC_FUNCTION_SQL = SYMMETRIC_MIGRATION_SQL.slice(
-  SYMMETRIC_MIGRATION_SQL.indexOf('CREATE OR REPLACE FUNCTION'),
 )
 
 async function insertSupplier(userId: string, companyId: string): Promise<string> {
@@ -245,11 +245,50 @@ describe('update_overdue_supplier_invoices() un-flip', () => {
   })
 })
 
+/**
+ * Migration-reset archives, 20260924204244: a past-due payable inside a
+ * migration-reset source company made block_migration_reset_source_mutation
+ * raise, which rolled back the whole UPDATE and stopped the flip for every
+ * company (prod: failing daily from 2026-08-29).
+ */
+describe('update_overdue_supplier_invoices() with a migration-reset archive', () => {
+  it('skips the frozen archive and still flips every other company', async () => {
+    const archive = await seedCompany()
+    const replacement = await seedCompany()
+    const archiveSupplierId = await insertSupplier(archive.userId, archive.companyId)
+    const archivedId = await insertSupplierInvoice({
+      userId: archive.userId, companyId: archive.companyId, supplierId: archiveSupplierId,
+      status: 'approved', dueDate: PAST, total: 1000, remaining: 1000,
+    })
+    // The reset row goes in last: the archive refuses writes once it exists.
+    await getPool().query(
+      `INSERT INTO public.company_migration_resets
+         (source_company_id, replacement_company_id, reason, confirmation_snapshot, source_counts)
+       VALUES ($1, $2, 'pg-real overdue cron test of a reset source', '{}'::jsonb, '{}'::jsonb)`,
+      [archive.companyId, replacement.companyId],
+    )
+
+    const live = await seedCompany()
+    const liveSupplierId = await insertSupplier(live.userId, live.companyId)
+    const liveId = await insertSupplierInvoice({
+      userId: live.userId, companyId: live.companyId, supplierId: liveSupplierId,
+      status: 'approved', dueDate: PAST, total: 1000, remaining: 1000,
+    })
+
+    await expect(
+      getPool().query('SELECT public.update_overdue_supplier_invoices()'),
+    ).resolves.toBeDefined()
+
+    expect(await statusOf(liveId)).toBe('overdue')
+    expect(await statusOf(archivedId)).toBe('approved')
+  })
+})
+
 describe('overdue backfill (migration 20260607120000)', () => {
   // Replaying the old migration downgrades the function definition; restore the
-  // current (symmetric) one so nothing later in the run sees a stale version.
+  // current one so nothing later in the run sees a stale version.
   afterAll(async () => {
-    await getPool().query(SYMMETRIC_FUNCTION_SQL)
+    await getPool().query(CURRENT_FUNCTION_SQL)
   })
 
   it('has nothing left to revert for credit notes: they can no longer reach overdue', async () => {
