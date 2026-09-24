@@ -2,6 +2,7 @@
 
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { Eye } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -25,7 +26,9 @@ interface DocumentViewButtonProps {
  * catch (the previous signed-URL fetch needed openDeferredTab for exactly that
  * reason). The browser's own viewer still offers saving the file.
  */
-export function DocumentViewButton({ documentId, label = 'Visa dokument', className }: DocumentViewButtonProps) {
+export function DocumentViewButton({ documentId, label, className }: DocumentViewButtonProps) {
+  const t = useTranslations('document_view_button')
+  const tc = useTranslations('common')
   const { toast } = useToast()
   const { appName } = useBranding()
 
@@ -35,8 +38,8 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
     // payload can't point the tab at another internal endpoint.
     if (!UUID_RE.test(documentId)) {
       toast({
-        title: 'Ogiltigt dokument-ID',
-        description: 'Försök ladda om sidan eller kontakta support.',
+        title: t('invalid_id_title'),
+        description: t('invalid_id_description'),
         variant: 'destructive',
       })
       return
@@ -51,8 +54,8 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       tab.opener = null
     } else {
       toast({
-        title: 'Kunde inte öppna dokumentet',
-        description: `Tillåt popupfönster för ${appName} i webbläsaren och försök igen.`,
+        title: t('open_failed_title'),
+        description: tc('popup_blocked_description', { appName }),
         variant: 'destructive',
       })
     }
@@ -67,7 +70,7 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       className={className}
     >
       <Eye className="mr-1.5 h-3.5 w-3.5" />
-      {label}
+      {label ?? t('default_label')}
     </Button>
   )
 }

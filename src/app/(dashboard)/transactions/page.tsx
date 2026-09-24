@@ -1887,10 +1887,10 @@ export default function TransactionsPage() {
       // No per-row toast: fall through to the delayed state patch below.
     } else if (journalEntryCreated) {
       toast({
-        title: 'Bokförd',
+        title: t('skv_booked_title'),
         description: narration,
         action: (
-          <ToastAction altText="Ångra kategorisering" onClick={async () => {
+          <ToastAction altText={t('undo_categorize_alt')} onClick={async () => {
             try {
               const undoRes = await undoCategorize(id)
               if (undoRes.ok) {
@@ -1908,7 +1908,7 @@ export default function TransactionsPage() {
               } else {
                 const errData = await undoRes.json()
                 toast({
-                  title: 'Kunde inte ångra',
+                  title: t('undo_failed_title'),
                   description: getErrorMessage(errData, { context: 'transaction', statusCode: undoRes.status }),
                   variant: 'destructive',
                 })
@@ -1917,12 +1917,12 @@ export default function TransactionsPage() {
               toast({ title: t('undo_failed_title'), description: t('undo_failed_description'), variant: 'destructive' })
             }
           }}>
-            Ångra
+            {t('skv_ignore_undo')}
           </ToastAction>
         ),
       })
     } else if (journalEntryError) {
-      toast({ title: 'Delvis bokförd', description: `Verifikation kunde inte skapas: ${journalEntryError}`, variant: 'destructive' })
+      toast({ title: t('partially_booked_title'), description: t('voucher_create_failed_detail', { error: journalEntryError }), variant: 'destructive' })
     } else {
       toast({ title: t('partially_booked_title'), description: t('partially_booked_description') })
     }
@@ -2077,13 +2077,13 @@ export default function TransactionsPage() {
           }
           let invalidAccountActivateInFlight = false
           toast({
-            title: 'Kontot finns inte i din kontoplan',
+            title: t('account_not_in_chart_title'),
             description: accountNumber
-              ? `Kontot ${displayName} är inte aktiverat.`
-              : 'Kontot är inte aktiverat.',
+              ? t('account_not_activated_named', { account: displayName })
+              : t('account_not_activated'),
             variant: 'destructive',
             action: accountNumber ? (
-              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+              <ToastAction altText={t('activate_and_book')} onClick={async () => {
                 if (invalidAccountActivateInFlight) return
                 invalidAccountActivateInFlight = true
                 try {
@@ -2095,7 +2095,7 @@ export default function TransactionsPage() {
                   if (!activateRes.ok) {
                     const errBody = await activateRes.json().catch(() => null)
                     toast({
-                      title: 'Kunde inte aktivera kontot',
+                      title: t('activate_account_failed'),
                       description: getErrorMessage(errBody, { statusCode: activateRes.status }),
                       variant: 'destructive',
                     })
@@ -2104,8 +2104,8 @@ export default function TransactionsPage() {
                   const activateBody = await activateRes.json()
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
-                      title: 'Kontot finns inte i BAS-planen',
-                      description: `Lägg till ${accountNumber} manuellt i Kontoplan.`,
+                      title: t('account_not_in_bas_title'),
+                      description: t('add_accounts_manually', { accounts: accountNumber }),
                       variant: 'destructive',
                     })
                     return
@@ -2115,7 +2115,7 @@ export default function TransactionsPage() {
                   invalidAccountActivateInFlight = false
                 }
               }}>
-                Aktivera och bokför
+                {t('activate_and_book')}
               </ToastAction>
             ) : undefined,
           })
@@ -2137,11 +2137,11 @@ export default function TransactionsPage() {
           // second categorize races the first's verifikation insert.
           let activateInFlight = false
           toast({
-            title: 'Kontot finns inte i din kontoplan',
-            description: `Bokföringsmallen kräver att följande konton aktiveras: ${accountNumbers.join(', ')}.`,
+            title: t('account_not_in_chart_title'),
+            description: t('template_requires_accounts', { accounts: accountNumbers.join(', ') }),
             variant: 'destructive',
             action: accountNumbers.length > 0 ? (
-              <ToastAction altText="Aktivera och bokför" onClick={async () => {
+              <ToastAction altText={t('activate_and_book')} onClick={async () => {
                 if (activateInFlight) return
                 activateInFlight = true
                 try {
@@ -2153,7 +2153,7 @@ export default function TransactionsPage() {
                   if (!activateRes.ok) {
                     const errBody = await activateRes.json().catch(() => null)
                     toast({
-                      title: 'Kunde inte aktivera konton',
+                      title: t('activate_accounts_failed'),
                       description: getErrorMessage(errBody, { statusCode: activateRes.status }),
                       variant: 'destructive',
                     })
@@ -2164,8 +2164,8 @@ export default function TransactionsPage() {
                   // can't be auto-created; tell the user to add them manually.
                   if (Array.isArray(activateBody.unknown) && activateBody.unknown.length > 0) {
                     toast({
-                      title: 'Kunde inte hitta alla konton',
-                      description: `Lägg till ${activateBody.unknown.join(', ')} manuellt i Kontoplan.`,
+                      title: t('accounts_not_found_title'),
+                      description: t('add_accounts_manually', { accounts: activateBody.unknown.join(', ') }),
                       variant: 'destructive',
                     })
                     return
@@ -2175,7 +2175,7 @@ export default function TransactionsPage() {
                   activateInFlight = false
                 }
               }}>
-                Aktivera och bokför
+                {t('activate_and_book')}
               </ToastAction>
             ) : undefined,
           })
@@ -2235,7 +2235,7 @@ export default function TransactionsPage() {
         }
         if (!silent) {
           toast({
-            title: 'Kategorisering misslyckades',
+            title: t('categorize_failed_title'),
             description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
             variant: 'destructive',
           })
@@ -2276,7 +2276,7 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         toast({
-          title: 'Matchning misslyckades',
+          title: t('match_failed_title'),
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
           variant: 'destructive',
         })
@@ -2325,7 +2325,7 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         toast({
-          title: 'Matchning misslyckades',
+          title: t('match_failed_title'),
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
           variant: 'destructive',
         })
@@ -2370,10 +2370,10 @@ export default function TransactionsPage() {
     // "Ignorerade transaktioner" card on Rapporter → Bankavstämning is the
     // standing third.
     const ok = await confirm({
-      title: 'Ignorera transaktionen?',
-      description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)} (${formatDate(tx.date)}) försvinner från listan utan att bokföras. Använd bara för poster som inte är affärshändelser, t.ex. dubbletter eller överföringar mellan egna konton. Riktiga köp och betalningar ska bokföras. Du kan återställa den under Bankavstämning när som helst.`,
-      confirmLabel: 'Ignorera',
-      cancelLabel: 'Avbryt',
+      title: t('ignore_confirm_title'),
+      description: t('ignore_confirm_body', { description: tx.description, amount: formatCurrency(tx.amount, tx.currency), date: formatDate(tx.date) }),
+      confirmLabel: t('batch_ignore_confirm_cta'),
+      cancelLabel: t('batch_ignore_confirm_cancel'),
       variant: 'warning',
     })
     if (!ok) return
@@ -2384,7 +2384,7 @@ export default function TransactionsPage() {
       const result = await res.json()
       if (!res.ok || result.error) {
         toast({
-          title: 'Kunde inte ignorera transaktionen',
+          title: t('ignore_failed_title'),
           description: typeof result.error === 'string' ? result.error : undefined,
           variant: 'destructive',
         })
@@ -2403,16 +2403,16 @@ export default function TransactionsPage() {
         })
       }, 350)
       toast({
-        title: 'Transaktionen ignorerad',
+        title: t('ignored_title'),
         description: `${tx.description}, ${formatCurrency(tx.amount, tx.currency)}`,
         action: (
-          <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(tx.id)}>
-            Ångra
+          <ToastAction altText={t('undo_ignore_alt')} onClick={() => void handleUnignoreTransaction(tx.id)}>
+            {t('skv_ignore_undo')}
           </ToastAction>
         ),
       })
     } catch {
-      toast({ title: 'Kunde inte ignorera transaktionen', variant: 'destructive' })
+      toast({ title: t('ignore_failed_title'), variant: 'destructive' })
     }
   }
 
@@ -2421,7 +2421,7 @@ export default function TransactionsPage() {
       const res = await fetch(`/api/transactions/${transactionId}/ignore`, { method: 'DELETE' })
       const result = await res.json()
       if (!res.ok || result.error) {
-        toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
+        toast({ title: t('unignore_failed_title'), variant: 'destructive' })
         return
       }
       setTransactions((prev) =>
@@ -2429,7 +2429,7 @@ export default function TransactionsPage() {
       )
       setTotalUncategorizedCount((prev) => (prev ?? 0) + 1)
     } catch {
-      toast({ title: 'Kunde inte återställa transaktionen', variant: 'destructive' })
+      toast({ title: t('unignore_failed_title'), variant: 'destructive' })
     }
   }
 
@@ -2482,7 +2482,7 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         toast({
-          title: isSupplier ? 'Leverantörsfakturamatchning misslyckades' : 'Fakturamatchning misslyckades',
+          title: isSupplier ? t('supplier_invoice_match_failed_title') : t('invoice_match_failed_title'),
           description: getErrorMessage(result, { context: 'transaction' }),
           variant: 'destructive',
         })
@@ -2491,9 +2491,9 @@ export default function TransactionsPage() {
       }
 
       const label = isSupplier
-        ? `Leverantörsfaktura ${selectedTransaction.potential_supplier_invoice!.supplier_invoice_number} markerad som betald`
-        : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
-      toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
+        ? t('supplier_invoice_marked_paid', { number: selectedTransaction.potential_supplier_invoice!.supplier_invoice_number ?? '' })
+        : t('invoice_marked_paid', { number: selectedTransaction.potential_invoice!.invoice_number ?? '' })
+      toast({ title: isSupplier ? t('supplier_invoice_matched_title') : t('invoice_matched_title'), description: label })
       setMatchDialogOpen(false)
 
       // Mark as exiting for animation
@@ -2710,7 +2710,7 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         toast({
-          title: 'Kunde inte koppla till befintlig verifikation',
+          title: t('link_existing_voucher_failed'),
           description: getErrorMessage(result, { context: 'transaction' }),
           variant: 'destructive',
         })
@@ -2720,10 +2720,10 @@ export default function TransactionsPage() {
 
       const voucherLabel = (result as { voucher_label?: string }).voucher_label ?? ''
       toast({
-        title: 'Bankhändelsen kopplad',
+        title: t('bank_event_linked_title'),
         description: voucherLabel
-          ? `Kopplad till verifikation ${voucherLabel}. Ingen ny bokföring skapad.`
-          : 'Ingen ny bokföring skapad.',
+          ? t('linked_to_voucher_no_new_booking', { voucher: voucherLabel })
+          : t('no_new_booking_created'),
       })
       setMatchDialogOpen(false)
 
@@ -2754,7 +2754,7 @@ export default function TransactionsPage() {
       }, 350)
     } catch {
       toast({
-        title: 'Koppling misslyckades',
+        title: t('link_failed_title'),
         description: t('voucher_link_failed_description'),
         variant: 'destructive',
       })
@@ -2771,10 +2771,10 @@ export default function TransactionsPage() {
   // filter drops it: animate it out the same way as the invoice-link path.
   function handleVoucherLinked(transactionId: string, journalEntryId: string, voucherLabel: string) {
     toast({
-      title: 'Bankhändelsen kopplad',
+      title: t('bank_event_linked_title'),
       description: voucherLabel
-        ? `Kopplad till verifikation ${voucherLabel}. Ingen ny bokföring skapad.`
-        : 'Ingen ny bokföring skapad.',
+        ? t('linked_to_voucher_no_new_booking', { voucher: voucherLabel })
+        : t('no_new_booking_created'),
     })
     setMatchVoucherTx(null)
     setExitingIds((prev) => new Set(prev).add(transactionId))
@@ -3049,17 +3049,17 @@ export default function TransactionsPage() {
       const result = await response.json()
       if (!response.ok) {
         toast({
-          title: 'Kunde inte skapa transaktion',
+          title: t('create_failed_title'),
           description: getErrorMessage(result, { context: 'transaction', statusCode: response.status }),
           variant: 'destructive',
         })
         return
       }
-      toast({ title: 'Transaktion tillagd', description: `${data.description} har lagts till` })
+      toast({ title: t('created_title'), description: t('created_description', { description: data.description }) })
       setTransactions([result.data, ...transactions])
       setIsDialogOpen(false)
     } catch {
-      toast({ title: 'Kunde inte skapa transaktion', description: t('booking_failed_description'), variant: 'destructive' })
+      toast({ title: t('create_failed_title'), description: t('booking_failed_description'), variant: 'destructive' })
     } finally {
       setIsCreating(false)
     }
@@ -3074,9 +3074,9 @@ export default function TransactionsPage() {
     // close the dialog synchronously and leave the fetch with no visible
     // state), then the row plays the same exit path as booking.
     await confirm({
-      title: 'Ta bort transaktion',
-      description: `Är du säker på att du vill ta bort "${transaction.description}"? Åtgärden kan inte ångras.`,
-      confirmLabel: 'Ta bort',
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm_body', { description: transaction.description }),
+      confirmLabel: t('batch_delete'),
       variant: 'destructive',
     }, async () => {
       try {
@@ -3089,7 +3089,7 @@ export default function TransactionsPage() {
           const result = await response.json()
           setProcessingId((prev) => (prev === id ? null : prev))
           toast({
-            title: 'Kunde inte ta bort',
+            title: t('delete_failed_title'),
             description: getErrorMessage(result, { context: 'transaction' }),
             variant: 'destructive',
           })
@@ -3126,7 +3126,7 @@ export default function TransactionsPage() {
       } catch {
         setProcessingId((prev) => (prev === id ? null : prev))
         toast({
-          title: 'Kunde inte ta bort',
+          title: t('delete_failed_title'),
           description: t('delete_failed_description'),
           variant: 'destructive',
         })
@@ -3539,9 +3539,9 @@ export default function TransactionsPage() {
     setBookingDialogProposalLines(null)
     setBookingDialogLineDescription(null)
     if (matched) {
-      toast({ title: 'Bankhändelsen kopplad', description: 'Ingen ny bokföring skapad.' })
+      toast({ title: t('bank_event_linked_title'), description: t('no_new_booking_created') })
     } else {
-      toast({ title: 'Bokförd' })
+      toast({ title: t('skv_booked_title') })
     }
   }
 
@@ -3659,20 +3659,20 @@ export default function TransactionsPage() {
 
     if (ids.length === 0) {
       toast({
-        title: 'Inget att ta bort',
-        description: 'De valda transaktionerna är importerade och kan endast ignoreras, inte raderas.',
+        title: t('batch_delete_nothing_title'),
+        description: t('batch_delete_nothing_description'),
         variant: 'destructive',
       })
       return
     }
 
     const ok = await confirm({
-      title: `Ta bort ${ids.length} transaktioner?`,
+      title: t('batch_delete_confirm_title', { count: ids.length }),
       description:
         skippedImported > 0
-          ? `${skippedImported} importerade transaktioner hoppas över (kan endast ignoreras). Åtgärden kan inte ångras.`
-          : 'Åtgärden kan inte ångras.',
-      confirmLabel: 'Ta bort',
+          ? t('batch_delete_confirm_skipped', { count: skippedImported })
+          : t('action_irreversible'),
+      confirmLabel: t('batch_delete'),
       variant: 'destructive',
     })
     if (!ok) return
@@ -3708,13 +3708,13 @@ export default function TransactionsPage() {
     }
     setBatchProgress(null)
     if (failures.length === 0 && skippedImported === 0) {
-      toast({ title: 'Klart', description: `${successes} transaktioner borttagna` })
+      toast({ title: t('batch_done_title'), description: t('batch_delete_done', { count: successes }) })
     } else {
-      const parts = [`${successes} borttagna`]
-      if (failures.length > 0) parts.push(`${failures.length} misslyckades`)
-      if (skippedImported > 0) parts.push(`${skippedImported} importerade kunde inte raderas`)
+      const parts = [t('batch_delete_part_deleted', { count: successes })]
+      if (failures.length > 0) parts.push(t('batch_delete_part_failed', { count: failures.length }))
+      if (skippedImported > 0) parts.push(t('batch_delete_part_imported', { count: skippedImported }))
       toast({
-        title: 'Delvis klart',
+        title: t('batch_partial_title'),
         description: parts.join(', '),
         variant: 'destructive',
       })
@@ -4228,7 +4228,7 @@ export default function TransactionsPage() {
   const templatePickerLinks = (
     <>
             <button type="button" className={QUIET_LINK_CLASS} onClick={handleManualBooking}>
-              Bokför manuellt
+              {t('book_manually')}
             </button>
             {templatePickerTransaction && templatePickerTransaction.amount > 0 && (
               <button
@@ -4241,7 +4241,7 @@ export default function TransactionsPage() {
                   setInvoicePickerOpen(true)
                 }}
               >
-                Matcha med faktura
+                {t('dialog_match_invoice')}
               </button>
             )}
             {templatePickerTransaction && (
@@ -4250,7 +4250,7 @@ export default function TransactionsPage() {
                 className={QUIET_LINK_CLASS}
                 onClick={() => void handleIgnoreTransaction(templatePickerTransaction)}
               >
-                Ignorera transaktionen
+                {t('dialog_duplicate_ignore')}
               </button>
             )}
     </>
@@ -4299,7 +4299,7 @@ export default function TransactionsPage() {
           ]}
         />
         <ToolbarSearch
-          placeholder="Sök transaktioner…"
+          placeholder={t('search_placeholder')}
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
         />
@@ -4396,7 +4396,7 @@ export default function TransactionsPage() {
         inboxItems.length === 0 ? (
           searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
-              title="Inga träffar"
+              title={t('no_matches_title')}
               description={
                 searchTerm
                   ? t('no_search_results')
@@ -4656,7 +4656,7 @@ export default function TransactionsPage() {
           href="/reconciliation"
           className="ml-auto transition-colors duration-150 hover:text-foreground"
         >
-          Bankavstämning →
+          {t('bank_reconciliation_link')}
         </Link>
       </div>
 
@@ -4808,7 +4808,7 @@ export default function TransactionsPage() {
             narrow desktops; sheet closed = the old max-w-lg. */}
         <DialogContent className="max-w-[min(32rem,calc(100vw-var(--agent-sheet-w,0px)))] max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Bokför transaktion</DialogTitle>
+            <DialogTitle>{t('book_transaction_title')}</DialogTitle>
           </DialogHeader>
           {templatePickerTransaction && (
             <div className="flex items-center justify-between gap-3 text-sm">
@@ -4865,7 +4865,7 @@ export default function TransactionsPage() {
       >
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Matcha med leverantörsfaktura</DialogTitle>
+            <DialogTitle>{t('match_supplier_invoice_title')}</DialogTitle>
           </DialogHeader>
           {supplierInvoicePickerTransaction && (
             <>
@@ -5018,19 +5018,17 @@ export default function TransactionsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Det finns en öppen leverantörsfaktura med samma belopp från samma leverantör. Matcha mot
-              fakturan istället för att bokföra direkt på leverantörsskuldskontot, annars skapas en
-              dubblerad verifikation som måste stornas (BFL 5 kap 5 §).
+              {t('si_match_suggestion_body')}
             </p>
             <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {siMatchSuggestion?.candidates.map((c) => (
                 <div key={c.supplier_invoice_id} className="flex items-center justify-between gap-3 text-sm">
                   <div className="min-w-0">
                     <div className="font-medium">
-                      {c.supplier_name || 'Leverantör'} · {c.invoice_number}
+                      {c.supplier_name || t('fallback_supplier')} · {c.invoice_number}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">
-                      {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
+                      {formatDate(c.invoice_date)} · {t('remaining_amount', { amount: formatCurrency(c.remaining_amount, c.currency) })}
                     </div>
                   </div>
                   <Button
@@ -5038,14 +5036,14 @@ export default function TransactionsPage() {
                     onClick={() => handleMatchSuggestedSupplierInvoice(siMatchSuggestion.transactionId, c.supplier_invoice_id)}
                     disabled={siMatchProcessing}
                   >
-                    Matcha
+                    {t('match_button')}
                   </Button>
                 </div>
               ))}
             </div>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setSiMatchSuggestion(null)}>
-                Avbryt
+                {t('dialog_duplicate_cancel')}
               </Button>
               <Button
                 variant="outline"
@@ -5056,7 +5054,7 @@ export default function TransactionsPage() {
                 }}
                 disabled={siMatchProcessing}
               >
-                Bokför på leverantörsskulder ändå
+                {t('si_book_anyway')}
               </Button>
             </div>
           </div>
@@ -5076,9 +5074,7 @@ export default function TransactionsPage() {
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Det finns en obetald kundfaktura med samma belopp från samma kund. Matcha mot fakturan
-              istället för att bokföra direkt mot kundfordringskontot, annars skapas en dubblerad
-              verifikation som måste stornas (BFL 5 kap 5 §).
+              {t('ci_match_suggestion_body')}
             </p>
             <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
               {ciMatchSuggestion?.candidates.map((c) => (
@@ -5086,14 +5082,14 @@ export default function TransactionsPage() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-medium">
-                        {c.customer_name || 'Kund'} · {c.invoice_number ?? '-'}
+                        {c.customer_name || t('fallback_customer')} · {c.invoice_number ?? '-'}
                       </span>
                       {c.match_reason === 'ocr_exact' && (
                         <span className="text-xs text-muted-foreground">{t('badge_exact_ocr')}</span>
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground tabular-nums">
-                      {formatDate(c.invoice_date)} · kvar {formatCurrency(c.remaining_amount, c.currency)}
+                      {formatDate(c.invoice_date)} · {t('remaining_amount', { amount: formatCurrency(c.remaining_amount, c.currency) })}
                     </div>
                   </div>
                   <Button
@@ -5101,14 +5097,14 @@ export default function TransactionsPage() {
                     onClick={() => handleMatchSuggestedInvoice(ciMatchSuggestion.transactionId, c.invoice_id)}
                     disabled={ciMatchProcessing}
                   >
-                    Matcha
+                    {t('match_button')}
                   </Button>
                 </div>
               ))}
             </div>
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setCiMatchSuggestion(null)}>
-                Avbryt
+                {t('dialog_duplicate_cancel')}
               </Button>
               <Button
                 variant="outline"
@@ -5119,7 +5115,7 @@ export default function TransactionsPage() {
                 }}
                 disabled={ciMatchProcessing}
               >
-                Bokför på kundfordringar ändå
+                {t('ci_book_anyway')}
               </Button>
             </div>
           </div>
@@ -5163,13 +5159,13 @@ export default function TransactionsPage() {
             })
           }, 350)
           toast({
-            title: 'Transaktionen ignorerad',
+            title: t('ignored_title'),
             description: ignoredTx
               ? `${ignoredTx.description}, ${formatCurrency(ignoredTx.amount, ignoredTx.currency)}`
               : undefined,
             action: (
-              <ToastAction altText="Ångra ignorera" onClick={() => void handleUnignoreTransaction(transactionId)}>
-                Ångra
+              <ToastAction altText={t('undo_ignore_alt')} onClick={() => void handleUnignoreTransaction(transactionId)}>
+                {t('skv_ignore_undo')}
               </ToastAction>
             ),
           })

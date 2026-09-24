@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { headers } from 'next/headers'
+import { getTranslations } from 'next-intl/server'
 import { MailCheck, MailWarning, Mails } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/server'
@@ -7,9 +8,9 @@ import { resolveLandingDestination } from '@/lib/company/landing-server'
 
 /**
  * Landing page for email-change confirmation clicks (/auth/callback redirects
- * here for type=email_change). Swedish-only like the other (auth) surfaces:
- * the reader may not even have a session, so user-preference locale does not
- * apply.
+ * here for type=email_change). The reader may not even have a session, so the
+ * locale comes from the locale cookie (src/i18n/request.ts), not a user
+ * preference.
  *
  * Secure email change requires a click in BOTH mails (new address + current
  * address), and this page is the only feedback the user gets after each
@@ -18,28 +19,35 @@ import { resolveLandingDestination } from '@/lib/company/landing-server'
 
 type EmailChangeStatus = 'partial' | 'done' | 'failed'
 
-const CONTENT: Record<
-  EmailChangeStatus,
-  { heading: string; body: string; cta: string; href: string }
-> = {
-  partial: {
-    heading: 'Ett klick kvar',
-    body: 'Din bekräftelse är registrerad. Av säkerhetsskäl skickades två mail, ett till din nya adress och ett till din nuvarande. Öppna det andra mailet och klicka på länken där för att slutföra bytet.',
-    cta: 'Gå till startsidan',
-    href: '/',
-  },
-  done: {
-    heading: 'E-postadressen är ändrad',
-    body: 'Klart! Din nya e-postadress gäller nu när du loggar in med e-post. Loggar du in med Google fortsätter det att fungera som vanligt.',
-    cta: 'Gå till startsidan',
-    href: '/',
-  },
-  failed: {
-    heading: 'Länken är ogiltig eller har gått ut',
-    body: 'Bekräftelselänken kunde inte användas. Begär bytet igen under Inställningar: Konto, så skickas två nya bekräftelsemail direkt.',
-    cta: 'Gå till kontoinställningar',
-    href: '/settings/account',
-  },
+type Translator = Awaited<ReturnType<typeof getTranslations>>
+
+function getContent(
+  status: EmailChangeStatus,
+  t: Translator,
+): { heading: string; body: string; cta: string; href: string } {
+  switch (status) {
+    case 'partial':
+      return {
+        heading: t('partial_heading'),
+        body: t('partial_body'),
+        cta: t('cta_home'),
+        href: '/',
+      }
+    case 'done':
+      return {
+        heading: t('done_heading'),
+        body: t('done_body'),
+        cta: t('cta_home'),
+        href: '/',
+      }
+    case 'failed':
+      return {
+        heading: t('failed_heading'),
+        body: t('failed_body'),
+        cta: t('cta_account_settings'),
+        href: '/settings/account',
+      }
+  }
 }
 
 function isEmailChangeStatus(value: string | undefined): value is EmailChangeStatus {
@@ -53,7 +61,8 @@ export default async function EmailChangeStatusPage({
 }) {
   const { status } = await searchParams
   const resolved: EmailChangeStatus = isEmailChangeStatus(status) ? status : 'failed'
-  const content = CONTENT[resolved]
+  const t = await getTranslations('email_change_page')
+  const content = getContent(resolved, t)
 
   // On completion the CTA goes where the callback would have sent the user
   // before this page existed (WL-14: byrå staff on their home domain land in

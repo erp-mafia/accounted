@@ -166,9 +166,9 @@ function FocusedReportInner({
         />
       ) : (
         <EmptyState
-          title="Inget räkenskapsår valt"
-          description="Skapa ett räkenskapsår för att kunna se rapporter."
-          actionLabel="Gå till inställningar"
+          title={t('no_fiscal_year_title')}
+          description={t('no_fiscal_year_description')}
+          actionLabel={t('no_fiscal_year_action')}
           actionHref="/settings"
         />
       )}

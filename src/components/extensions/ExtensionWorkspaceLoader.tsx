@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import type { ExtensionDefinition } from '@/lib/extensions/types'
 import { getWorkspaceComponent } from '@/lib/extensions/workspace-registry'
 import ExtensionWorkspaceShell from './ExtensionWorkspaceShell'
@@ -20,6 +21,7 @@ export default function ExtensionWorkspaceLoader({
   definition: ExtensionDefinition
   userId: string
 }) {
+  const t = useTranslations('extension_workspace_loader')
   const WorkspaceComponent = getWorkspaceComponent(sector, slug)
   const isFullScreen = FULLSCREEN_WORKSPACES.has(`${sector}/${slug}`)
 
@@ -33,8 +35,8 @@ export default function ExtensionWorkspaceLoader({
         <WorkspaceComponent userId={userId} />
       ) : (
         <EmptyExtensionState
-          title="Bakgrundstjänst"
-          description={`${definition.name} körs i bakgrunden och har ingen egen vy. Du kan hantera inställningar under Inställningar.`}
+          title={t('background_title')}
+          description={t('background_description', { name: definition.name })}
         />
       )}
     </ExtensionWorkspaceShell>

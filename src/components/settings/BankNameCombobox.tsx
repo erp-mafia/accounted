@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
@@ -33,6 +34,7 @@ interface BankNameComboboxProps {
 }
 
 export function BankNameCombobox({ defaultValue = '', value: controlledValue, onChange, enableBankingEnabled = false, 'aria-label': ariaLabel }: BankNameComboboxProps) {
+  const t = useTranslations('bank_name_combobox')
   const isControlled = controlledValue !== undefined
   const [internalValue, setInternalValue] = useState(defaultValue)
   const value = isControlled ? controlledValue : internalValue
@@ -136,7 +138,7 @@ export function BankNameCombobox({ defaultValue = '', value: controlledValue, on
         aria-label={ariaLabel}
         ref={inputRef}
         type="text"
-        placeholder="t.ex. Nordea"
+        placeholder={t('placeholder')}
         maxLength={100}
         value={value}
         onChange={(e) => {

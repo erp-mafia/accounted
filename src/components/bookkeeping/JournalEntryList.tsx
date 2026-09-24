@@ -1225,10 +1225,10 @@ export default function JournalEntryList({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">Alla serier</SelectItem>
+                    <SelectItem value="all">{t('filter_all_series')}</SelectItem>
                     {'ABCDEFG'.split('').map((letter) => (
                       <SelectItem key={letter} value={letter} className="font-mono">
-                        Serie {letter}
+                        {t('filter_series_letter', { letter })}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -41,6 +41,8 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
   const { toast } = useToast()
   const router = useRouter()
   const t = useTranslations('journal_detail')
+  const tCommon = useTranslations('common')
+  const locale = useLocale() as ErrorLocale
   const [newDate, setNewDate] = useState(entry.entry_date)
   const [preview, setPreview] = useState<PeriodStatus | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -84,7 +86,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
       } catch {
         if (!cancelled) {
           setPreview(null)
-          setPreviewError('Kunde inte kontrollera perioden. Försök igen.')
+          setPreviewError(t('recordate_period_check_failed'))
         }
       } finally {
         if (!cancelled) setPreviewLoading(false)
@@ -94,7 +96,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
       cancelled = true
       clearTimeout(handle)
     }
-  }, [newDate, open, entry.entry_date])
+  }, [newDate, open, entry.entry_date, t])
 
   const dateChanged = ISO_DATE.test(newDate) && newDate !== entry.entry_date
   const targetOpen = preview?.status === 'open' && !!preview?.period_id
@@ -135,11 +137,11 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
       setDeepChainDepth(null)
       const correctedId = result.data?.corrected?.id
       toast({
-        title: 'Verifikationen flyttad',
-        description: 'En storno och en rättelse med rätt datum har bokförts.',
+        title: t('recordate_moved_title'),
+        description: t('recordate_moved_description'),
         action: correctedId ? (
           <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
-            Visa rättelsen
+            {t('recordate_show_correction')}
           </Button>
         ) : undefined,
       })
@@ -148,8 +150,8 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
     } catch (err) {
       const anyErr = err as { body?: unknown; status?: number }
       toast({
-        title: 'Kunde inte flytta verifikationen',
-        description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
+        title: t('recordate_move_failed'),
+        description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status, locale }),
         variant: 'destructive',
       })
     } finally {
@@ -164,18 +166,10 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
           <div className="flex items-center gap-2">
-            <DialogTitle>Rätta datum</DialogTitle>
+            <DialogTitle>{t('correct_date')}</DialogTitle>
             <RattelseExplainer>
-              <p>
-                Raderna behålls oförändrade: en stornoverifikation nollställer
-                originalet i sin period, och en ny verifikation bokförs med
-                samma rader på det nya datumet.
-              </p>
-              <p>
-                Spårbarheten ligger i stornokedjan: originalet,
-                stornoverifikationen och den nya verifikationen förblir synliga
-                i bokföringen och länkade till varandra.
-              </p>
+              <p>{t('recordate_explainer_lines')}</p>
+              <p>{t('recordate_explainer_traceability')}</p>
             </RattelseExplainer>
           </div>
         </DialogHeader>
@@ -185,7 +179,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
           <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
             <span className="font-mono">{formatVoucher(entry)}</span>
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
-            <Badge variant="outline" className="text-xs">Original</Badge>
+            <Badge variant="outline" className="text-xs">{t('recordate_original_badge')}</Badge>
           </div>
           <p className="text-sm">{entry.description}</p>
         </div>
@@ -193,7 +187,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
         {/* New date */}
         <div className="space-y-2">
           <label htmlFor="recordate-date" className="text-sm font-medium">
-            Nytt datum
+            {t('recordate_new_date')}
           </label>
           <Input
             id="recordate-date"
@@ -206,7 +200,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
           {/* Target period feedback */}
           {dateChanged && (
             <div className="text-sm" aria-live="polite">
-              {previewLoading && <span className="text-muted-foreground">Kontrollerar period…</span>}
+              {previewLoading && <span className="text-muted-foreground">{t('recordate_checking_period')}</span>}
 
               {!previewLoading && previewError && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
@@ -218,26 +212,30 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
               {!previewLoading && !previewError && targetOpen && (
                 <span className="inline-flex items-center gap-1.5 text-muted-foreground">
                   <ArrowRight className="h-4 w-4" />
-                  Flyttas till {preview?.period_name ?? 'rätt räkenskapsår'}
+                  {preview?.period_name
+                    ? t('recordate_moves_to', { period: preview.period_name })
+                    : t('recordate_moves_to_correct_year')}
                 </span>
               )}
 
               {!previewLoading && noCoveringPeriod && (
                 <span className="text-destructive">
-                  Det finns ingen räkenskapsperiod som täcker datumet. Skapa eller öppna räkenskapsåret först.
+                  {t('recordate_no_covering_period')}
                 </span>
               )}
 
               {!previewLoading && preview?.status === 'closed' && (
                 <span className="text-destructive">
-                  Räkenskapsåret är stängt (bokslut) och kan inte återöppnas. Bokför rättelsen i innevarande period istället.
+                  {t('recordate_period_closed')}
                 </span>
               )}
 
               {!previewLoading && preview?.status === 'locked' && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
                   <Lock className="h-4 w-4" />
-                  Perioden är låst{preview?.lock_date ? ` t.o.m. ${formatDate(preview.lock_date)}` : ''}. Lås upp perioden för att flytta verifikationen dit.
+                  {preview?.lock_date
+                    ? t('recordate_period_locked_until', { date: formatDate(preview.lock_date) })
+                    : t('recordate_period_locked')}
                 </span>
               )}
             </div>
@@ -248,7 +246,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
             <p className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
               <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
-                Om momsen för perioden redan är inlämnad kan du behöva lämna en rättad momsdeklaration.
+                {t('recordate_vat_filed_advisory')}
               </span>
             </p>
           )}
@@ -256,10 +254,10 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {tCommon('cancel')}
           </Button>
           <Button onClick={() => handleSubmit()} disabled={!canSubmit}>
-            {isSubmitting ? 'Flyttar…' : 'Flytta verifikationen'}
+            {isSubmitting ? t('recordate_moving') : t('recordate_submit')}
           </Button>
         </DialogFooter>
 

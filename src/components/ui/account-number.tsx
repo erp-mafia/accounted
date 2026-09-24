@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { getAccountDescription, type AccountType } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { useAccounts } from '@/lib/reference-data/hooks'
@@ -18,15 +19,6 @@ const TYPE_COLORS: Record<AccountType, string> = {
   revenue: 'bg-muted-foreground',
   expense: 'bg-destructive',
   untaxed_reserves: 'bg-warning',
-}
-
-const TYPE_LABELS: Record<AccountType, string> = {
-  asset: 'Tillgång',
-  liability: 'Skuld',
-  equity: 'Eget kapital',
-  revenue: 'Intäkt',
-  expense: 'Kostnad',
-  untaxed_reserves: 'Obeskattade reserver',
 }
 
 interface AccountNumberProps {
@@ -47,6 +39,17 @@ export function AccountNumber({
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
+  const t = useTranslations('account_number_tooltip')
+  const typeLabel = (type: AccountType): string => {
+    switch (type) {
+      case 'asset': return t('type_asset')
+      case 'liability': return t('type_liability')
+      case 'equity': return t('type_equity')
+      case 'revenue': return t('type_revenue')
+      case 'expense': return t('type_expense')
+      case 'untaxed_reserves': return t('type_untaxed_reserves')
+    }
+  }
   // Inactive accounts included: historical verifikat keep referencing them
   // long after they leave the active chart.
   const { accounts } = useAccounts(false)
@@ -116,7 +119,7 @@ export function AccountNumber({
             <div className="flex items-center gap-2">
               <span className={cn('h-2 w-2 rounded-full shrink-0', TYPE_COLORS[desc.type])} />
               <span className="text-xs text-muted-foreground">
-                {desc.classLabel} &middot; {TYPE_LABELS[desc.type]}
+                {desc.classLabel} &middot; {typeLabel(desc.type)}
               </span>
             </div>
             <div className="font-medium">

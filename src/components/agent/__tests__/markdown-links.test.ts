@@ -85,40 +85,42 @@ describe('announceableAnswer', () => {
   })
 })
 
+// Echoes the key (and the name) so the tests pin which message is chosen.
+const tDisplay = (key: string, values?: Record<string, string | number>) =>
+  values?.name ? `${key}:${values.name}` : key
+
 describe('intentLabel', () => {
   it('never shows the raw intent id', () => {
     // It used to return the id itself, so an unmapped intent put
     // "bokslut.step" in front of the user as the name of their conversation.
-    expect(intentLabel('some.unmapped.intent')).toBe('Fråga din assistent')
-    expect(intentLabel('some.unmapped.intent', 'Anna')).toBe('Fråga Anna')
+    expect(intentLabel('some.unmapped.intent', tDisplay)).toBe('ask_assistant')
+    expect(intentLabel('some.unmapped.intent', tDisplay, 'Anna')).toBe('ask_named:Anna')
   })
 
   it('gives the panel and the history list the SAME name for a thread', () => {
     // The two maps had drifted: the panel titled a bokslut thread "Fråga Anna"
     // while the history list called it "Hjälp med bokslut".
-    expect(intentLabel('bokslut.step')).toBe('Hjälp med bokslut')
-    expect(intentLabel('bokslut.step', 'Anna')).toBe('Hjälp med bokslut')
-    expect(intentLabel('kpi.explain', 'Anna')).toBe('Förklara nyckeltal')
+    expect(intentLabel('bokslut.step', tDisplay)).toBe('intent_bokslut_step')
+    expect(intentLabel('bokslut.step', tDisplay, 'Anna')).toBe('intent_bokslut_step')
+    expect(intentLabel('kpi.explain', tDisplay, 'Anna')).toBe('intent_kpi_explain')
   })
 
   it('personalises general help and falls back without a name', () => {
-    expect(intentLabel('general.help', 'Anna')).toBe('Fråga Anna')
-    expect(intentLabel('general.help')).toBe('Fråga din assistent')
-    expect(intentLabel('general.help', '   ')).toBe('Fråga din assistent')
+    expect(intentLabel('general.help', tDisplay, 'Anna')).toBe('ask_named:Anna')
+    expect(intentLabel('general.help', tDisplay)).toBe('ask_assistant')
+    expect(intentLabel('general.help', tDisplay, '   ')).toBe('ask_assistant')
   })
 
   it('does not resolve inherited Object keys as labels', () => {
-    // A plain object literal inherits from Object.prototype, so a lookup of
-    // 'toString' returned a FUNCTION, passed the truthiness check and reached
-    // React as a conversation title. intent_id comes from the database.
-    expect(intentLabel('toString')).toBe('Fråga din assistent')
-    expect(intentLabel('constructor', 'Anna')).toBe('Fråga Anna')
-    expect(intentLabel('__proto__')).toBe('Fråga din assistent')
+    // A plain object lookup of 'toString' returned a FUNCTION, passed the
+    // truthiness check and reached React as a conversation title. intent_id
+    // comes from the database.
+    expect(intentLabel('toString', tDisplay)).toBe('ask_assistant')
+    expect(intentLabel('constructor', tDisplay, 'Anna')).toBe('ask_named:Anna')
+    expect(intentLabel('__proto__', tDisplay)).toBe('ask_assistant')
   })
 
-  it('keeps momsdeklaration spelled correctly through the soft hyphen', () => {
-    // The label carries a U+00AD so it can break across the narrow panel.
-    // Stripping it must leave a real word.
-    expect(intentLabel('vat.review').replace(/­/g, '')).toBe('Granska momsdeklaration')
+  it('maps the VAT review intent to its own label', () => {
+    expect(intentLabel('vat.review', tDisplay)).toBe('intent_vat_review')
   })
 })

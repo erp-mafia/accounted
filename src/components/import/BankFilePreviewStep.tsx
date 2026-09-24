@@ -60,19 +60,22 @@ export default function BankFilePreviewStep({
         stats={[
           {
             key: 'rows',
-            label: 'Transaktioner',
+            label: t('bank_file_preview_transactions'),
             value: stats.parsed_rows,
-            note: stats.skipped_rows > 0 ? `${stats.skipped_rows} rader hoppades över` : undefined,
+            note:
+              stats.skipped_rows > 0
+                ? t('bank_file_preview_skipped_rows', { count: stats.skipped_rows })
+                : undefined,
           },
           {
             key: 'period',
-            label: 'Period',
-            value: `${date_from || '-'} till ${date_to || '-'}`,
+            label: t('bank_file_preview_period'),
+            value: t('bank_file_preview_period_value', { from: date_from || '-', to: date_to || '-' }),
             plain: true,
           },
           {
             key: 'income',
-            label: 'Inkomster',
+            label: t('bank_file_preview_income'),
             value: (
               <div className="space-y-1">
                 {totalsRows.map((row) => (
@@ -83,7 +86,7 @@ export default function BankFilePreviewStep({
           },
           {
             key: 'expenses',
-            label: 'Utgifter',
+            label: t('bank_file_preview_expenses'),
             value: (
               <div className="space-y-1">
                 {totalsRows.map((row) => (
@@ -109,9 +112,9 @@ export default function BankFilePreviewStep({
       {/* Transaction preview table */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Transaktioner</CardTitle>
+          <CardTitle className="text-base">{t('bank_file_preview_transactions')}</CardTitle>
           <CardDescription>
-            Förhandsgranskning av de {Math.min(transactions.length, 50)} första transaktionerna
+            {t('bank_file_preview_table_description', { count: Math.min(transactions.length, 50) })}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -119,14 +122,14 @@ export default function BankFilePreviewStep({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-28">Datum</TableHead>
-                  <TableHead>Beskrivning</TableHead>
-                  <TableHead className="text-right w-32">Belopp</TableHead>
+                  <TableHead className="w-28">{t('bank_file_preview_col_date')}</TableHead>
+                  <TableHead>{t('bank_file_preview_col_description')}</TableHead>
+                  <TableHead className="text-right w-32">{t('bank_file_preview_col_amount')}</TableHead>
                   {transactions.some((t) => t.balance != null) && (
-                    <TableHead className="text-right w-32">Saldo</TableHead>
+                    <TableHead className="text-right w-32">{t('bank_file_preview_col_balance')}</TableHead>
                   )}
                   {transactions.some((t) => t.reference) && (
-                    <TableHead className="w-32">Referens</TableHead>
+                    <TableHead className="w-32">{t('bank_file_preview_col_reference')}</TableHead>
                   )}
                 </TableRow>
               </TableHeader>
@@ -164,7 +167,7 @@ export default function BankFilePreviewStep({
           </div>
           {transactions.length > 50 && (
             <p className="text-sm text-muted-foreground mt-2 text-center">
-              Visar 50 av {transactions.length} transaktioner
+              {t('bank_file_preview_showing', { total: transactions.length })}
             </p>
           )}
         </CardContent>
@@ -177,11 +180,11 @@ export default function BankFilePreviewStep({
             <div className="flex gap-3">
               <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-2">
-                <p className="font-medium text-destructive">Filen innehåller fel som förhindrar import</p>
+                <p className="font-medium text-destructive">{t('bank_file_preview_blocking_errors')}</p>
                 <div className="max-h-32 space-y-1 overflow-y-auto">
                   {errors.map((issue, i) => (
                     <p key={i} className="text-xs text-muted-foreground">
-                      Rad {issue.row}: {issue.message}
+                      {t('bank_file_preview_row_issue', { row: issue.row, message: issue.message })}
                     </p>
                   ))}
                 </div>
@@ -195,10 +198,10 @@ export default function BankFilePreviewStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('bank_file_preview_back')}
         </Button>
         <Button onClick={onContinue} disabled={hasIssues || transactions.length === 0}>
-          Fortsätt
+          {t('bank_file_preview_continue')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

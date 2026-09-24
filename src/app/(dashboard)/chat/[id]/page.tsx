@@ -1,4 +1,5 @@
 import { notFound, redirect } from 'next/navigation'
+import { getTranslations } from 'next-intl/server'
 import ChatConversationView from '@/components/agent/ChatConversationView'
 import type { StoredStagedOperation } from '@/types'
 import { getDashboardAuthContext, getDashboardCompanyId } from '../../request-context'
@@ -15,6 +16,7 @@ interface PageProps {
 // up via /api/agent/invoke with conversation_id supplied.
 export default async function ChatConversationPage({ params }: PageProps) {
   const { id } = await params
+  const t = await getTranslations('chat_conversation_page')
   const [{ supabase, user }, companyId] = await Promise.all([
     getDashboardAuthContext(),
     getDashboardCompanyId(),
@@ -60,23 +62,26 @@ export default async function ChatConversationPage({ params }: PageProps) {
       conversationId={id}
       intentId={conversation.intent_id}
       contextRef={conversation.context_ref}
-      title={conversation.title ?? intentLabel(conversation.intent_id)}
+      title={conversation.title ?? intentLabel(conversation.intent_id, t)}
       rawMessages={(messages ?? []) as { role: string; content: unknown; hidden?: boolean }[]}
       stagedOperations={(staged.data ?? []) as StoredStagedOperation[]}
     />
   )
 }
 
-function intentLabel(intentId: string): string {
+function intentLabel(
+  intentId: string,
+  t: (key: string) => string,
+): string {
   switch (intentId) {
     case 'general.help':
-      return 'Fråga din assistent'
+      return t('intent_general_help')
     case 'transaction.categorization':
-      return 'Hjälp med transaktion'
+      return t('intent_transaction_categorization')
     case 'invoice.draft':
-      return 'Hjälp med faktura'
+      return t('intent_invoice_draft')
     case 'supplier_invoice.review':
-      return 'Granska leverantörsfaktura'
+      return t('intent_supplier_invoice_review')
     default:
       return intentId
   }

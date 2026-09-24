@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -80,15 +81,9 @@ interface FormLine {
 
 const BLANK_LINE: FormLine = { account_number: '', debit_amount: '', credit_amount: '' }
 
-// Swedish entity labels for the "Spara som mall" editor. Hard-coded to match
-// this dialog's Swedish-only surface (the shared TemplateForm handles the rest
-// of its own strings bilingually).
-const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
-  all: 'Alla',
-  enskild_firma: 'Enskild firma',
-  aktiebolag: 'Aktiebolag',
-  ideell_forening: 'Ideell förening',
-}
+// Entity labels for the "Spara som mall" editor are built inside the
+// component (they need the translator); the shared TemplateForm handles the
+// rest of its own strings bilingually.
 
 interface Props {
   open: boolean
@@ -178,7 +173,14 @@ function rankBySekCloseness(
 
 export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = null, docMime = null, onSuccess }: Props) {
   const { toast } = useToast()
+  const t = useTranslations('book_directly_dialog')
   const { company } = useCompany()
+  const TEMPLATE_ENTITY_LABELS: Record<string, string> = {
+    all: t('entity_all'),
+    enskild_firma: t('entity_enskild_firma'),
+    aktiebolag: t('entity_aktiebolag'),
+    ideell_forening: t('entity_ideell_forening'),
+  }
 
   // Underlag total + currency. Booking happens in SEK, so a foreign total needs
   // an FX rate to rank/compare against the (SEK) bank transactions.
@@ -564,14 +566,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
   const disabledReason = useMemo(() => {
     if (isSubmitting) return null
-    if (!entryDate) return 'Välj datum'
-    if (!periodId) return 'Datumet matchar ingen öppen räkenskapsperiod'
-    if (derivedPeriodBlocked) return 'Räkenskapsperioden är låst eller stängd'
-    if (description.trim().length === 0) return 'Fyll i beskrivning'
-    if (lines.some((l) => l.account_number.trim().length === 0)) return 'Alla rader behöver ett konto'
-    if (!totals.balanced) return 'Debet och kredit måste vara lika'
+    if (!entryDate) return t('reason_pick_date')
+    if (!periodId) return t('reason_no_open_period')
+    if (derivedPeriodBlocked) return t('reason_period_locked')
+    if (description.trim().length === 0) return t('reason_fill_description')
+    if (lines.some((l) => l.account_number.trim().length === 0)) return t('reason_all_lines_need_account')
+    if (!totals.balanced) return t('reason_unbalanced')
     return null
-  }, [isSubmitting, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced])
+  }, [isSubmitting, entryDate, periodId, derivedPeriodBlocked, description, lines, totals.balanced, t])
 
   const canSubmit = !isSubmitting && disabledReason === null
 
@@ -615,10 +617,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       const json = await runSubmit()
       const voucher = json?.data?.journal_entry
       toast({
-        title: 'Bokfört',
+        title: t('booked_title'),
         description: voucher
-          ? `Verifikation ${formatVoucher(voucher)} skapad.`
-          : 'Verifikation skapad.',
+          ? t('voucher_created', { voucher: formatVoucher(voucher) })
+          : t('voucher_created_plain'),
       })
       await onSuccess()
       onOpenChange(false)
@@ -628,7 +630,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       } else {
         const anyErr = err as { body?: unknown; status?: number }
         toast({
-          title: 'Kunde inte bokföra',
+          title: t('book_failed'),
           description: getErrorMessage(anyErr.body ?? err, {
             context: 'journal_entry',
             statusCode: anyErr.status,
@@ -639,15 +641,15 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
     } finally {
       setIsSubmitting(false)
     }
-  }, [canSubmit, runSubmit, toast, onSuccess, onOpenChange])
+  }, [canSubmit, runSubmit, toast, onSuccess, onOpenChange, t])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Bokför direkt</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Skapa en verifikation från underlaget. Dokumentet bifogas verifikationen som underlag.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -668,7 +670,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
           {/* Metadata row */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="bd-date">Datum</Label>
+              <Label htmlFor="bd-date">{t('date_label')}</Label>
               <Input
                 id="bd-date"
                 type="date"
@@ -679,54 +681,52 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               />
             </div>
             <div className="space-y-1.5 md:col-span-2">
-              <Label>Räkenskapsperiod</Label>
+              <Label>{t('fiscal_period_label')}</Label>
               {/* Derived from the entry date (periods never overlap): text,
                   not a picker, so it can never disagree with the date. */}
               {periods.length === 0 ? (
-                <p className="text-sm text-muted-foreground pt-2">Hämtar perioder …</p>
+                <p className="text-sm text-muted-foreground pt-2">{t('loading_periods')}</p>
               ) : derivedPeriod ? (
                 <p className="text-sm pt-2 tabular-nums">
                   {derivedPeriod.period_start}: {derivedPeriod.period_end}
                   {(derivedPeriod.locked_at || derivedPeriod.is_closed) && (
                     <span className="text-attn">
-                      {' '}({derivedPeriod.locked_at ? 'låst' : 'stängd'})
+                      {' '}({derivedPeriod.locked_at ? t('period_locked') : t('period_closed')})
                     </span>
                   )}
                 </p>
               ) : (
                 <AttnLine className="pt-2">
-                  Datumet ligger utanför öppna räkenskapsperioder. Ändra datumet eller skapa perioden under Bokföring.
+                  {t('date_outside_periods')}
                 </AttnLine>
               )}
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="bd-description">Beskrivning</Label>
+            <Label htmlFor="bd-description">{t('description_label')}</Label>
             <Input
               id="bd-description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               disabled={isSubmitting}
-              placeholder="Leverantör · fakturanummer"
+              placeholder={t('description_placeholder')}
             />
           </div>
 
           {/* Transaction picker: always shown, selection is optional. */}
           <div className="rounded-lg border p-4 space-y-3">
             <div className="space-y-0.5">
-              <Label className="text-sm">Koppla till banktransaktion (valfritt)</Label>
+              <Label className="text-sm">{t('link_transaction_label')}</Label>
               <p className="text-xs text-muted-foreground">
-                Välj en transaktion om dokumentet motsvarar en redan-bokad
-                bankhändelse: den bokas då samtidigt. Lämna tom för en
-                fristående verifikation.
+                {t('link_transaction_help')}
               </p>
             </div>
             <div className="space-y-2">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Sök på beskrivning…"
+                  placeholder={t('search_placeholder')}
                   value={txSearch}
                   onChange={(e) => setTxSearch(e.target.value)}
                   className="pl-10"
@@ -735,14 +735,14 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               </div>
               <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
-                  <div className="space-y-2 px-3 py-3" aria-busy="true" aria-label="Laddar…">
+                  <div className="space-y-2 px-3 py-3" aria-busy="true" aria-label={t('loading')}>
                     {[0, 1, 2, 3].map((i) => (
                       <Skeleton key={i} className="h-8 w-full" />
                     ))}
                   </div>
                 ) : filteredTransactions.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
-                    Inga okategoriserade transaktioner.
+                    {t('no_uncategorized_transactions')}
                   </p>
                 ) : (
                   <ul className="divide-y">
@@ -776,7 +776,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                                 <p className="truncate">{tx.description}</p>
                                 {isInboxMatch && (
                                   <Badge variant="secondary" className="shrink-0 text-[11px] px-1.5 py-0">
-                                    Matchad
+                                    {t('matched_badge')}
                                   </Badge>
                                 )}
                               </div>
@@ -811,7 +811,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   onClick={() => setSelectedTransactionId(null)}
                   disabled={isSubmitting}
                 >
-                  Rensa val
+                  {t('clear_selection')}
                 </button>
               )}
             </div>
@@ -820,11 +820,11 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
           {/* Journal entry lines */}
           <div className="space-y-2">
             <div className="flex items-center justify-between gap-3">
-              <Label className="text-sm">Konteringsrader</Label>
+              <Label className="text-sm">{t('lines_label')}</Label>
               <div className="text-xs text-muted-foreground text-right">
                 {targetAmount != null && (
                   <span>
-                    Underlag:{' '}
+                    {t('document_amount_label')}{' '}
                     <span className="tabular-nums font-medium text-foreground">
                       {formatCurrency(targetAmount, targetCurrency)}
                     </span>
@@ -833,7 +833,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 {selectedTransactionAmount != null && (
                   <span>
                     {targetAmount != null && ' · '}
-                    Transaktion:{' '}
+                    {t('transaction_amount_label')}{' '}
                     <span className="tabular-nums font-medium text-foreground">
                       {formatCurrency(Math.abs(selectedTransactionAmount), 'SEK')}
                     </span>
@@ -843,25 +843,25 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             </div>
             {targetCurrency !== 'SEK' && selectedTransactionAmount != null && (
               <p className="text-[11px] text-muted-foreground">
-                Underlaget är i {targetCurrency}. Bokföringen sker i SEK enligt
-                transaktionens belopp. Momsraden har lämnats bort: vid behov
-                lägg till en rad för omvänd skattskyldighet manuellt.
+                {t('foreign_currency_note', { currency: targetCurrency })}
               </p>
             )}
             {accountSuggestion && lines[0]?.account_number === accountSuggestion.account && (
               <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-                Konto {accountSuggestion.account} föreslaget från tidigare bokföringar av{' '}
-                {formatCounterpartyName(accountSuggestion.counterparty)}
+                {t('account_suggested', {
+                  account: accountSuggestion.account,
+                  counterparty: formatCounterpartyName(accountSuggestion.counterparty),
+                })}
               </p>
             )}
             <div className="rounded-lg border overflow-hidden">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40">
                   <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-                    <th className="text-left font-medium px-3 py-2 w-[40%]">Konto</th>
-                    <th className="text-right font-medium px-3 py-2">Debet</th>
-                    <th className="text-right font-medium px-3 py-2">Kredit</th>
+                    <th className="text-left font-medium px-3 py-2 w-[40%]">{t('col_account')}</th>
+                    <th className="text-right font-medium px-3 py-2">{t('col_debit')}</th>
+                    <th className="text-right font-medium px-3 py-2">{t('col_credit')}</th>
                     <th className="w-10" />
                   </tr>
                 </thead>
@@ -909,7 +909,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           size="icon-sm"
                           onClick={() => removeLine(idx)}
                           disabled={isSubmitting || lines.length <= 2}
-                          aria-label="Ta bort rad"
+                          aria-label={t('remove_line')}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -925,13 +925,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                             reconciles the sums: what is still missing to balance. */}
                         {totals.diff !== 0 ? (
                           <span className="tabular-nums font-medium text-destructive">
-                            Differens {Math.abs(totals.diff).toFixed(2)}
+                            {t('difference', { amount: Math.abs(totals.diff).toFixed(2) })}
                           </span>
                         ) : (
                           <span />
                         )}
                         <span className="text-right font-medium uppercase tracking-wider text-muted-foreground">
-                          Summa
+                          {t('sum')}
                         </span>
                       </div>
                     </td>
@@ -966,7 +966,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   disabled={isSubmitting}
                 >
                   <Plus className="h-3.5 w-3.5 mr-1.5" />
-                  Lägg till rad
+                  {t('add_line')}
                 </Button>
                 <TemplateApplyButton
                   onApply={handleTemplateApply}
@@ -986,19 +986,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   disabled={isSubmitting || derivedTemplateLines.length < 2}
                   title={
                     derivedTemplateLines.length < 2
-                      ? 'Fyll i minst två konteringsrader med konto och belopp'
+                      ? t('save_template_needs_lines')
                       : undefined
                   }
                 >
                   <BookmarkPlus className="h-3.5 w-3.5 mr-1.5" />
-                  Spara som mall
+                  {t('save_as_template')}
                 </Button>
               </div>
               {totals.balanced ? (
-                <span className="text-xs text-muted-foreground">Balanserad</span>
+                <span className="text-xs text-muted-foreground">{t('balanced')}</span>
               ) : totals.diff !== 0 ? (
                 <span className="text-xs text-muted-foreground">
-                  Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
+                  {t('double_click_hint')}
                 </span>
               ) : null}
             </div>
@@ -1006,7 +1006,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
 
           <div className="space-y-1.5">
             <Label htmlFor="bd-notes" className="text-xs uppercase tracking-wider text-muted-foreground">
-              Anteckningar (valfritt)
+              {t('notes_label')}
             </Label>
             <Textarea
               id="bd-notes"
@@ -1014,7 +1014,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               onChange={(e) => setNotes(e.target.value)}
               disabled={isSubmitting}
               rows={2}
-              placeholder="Intern kommentar om verifikationen"
+              placeholder={t('notes_placeholder')}
             />
           </div>
 
@@ -1026,7 +1026,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               )}
               aria-live="polite"
             >
-              {disabledReason ?? 'Klar att bokföra.'}
+              {disabledReason ?? t('ready_to_book')}
             </p>
             <div className="flex items-center gap-2">
               <Button
@@ -1035,7 +1035,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 onClick={() => onOpenChange(false)}
                 disabled={isSubmitting}
               >
-                Avbryt
+                {t('cancel')}
               </Button>
               <Button
                 type="button"
@@ -1044,7 +1044,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 loading={isSubmitting}
                 title={disabledReason ?? undefined}
               >
-                {isSubmitting ? 'Bokför…' : 'Bokför'}
+                {isSubmitting ? t('booking') : t('book')}
               </Button>
             </div>
           </div>
@@ -1065,11 +1065,9 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       <Dialog open={showSaveTemplate} onOpenChange={setShowSaveTemplate}>
         <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Spara som bokföringsmall</DialogTitle>
+            <DialogTitle>{t('save_template_title')}</DialogTitle>
             <DialogDescription>
-              Spara den här konteringen som en återanvändbar mall. Beloppen sparas
-              som andelar av totalsumman — du anger ett nytt belopp när du använder
-              mallen. Kontrollera raderna nedan innan du sparar.
+              {t('save_template_description')}
             </DialogDescription>
           </DialogHeader>
           {showSaveTemplate && (

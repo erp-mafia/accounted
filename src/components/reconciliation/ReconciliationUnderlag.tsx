@@ -36,6 +36,7 @@ function formatSize(bytes: number): string {
 
 export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = true }: ReconciliationUnderlagProps) {
   const t = useTranslations('reconciliation_underlag')
+  const tUpload = useTranslations('upload_size')
   const { toast } = useToast()
   const [attachments, setAttachments] = useState<ReconciliationAttachment[] | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -72,7 +73,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
           file = await shrinkImageForUpload(file)
         }
         if (exceedsHostedUploadLimit(file.size)) {
-          toast({ title: t('too_large_title'), description: tooLargeMessage(file.size), variant: 'destructive' })
+          toast({ title: t('too_large_title'), description: tooLargeMessage(file.size, tUpload), variant: 'destructive' })
           continue
         }
         const form = new FormData()

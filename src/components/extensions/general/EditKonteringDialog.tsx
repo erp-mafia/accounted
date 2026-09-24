@@ -79,7 +79,7 @@ export default function EditKonteringDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Ändra kontering</DialogTitle>
+          <DialogTitle>{t('edit_kontering_title')}</DialogTitle>
           {matchedTransaction && (
             <p className="text-xs text-muted-foreground tabular-nums">
               {t('dialog_matched_transaction')}: {formatCurrency(matchedTransaction.amount_sek)} ·{' '}

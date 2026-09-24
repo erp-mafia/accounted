@@ -16,9 +16,10 @@
  * behind a deep-link the customer never reached.
  */
 import { useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { JournalEntry } from '@/types'
 
 interface Props {
@@ -33,6 +34,8 @@ interface Props {
 }
 
 export default function CorrectionAffordance({ journalEntryId, onCorrected, children }: Props) {
+  const t = useTranslations('correction_affordance')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [open, setOpen] = useState(false)
@@ -46,8 +49,12 @@ export default function CorrectionAffordance({ journalEntryId, onCorrected, chil
       const json = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte hämta verifikationen',
-          description: getErrorMessage(json, { context: 'journal_entry', statusCode: res.status }),
+          title: t('fetch_failed'),
+          description: getErrorMessage(json, {
+            context: 'journal_entry',
+            statusCode: res.status,
+            locale: errorLocale,
+          }),
           variant: 'destructive',
         })
         return
@@ -55,9 +62,8 @@ export default function CorrectionAffordance({ journalEntryId, onCorrected, chil
       const fetched = json.data as JournalEntry
       if (fetched.status !== 'posted') {
         toast({
-          title: 'Verifikationen kan inte ändras',
-          description:
-            'Endast bokförda verifikationer kan rättas. Utkast hanteras direkt under bokföringen.',
+          title: t('not_posted_title'),
+          description: t('not_posted_description'),
           variant: 'destructive',
         })
         return
@@ -66,8 +72,8 @@ export default function CorrectionAffordance({ journalEntryId, onCorrected, chil
       setOpen(true)
     } catch (err) {
       toast({
-        title: 'Kunde inte hämta verifikationen',
-        description: getErrorMessage(err, { context: 'journal_entry' }),
+        title: t('fetch_failed'),
+        description: getErrorMessage(err, { context: 'journal_entry', locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {

@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   DIMENSION_CODE_PATTERN,
   type DimensionValueDto,
@@ -36,9 +37,8 @@ interface DimensionComboboxProps {
  * lists are small). Only active values are offered: archived codes stay
  * pickable in history but are never suggested.
  *
- * Strings are hardcoded Swedish per the AccountCombobox convention: the
- * component mounts on the voucher editor (PR3), a stays-Swedish surface per
- * .claude/rules/i18n.md.
+ * UI chrome is translated via the dimension_combobox namespace; dimension
+ * codes and names are the company's own data and render as stored.
  */
 export default function DimensionCombobox({
   sieDimNo,
@@ -47,6 +47,8 @@ export default function DimensionCombobox({
   disabled,
   className,
 }: DimensionComboboxProps) {
+  const t = useTranslations('dimension_combobox')
+  const locale = useLocale() as ErrorLocale
   const [search, setSearch] = useState(value ?? '')
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -168,7 +170,7 @@ export default function DimensionCombobox({
         })
         const json = await res.json().catch(() => null)
         if (!res.ok) {
-          setCreateError(getErrorMessage(json, { locale: 'sv' }))
+          setCreateError(getErrorMessage(json, { locale }))
           return
         }
         const created: DimensionValueDto = json?.data ?? {
@@ -186,7 +188,7 @@ export default function DimensionCombobox({
         setIsCreating(false)
       }
     },
-    [dimensionId, isCreating, selectValue],
+    [dimensionId, isCreating, selectValue, locale],
   )
 
   const activateOption = useCallback(
@@ -274,7 +276,7 @@ export default function DimensionCombobox({
         onFocus={openDropdown}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
-        placeholder="Sök värde…"
+        placeholder={t('search_placeholder')}
         disabled={disabled}
         className={`font-mono ${className ?? ''}`.trim()}
         autoComplete="off"
@@ -304,17 +306,17 @@ export default function DimensionCombobox({
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              Laddar…
+              {t('loading')}
             </div>
           )}
           {loadState === 'error' && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Kunde inte hämta värden.
+              {t('load_failed')}
             </p>
           )}
           {loadState === 'loaded' && optionCount === 0 && (
             <p className="px-2 py-2 text-sm text-muted-foreground">
-              Hittade inget värde som matchar.
+              {t('no_match')}
             </p>
           )}
           {loadState === 'loaded' &&
@@ -361,7 +363,7 @@ export default function DimensionCombobox({
               ) : (
                 <Plus className="h-3.5 w-3.5 shrink-0" />
               )}
-              <span className="truncate">Skapa ny &quot;{createCandidate}&quot;</span>
+              <span className="truncate">{t('create_new', { code: createCandidate })}</span>
             </button>
           )}
           {createError && (

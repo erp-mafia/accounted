@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -35,6 +36,8 @@ export default function OpeningBalancePeriodStep({
   isLoading,
   error,
 }: OpeningBalancePeriodStepProps) {
+  const t = useTranslations('opening_balance_period_step')
+  const tc = useTranslations('common')
   // Session-cached period list (lib/reference-data).
   const { periods, isLoading: loadingPeriods } = useFiscalPeriods()
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('')
@@ -87,34 +90,34 @@ export default function OpeningBalancePeriodStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Välj räkenskapsperiod</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Välj vilken räkenskapsperiod de ingående balanserna ska bokföras på.
+          {t('description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Period selector */}
         <div className="space-y-2">
-          <Label>Räkenskapsperiod</Label>
+          <Label>{t('period_label')}</Label>
           {loadingPeriods ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Hämtar perioder...
+              {t('loading_periods')}
             </div>
           ) : periods.length === 0 ? (
             <ImportNotices notices={[makeNotice('ob_no_periods', 'action')]} />
           ) : (
             <Select value={selectedPeriodId} onValueChange={setSelectedPeriodId}>
               <SelectTrigger>
-                <SelectValue placeholder="Välj period" />
+                <SelectValue placeholder={t('choose_period')} />
               </SelectTrigger>
               <SelectContent>
                 {periods.map((p) => (
                   <SelectItem key={p.id} value={p.id} disabled={p.is_closed || !!p.locked_at}>
-                    {p.name} ({p.period_start} till {p.period_end})
-                    {p.opening_balances_set && ', har redan IB'}
-                    {p.is_closed && ', stängd'}
-                    {p.locked_at && !p.is_closed && ', låst'}
+                    {t('period_option', { name: p.name, start: p.period_start, end: p.period_end })}
+                    {p.opening_balances_set && t('has_ib_suffix')}
+                    {p.is_closed && t('closed_suffix')}
+                    {p.locked_at && !p.is_closed && t('locked_suffix')}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -129,15 +132,15 @@ export default function OpeningBalancePeriodStep({
 
         {/* Summary */}
         <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-          <h4 className="text-sm font-medium">Sammanfattning</h4>
+          <h4 className="text-sm font-medium">{t('summary')}</h4>
           <div className="grid grid-cols-2 gap-y-2 text-sm">
-            <span className="text-muted-foreground">Antal konton:</span>
+            <span className="text-muted-foreground">{t('account_count')}</span>
             <span className="tabular-nums text-right">{rows.length}</span>
-            <span className="text-muted-foreground">Total debet:</span>
+            <span className="text-muted-foreground">{t('total_debit')}</span>
             <span className="tabular-nums text-right">
               {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
             </span>
-            <span className="text-muted-foreground">Total kredit:</span>
+            <span className="text-muted-foreground">{t('total_credit')}</span>
             <span className="tabular-nums text-right">
               {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK
             </span>
@@ -145,17 +148,16 @@ export default function OpeningBalancePeriodStep({
           {isBalanced ? (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
               <CheckCircle2 className="h-4 w-4 text-success" />
-              <span className="text-success font-medium">Balanserar</span>
+              <span className="text-success font-medium">{t('balanced')}</span>
             </div>
           ) : (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
               <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
               <span className="text-destructive font-medium">
-                Balanserar inte (differens{' '}
-                <span className="tabular-nums">
-                  {balanceDiff.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
-                </span>{' '}
-                SEK)
+                {t.rich('not_balanced', {
+                  diff: balanceDiff.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+                  num: (c) => <span className="tabular-nums">{c}</span>,
+                })}
               </span>
             </div>
           )}
@@ -172,15 +174,15 @@ export default function OpeningBalancePeriodStep({
         {/* Actions */}
         <div className="flex justify-between pt-2">
           <Button variant="ghost" onClick={onBack} disabled={isLoading}>
-            Tillbaka
+            {tc('back')}
           </Button>
           <Button onClick={handleExecute} disabled={!canExecute} loading={isLoading}>
             {isLoading ? (
-              periodHasOB ? 'Ersätter...' : 'Bokför...'
+              periodHasOB ? t('replacing') : t('booking')
             ) : periodHasOB ? (
-              'Ersätt ingående balanser'
+              t('replace_submit')
             ) : (
-              'Bokför ingående balanser'
+              t('book_submit')
             )}
           </Button>
         </div>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -22,11 +23,12 @@ import { matchesVoucherSearch } from '@/lib/reconciliation/voucher-search'
  */
 function confidenceMark(
   confidence: number | undefined,
+  t: ReturnType<typeof useTranslations>,
 ): { label: string; variant: 'secondary' | 'outline' | null } | null {
   if (confidence == null) return null
-  if (confidence >= 0.85) return { label: 'Stark träff', variant: null }
-  if (confidence >= 0.6) return { label: 'Trolig träff', variant: 'secondary' }
-  return { label: 'Svag träff', variant: 'outline' }
+  if (confidence >= 0.85) return { label: t('strength_strong'), variant: null }
+  if (confidence >= 0.6) return { label: t('strength_likely'), variant: 'secondary' }
+  return { label: t('strength_weak'), variant: 'outline' }
 }
 
 /**
@@ -102,11 +104,12 @@ export function MatchVerifikationPicker({
   value = '',
   onChange,
   disabled,
-  placeholder = 'Sök ver.nr, datum, belopp eller beskrivning…',
+  placeholder,
   inline = false,
   selectedIds,
   onToggle,
 }: MatchPickerProps) {
+  const t = useTranslations('match_verifikation_picker')
   const multiple = selectedIds !== undefined
   // `open` controls the overlay dropdown only. In inline mode the list is always
   // rendered, so the setOpen() writes in the handlers below are harmless no-ops
@@ -153,7 +156,7 @@ export function MatchVerifikationPicker({
     // green "Stark träff" can't visually encourage an accidental double-match:
     // "Redan matchad" is the signal that matters there (N:1 stays opt-in).
     const strength =
-      (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
+      (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence, t)
     return (
       <div className="flex items-center gap-2 rounded-lg border border-border bg-secondary/40 px-3 py-2 text-sm">
         <span className="font-mono text-xs shrink-0">{formatVoucher(line)}</span>
@@ -171,7 +174,7 @@ export function MatchVerifikationPicker({
         )}
         {(line.linked_transaction_count ?? 0) > 0 && (
           <Badge variant="secondary" className="shrink-0 text-[11px]">
-            Redan matchad
+            {t('already_matched')}
           </Badge>
         )}
         <Button
@@ -181,7 +184,7 @@ export function MatchVerifikationPicker({
           className="shrink-0"
           onClick={onRemove}
           disabled={disabled}
-          aria-label="Avmarkera verifikation"
+          aria-label={t('deselect')}
         >
           <X className="h-3.5 w-3.5" />
         </Button>
@@ -209,14 +212,14 @@ export function MatchVerifikationPicker({
   const listContent =
     filtered.length === 0 ? (
       <div className="px-3 py-4 text-sm text-muted-foreground text-center">
-        Inga verifikationer matchar &quot;{search}&quot;
+        {t('no_match', { query: search })}
       </div>
     ) : (
       <div className="max-h-72 overflow-y-auto">
         {filtered.map((line) => {
           const amount = line.debit_amount > 0 ? line.debit_amount : -line.credit_amount
           const strength =
-            (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence)
+            (line.linked_transaction_count ?? 0) > 0 ? null : confidenceMark(line.confidence, t)
           const picked = multiple && pickedSet.has(line.journal_entry_id)
           return (
             <button
@@ -257,7 +260,7 @@ export function MatchVerifikationPicker({
               )}
               {(line.linked_transaction_count ?? 0) > 0 && (
                 <Badge variant="secondary" className="shrink-0 text-[11px]">
-                  Matchad
+                  {t('matched')}
                 </Badge>
               )}
             </button>
@@ -265,7 +268,7 @@ export function MatchVerifikationPicker({
         })}
         {glLines.length > filtered.length && (
           <div className="px-3 py-2 text-[11px] text-muted-foreground border-t border-border bg-secondary/30">
-            Visar {filtered.length} av {glLines.length}: sök för att filtrera fler.
+            {t('showing', { shown: filtered.length, total: glLines.length })}
           </div>
         )}
       </div>
@@ -281,7 +284,7 @@ export function MatchVerifikationPicker({
           setOpen(true)
         }}
         onFocus={() => setOpen(true)}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t('search_placeholder')}
         disabled={disabled}
         className="pl-9"
       />

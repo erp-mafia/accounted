@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { Settings } from 'lucide-react'
+import { getTranslations } from 'next-intl/server'
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import OnboardingBackdrop from '@/components/onboarding/OnboardingBackdrop'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
@@ -9,6 +10,7 @@ export default async function OnboardingLayout({
 }: {
   children: React.ReactNode
 }) {
+  const t = await getTranslations('onboarding_layout')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -49,8 +51,8 @@ export default async function OnboardingLayout({
       {user && hasCompletedOnboarding && (
         <Link
           href="/settings/account"
-          aria-label="Kontoinställningar"
-          title="Kontoinställningar"
+          aria-label={t('account_settings')}
+          title={t('account_settings')}
           className="fixed bottom-6 right-6 z-50 flex h-10 w-10 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground shadow-[var(--shadow-md)] backdrop-blur transition-colors hover:border-foreground/40 hover:text-foreground"
         >
           <Settings className="h-4 w-4" />

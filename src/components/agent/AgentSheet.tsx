@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   X,
   Expand,
@@ -220,14 +221,16 @@ export default function AgentSheet({
   onRestart,
   onClose,
 }: Props) {
+  const t = useTranslations('agent_sheet')
+  const tDisplay = useTranslations('agent_conversation_display')
   // Live conversation id from the active AgentChat (fresh sessions report it via
   // onConversationIdChange; resumed ones we set directly on select).
   // Drops the enter class once the slide has played, so re-expanding a
   // collapsed session is instant rather than sliding in again.
   const [entering, setEntering] = useState(true)
   useEffect(() => {
-    const t = setTimeout(() => setEntering(false), 320)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setEntering(false), 320)
+    return () => clearTimeout(timer)
   }, [])
   const [conversationId, setConversationId] = useState<string | null>(null)
   // 'chat' shows the conversation; 'list' shows the session picker.
@@ -304,8 +307,8 @@ export default function AgentSheet({
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
   const agentName = identity.displayName?.trim() || null
-  const sheetTitle = intentLabel(intentId, agentName)
-  const displayTitle = loaded ? (loaded.title ?? intentLabel(loaded.intentId, agentName)) : sheetTitle
+  const sheetTitle = intentLabel(intentId, tDisplay, agentName)
+  const displayTitle = loaded ? (loaded.title ?? intentLabel(loaded.intentId, tDisplay, agentName)) : sheetTitle
   const activeConversationId = loaded?.id ?? conversationId
   // A resumed thread's stored ref wins: it says what THAT conversation was
   // about, which is the whole reason to show this. Falls back to the ref the
@@ -520,14 +523,14 @@ export default function AgentSheet({
       setConversationId(data.conversation.id)
     } catch {
       if (seq === selectSeqRef.current) {
-        setLoadError('Kunde inte öppna konversationen.')
+        setLoadError(t('open_failed'))
         // A thread that no longer opens must not be retried on every reload.
         clearAgentSheetSession()
       }
     } finally {
       if (seq === selectSeqRef.current) setLoadingConversation(false)
     }
-  }, [])
+  }, [t])
 
   // Reload restore: the provider remounts the sheet on the thread this tab
   // had open, and it is loaded here the same way a picked one is.
@@ -606,7 +609,7 @@ export default function AgentSheet({
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label="Ändra panelens bredd"
+          aria-label={t('resize_width')}
           aria-valuenow={expanded ? expandedW : dockW}
           aria-valuemin={DOCK_WIDTH_MIN}
           aria-valuemax={clampDockWidth(DOCK_WIDTH_MAX, viewport.w, navW)}
@@ -661,17 +664,17 @@ export default function AgentSheet({
           <button
             onClick={() => setView('chat')}
             className="h-9 w-9 -ml-1 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-            aria-label="Tillbaka"
-            title="Tillbaka"
+            aria-label={t('back')}
+            title={t('back')}
           >
             <ChevronLeft className="h-4 w-4" />
           </button>
-          <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
+          <h2 className="font-display text-lg tracking-tight truncate">{t('conversations')}</h2>
           <button
             onClick={onClose}
             className="ml-auto h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-            aria-label="Stäng"
-            title="Avsluta sessionen"
+            aria-label={t('close')}
+            title={t('end_session')}
           >
             <X className="h-4 w-4" />
           </button>
@@ -690,13 +693,13 @@ export default function AgentSheet({
             <button
               onClick={() => setView('list')}
               className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-              aria-label="Tidigare konversationer"
-              title="Tidigare konversationer"
+              aria-label={t('previous_conversations')}
+              title={t('previous_conversations')}
             >
               <History className="h-4 w-4" />
             </button>
           )}
-          <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
+          <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? t('assistant')} />
           <div className="min-w-0 flex-1">
             <h2 className="font-display text-lg leading-tight tracking-tight truncate">
               {displayTitle}
@@ -715,11 +718,11 @@ export default function AgentSheet({
               <button
                 onClick={toggleFloating}
                 className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-                aria-label={floating ? 'Docka mot högerkanten' : 'Frigör panelen'}
+                aria-label={floating ? t('dock_right') : t('undock')}
                 title={
                   floating
-                    ? 'Docka mot högerkanten'
-                    : 'Frigör panelen: flytta och ändra storlek fritt'
+                    ? t('dock_right')
+                    : t('undock_title')
                 }
               >
                 {floating ? (
@@ -737,8 +740,8 @@ export default function AgentSheet({
               <button
                 onClick={() => setExpanded((v) => !v)}
                 className="hidden md:inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-                aria-label={expanded ? 'Förminska' : 'Förstora'}
-                title={expanded ? 'Förminska' : 'Förstora'}
+                aria-label={expanded ? t('shrink') : t('expand')}
+                title={expanded ? t('shrink') : t('expand')}
               >
                 {expanded ? <Shrink className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
               </button>
@@ -750,26 +753,26 @@ export default function AgentSheet({
               <button
                 onClick={onRestart}
                 className="h-9 inline-flex items-center gap-2 rounded-sm px-2 text-xs font-medium text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-                aria-label="Rensa: börja en ny konversation"
-                title="Rensa: börja en ny konversation"
+                aria-label={t('clear_title')}
+                title={t('clear_title')}
               >
                 <Eraser className="h-4 w-4" />
-                Rensa
+                {t('clear')}
               </button>
             )}
             <button
               onClick={handleCollapse}
               className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-              aria-label="Minimera"
-              title="Minimera: behåll sessionen"
+              aria-label={t('minimize')}
+              title={t('minimize_title')}
             >
               <PanelRightClose className="h-4 w-4" />
             </button>
             <button
               onClick={onClose}
               className="h-9 w-9 inline-flex items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
-              aria-label="Stäng"
-              title="Avsluta sessionen"
+              aria-label={t('close')}
+              title={t('end_session')}
             >
               <X className="h-4 w-4" />
             </button>
@@ -786,7 +789,7 @@ export default function AgentSheet({
         />
       ) : loadingConversation ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Öppnar konversation…
+          <Loader2 className="h-4 w-4 animate-spin" /> {t('opening')}
         </div>
       ) : loadError ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">
@@ -795,7 +798,7 @@ export default function AgentSheet({
             onClick={() => setView('list')}
             className="text-xs font-medium text-foreground hover:underline"
           >
-            Tillbaka till konversationer
+            {t('back_to_conversations')}
           </button>
         </div>
       ) : loaded ? (

@@ -18,12 +18,12 @@ import {
 import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import { sendFeedback, type FeedbackSentiment } from './feedback-client'
@@ -257,6 +257,7 @@ export default function AgentChat({
   // resumed thread or a deep link: never fire an invoke that answers 503.
   const assistantAvailable = useAssistantAvailable()
   const tChat = useTranslations('agent_chat')
+  const errorLocale = useLocale() as ErrorLocale
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   // Turn boundaries for the status channel are derived from the streaming flag
@@ -274,13 +275,19 @@ export default function AgentChat({
       turnOpenRef.current = true
       turnStartRef.current = messagesRef.current.length
       onStatus?.({ type: 'turn_start' })
-      setAnnouncement('Assistenten skriver ett svar.')
+      setAnnouncement(tChat('announce_writing'))
     } else if (turnOpenRef.current) {
       turnOpenRef.current = false
       onStatus?.({ type: 'turn_end' })
-      setAnnouncement(announceableAnswer(messagesRef.current.slice(turnStartRef.current)))
+      setAnnouncement(
+        announceableAnswer(messagesRef.current.slice(turnStartRef.current), {
+          interrupted: tChat('announce_interrupted'),
+          done: tChat('announce_done'),
+          continues: tChat('announce_continues'),
+        }),
+      )
     }
-  }, [streaming, onStatus])
+  }, [streaming, onStatus, tChat])
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   // True between a stream_restart event and the retried stream's first sign of
   // life: renders a discreet "Försöker igen…" line so the reset bubble doesn't
@@ -427,7 +434,7 @@ export default function AgentChat({
       })
     } catch (err) {
       if (signal.aborted) return false
-      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte nå assistenten.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err, { locale: errorLocale }) : tChat('error_unreachable'))
       setStreaming(false)
       activeControllerRef.current = null
       return false
@@ -436,7 +443,7 @@ export default function AgentChat({
     if (!response.ok || !response.body) {
       // Surface the server's friendly Swedish message (rate-limit sentence,
       // "ingen aktiv firma", etc.) rather than a raw "HTTP 429".
-      let msg = 'Kunde inte nå assistenten. Försök igen om en stund.'
+      let msg = tChat('error_unreachable_retry')
       try {
         const errBody = await response.json()
         if (errBody && typeof errBody.error === 'string' && errBody.error.trim()) {
@@ -510,11 +517,11 @@ export default function AgentChat({
       // the user did not abort, the function was cut off mid-turn (duration
       // cap, proxy drop): say so instead of presenting silence as success.
       if (!sawTerminalEvent && !signal.aborted) {
-        setErrorMessage('Anslutningen bröts innan svaret blev klart. Försök igen.')
+        setErrorMessage(tChat('error_connection_cut'))
       }
     } catch (err) {
       if (!signal.aborted) {
-        setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Streamen avbröts.')
+        setErrorMessage(err instanceof Error ? getUserErrorMessage(err, { locale: errorLocale }) : tChat('error_stream_aborted'))
       }
     } finally {
       try {
@@ -602,9 +609,7 @@ export default function AgentChat({
       if (withdrawn.some((ok) => !ok)) {
         // Leave the turn on screen: hiding a card whose operation is still
         // pending is the failure mode this whole change exists to remove.
-        setErrorMessage(
-          'Kunde inte dra tillbaka det tidigare förslaget, så svaret behölls. Försök igen.',
-        )
+        setErrorMessage(tChat('error_withdraw_failed'))
         return
       }
 
@@ -698,7 +703,7 @@ export default function AgentChat({
         breakBeforeNextTextRef.current = true
         // Same label the in-thread chip shows, so a hidden panel and a visible
         // one describe the step identically.
-        onStatus?.({ type: 'step', label: prettyToolName(ev.name as string) })
+        onStatus?.({ type: 'step', label: prettyToolName(ev.name as string, tChat) })
         setMessages((prev) =>
           updateLastAssistant(prev, (m) => ({
             ...m,
@@ -886,7 +891,7 @@ export default function AgentChat({
 
         {retryNotice && !errorMessage && (
           <div className="text-xs text-muted-foreground px-1">
-            Anslutningen bröts, försöker igen…
+            {tChat('retry_notice')}
           </div>
         )}
 
@@ -904,7 +909,7 @@ export default function AgentChat({
           className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-[var(--shadow-md)] hover:bg-secondary/60 transition-colors"
         >
           <ArrowDown className="h-3 w-3" />
-          Nytt svar
+          {tChat('new_answer')}
         </button>
       )}
       </div>
@@ -920,7 +925,7 @@ export default function AgentChat({
             disabled={clearingProposals}
             className="text-xs text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
           >
-            {clearingProposals ? 'Rensar…' : 'Rensa förslag som inte godkänts'}
+            {clearingProposals ? tChat('clearing_proposals') : tChat('clear_proposals')}
           </button>
         </div>
       )}
@@ -930,7 +935,7 @@ export default function AgentChat({
           deep link to /chat/*) never offers an input that can't send. */}
       {!hasAi ? (
         <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
-          <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
+          <UpgradeNote>{tChat('requires_subscription')}</UpgradeNote>
         </div>
       ) : !assistantAvailable ? (
         /* No tool-loop runtime on this deployment (#2204): same swap as the
@@ -957,7 +962,7 @@ export default function AgentChat({
             ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Skriv din fråga…"
+            placeholder={tChat('input_placeholder')}
             rows={1}
             className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto"
             onKeyDown={(e) => {
@@ -975,8 +980,8 @@ export default function AgentChat({
               size="icon"
               variant="outline"
               onClick={handleStop}
-              aria-label="Avbryt"
-              title="Avbryt strömning"
+              aria-label={tChat('stop_aria')}
+              title={tChat('stop_title')}
             >
               <Square className="h-3.5 w-3.5 fill-current" />
             </Button>
@@ -985,14 +990,14 @@ export default function AgentChat({
               type="submit"
               size="icon"
               disabled={input.trim().length === 0}
-              aria-label="Skicka"
+              aria-label={tChat('send_aria')}
             >
               <Send className="h-4 w-4" />
             </Button>
           )}
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Enter att skicka · Shift+Enter för ny rad
+          {tChat('composer_hint')}
         </p>
       </form>
       )}
@@ -1026,6 +1031,7 @@ function MessageBubble({
   const isThinking = !isUser && streamingTail && !message.text && !!message.reasoning
   const hideEmptyBubble = (!isUser && !message.text && !streamingTail) || isThinking
   const markdownLoaded = useMarkdownReady()
+  const t = useTranslations('agent_chat')
   return (
     <div
       className={cn('group/msg flex flex-col gap-2', isUser ? 'items-end' : 'items-start')}
@@ -1063,7 +1069,7 @@ function MessageBubble({
 
       {message.interrupted && (
         <p className="text-[11px] text-muted-foreground border-t border-dashed border-border pt-1.5">
-          Avbrutet. Det som hann skrivas står kvar.
+          {t('interrupted_marker')}
         </p>
       )}
 
@@ -1084,7 +1090,7 @@ function MessageBubble({
               ) : (
                 <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
               )}
-              {prettyToolName(tc.name)}
+              {prettyToolName(tc.name, t)}
             </span>
           ))}
         </div>
@@ -1119,7 +1125,7 @@ function MessageBubble({
                 key={s.tool_use_id}
                 className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
               >
-                Förslag stageat men ingen operation-id mottagen. Granska i accounted under <em>Förslag</em>.
+                {t.rich('staged_without_id', { em: (chunks) => <em>{chunks}</em> })}
               </div>
             ),
           )}
@@ -1159,6 +1165,7 @@ function MessageActions({
   onRegenerate?: () => void
   onVote?: (sentiment: FeedbackSentiment) => Promise<boolean>
 }) {
+  const t = useTranslations('agent_chat')
   const [copied, setCopied] = useState(false)
   const [vote, setVote] = useState<'up' | 'down' | null>(null)
   const [voting, setVoting] = useState(false)
@@ -1173,8 +1180,8 @@ function MessageActions({
 
   useEffect(() => {
     if (!copied) return
-    const t = setTimeout(() => setCopied(false), 2000)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setCopied(false), 2000)
+    return () => clearTimeout(timer)
   }, [copied])
 
   async function handleCopy() {
@@ -1192,36 +1199,36 @@ function MessageActions({
 
   return (
     <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
-      <button type="button" onClick={handleCopy} className={btn} title="Kopiera svaret">
+      <button type="button" onClick={handleCopy} className={btn} title={t('copy_title')}>
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-        {copied ? 'Kopierat' : 'Kopiera'}
+        {copied ? t('copied') : t('copy')}
       </button>
       <button
         type="button"
         onClick={() => handleVote('up')}
         disabled={voting || !onVote}
         className={cn(btn, vote === 'up' && 'text-foreground', voting && 'opacity-60')}
-        title="Bra svar"
+        title={t('vote_good')}
         aria-pressed={vote === 'up'}
       >
         <ThumbsUp className="h-3 w-3" />
-        <span className="sr-only">Bra svar</span>
+        <span className="sr-only">{t('vote_good')}</span>
       </button>
       <button
         type="button"
         onClick={() => handleVote('down')}
         disabled={voting || !onVote}
         className={cn(btn, vote === 'down' && 'text-foreground', voting && 'opacity-60')}
-        title="Dåligt svar"
+        title={t('vote_bad')}
         aria-pressed={vote === 'down'}
       >
         <ThumbsDown className="h-3 w-3" />
-        <span className="sr-only">Dåligt svar</span>
+        <span className="sr-only">{t('vote_bad')}</span>
       </button>
       {onRegenerate && (
-        <button type="button" onClick={onRegenerate} className={btn} title="Generera om svaret">
+        <button type="button" onClick={onRegenerate} className={btn} title={t('regenerate_title')}>
           <RotateCw className="h-3 w-3" />
-          Generera om
+          {t('regenerate')}
         </button>
       )}
     </div>
@@ -1233,8 +1240,9 @@ function MessageActions({
 // Stays only until the first text_delta lands, then the message body takes
 // over.
 function Cursor() {
+  const t = useTranslations('agent_chat')
   return (
-    <span className="inline-flex items-center gap-1 align-middle" aria-label="Skriver" role="status">
+    <span className="inline-flex items-center gap-1 align-middle" aria-label={t('typing_aria')} role="status">
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground/50 animate-typing-dot" style={{ animationDelay: '0ms' }} />
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground/50 animate-typing-dot" style={{ animationDelay: '150ms' }} />
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground/50 animate-typing-dot" style={{ animationDelay: '300ms' }} />
@@ -1247,6 +1255,7 @@ function Cursor() {
 // in place of the typing cursor. Once the answer starts it collapses to a
 // quiet toggle so the reply stays the focus and the surface stays calm.
 function ReasoningBlock({ reasoning, active }: { reasoning: string; active: boolean }) {
+  const t = useTranslations('agent_chat')
   const [open, setOpen] = useState(false)
   const show = open || active
   return (
@@ -1262,7 +1271,7 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
         ) : (
           <Brain className="h-3 w-3" />
         )}
-        {active ? 'Tänker…' : show ? 'Dölj resonemang' : 'Visa resonemang'}
+        {active ? t('thinking') : show ? t('hide_reasoning') : t('show_reasoning')}
       </button>
       {show && (
         <div className="mt-1.5 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs leading-5 text-muted-foreground whitespace-pre-wrap">
@@ -1273,17 +1282,29 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
   )
 }
 
-const MEMORY_KIND_LABEL: Record<'fact' | 'preference' | 'pattern' | 'correction', string> = {
-  fact: 'Fakta',
-  preference: 'Preferens',
-  pattern: 'Mönster',
-  correction: 'Korrigering',
+type AgentChatTranslator = ReturnType<typeof useTranslations<'agent_chat'>>
+
+function memoryKindLabel(
+  kind: 'fact' | 'preference' | 'pattern' | 'correction',
+  t: AgentChatTranslator,
+): string {
+  switch (kind) {
+    case 'fact':
+      return t('memory_kind_fact')
+    case 'preference':
+      return t('memory_kind_preference')
+    case 'pattern':
+      return t('memory_kind_pattern')
+    case 'correction':
+      return t('memory_kind_correction')
+  }
 }
 
 function MemoryChip({ event }: { event: MemoryEvent }) {
+  const t = useTranslations('agent_chat')
   const Icon = event.action === 'remembered' ? BookmarkCheck : BookmarkX
-  const verb = event.action === 'remembered' ? 'Sparat som minne' : 'Glömt minne'
-  const kindLabel = event.memory_kind ? MEMORY_KIND_LABEL[event.memory_kind] : null
+  const verb = event.action === 'remembered' ? t('memory_remembered') : t('memory_forgotten')
+  const kindLabel = event.memory_kind ? memoryKindLabel(event.memory_kind, t) : null
   const snippet = event.content
     ? event.content.length > 140
       ? `${event.content.slice(0, 140).trim()}…`
@@ -1293,7 +1314,7 @@ function MemoryChip({ event }: { event: MemoryEvent }) {
     <Link
       href="/agent-knowledge?view=memory"
       className="group inline-flex items-start gap-2 rounded-lg border border-border bg-card px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-foreground/30 hover:text-foreground"
-      title="Visa i Assistentens minne"
+      title={t('memory_view_title')}
     >
       <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground/70" />
       <span className="flex-1 min-w-0">
@@ -1334,59 +1355,93 @@ function updateLastAssistant(
   return [...prev.slice(0, -1), update(last)]
 }
 
-// Swedish present-progressive labels for the most common MCP tools, so the
-// inline badge reads as "what the agent is doing right now" rather than
-// dumping the raw tool slug. Anything not in the map falls back to a
-// humanized stem ("gnubok_foo_bar" → "kör foo bar…").
-const TOOL_BADGE_LABELS: Record<string, string> = {
-  // Discovery
-  gnubok_search_tools: 'Letar efter verktyg…',
-  gnubok_list_skills: 'Letar bland kunskap…',
-  gnubok_load_skill: 'Slår upp regelverk…',
-  // Reading / context
-  gnubok_get_document_content: 'Läser underlaget…',
-  gnubok_get_counterparty_templates: 'Letar i mottagar­mallar…',
-  gnubok_get_supplier_ledger: 'Hämtar leverantörshistorik…',
-  gnubok_get_ar_ledger: 'Hämtar kundreskontra…',
-  gnubok_get_trial_balance: 'Hämtar saldobalans…',
-  gnubok_get_balance_sheet: 'Hämtar balansräkning…',
-  gnubok_get_income_statement: 'Hämtar resultatrapport…',
-  gnubok_get_general_ledger: 'Slår i huvudboken…',
-  gnubok_get_kpi_report: 'Beräknar nyckeltal…',
-  gnubok_get_vat_report: 'Hämtar momsrapport…',
-  gnubok_vat_close_check: 'Kontrollerar momsperiod…',
-  gnubok_query_journal: 'Söker i bokföringen…',
-  gnubok_year_end_readiness: 'Kontrollerar bokslutsläge…',
-  gnubok_list_customers: 'Söker bland kunder…',
-  gnubok_list_invoices: 'Listar fakturor…',
-  // Writes (staged)
-  gnubok_categorize_transaction: 'Förbereder bokning…',
-  gnubok_match_transaction_to_invoice: 'Matchar mot faktura…',
-  gnubok_create_customer: 'Skapar kund…',
-  gnubok_create_invoice: 'Förbereder faktura…',
-  gnubok_create_voucher: 'Förbereder verifikation…',
-  gnubok_create_transactions: 'Förbereder transaktioner…',
-  gnubok_approve_supplier_invoice: 'Stagear attestering…',
-  gnubok_credit_supplier_invoice: 'Förbereder kreditfaktura…',
-  gnubok_propose_accruals: 'Räknar fram periodiseringar…',
-  gnubok_propose_annual_depreciation: 'Beräknar avskrivningar…',
-  gnubok_propose_dispositioner: 'Förbereder dispositioner…',
-  gnubok_preview_arsredovisning: 'Förhandsgranskar årsredovisning…',
-  gnubok_preview_ef_declaration: 'Förbereder NE-bilaga…',
-  gnubok_post_annual_depreciation: 'Bokar avskrivningar…',
-  gnubok_list_assets: 'Hämtar anläggningsregistret…',
-  gnubok_get_asset: 'Hämtar tillgång…',
-  gnubok_create_asset: 'Registrerar tillgång…',
-  gnubok_update_asset: 'Uppdaterar tillgång…',
-  gnubok_dispose_asset: 'Bokar avyttring…',
-  // Memory
-  gnubok_remember_fact: 'Sparar i minnet…',
-  gnubok_forget_fact: 'Tar bort från minnet…',
-}
-
-function prettyToolName(name: string): string {
-  if (TOOL_BADGE_LABELS[name]) return TOOL_BADGE_LABELS[name]
-  return `kör ${name.replace(/^gnubok_/, '').replace(/_/g, ' ')}…`
+// Present-progressive labels for the most common MCP tools, so the inline
+// badge reads as "what the agent is doing right now" rather than dumping the
+// raw tool slug. Anything not listed falls back to a humanized stem
+// ("gnubok_foo_bar" -> "kör foo bar…").
+function prettyToolName(name: string, t: AgentChatTranslator): string {
+  switch (name) {
+    case 'gnubok_search_tools':
+      return t('tool_search_tools')
+    case 'gnubok_list_skills':
+      return t('tool_list_skills')
+    case 'gnubok_load_skill':
+      return t('tool_load_skill')
+    case 'gnubok_get_document_content':
+      return t('tool_get_document_content')
+    case 'gnubok_get_counterparty_templates':
+      return t('tool_get_counterparty_templates')
+    case 'gnubok_get_supplier_ledger':
+      return t('tool_get_supplier_ledger')
+    case 'gnubok_get_ar_ledger':
+      return t('tool_get_ar_ledger')
+    case 'gnubok_get_trial_balance':
+      return t('tool_get_trial_balance')
+    case 'gnubok_get_balance_sheet':
+      return t('tool_get_balance_sheet')
+    case 'gnubok_get_income_statement':
+      return t('tool_get_income_statement')
+    case 'gnubok_get_general_ledger':
+      return t('tool_get_general_ledger')
+    case 'gnubok_get_kpi_report':
+      return t('tool_get_kpi_report')
+    case 'gnubok_get_vat_report':
+      return t('tool_get_vat_report')
+    case 'gnubok_vat_close_check':
+      return t('tool_vat_close_check')
+    case 'gnubok_query_journal':
+      return t('tool_query_journal')
+    case 'gnubok_year_end_readiness':
+      return t('tool_year_end_readiness')
+    case 'gnubok_list_customers':
+      return t('tool_list_customers')
+    case 'gnubok_list_invoices':
+      return t('tool_list_invoices')
+    case 'gnubok_categorize_transaction':
+      return t('tool_categorize_transaction')
+    case 'gnubok_match_transaction_to_invoice':
+      return t('tool_match_transaction_to_invoice')
+    case 'gnubok_create_customer':
+      return t('tool_create_customer')
+    case 'gnubok_create_invoice':
+      return t('tool_create_invoice')
+    case 'gnubok_create_voucher':
+      return t('tool_create_voucher')
+    case 'gnubok_create_transactions':
+      return t('tool_create_transactions')
+    case 'gnubok_approve_supplier_invoice':
+      return t('tool_approve_supplier_invoice')
+    case 'gnubok_credit_supplier_invoice':
+      return t('tool_credit_supplier_invoice')
+    case 'gnubok_propose_accruals':
+      return t('tool_propose_accruals')
+    case 'gnubok_propose_annual_depreciation':
+      return t('tool_propose_annual_depreciation')
+    case 'gnubok_propose_dispositioner':
+      return t('tool_propose_dispositioner')
+    case 'gnubok_preview_arsredovisning':
+      return t('tool_preview_arsredovisning')
+    case 'gnubok_preview_ef_declaration':
+      return t('tool_preview_ef_declaration')
+    case 'gnubok_post_annual_depreciation':
+      return t('tool_post_annual_depreciation')
+    case 'gnubok_list_assets':
+      return t('tool_list_assets')
+    case 'gnubok_get_asset':
+      return t('tool_get_asset')
+    case 'gnubok_create_asset':
+      return t('tool_create_asset')
+    case 'gnubok_update_asset':
+      return t('tool_update_asset')
+    case 'gnubok_dispose_asset':
+      return t('tool_dispose_asset')
+    case 'gnubok_remember_fact':
+      return t('tool_remember_fact')
+    case 'gnubok_forget_fact':
+      return t('tool_forget_fact')
+    default:
+      return t('tool_fallback', { name: name.replace(/^gnubok_/, '').replace(/_/g, ' ') })
+  }
 }
 
 // Helper used by /chat/[id] server component to normalize agent_messages
@@ -1480,18 +1535,34 @@ export function normalizeStoredMessages(
  * included, so the promise the constant makes is the one the output keeps.
  */
 export const ANNOUNCEMENT_LIMIT = 400
-const CONTINUES = '… Svaret fortsätter i meddelandet.'
 
-export function announceableAnswer(messages: ChatMessage[]): string {
+/** Announcement copy; the component passes the active locale's strings. */
+export interface AnnouncementLabels {
+  interrupted: string
+  done: string
+  continues: string
+}
+
+// Swedish defaults for callers without a translator (tests, non-React use).
+const DEFAULT_ANNOUNCEMENT_LABELS: AnnouncementLabels = {
+  interrupted: 'Assistenten avbröts. Ett ofullständigt svar står i meddelandet.',
+  done: 'Assistenten är klar.',
+  continues: '… Svaret fortsätter i meddelandet.',
+}
+
+export function announceableAnswer(
+  messages: ChatMessage[],
+  labels: AnnouncementLabels = DEFAULT_ANNOUNCEMENT_LABELS,
+): string {
   const last = [...messages].reverse().find((m) => m.role === 'assistant')
 
   // Stop leaves the partial text in place with a visible marker. Reading it
   // out as a finished answer would tell a screen-reader user the opposite of
   // what the marker tells everyone else.
-  if (last?.interrupted) return 'Assistenten avbröts. Ett ofullständigt svar står i meddelandet.'
+  if (last?.interrupted) return labels.interrupted
 
   const text = last?.text?.trim()
-  if (!text) return 'Assistenten är klar.'
+  if (!text) return labels.done
   if (text.length <= ANNOUNCEMENT_LIMIT) return text
-  return text.slice(0, ANNOUNCEMENT_LIMIT - CONTINUES.length).trimEnd() + CONTINUES
+  return text.slice(0, ANNOUNCEMENT_LIMIT - labels.continues.length).trimEnd() + labels.continues
 }

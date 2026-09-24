@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { HelpPopover } from '@/components/ui/help-popover'
 
 interface RattelseExplainerProps {
@@ -14,8 +15,7 @@ interface RattelseExplainerProps {
  * for the "a posted verifikat cannot be edited directly" framing, so the four
  * dialogs stop maintaining near-duplicate inline paragraphs. Rendered next to
  * the DialogTitle per UI-migration convention 7 (help lives behind a "?",
- * not in the dialog flow: see MatchVoucherDialog). Stays Swedish
- * (verifikat surface, .claude/rules/i18n.md).
+ * not in the dialog flow: see MatchVoucherDialog).
  *
  * Only the universally true framing lives here. The audit-trail sentence is
  * mechanism-specific (BFL 5 kap 5 §: two distinct correction tracks) and must
@@ -27,12 +27,10 @@ interface RattelseExplainerProps {
  * the storno paths.
  */
 export default function RattelseExplainer({ children, className }: RattelseExplainerProps) {
+  const t = useTranslations('rattelse_explainer')
   return (
     <HelpPopover className={className}>
-      <p>
-        En bokförd verifikation kan inte ändras direkt: enligt bokföringslagen
-        måste varje rättelse vara spårbar i efterhand.
-      </p>
+      <p>{t('framing')}</p>
       <div className="mt-2 space-y-2">{children}</div>
     </HelpPopover>
   )

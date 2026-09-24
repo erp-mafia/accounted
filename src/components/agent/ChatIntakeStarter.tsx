@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import AgentChat from './AgentChat'
 import AgentAvatar from './AgentAvatar'
 import SandboxAgentPreview from './SandboxAgentPreview'
@@ -17,11 +18,12 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 //
 // Plan refs: §7 Phase C.
 export default function ChatIntakeStarter() {
+  const t = useTranslations('chat_intake_starter')
   const router = useRouter()
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
-  const agentName = identity.displayName?.trim() || 'Din assistent'
+  const agentName = identity.displayName?.trim() || t('default_agent_name')
   // Lock the swap to the first id we see: defensive guard against the
   // AgentChat callback firing twice during React 19 Strict Mode reruns.
   const [swapped, setSwapped] = useState(false)
@@ -31,11 +33,11 @@ export default function ChatIntakeStarter() {
       <header className="flex items-center gap-3 border-b border-border px-6 py-4 shrink-0">
         <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName} />
         <div className="min-w-0">
-          <h1 className="font-display text-lg tracking-tight truncate">{agentName} är redo</h1>
+          <h1 className="font-display text-lg tracking-tight truncate">{t('ready', { name: agentName })}</h1>
           <p className="text-xs text-muted-foreground">
             {isSandbox
-              ? 'Förhandsvisning: den verkliga konversationen kräver ett konto.'
-              : 'Några frågor för att lära känna din verksamhet: svara i din egen takt, du kan avsluta när du vill.'}
+              ? t('sandbox_preview')
+              : t('intro')}
           </p>
         </div>
       </header>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 
 // `createClient()` returns a fresh object on every call, so we keep the
@@ -46,6 +47,7 @@ export default function BankTransactionPicker({
   targetCurrency,
   onPick,
 }: BankTransactionPickerProps) {
+  const t = useTranslations('bank_transaction_picker')
   const { company } = useCompany()
   const [transactions, setTransactions] = useState<BankTransaction[]>([])
   const [isLoading, setIsLoading] = useState(false)
@@ -109,9 +111,9 @@ export default function BankTransactionPicker({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Välj banktransaktion</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Välj den utgående banktransaktion som motsvarar denna faktura. Fakturan registreras och markeras som betald i ett steg.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -119,7 +121,7 @@ export default function BankTransactionPicker({
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             autoFocus
-            placeholder="Sök på beskrivning..."
+            placeholder={t('search_placeholder')}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="pl-10"
@@ -130,14 +132,14 @@ export default function BankTransactionPicker({
           {isLoading ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              Laddar transaktioner…
+              {t('loading')}
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-sm text-muted-foreground">
               <ArrowDownRight className="h-8 w-8 mb-2" />
               {transactions.length === 0
-                ? 'Inga okategoriserade utgifts­transaktioner hittades.'
-                : `Inga transaktioner matchar "${searchTerm}".`}
+                ? t('empty')
+                : t('no_search_matches', { term: searchTerm })}
             </div>
           ) : (
             filtered.map((tx) => {
@@ -162,14 +164,14 @@ export default function BankTransactionPicker({
                         {formatCurrency(tx.amount, tx.currency)}
                       </p>
                       {isExact ? (
-                        <p className="text-xs text-success">Belopp matchar</p>
+                        <p className="text-xs text-success">{t('amount_matches')}</p>
                       ) : diff != null && targetAmount > 0 ? (
                         <p className="text-xs text-muted-foreground">
-                          Diff {formatCurrency(diff, tx.currency)}
+                          {t('diff', { amount: formatCurrency(diff, tx.currency) })}
                         </p>
                       ) : !sameCurrency ? (
                         <p className="text-xs text-muted-foreground">
-                          Annan valuta
+                          {t('other_currency')}
                         </p>
                       ) : null}
                     </div>
@@ -182,7 +184,7 @@ export default function BankTransactionPicker({
 
         <div className="flex justify-end pt-2">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Avbryt
+            {t('cancel')}
           </Button>
         </div>
       </DialogContent>

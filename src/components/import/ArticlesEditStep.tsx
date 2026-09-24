@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -31,10 +32,7 @@ interface ArticlesEditStepProps {
   notices?: ImportNotice[]
 }
 
-const TYPE_LABELS: Record<ArticleType, string> = {
-  vara: 'Vara',
-  tjanst: 'Tjänst',
-}
+const ARTICLE_TYPES: ArticleType[] = ['vara', 'tjanst']
 
 const VAT_RATES = [25, 12, 6, 0] as const
 
@@ -46,6 +44,8 @@ export default function ArticlesEditStep({
   error,
   notices = [],
 }: ArticlesEditStepProps) {
+  const t = useTranslations('articles_edit_step')
+  const tc = useTranslations('common')
   const [rows, setRows] = useState<EditableArticleRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
@@ -81,9 +81,9 @@ export default function ArticlesEditStep({
     updateRow(id, {
       price_excl_vat: price,
       is_valid: price >= 0,
-      validation_errors: price < 0 ? ['Priset kan inte vara negativt'] : [],
+      validation_errors: price < 0 ? [t('price_negative')] : [],
     })
-  }, [updateRow])
+  }, [updateRow, t])
 
   const handleExecute = () => {
     if (!canContinue) return
@@ -94,11 +94,12 @@ export default function ArticlesEditStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Granska artiklar</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Kontrollera att uppgifterna stämmer. Du kan justera benämning, typ, pris och moms
-          inline, eller ta bort rader. {newCount} ny{newCount === 1 ? '' : 'a'} artik{newCount === 1 ? 'el' : 'lar'} skapas
-          {liveDuplicateCount > 0 ? ` och ${liveDuplicateCount} matchar befintliga.` : '.'}
+          {t('description')}{' '}
+          {liveDuplicateCount > 0
+            ? t('new_count_with_duplicates', { count: newCount, duplicates: liveDuplicateCount })
+            : t('new_count', { count: newCount })}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -108,8 +109,10 @@ export default function ArticlesEditStep({
             <RefreshCw className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
-                <span className="font-medium">{liveDuplicateCount} rader</span> matchar befintliga
-                artiklar (på artikelnummer eller benämning).
+                {t.rich('duplicates_banner', {
+                  count: liveDuplicateCount,
+                  b: (chunks) => <span className="font-medium">{chunks}</span>,
+                })}
               </p>
               <div className="flex items-center gap-3">
                 <Switch
@@ -119,13 +122,13 @@ export default function ArticlesEditStep({
                 />
                 <Label htmlFor="update-duplicates" className="text-sm cursor-pointer">
                   {updateDuplicates
-                    ? 'Uppdatera befintliga artiklar med ny information'
-                    : 'Hoppa över befintliga artiklar'}
+                    ? t('update_existing')
+                    : t('skip_existing')}
                 </Label>
               </div>
               {updateDuplicates && (
                 <p className="text-xs text-muted-foreground">
-                  Endast fält med värden i filen skrivs över. Typ, enhet och moms lämnas orörda.
+                  {t('update_existing_hint')}
                 </p>
               )}
             </div>
@@ -148,12 +151,12 @@ export default function ArticlesEditStep({
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
-                <th className="px-3 py-2 text-left w-28">Art.nr</th>
-                <th className="px-3 py-2 text-left">Benämning</th>
-                <th className="px-3 py-2 text-left w-28">Typ</th>
-                <th className="px-3 py-2 text-right w-28">Pris exkl moms</th>
-                <th className="px-3 py-2 text-left w-24">Moms</th>
-                <th className="px-3 py-2 text-left w-28">Status</th>
+                <th className="px-3 py-2 text-left w-28">{t('col_article_number')}</th>
+                <th className="px-3 py-2 text-left">{t('col_name')}</th>
+                <th className="px-3 py-2 text-left w-28">{t('col_type')}</th>
+                <th className="px-3 py-2 text-right w-28">{t('col_price_excl_vat')}</th>
+                <th className="px-3 py-2 text-left w-24">{t('col_vat')}</th>
+                <th className="px-3 py-2 text-left w-28">{t('col_status')}</th>
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>
@@ -164,7 +167,7 @@ export default function ArticlesEditStep({
                   className={cn('border-b last:border-0', !row.is_valid && 'bg-destructive/5')}
                 >
                   <td className="px-3 py-1.5 text-muted-foreground tabular-nums">
-                    {row.article_number || 'Auto'}
+                    {row.article_number || t('auto_number')}
                   </td>
                   <td className="px-3 py-1.5">
                     <Input
@@ -182,9 +185,9 @@ export default function ArticlesEditStep({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(Object.keys(TYPE_LABELS) as ArticleType[]).map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {TYPE_LABELS[t]}
+                        {ARTICLE_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {type === 'vara' ? t('type_goods') : t('type_service')}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -228,7 +231,7 @@ export default function ArticlesEditStep({
                       {row.vat_rate_adjusted && (
                         <span
                           className="text-warning shrink-0"
-                          title="Momssatsen tolkades om från filen: kontrollera att den stämmer."
+                          title={t('vat_reinterpreted_title')}
                         >
                           <AlertTriangle className="h-3.5 w-3.5" />
                         </span>
@@ -253,13 +256,13 @@ export default function ArticlesEditStep({
                               ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
                           )}
-                          title={`Matchar ${row.duplicate_match.existing_name} (${row.duplicate_match.matched_by})`}
+                          title={t('matches_title', { name: row.duplicate_match.existing_name, matchedBy: row.duplicate_match.matched_by })}
                         >
-                          {updateDuplicates ? 'Uppdateras' : 'Hoppas över'}
+                          {updateDuplicates ? t('status_updates') : t('status_skipped')}
                         </span>
                       ) : (
                         <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
-                          Ny
+                          {t('status_new')}
                         </span>
                       )}
                     </div>
@@ -268,7 +271,7 @@ export default function ArticlesEditStep({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label="Ta bort rad"
+                      aria-label={t('delete_row')}
                       onClick={() => deleteRow(row.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -291,12 +294,12 @@ export default function ArticlesEditStep({
 
         <div className="flex justify-between pt-2">
           <Button variant="ghost" onClick={onBack} disabled={isLoading}>
-            Tillbaka
+            {tc('back')}
           </Button>
           <Button onClick={handleExecute} disabled={!canContinue} loading={isLoading}>
             {isLoading
-              ? 'Importerar...'
-              : `Importera ${rows.length} rad${rows.length === 1 ? '' : 'er'}`}
+              ? t('importing')
+              : t('import_rows', { count: rows.length })}
           </Button>
         </div>
       </CardContent>

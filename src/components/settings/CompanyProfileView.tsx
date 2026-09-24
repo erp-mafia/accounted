@@ -1,3 +1,4 @@
+import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { formatDate } from '@/lib/utils'
 import { SettingsRow, SettingsRowNote } from '@/components/settings/SettingsRows'
@@ -71,33 +72,33 @@ function cleanSignatory(raw: string | null | undefined): string[] {
 }
 
 export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | null }) {
+  const t = useTranslations('company_profile_view')
   if (!snapshot) {
     // Dynamic status (nothing fetched yet): stays visible as a quiet line.
     return (
       <p className="border-b border-border px-1 py-3 text-sm text-muted-foreground">
-        Inga företagsuppgifter hämtade ännu. Uppgifterna hämtas automatiskt
-        från Bolagsverket via organisationsnumret.
+        {t('no_snapshot')}
       </p>
     )
   }
 
   const entityLabel =
     snapshot.legalEntityType === 'AB'
-      ? 'Aktiebolag'
+      ? t('entity_ab')
       : snapshot.legalEntityType === 'EF'
-        ? 'Enskild firma'
+        ? t('entity_ef')
         : snapshot.legalEntityType ?? null
 
   const reg = snapshot.registration
   const regBadges = [
-    reg?.fTax ? 'F-skatt' : null,
-    reg?.vat ? 'Moms' : null,
-    reg?.payroll ? 'Arbetsgivare' : null,
+    reg?.fTax ? t('reg_f_tax') : null,
+    reg?.vat ? t('reg_vat') : null,
+    reg?.payroll ? t('reg_employer') : null,
   ].filter(Boolean) as string[]
 
   const fyLabel =
     snapshot.fiscalYear?.startMonthDay && snapshot.fiscalYear?.endMonthDay
-      ? `${snapshot.fiscalYear.startMonthDay} till ${snapshot.fiscalYear.endMonthDay}`
+      ? t('fiscal_year_range', { start: snapshot.fiscalYear.startMonthDay, end: snapshot.fiscalYear.endMonthDay })
       : null
 
   // Only show dated status entries: Bolagsverket emits informational
@@ -117,8 +118,8 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
 
   return (
     <>
-      <SettingsRow label="Företag">
-        <span className="text-foreground">{snapshot.companyName ?? 'Okänt företag'}</span>
+      <SettingsRow label={t('label_company')}>
+        <span className="text-foreground">{snapshot.companyName ?? t('unknown_company')}</span>
         {(snapshot.orgNumber || entityLabel) && (
           <SettingsRowNote className="tabular-nums">
             {[snapshot.orgNumber, entityLabel].filter(Boolean).join(' · ')}
@@ -127,7 +128,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       </SettingsRow>
 
       {snapshot.address && (
-        <SettingsRow label="Adress">
+        <SettingsRow label={t('label_address')}>
           <span className="text-muted-foreground">
             {[
               snapshot.address.street,
@@ -140,7 +141,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       )}
 
       {regBadges.length > 0 && (
-        <SettingsRow label="Registrerat för">
+        <SettingsRow label={t('label_registered_for')}>
           {regBadges.map((b) => (
             <Badge key={b} variant="secondary" className="font-normal">{b}</Badge>
           ))}
@@ -148,7 +149,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       )}
 
       {Array.isArray(snapshot.sniCodes) && snapshot.sniCodes.length > 0 && (
-        <SettingsRow label="SNI-koder" align="baseline">
+        <SettingsRow label={t('label_sni')} align="baseline">
           <ul className="w-full space-y-1">
             {snapshot.sniCodes.map((s) => (
               <li key={s.code} className="text-sm tabular-nums">
@@ -161,7 +162,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       )}
 
       {Array.isArray(snapshot.bankAccounts) && snapshot.bankAccounts.length > 0 && (
-        <SettingsRow label="Bankuppgifter" align="baseline">
+        <SettingsRow label={t('label_bank')} align="baseline">
           {/* Registry read-out, not a setting: without the note this row makes
               the bankgiro look configured while payment files and invoices
               read the editable fields under Fakturering. */}
@@ -175,52 +176,51 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
               ))}
             </ul>
             <SettingsRowNote className="block">
-              Enligt Bolagsverket. Fakturor och betalfiler använder bankuppgifterna
-              under Inställningar → Fakturering.
+              {t('bank_note')}
             </SettingsRowNote>
           </div>
         </SettingsRow>
       )}
 
       {snapshot.purpose && (
-        <SettingsRow label="Verksamhet" align="baseline">
+        <SettingsRow label={t('label_purpose')} align="baseline">
           <p className="text-sm leading-6 text-muted-foreground">{snapshot.purpose}</p>
         </SettingsRow>
       )}
 
-      <SettingsRow label="Anställda">
+      <SettingsRow label={t('label_employees')}>
         <span className="text-muted-foreground">
-          {snapshot.employeeRange ?? 'Inga anställda'}
+          {snapshot.employeeRange ?? t('no_employees')}
         </span>
       </SettingsRow>
 
-      <SettingsRow label="Senaste bokslut">
+      <SettingsRow label={t('label_latest_accounts')}>
         {snapshot.financials ? (
           <>
             <span>
-              <span className="text-muted-foreground">Nettoomsättning </span>
+              <span className="text-muted-foreground">{t('net_sales')} </span>
               <span className="tabular-nums">
                 {snapshot.financials.netSalesK != null
-                  ? `${snapshot.financials.netSalesK.toLocaleString('sv-SE')} tkr`
+                  ? t('amount_tkr', { amount: snapshot.financials.netSalesK.toLocaleString('sv-SE') })
                   : '-'}
               </span>
             </span>
             <span>
-              <span className="text-muted-foreground">Rörelseresultat </span>
+              <span className="text-muted-foreground">{t('operating_profit')} </span>
               <span className="tabular-nums">
                 {snapshot.financials.operatingProfitK != null
-                  ? `${snapshot.financials.operatingProfitK.toLocaleString('sv-SE')} tkr`
+                  ? t('amount_tkr', { amount: snapshot.financials.operatingProfitK.toLocaleString('sv-SE') })
                   : '-'}
               </span>
             </span>
           </>
         ) : (
-          <span className="text-muted-foreground">Inga finansiella uppgifter tillgängliga.</span>
+          <span className="text-muted-foreground">{t('no_financials')}</span>
         )}
       </SettingsRow>
 
       {datedStatuses.length > 0 && (
-        <SettingsRow label="Status" align="baseline">
+        <SettingsRow label={t('label_status')} align="baseline">
           <dl className="w-full space-y-1">
             {datedStatuses.map((s, i) => (
               <div key={`${s.code}-${i}`} className="flex items-center justify-between gap-3 text-sm">
@@ -237,13 +237,13 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       )}
 
       {fyLabel && (
-        <SettingsRow label="Räkenskapsår">
-          <span className="tabular-nums text-muted-foreground">Nuvarande: {fyLabel}</span>
+        <SettingsRow label={t('label_fiscal_year')}>
+          <span className="tabular-nums text-muted-foreground">{t('fiscal_year_current', { range: fyLabel })}</span>
         </SettingsRow>
       )}
 
       {signatoryRules.length > 0 && (
-        <SettingsRow label="Firmateckning" align="baseline">
+        <SettingsRow label={t('label_signatory')} align="baseline">
           <ul className="w-full space-y-1">
             {signatoryRules.map((rule, i) => (
               <li key={i} className="text-sm leading-6 text-muted-foreground">
@@ -255,16 +255,16 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
       )}
 
       {Array.isArray(snapshot.representatives) && snapshot.representatives.length > 0 && (
-        <SettingsRow label="Företrädare" align="baseline">
+        <SettingsRow label={t('label_representatives')} align="baseline">
           <div className="w-full">
             {snapshot.board && (
               <p className="mb-2 text-xs text-muted-foreground">
                 {[
                   snapshot.board.numberOfBoardMembers != null
-                    ? `${snapshot.board.numberOfBoardMembers} styrelseledamot/-ledamöter`
+                    ? t('board_members', { count: snapshot.board.numberOfBoardMembers })
                     : null,
                   snapshot.board.numberOfDeputyBoardMembers != null
-                    ? `${snapshot.board.numberOfDeputyBoardMembers} suppleant(er)`
+                    ? t('deputy_members', { count: snapshot.board.numberOfDeputyBoardMembers })
                     : null,
                 ]
                   .filter(Boolean)

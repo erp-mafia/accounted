@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import { createTheater, type TheaterAccount, type TheaterApi, type TheaterGroup, type TheaterParty } from '../engines/theater-engine'
 import { ImportProgress, type ImportProgressProps } from './ImportProgress'
 
@@ -37,6 +38,7 @@ interface TheaterProps {
  * the step drives it through the api (spawn, feed, register stage).
  */
 export function Theater({ model, lines, shown, settled, hold, progress, onApi, onCount, groupLabels, reviewLabel }: TheaterProps) {
+  const t = useTranslations('onboarding_theater')
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const onApiRef = useRef(onApi)
   const onCountRef = useRef(onCount)
@@ -62,6 +64,11 @@ export function Theater({ model, lines, shown, settled, hold, progress, onApi, o
       onCount: (n) => onCountRef.current?.(n),
       groupLabels,
       reviewLabel,
+      text: {
+        others: (group) => othersLabel(group, t),
+        vouchers: (count) => t('vouchers', { count }),
+        counterparty: t('counterparty'),
+      },
     })
     onApiRef.current(api)
     return () => {
@@ -94,4 +101,17 @@ export function Theater({ model, lines, shown, settled, hold, progress, onApi, o
       </div>
     </div>
   )
+}
+
+function othersLabel(group: TheaterGroup, t: ReturnType<typeof useTranslations>): string {
+  switch (group) {
+    case 'tillgangar':
+      return t('others_assets')
+    case 'skulder':
+      return t('others_liabilities')
+    case 'intakter':
+      return t('others_revenue')
+    case 'kostnader':
+      return t('others_costs')
+  }
 }

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Input } from '@/components/ui/input'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
@@ -25,6 +26,7 @@ export default function SupplierInvoicePicker({
   transaction,
   onSelect,
 }: SupplierInvoicePickerProps) {
+  const t = useTranslations('supplier_invoice_picker')
   const { company } = useCompany()
   const supabase = useMemo(() => createClient(), [])
   const [invoices, setInvoices] = useState<OpenSupplierInvoice[]>([])
@@ -111,7 +113,7 @@ export default function SupplierInvoicePicker({
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
         <Loader2 className="h-5 w-5 animate-spin mr-2" />
-        Laddar leverantörsfakturor...
+        {t('loading')}
       </div>
     )
   }
@@ -119,7 +121,7 @@ export default function SupplierInvoicePicker({
   if (invoices.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground">
-        <p className="text-sm">Inga öppna leverantörsfakturor att matcha mot.</p>
+        <p className="text-sm">{t('empty')}</p>
       </div>
     )
   }
@@ -129,7 +131,7 @@ export default function SupplierInvoicePicker({
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Sök fakturanummer eller leverantör..."
+          placeholder={t('search_placeholder')}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -165,16 +167,16 @@ export default function SupplierInvoicePicker({
                   <div className="flex items-center gap-2">
                     <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                     <span className="font-medium text-sm">
-                      {invoice.supplier_invoice_number ?? '(utan nummer)'}
+                      {invoice.supplier_invoice_number ?? t('no_number')}
                     </span>
                     {invoice.status === 'overdue' && (
                       <span className="text-[11px] uppercase tracking-wide text-destructive">
-                        Förfallen
+                        {t('overdue')}
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
                       <span className="text-[11px] uppercase tracking-wide text-attn">
-                        Delbetald
+                        {t('partially_paid')}
                       </span>
                     )}
                     {foreignCurrency && (
@@ -184,8 +186,8 @@ export default function SupplierInvoicePicker({
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                    {invoice.supplier?.name || 'Okänd leverantör'} · Förfaller{' '}
-                    {formatDate(invoice.due_date)}
+                    {invoice.supplier?.name || t('unknown_supplier')} ·{' '}
+                    {t('due', { date: formatDate(invoice.due_date) })}
                   </p>
                 </div>
                 <div className="text-right flex-shrink-0">
@@ -197,7 +199,7 @@ export default function SupplierInvoicePicker({
                   >
                     {formatCurrency(remaining, invoiceCurrency)}
                   </p>
-                  {exact && <p className="text-[11px] text-success">Exakt match</p>}
+                  {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
                   {candidateSek != null && (
                     <p className="text-[11px] text-muted-foreground tabular-nums">
                       ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
@@ -210,7 +212,7 @@ export default function SupplierInvoicePicker({
         })}
         {sorted.length === 0 && (
           <p className="text-center text-sm text-muted-foreground py-4">
-            Ingen faktura matchar &quot;{search}&quot;
+            {t('no_match', { search })}
           </p>
         )}
       </div>

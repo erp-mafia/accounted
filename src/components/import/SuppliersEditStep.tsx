@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -31,11 +32,7 @@ interface SuppliersEditStepProps {
   notices?: ImportNotice[]
 }
 
-const TYPE_LABELS: Record<SupplierType, string> = {
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utomeuropeiskt företag',
-}
+const SUPPLIER_TYPES: SupplierType[] = ['swedish_business', 'eu_business', 'non_eu_business']
 
 export default function SuppliersEditStep({
   rows: initialRows,
@@ -45,6 +42,17 @@ export default function SuppliersEditStep({
   error,
   notices = [],
 }: SuppliersEditStepProps) {
+  const t = useTranslations('suppliers_edit_step')
+  const typeLabel = (type: SupplierType): string => {
+    switch (type) {
+      case 'swedish_business':
+        return t('type_swedish_business')
+      case 'eu_business':
+        return t('type_eu_business')
+      case 'non_eu_business':
+        return t('type_non_eu_business')
+    }
+  }
   const [rows, setRows] = useState<EditableSupplierRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
@@ -77,10 +85,9 @@ export default function SuppliersEditStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Granska leverantörer</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Kontrollera att uppgifterna stämmer. {newCount} ny{newCount === 1 ? '' : 'a'} leverantör{newCount === 1 ? '' : 'er'} skapas
-          {liveDuplicateCount > 0 ? ` och ${liveDuplicateCount} matchar befintliga.` : '.'}
+          {t('description', { count: newCount, duplicates: liveDuplicateCount })}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -89,8 +96,10 @@ export default function SuppliersEditStep({
             <RefreshCw className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
-                <span className="font-medium">{liveDuplicateCount} rader</span> matchar befintliga
-                leverantörer (på orgnummer eller e-post).
+                {t.rich('duplicates_notice', {
+                  count: liveDuplicateCount,
+                  b: (chunks) => <span className="font-medium">{chunks}</span>,
+                })}
               </p>
               <div className="flex items-center gap-3">
                 <Switch
@@ -100,14 +109,13 @@ export default function SuppliersEditStep({
                 />
                 <Label htmlFor="update-duplicates-supp" className="text-sm cursor-pointer">
                   {updateDuplicates
-                    ? 'Uppdatera befintliga leverantörer med ny information'
-                    : 'Hoppa över befintliga leverantörer'}
+                    ? t('update_duplicates')
+                    : t('skip_duplicates')}
                 </Label>
               </div>
               {updateDuplicates && (
                 <p className="text-xs text-muted-foreground">
-                  Endast fält med värden i filen skrivs över. Tomma fält i filen lämnar
-                  befintliga värden orörda.
+                  {t('update_duplicates_hint')}
                 </p>
               )}
             </div>
@@ -118,11 +126,11 @@ export default function SuppliersEditStep({
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
-                <th className="px-3 py-2 text-left">Namn</th>
-                <th className="px-3 py-2 text-left w-44">Typ</th>
-                <th className="px-3 py-2 text-left w-36">Orgnr</th>
-                <th className="px-3 py-2 text-left w-32">Bankgiro/IBAN</th>
-                <th className="px-3 py-2 text-left w-32">Status</th>
+                <th className="px-3 py-2 text-left">{t('th_name')}</th>
+                <th className="px-3 py-2 text-left w-44">{t('th_type')}</th>
+                <th className="px-3 py-2 text-left w-36">{t('th_org_number')}</th>
+                <th className="px-3 py-2 text-left w-32">{t('th_bank')}</th>
+                <th className="px-3 py-2 text-left w-32">{t('th_status')}</th>
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>
@@ -151,9 +159,9 @@ export default function SuppliersEditStep({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(Object.keys(TYPE_LABELS) as SupplierType[]).map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {TYPE_LABELS[t]}
+                        {SUPPLIER_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {typeLabel(type)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -183,13 +191,13 @@ export default function SuppliersEditStep({
                               ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
                           )}
-                          title={`Matchar ${row.duplicate_match.existing_name} (${row.duplicate_match.matched_by})`}
+                          title={t('matches_existing', { name: row.duplicate_match.existing_name, matchedBy: row.duplicate_match.matched_by })}
                         >
-                          {updateDuplicates ? 'Uppdateras' : 'Hoppas över'}
+                          {updateDuplicates ? t('status_updated') : t('status_skipped')}
                         </span>
                       ) : (
                         <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
-                          Ny
+                          {t('status_new')}
                         </span>
                       )}
                     </div>
@@ -198,7 +206,7 @@ export default function SuppliersEditStep({
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      aria-label="Ta bort rad"
+                      aria-label={t('delete_row')}
                       onClick={() => deleteRow(row.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -225,11 +233,11 @@ export default function SuppliersEditStep({
         )}
 
         <div className="flex justify-between pt-2">
-          <Button variant="ghost" onClick={onBack} disabled={isLoading}>Tillbaka</Button>
+          <Button variant="ghost" onClick={onBack} disabled={isLoading}>{t('back')}</Button>
           <Button onClick={handleExecute} disabled={!canContinue} loading={isLoading}>
             {isLoading
-              ? 'Importerar...'
-              : `Importera ${rows.length} rad${rows.length === 1 ? '' : 'er'}`}
+              ? t('importing')
+              : t('import_rows', { count: rows.length })}
           </Button>
         </div>
       </CardContent>

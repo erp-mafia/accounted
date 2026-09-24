@@ -44,27 +44,7 @@ interface Props {
 // Swedish category labels: mirrors lib/bookkeeping/category-mapping.ts
 // (categoryLabels), ordered expenses-first since underlag are overwhelmingly
 // costs. Values match TransactionCategorySchema in lib/api/schemas.ts.
-const CATEGORY_OPTIONS: { value: string; label: string }[] = [
-  { value: 'expense_software', label: 'Programvara/IT-tjänster' },
-  { value: 'expense_office', label: 'Kontorskostnad' },
-  { value: 'expense_consumables', label: 'Förbrukningsvaror' },
-  { value: 'expense_equipment', label: 'Förbrukningsinventarier' },
-  { value: 'expense_telecom', label: 'Telefon & internet' },
-  { value: 'expense_travel', label: 'Resekostnad' },
-  { value: 'expense_marketing', label: 'Marknadsföring' },
-  { value: 'expense_professional_services', label: 'Konsulttjänst' },
-  { value: 'expense_education', label: 'Utbildning' },
-  { value: 'expense_representation', label: 'Representation' },
-  { value: 'expense_vehicle', label: 'Bil & drivmedel' },
-  { value: 'expense_bank_fees', label: 'Bankavgift' },
-  { value: 'expense_card_fees', label: 'Kortavgift' },
-  { value: 'expense_currency_exchange', label: 'Valutaväxling' },
-  { value: 'expense_other', label: 'Övrig kostnad' },
-  { value: 'income_services', label: 'Tjänsteförsäljning' },
-  { value: 'income_products', label: 'Varuförsäljning' },
-  { value: 'income_other', label: 'Övrig intäkt' },
-  { value: 'private', label: 'Privat' },
-]
+// Labels are built inside the component (they need the translator).
 
 // VAT treatment options. `value` is typed as `VatTreatment` (types/index.ts)
 // so this list can never drift from what the backend accepts: the bulk-book
@@ -73,18 +53,7 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 // here by `reduced_12` / `reduced_6`: there is deliberately no `standard_12` /
 // `standard_6` (no such treatment exists; the backend would reject it). Keep
 // this list in sync with the union, not with rate labels.
-const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
-  // 'auto' sends no explicit treatment: the bulk-book route derives the
-  // default from the picked category (exempt for bank/card fees, 12%
-  // representation, else 25%). Reverse charge is never derived; see below.
-  { value: 'auto', label: 'Enligt kategori' },
-  { value: 'standard_25', label: 'Moms 25%' },
-  { value: 'reduced_12', label: 'Moms 12%' },
-  { value: 'reduced_6', label: 'Moms 6%' },
-  { value: 'reverse_charge', label: 'Omvänd skattskyldighet (EU/utland)' },
-  { value: 'export', label: 'Export (0%)' },
-  { value: 'exempt', label: 'Momsfri' },
-]
+// Labels are built inside the component (they need the translator).
 
 function isBookable(it: BulkBookInboxItem): boolean {
   return (
@@ -103,6 +72,40 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
   const [category, setCategory] = useState<string>('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'auto'>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const CATEGORY_OPTIONS: { value: string; label: string }[] = [
+    { value: 'expense_software', label: t('category_expense_software') },
+    { value: 'expense_office', label: t('category_expense_office') },
+    { value: 'expense_consumables', label: t('category_expense_consumables') },
+    { value: 'expense_equipment', label: t('category_expense_equipment') },
+    { value: 'expense_telecom', label: t('category_expense_telecom') },
+    { value: 'expense_travel', label: t('category_expense_travel') },
+    { value: 'expense_marketing', label: t('category_expense_marketing') },
+    { value: 'expense_professional_services', label: t('category_expense_professional_services') },
+    { value: 'expense_education', label: t('category_expense_education') },
+    { value: 'expense_representation', label: t('category_expense_representation') },
+    { value: 'expense_vehicle', label: t('category_expense_vehicle') },
+    { value: 'expense_bank_fees', label: t('category_expense_bank_fees') },
+    { value: 'expense_card_fees', label: t('category_expense_card_fees') },
+    { value: 'expense_currency_exchange', label: t('category_expense_currency_exchange') },
+    { value: 'expense_other', label: t('category_expense_other') },
+    { value: 'income_services', label: t('category_income_services') },
+    { value: 'income_products', label: t('category_income_products') },
+    { value: 'income_other', label: t('category_income_other') },
+    { value: 'private', label: t('category_private') },
+  ]
+  const VAT_OPTIONS: { value: VatTreatment | 'auto'; label: string }[] = [
+    // 'auto' sends no explicit treatment: the bulk-book route derives the
+    // default from the picked category (exempt for bank/card fees, 12%
+    // representation, else 25%). Reverse charge is never derived; see below.
+    { value: 'auto', label: t('vat_auto') },
+    { value: 'standard_25', label: t('vat_standard_25') },
+    { value: 'reduced_12', label: t('vat_reduced_12') },
+    { value: 'reduced_6', label: t('vat_reduced_6') },
+    { value: 'reverse_charge', label: t('vat_reverse_charge') },
+    { value: 'export', label: t('vat_export') },
+    { value: 'exempt', label: t('vat_exempt') },
+  ]
 
   const bookable = useMemo(() => items.filter(isBookable), [items])
   const notMatched = useMemo(
@@ -170,19 +173,19 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
       const bookedCount: number = json.data?.booked_count ?? 0
       const skippedCount: number = json.data?.skipped_count ?? 0
       const parts: string[] = []
-      if (bookedCount > 0) parts.push(`${bookedCount} bokförda`)
-      if (skippedCount > 0) parts.push(`${skippedCount} överhoppade`)
+      if (bookedCount > 0) parts.push(t('booked_count', { count: bookedCount }))
+      if (skippedCount > 0) parts.push(t('skipped_count', { count: skippedCount }))
       toast({
-        title: 'Bulkbokföring klar',
-        description: parts.join(' · ') || 'Inga underlag bokfördes',
+        title: t('done_title'),
+        description: parts.join(' · ') || t('none_booked'),
         variant: bookedCount === 0 ? 'destructive' : 'default',
       })
       onOpenChange(false)
       await onSuccess()
     } catch (err) {
       toast({
-        title: 'Bokföringen misslyckades',
-        description: err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel',
+        title: t('failed_title'),
+        description: err instanceof Error ? getUserErrorMessage(err) : t('unknown_error'),
         variant: 'destructive',
       })
     } finally {
@@ -192,27 +195,27 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
   const skippedNote: string | null = useMemo(() => {
     const bits: string[] = []
-    if (notMatched > 0) bits.push(`${notMatched} saknar matchad transaktion`)
-    if (alreadyBooked > 0) bits.push(`${alreadyBooked} redan bokförda`)
+    if (notMatched > 0) bits.push(t('not_matched_count', { count: notMatched }))
+    if (alreadyBooked > 0) bits.push(t('already_booked_count', { count: alreadyBooked }))
     return bits.length > 0 ? bits.join(' · ') : null
-  }, [notMatched, alreadyBooked])
+  }, [notMatched, alreadyBooked, t])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Bokför {bookable.length} underlag</DialogTitle>
+          <DialogTitle>{t('book_n_documents', { count: bookable.length })}</DialogTitle>
           <DialogDescription>
-            Varje underlag bokförs mot sin matchade banktransaktion med samma kategori och momsbehandling.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="bulk-category">Kategori</Label>
+            <Label htmlFor="bulk-category">{t('category_label')}</Label>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger id="bulk-category">
-                <SelectValue placeholder="Välj kategori" />
+                <SelectValue placeholder={t('category_placeholder')} />
               </SelectTrigger>
               <SelectContent>
                 {CATEGORY_OPTIONS.map((opt) => (
@@ -226,15 +229,9 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
           <div className="space-y-2">
             <div className="flex items-center gap-1">
-              <Label htmlFor="bulk-vat">Moms</Label>
+              <Label htmlFor="bulk-vat">{t('vat_label')}</Label>
               <InfoTooltip
-                content={
-                  <>
-                    Välj <strong>Omvänd skattskyldighet</strong> för köp från en utländsk säljare utan
-                    svenskt momsnummer (t.ex. EU-tjänster som moln/mjukvara). Svenska fakturor med moms:
-                    välj den sats kvittot visar: valutan avgör inte.
-                  </>
-                }
+                content={t.rich('vat_tooltip', { b: (c) => <strong>{c}</strong> })}
               />
             </div>
             <Select value={vatTreatment} onValueChange={(v) => setVatTreatment(v as VatTreatment | 'auto')}>
@@ -252,12 +249,9 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
             {vatTreatment === 'reverse_charge' && (
               <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-                <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
-                Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
-                säljare utan svenskt momsregistreringsnummer</strong>: t.ex. EU-tjänster, EU-varor,
-                byggtjänster eller viss elektronik. Valutan avgör inte: en svensk säljare kan fakturera i
-                EUR och ändå debitera 25% moms. Är säljaren svensk och momsen står på kvittot, välj i
-                stället rätt momssats ovan.
+                {t.rich('reverse_charge_warning', {
+                  b: (c) => <strong className="font-medium text-foreground">{c}</strong>,
+                })}
               </div>
             )}
           </div>
@@ -287,17 +281,17 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
 
           {skippedNote && (
             <p className="text-xs text-muted-foreground">
-              Hoppas över: {skippedNote}.
+              {t('skipped_note', { note: skippedNote })}
             </p>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {t('cancel')}
           </Button>
           <Button onClick={submit} disabled={!category || bookable.length === 0} loading={isSubmitting}>
-            Bokför {bookable.length} underlag
+            {t('book_n_documents', { count: bookable.length })}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -276,15 +276,15 @@ const DOCUMENT_FETCH_TIMEOUT_MS = 15_000
 
 // ── Helpers ──────────────────────────────────────────────────
 
-function timeAgo(iso: string): string {
+function timeAgo(iso: string, t: ReturnType<typeof useTranslations>): string {
   const ms = Date.now() - new Date(iso).getTime()
   const min = Math.floor(ms / 60000)
-  if (min < 1) return 'nyss'
-  if (min < 60) return `${min} min sedan`
+  if (min < 1) return t('time_just_now')
+  if (min < 60) return t('time_minutes_ago', { count: min })
   const h = Math.floor(min / 60)
-  if (h < 24) return `${h} h sedan`
+  if (h < 24) return t('time_hours_ago', { count: h })
   const d = Math.floor(h / 24)
-  if (d < 30) return `${d} d sedan`
+  if (d < 30) return t('time_days_ago', { count: d })
   return new Date(iso).toLocaleDateString('sv-SE')
 }
 
@@ -430,6 +430,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   const t = useTranslations('inbox_workspace')
   const tArkiv = useTranslations('arkiv')
   const tStart = useTranslations('start_cards')
+  const tUpload = useTranslations('upload_size')
   const dismissKeyCompanyId = useCompanyOptional()?.company?.id ?? null
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // Its own input: sharing the header's would upload without the purchase.
@@ -958,12 +959,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } catch (err) {
       if (detailRequestRef.current !== request) return
       toast({
-        title: 'Kunde inte ladda dokumentet',
+        title: t('document_open_failed'),
         description: failureText(err),
         variant: 'destructive',
       })
     }
-  }, [items, toast, loadDocument])
+  }, [items, toast, loadDocument, t])
 
   // The detail pane renders from its own fetched snapshot (`selected`), so
   // the realtime refetch updates the list row but would leave a selected
@@ -1003,8 +1004,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         reason: 'over inbox ceiling, refused client-side',
       })
       toast({
-        title: 'Uppladdning misslyckades',
-        description: inboxTooLargeMessage(file.size),
+        title: t('upload_failed'),
+        description: inboxTooLargeMessage(file.size, tUpload),
         variant: 'destructive',
       })
       return undefined
@@ -1057,13 +1058,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       if (json.data?.extraction_skipped) {
         const pages = json.data?.page_count
         toast({
-          title: 'Dokument uppladdat',
+          title: t('document_uploaded'),
           description: pages
-            ? `Stort dokument (${pages} sidor): AI-tolkning skippad. Du kan koppla det till en transaktion eller skapa leverantörsfaktura manuellt.`
-            : 'AI-tolkning skippad. Du kan koppla dokumentet till en transaktion eller skapa leverantörsfaktura manuellt.',
+            ? t('upload_skipped_large', { pages })
+            : t('upload_skipped'),
         })
       } else {
-        toast({ title: 'Dokument uppladdat', description: file.name })
+        toast({ title: t('document_uploaded'), description: file.name })
       }
       setItems((prev) => prev.filter((it) => it.id !== tempId))
       await fetchItems()
@@ -1085,14 +1086,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         reason,
       })
       toast({
-        title: 'Uppladdning misslyckades',
+        title: t('upload_failed'),
         description: reason,
         variant: 'destructive',
       })
     } finally {
       setIsUploading(false)
     }
-  }, [fetchItems, handleSelect, toast])
+  }, [fetchItems, handleSelect, toast, t, tUpload])
 
   // Sequential queue: running multiple extractions concurrently would
   // hammer pdfjs on slow boxes. Per-file placeholder rows + the queue
@@ -1128,8 +1129,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       )
       if (!res.ok) throw await resolveFailure(res)
       toast({
-        title: 'Underlag kopplat',
-        description: rest.length ? `${file.name}. ${rest.length} till lades i inkorgen.` : file.name,
+        title: t('linked_document'),
+        description: rest.length ? t('linked_document_extra', { name: file.name, count: rest.length }) : file.name,
       })
       setSelectedPurchaseId(null)
       await Promise.all([fetchItems(), fetchPurchases()])
@@ -1137,15 +1138,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       // The document is safely filed either way; only the link failed, and
       // the user can still make it by hand from the inbox.
       toast({
-        title: 'Uppladdat, men inte kopplat',
+        title: t('link_failed'),
         description: err instanceof ResolvedFailure
-          ? `${failureText(err)} Dokumentet ligger i inkorgen, koppla det till köpet därifrån.`
-          : 'Dokumentet ligger i inkorgen. Koppla det till köpet därifrån.',
+          ? t('link_failed_body_with_reason', { reason: failureText(err) })
+          : t('link_failed_body'),
         variant: 'destructive',
       })
       await fetchItems()
     }
-  }, [uploadFile, toast, fetchItems, fetchPurchases])
+  }, [uploadFile, toast, fetchItems, fetchPurchases, t])
 
   const uploadFiles = useCallback(async (files: File[]) => {
     if (files.length === 0) return
@@ -1191,14 +1192,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // ── Delete ─────────────────────────────────────────────────
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!confirm('Ta bort dokumentet ur inkorgen?')) return
+    if (!confirm(t('delete_document_confirm'))) return
     setIsDeleting(true)
     try {
       const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${id}`, {
         method: 'DELETE',
       })
       if (!res.ok) throw await resolveFailure(res)
-      toast({ title: 'Borttagen' })
+      toast({ title: t('deleted') })
       if (selectedId === id) {
         setSelectedId(null)
         setSelected(null)
@@ -1206,14 +1207,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       await fetchItems()
     } catch (err) {
       toast({
-        title: 'Kunde inte ta bort',
+        title: t('delete_failed'),
         description: failureText(err),
         variant: 'destructive',
       })
     } finally {
       setIsDeleting(false)
     }
-  }, [fetchItems, selectedId, toast])
+  }, [fetchItems, selectedId, toast, t])
 
   // Ranges walk the rendered inbox rows in order. Optimistic upload
   // placeholders render no checkbox, so they stay out of the range: their
@@ -1256,7 +1257,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
   const handleBulkDelete = useCallback(async () => {
     if (selectedIds.size === 0) return
-    if (!confirm(`Ta bort ${selectedIds.size} poster ur inkorgen?`)) return
+    if (!confirm(t('bulk_delete_confirm', { count: selectedIds.size }))) return
 
     // Skip items that the server would 409 on, surface the count to the user.
     const targets = items.filter((it) => selectedIds.has(it.id))
@@ -1278,11 +1279,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const failed = results.filter((r) => r.status === 'rejected').length
       const succeeded = deletable.length - failed
       const parts: string[] = []
-      if (succeeded > 0) parts.push(`${succeeded} borttagna`)
-      if (skipped > 0) parts.push(`${skipped} kopplade till leverantörsfaktura, hoppade över`)
-      if (failed > 0) parts.push(`${failed} misslyckades`)
+      if (succeeded > 0) parts.push(t('bulk_deleted_count', { count: succeeded }))
+      if (skipped > 0) parts.push(t('bulk_skipped_count', { count: skipped }))
+      if (failed > 0) parts.push(t('bulk_failed_count', { count: failed }))
       toast({
-        title: 'Bulkborttagning klar',
+        title: t('bulk_delete_done'),
         description: parts.join(' · '),
         variant: failed > 0 ? 'destructive' : 'default',
       })
@@ -1296,7 +1297,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
     } finally {
       setIsBulkDeleting(false)
     }
-  }, [selectedIds, items, selectedId, fetchItems, toast, clearSelection])
+  }, [selectedIds, items, selectedId, fetchItems, toast, clearSelection, t])
 
   // ── Inbox address ──────────────────────────────────────────
 
@@ -1327,10 +1328,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       const json = await res.json()
       setInboxAddress(json.data)
       setAddressLoadFailed(false)
-      toast({ title: 'Ny adress skapad', description: json.data.address })
+      toast({ title: t('address_created'), description: json.data.address })
     } catch (err) {
       toast({
-        title: 'Rotation misslyckades',
+        title: t('rotate_failed'),
         description: failureText(err),
         variant: 'destructive',
       })
@@ -1362,7 +1363,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
           <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
-          <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
+          <h1 className="text-sm shrink-0">{t('page_title')}</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               is a thing people look up when something seems wrong, not
               something they read every visit. */}
@@ -1374,7 +1375,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               className="font-normal shrink-0 text-muted-foreground"
               aria-expanded={sourcesOpen}
             >
-              {`${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
+              {sourceCount === 1 ? t('sources_one', { count: sourceCount }) : t('sources_many', { count: sourceCount })}
               <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
@@ -1396,7 +1397,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               className="ml-2 shrink-0"
             >
               {!isRotating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
-              Aktivera inkorgsadress
+              {t('activate_address')}
             </Button>
           )}
         </div>
@@ -1424,10 +1425,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           >
             {!isUploading && <Plus className="h-3.5 w-3.5 mr-1.5" />}
             {uploadQueue
-              ? `Laddar ${Math.min(uploadQueue.done + 1, uploadQueue.total)} av ${uploadQueue.total}…`
+              ? t('upload_progress', { current: Math.min(uploadQueue.done + 1, uploadQueue.total), total: uploadQueue.total })
               : isUploading
-                ? 'Laddar…'
-                : 'Ladda upp'}
+                ? t('uploading')
+                : t('upload')}
           </Button>
         </div>
       </header>
@@ -1553,7 +1554,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <dd className="tabular-nums">{whatsapp.phoneMasked ?? '-'}</dd>
                 </div>
                 <div className="flex gap-2">
-                  <dt className="w-24 shrink-0">Status</dt>
+                  <dt className="w-24 shrink-0">{t('source_status')}</dt>
                   <dd>{whatsapp.verifiedAt ? t('source_verified') : t('source_unverified')}</dd>
                 </div>
               </dl>
@@ -1577,7 +1578,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
-                  placeholder="Sök i inkorgen…"
+                  placeholder={t('search_placeholder')}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-8 h-8 text-xs"
@@ -1590,7 +1591,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               {/* Count */}
               <span className="text-xs text-muted-foreground tabular-nums">
                 <span className="font-medium text-foreground">{selectedIds.size}</span>{' '}
-                {selectedIds.size === 1 ? 'markerad' : 'markerade'}
+                {t('selected_label', { count: selectedIds.size })}
               </span>
               {/* Primary action: the one solid button */}
               <Button
@@ -1601,12 +1602,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 disabled={isBulkDeleting || bookableSelectedCount === 0}
                 title={
                   bookableSelectedCount === 0
-                    ? 'Inget av de valda underlagen är matchat mot en banktransaktion'
+                    ? t('bulk_book_none_matched')
                     : undefined
                 }
               >
                 <Check className="h-3.5 w-3.5 mr-1.5" />
-                Bokför valda
+                {t('book_selected')}
               </Button>
               {/* Secondary actions: outlined, so they read as buttons */}
               <div className="flex items-center gap-2">
@@ -1625,7 +1626,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     disabled={isBulkDeleting}
                   >
                     <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                    Fråga assistenten
+                    {t('ask_assistant')}
                   </Button>
                 )}
                 <Button
@@ -1639,7 +1640,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   loading={isBulkDeleting}
                 >
                   {!isBulkDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
-                  Ta bort
+                  {t('delete')}
                 </Button>
               </div>
             </div>
@@ -1681,13 +1682,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 </div>
                 <div className="hidden xl:block p-6 text-center text-sm text-muted-foreground">
                   <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                  Inkorgen är tom.
+                  {t('inbox_empty')}
                 </div>
               </>
             ) : (
               <div className="p-6 text-center text-sm text-muted-foreground">
                 <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
-                Inkorgen är tom.
+                {t('inbox_empty')}
               </div>
             )
           ) : (filter === 'missing' || filter === 'portal' ? filteredPurchases.length : filteredItems.length) === 0 ? (
@@ -1697,14 +1698,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   would claim every purchase has its underlag while the button
                   beside it reads 50. */}
               {searchTerm.trim() !== ''
-                ? `Inga träffar på ”${searchTerm.trim()}”.`
+                ? t('empty_no_search_hits', { term: searchTerm.trim() })
                 : filter === 'todo'
-                  ? 'Inget att åtgärda; allt är bearbetat.'
+                  ? t('empty_nothing_to_do')
                   : filter === 'portal'
-                    ? 'Inga köp väntar på en faktura från en portal.'
+                    ? t('empty_no_portal')
                     : filter === 'missing'
-                      ? 'Varje köp har sitt underlag.'
-                      : 'Inga poster matchar filtret.'}
+                      ? t('empty_all_covered')
+                      : t('empty_no_filter_match')}
             </div>
           ) : (
             <ul>
@@ -1756,14 +1757,14 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 <p className="text-sm">{t('purchase_no_document')}</p>
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
-                    ? `${selectedPurchase.portal.vendor} skickar ingen fil. Hämta fakturan och släpp den här.`
+                    ? t('purchase_portal_hint', { vendor: selectedPurchase.portal.vendor })
                     : t('purchase_drop_hint')}
                 </p>
 
                 {selectedPurchase.portal && (
                   <Button size="sm" variant="outline" className="mt-4" asChild>
                     <a href={selectedPurchase.portal.url} target="_blank" rel="noopener noreferrer">
-                      Öppna {selectedPurchase.portal.vendor}
+                      {t('purchase_open_portal', { vendor: selectedPurchase.portal.vendor })}
                       <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
                     </a>
                   </Button>
@@ -1795,11 +1796,11 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   {isUploading ? (
                     <span className="flex items-center justify-center gap-2">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      Laddar upp…
+                      {t('purchase_uploading')}
                     </span>
                   ) : (
                     <>
-                      Släpp filen här, eller klicka för att välja
+                      {t('purchase_drop')}
                       <span className="block mt-1 opacity-70">
                         {formatCurrency(Math.abs(selectedPurchase.amount), selectedPurchase.currency ?? undefined)}
                         {' · '}
@@ -1848,7 +1849,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           )}
           {isDragging && (
             <div className="absolute inset-0 bg-primary/5 border-2 border-dashed border-primary rounded-lg m-4 flex items-center justify-center pointer-events-none">
-              <p className="text-sm font-medium text-primary">Släpp filen för att ladda upp</p>
+              <p className="text-sm font-medium text-primary">{t('drop_to_upload')}</p>
             </div>
           )}
         </main>
@@ -1887,7 +1888,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 if (!res.ok) {
                   const json = await res.json().catch(() => ({}))
                   toast({
-                    title: 'Kunde inte avbryta matchningen',
+                    title: t('unmatch_failed'),
                     description: json.error ?? `HTTP ${res.status}`,
                     variant: 'destructive',
                   })
@@ -1935,7 +1936,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             />
           ) : (
             <div className="p-6 text-center text-sm text-muted-foreground">
-              Välj en post för att se extraherade fält.
+              {t('select_item_hint')}
             </div>
           )}
         </aside>
@@ -1990,7 +1991,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         void fetchArkivQuestions()
         void fetchItems()
       }}
-      onFailed={() => toast({ title: 'Det gick inte att spara', variant: 'destructive' })}
+      onFailed={() => toast({ title: t('save_failed_generic'), variant: 'destructive' })}
     />
     <BulkBookInboxDialog
       open={bulkBookOpen}
@@ -2222,7 +2223,7 @@ function InboxRow({
   const isExtracting = status === 'processing'
   const receivedMeta = (
     <span className="truncate">
-      {timeAgo(item.email_received_at ?? item.created_at)}
+      {timeAgo(item.email_received_at ?? item.created_at, t)}
       {invoiceDate && (
         <> · <span className="tabular-nums">{formatDate(invoiceDate)}</span></>
       )}
@@ -2256,7 +2257,7 @@ function InboxRow({
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleChecked(shiftHeld.current)}
-            aria-label="Markera post"
+            aria-label={t('select_item')}
             className="h-3.5 w-3.5 border-foreground"
           />
         </div>
@@ -2292,25 +2293,25 @@ function InboxRow({
           )}
           <span className="text-sm font-medium truncate flex-1 min-w-0">
             {isPlaceholder
-              ? (item.fileName ?? 'Nytt dokument')
-              : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
+              ? (item.fileName ?? t('new_document'))
+              : (supplierName ?? item.email_subject ?? t('unknown_document'))}
           </span>
           {hasQuestion && (
             <HelpCircle className="h-3 w-3 text-attn shrink-0" aria-label={tArkiv('question_nub')} />
           )}
           {isErrored && (
-            <AlertTriangle className="h-3 w-3 text-destructive shrink-0" aria-label="Fel vid bearbetning" />
+            <AlertTriangle className="h-3 w-3 text-destructive shrink-0" aria-label={t('processing_error')} />
           )}
           {isLinkedToTransaction && (
-            <Link2 className="h-3 w-3 text-success shrink-0" aria-label="Kopplad till transaktion" />
+            <Link2 className="h-3 w-3 text-success shrink-0" aria-label={t('linked_to_transaction')} />
           )}
           {isBooked && (
-            <Check className="h-3 w-3 text-success shrink-0" aria-label="Bokförd" />
+            <Check className="h-3 w-3 text-success shrink-0" aria-label={t('booked')} />
           )}
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           {isPlaceholder ? (
-            <span className="italic">Tolkar dokument med AI…</span>
+            <span className="italic">{t('extracting_document')}</span>
           ) : (
             <span className="flex items-center gap-1.5 min-w-0">
               {/* Document kind (#2129): sender's +lev / +ver hint first, then
@@ -2328,7 +2329,7 @@ function InboxRow({
               ) : (
                 <>
                   {item.extraction_skipped && (
-                    <Badge variant="outline" className="font-normal">Inte AI-tolkad</Badge>
+                    <Badge variant="outline" className="font-normal">{t('not_ai_extracted')}</Badge>
                   )}
                 </>
               )}
@@ -2370,7 +2371,7 @@ export function DocumentPreview({
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
         <Loader2 className="h-6 w-6 animate-spin" />
-        <span>Tolkar dokument med AI…</span>
+        <span>{t('extracting_document')}</span>
       </div>
     )
   }
@@ -2401,7 +2402,7 @@ export function DocumentPreview({
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
         <FileText className="h-5 w-5 mr-2" />
-        Inget underlag bifogat
+        {t('no_document_attached')}
       </div>
     )
   }
@@ -2413,7 +2414,7 @@ export function DocumentPreview({
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={docUrl}
-            alt="Underlag"
+            alt={t('document_alt')}
             className="block max-h-[calc(100vh-9rem)] max-w-full w-auto h-auto object-contain"
           />
         </div>
@@ -2427,13 +2428,13 @@ export function DocumentPreview({
             src={docUrl}
             sandbox=""
             className="w-full h-full border-0 bg-white"
-            title="Underlag"
+            title={t('document_alt')}
           />
         </div>
       ) : (
         // PDF: iframe needs explicit height, frame fills the available pane.
         <div className="h-full w-full max-w-3xl bg-background rounded-lg border overflow-hidden">
-          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title="Underlag" />
+          <embed src={docUrl} type="application/pdf" className="w-full h-full border-0" title={t('document_alt')} />
         </div>
       )}
     </div>
@@ -2452,29 +2453,30 @@ function EmptyPreview({
   onActivateInbox: (() => void) | null
   isActivating: boolean
 }) {
+  const t = useTranslations('inbox_workspace')
   return (
     <div className="h-full flex flex-col items-center justify-center text-center px-6 gap-3">
       <Inbox className="h-10 w-10 text-muted-foreground/40" />
       <div>
         <p className="text-sm font-medium">
-          {onActivateInbox ? 'Aktivera din inkorgsadress' : 'Välj ett dokument från listan'}
+          {onActivateInbox ? t('empty_activate_title') : t('empty_select_title')}
         </p>
         <p className="text-xs text-muted-foreground mt-1">
           {onActivateInbox
-            ? 'Ditt bolag får en unik e-postadress som leverantörer kan skicka fakturor till.'
-            : 'Eller dra och släpp en fil var som helst på sidan för att ladda upp.'}
+            ? t('empty_activate_body')
+            : t('empty_select_body')}
         </p>
       </div>
       <div className="flex gap-2">
         {onActivateInbox && (
           <Button size="sm" onClick={onActivateInbox} loading={isActivating}>
             {!isActivating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
-            Aktivera inkorgsadress
+            {t('activate_address')}
           </Button>
         )}
         <Button variant="outline" size="sm" onClick={onUploadClick}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
-          Ladda upp en fil
+          {t('upload_a_file')}
         </Button>
       </div>
     </div>
@@ -2559,11 +2561,11 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
 
       <dl className="space-y-1.5 text-xs">
         <div className="flex justify-between gap-3">
-          <dt className="text-muted-foreground">Datum</dt>
+          <dt className="text-muted-foreground">{t('purchase_date')}</dt>
           <dd className="tabular-nums">{formatDate(purchase.date)}</dd>
         </div>
         <div className="flex justify-between gap-3">
-          <dt className="text-muted-foreground">Belopp</dt>
+          <dt className="text-muted-foreground">{t('purchase_amount')}</dt>
           <dd className="tabular-nums">
             {formatCurrency(Math.abs(purchase.amount), purchase.currency ?? undefined)}
           </dd>
@@ -2580,21 +2582,20 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
             {purchase.portal.note ??
-              `${purchase.portal.vendor} skickar ingen fil. Fakturan ligger bakom en inloggning.`}
+              t('purchase_portal_login', { vendor: purchase.portal.vendor })}
           </p>
           {/* We never log in for anyone. Knowing where the invoice is costs no
               password and is most of the value. */}
           <Button size="sm" className="w-full" asChild>
             <a href={purchase.portal.url} target="_blank" rel="noopener noreferrer">
-              Öppna {purchase.portal.vendor}
+              {t('purchase_open_portal', { vendor: purchase.portal.vendor })}
               <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
             </a>
           </Button>
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Vi hittade ingen bilaga och känner inte till någon portal för den här leverantören. Ladda upp
-          kvittot här, eller vidarebefordra det till inkorgsadressen.
+          {t('purchase_no_portal')}
         </p>
       )}
     </div>
@@ -2641,17 +2642,29 @@ type SuggestedBooking = {
   transaction?: { amount_sek: number; date: string } | null
 }
 
-const SUGGESTION_SOURCE_LABEL: Record<string, string> = {
-  counterparty_template: 'Så du brukar bokföra den här leverantören',
-  booking_template: 'Från en bokföringsmall',
-  mapping_rule: 'Från en konteringsregel',
+function suggestionSourceLabel(source: string, t: ReturnType<typeof useTranslations>): string | null {
+  switch (source) {
+    case 'counterparty_template':
+      return t('proposal_from_counterparty')
+    case 'booking_template':
+      return t('proposal_from_template')
+    case 'mapping_rule':
+      return t('proposal_from_rule')
+    default:
+      return null
+  }
 }
 
 /** Why there is no proposal, said plainly rather than shown as an empty table. */
-const SUGGESTION_EMPTY_REASON: Record<string, string> = {
-  no_mapping: 'Okänd leverantör. Bokför en gång, så känns den igen.',
-  currency_unsupported:
-    'Köpet är i utländsk valuta och matchades av en konteringsregel. Momsen skulle bli fel, så vi visar inget förslag.',
+function suggestionEmptyReason(source: string, t: ReturnType<typeof useTranslations>): string | null {
+  switch (source) {
+    case 'no_mapping':
+      return t('proposal_none_unknown_short')
+    case 'currency_unsupported':
+      return t('proposal_none_currency')
+    default:
+      return null
+  }
 }
 
 function ProposedBooking({
@@ -2710,7 +2723,7 @@ function ProposedBooking({
   if (data.source === 'already_booked' || data.source === 'no_transaction') return null
 
   if (data.lines.length === 0) {
-    const reason = SUGGESTION_EMPTY_REASON[data.source]
+    const reason = suggestionEmptyReason(data.source, t)
     return reason ? <p className="text-xs text-muted-foreground">{reason}</p> : null
   }
 
@@ -2724,7 +2737,7 @@ function ProposedBooking({
         <h3 className="text-xs">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
-            Bokförs {formatDate(data.entry_date)}
+            {t('proposal_booked_on', { date: formatDate(data.entry_date) })}
           </span>
         )}
       </div>
@@ -2733,10 +2746,10 @@ function ProposedBooking({
         <thead>
           <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
             <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
-              Konto
+              {t('col_account')}
             </th>
-            <th className="pb-1 text-right font-medium w-20">Debet</th>
-            <th className="pb-1 pl-2 text-right font-medium w-20">Kredit</th>
+            <th className="pb-1 text-right font-medium w-20">{t('col_debit')}</th>
+            <th className="pb-1 pl-2 text-right font-medium w-20">{t('col_credit')}</th>
           </tr>
         </thead>
         <tbody>
@@ -2762,24 +2775,23 @@ function ProposedBooking({
           and the user should see it before booking. */}
       {!balanced && (
         <p className="text-[11px] text-warning">
-          Debet {formatCurrency(debit)} · Kredit {formatCurrency(credit)}
+          {t('proposal_unbalanced', { debit: formatCurrency(debit), credit: formatCurrency(credit) })}
         </p>
       )}
 
-      {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
+      {(suggestionSourceLabel(data.source, t) || data.requires_review || data.direction_mismatch) && (
         <details className="text-[11px] text-muted-foreground">
           <summary className="cursor-pointer hover:text-foreground">{t('proposal_why')}</summary>
           <div className="pt-1.5 space-y-1">
-            {SUGGESTION_SOURCE_LABEL[data.source] && <p>{SUGGESTION_SOURCE_LABEL[data.source]}</p>}
-            {data.rule_name && <p>Regel: {data.rule_name}</p>}
+            {suggestionSourceLabel(data.source, t) && <p>{suggestionSourceLabel(data.source, t)}</p>}
+            {data.rule_name && <p>{t('proposal_rule_named', { name: data.rule_name })}</p>}
             {data.direction_mismatch && (
               <p className="text-warning">
-                Beloppets riktning stämmer inte med hur leverantören brukar bokföras. Kontrollera innan du
-                bokför.
+                {t('proposal_direction_mismatch')}
               </p>
             )}
             {data.requires_review && !data.direction_mismatch && (
-              <p>Förslaget är osäkert och bör granskas innan du bokför.</p>
+              <p>{t('proposal_needs_review')}</p>
             )}
           </div>
         </details>
@@ -2927,13 +2939,13 @@ function FieldsRail({
       )
       if (!res.ok) {
         toast({
-          title: 'Tolkning misslyckades',
+          title: t('extraction_failed'),
           description: (await resolveFailure(res)).message,
           variant: 'destructive',
         })
         return
       }
-      toast({ title: 'Tolkning lyckades' })
+      toast({ title: t('extraction_succeeded') })
       await onRetryRequested()
     } finally {
       setIsRetrying(false)
@@ -2953,19 +2965,19 @@ function FieldsRail({
         <div className="border-b px-4 py-3 text-xs space-y-1">
           {item.email_from && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Från</span>
+              <span className="text-muted-foreground w-14 shrink-0">{t('email_from')}</span>
               <span className="truncate">{item.email_from}</span>
             </div>
           )}
           {item.email_subject && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Ämne</span>
+              <span className="text-muted-foreground w-14 shrink-0">{t('email_subject')}</span>
               <span className="truncate">{item.email_subject}</span>
             </div>
           )}
           {item.email_received_at && (
             <div className="flex gap-2">
-              <span className="text-muted-foreground w-14 shrink-0">Mottaget</span>
+              <span className="text-muted-foreground w-14 shrink-0">{t('email_received')}</span>
               <span>{new Date(item.email_received_at).toLocaleString('sv-SE')}</span>
             </div>
           )}
@@ -3075,7 +3087,7 @@ function FieldsRail({
           <div className="flex items-start gap-2">
             <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium">Fel vid bearbetning</p>
+              <p className="font-medium">{t('processing_error')}</p>
               <p className="text-muted-foreground mt-0.5">{item.error_message}</p>
             </div>
           </div>
@@ -3088,7 +3100,7 @@ function FieldsRail({
               loading={isRetrying}
             >
               {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
-              Försök igen
+              {t('retry')}
             </Button>
           )}
         </div>
@@ -3118,8 +3130,10 @@ function FieldsRail({
       {/* Hint only: creation happens on the leverantörsfaktura form via "Skapa & välj" */}
       {showNoMatchHint && (
         <div className="border-b bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
-          <span className="text-foreground font-medium">{extractedSupplierName}</span>
-          {' finns inte upplagd än. Den skapas när du gör leverantörsfakturan.'}
+          {t.rich('supplier_not_registered', {
+            name: extractedSupplierName,
+            b: (c) => <span className="text-foreground font-medium">{c}</span>,
+          })}
         </div>
       )}
 
@@ -3222,7 +3236,7 @@ function FieldsRail({
           <div className="space-y-2">
             <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
               <Loader2 className="h-3 w-3 animate-spin" />
-              Tolkar dokument med AI…
+              {t('extracting_document')}
             </div>
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-8 w-full" />
@@ -3235,15 +3249,13 @@ function FieldsRail({
           <div className="rounded-lg border border-border bg-secondary/40 px-4 py-3 text-left">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Sparkles className="h-4 w-4" />
-              AI-tolkning ingår i abonnemanget
+              {t('ai_upsell_title')}
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-              Uppgradera för att låta {appName} läsa av leverantör, belopp och
-              moms automatiskt. Du kan fortfarande fylla i fälten manuellt eller
-              koppla dokumentet till en transaktion nedan.
+              {t('ai_upsell_body', { appName })}
             </p>
             <Button size="sm" className="mt-3" asChild>
-              <Link href="/settings/billing">Uppgradera</Link>
+              <Link href="/settings/billing">{t('upgrade')}</Link>
             </Button>
           </div>
         ) : (
@@ -3266,14 +3278,14 @@ function FieldsRail({
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">
             <Button variant="default" size="sm" className="w-full">
               <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
-              Öppna leverantörsfaktura
+              {t('open_supplier_invoice')}
             </Button>
           </Link>
         ) : isBookedDirectly && bookedEntryId ? (
           <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
             <Button variant="default" size="sm" className="w-full">
               <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
-              Öppna verifikation
+              {t('open_voucher')}
             </Button>
           </Link>
         ) : isLinkedToTransaction && item.matched_transaction_id ? (
@@ -3307,7 +3319,7 @@ function FieldsRail({
                 className="w-full"
                 onClick={() => onAskAssistant(item.matched_transaction_id!)}
               >
-                Fråga assistenten
+                {t('ask_assistant')}
               </Button>
             )}
             {/* One control, and its scope is the whole verifikat. It opens
@@ -3338,7 +3350,7 @@ function FieldsRail({
               disabled={isUnmatchingTx}
               className="w-full text-xs text-muted-foreground hover:text-foreground hover:underline pt-1"
             >
-              {isUnmatchingTx ? 'Avbryter…' : 'Avbryt matchning'}
+              {isUnmatchingTx ? t('unmatching') : t('unmatch')}
             </button>
           </>
         ) : (
@@ -3350,11 +3362,11 @@ function FieldsRail({
             <PayerChoiceSelect value={payer} onChange={setPayer} accountingMethod={accountingMethod} />
             {payer === 'company' ? (
               <Button variant="default" size="sm" className="w-full" onClick={onMatchTransaction}>
-                Matcha mot transaktion
+                {t('match_transaction')}
               </Button>
             ) : payer === 'unpaid' ? (
               <Button variant="default" size="sm" className="w-full" onClick={onCreateSupplierInvoice}>
-                Skapa leverantörsfaktura
+                {t('create_supplier_invoice')}
               </Button>
             ) : (
               <Button variant="default" size="sm" className="w-full" onClick={() => onRegisterExpense(payer)}>
@@ -3379,27 +3391,27 @@ function FieldsRail({
           loading={isDeleting}
           title={
             isProcessed
-              ? 'Kopplad till leverantörsfaktura, kan inte tas bort'
+              ? t('delete_blocked_supplier_invoice')
               : isBookedDirectly
-                ? 'Bokförd, kan inte tas bort'
+                ? t('delete_blocked_booked')
                 : isLinkedToTransaction
-                  ? 'Kopplad till transaktion, koppla loss innan borttagning'
+                  ? t('delete_blocked_linked')
                   : undefined
           }
         >
           {!isDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
-          Ta bort
+          {t('delete')}
         </Button>
         {isProcessed && (
           <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
-            Bearbetad
+            {t('processed')}
           </Badge>
         )}
         {isBookedDirectly && (
           <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
-            Bokförd
+            {t('booked')}
           </Badge>
         )}
         {isLinkedToTransaction &&
@@ -3413,13 +3425,13 @@ function FieldsRail({
                 className="w-full justify-center text-[11px] hover:bg-secondary/60"
               >
                 <Link2 className="h-2.5 w-2.5 mr-1" />
-                Kopplad till transaktion
+                {t('linked_to_transaction')}
               </Badge>
             </Link>
           ) : (
             <Badge variant="secondary" className="w-full justify-center text-[11px]">
               <Link2 className="h-2.5 w-2.5 mr-1" />
-              Kopplad till transaktion
+              {t('linked_to_transaction')}
             </Badge>
           ))}
       </div>
@@ -3512,28 +3524,32 @@ type FieldKey =
   | 'totals.total'
   | 'totals.vatAmount'
 
-interface FieldDef {
+interface FieldSpec {
   key: FieldKey
-  label: string
   type: 'text' | 'date' | 'number'
   inputMode?: 'numeric' | 'decimal'
 }
 
-const FIELD_DEFS: FieldDef[] = [
-  { key: 'supplier.name', label: 'Leverantör', type: 'text' },
-  { key: 'supplier.orgNumber', label: 'Org.nr', type: 'text' },
-  { key: 'supplier.vatNumber', label: 'VAT-nr', type: 'text' },
-  { key: 'invoice.currency', label: 'Valuta', type: 'text' },
-  { key: 'totals.total', label: 'Totalt', type: 'number', inputMode: 'decimal' },
-  { key: 'totals.vatAmount', label: 'Moms', type: 'number', inputMode: 'decimal' },
-  { key: 'supplier.bankgiro', label: 'Bankgiro', type: 'text' },
-  { key: 'supplier.plusgiro', label: 'Plusgiro', type: 'text' },
-  { key: 'supplier.iban', label: 'IBAN', type: 'text' },
-  { key: 'supplier.bic', label: 'BIC', type: 'text' },
-  { key: 'invoice.invoiceNumber', label: 'Fakturanr', type: 'text' },
-  { key: 'invoice.paymentReference', label: 'OCR/Referens', type: 'text' },
-  { key: 'invoice.invoiceDate', label: 'Fakturadatum', type: 'date' },
-  { key: 'invoice.dueDate', label: 'Förfallodatum', type: 'date' },
+interface FieldDef extends FieldSpec {
+  label: string
+}
+
+// Labels are resolved in EditableFieldsList (they need the translator).
+const FIELD_DEFS: FieldSpec[] = [
+  { key: 'supplier.name', type: 'text' },
+  { key: 'supplier.orgNumber', type: 'text' },
+  { key: 'supplier.vatNumber', type: 'text' },
+  { key: 'invoice.currency', type: 'text' },
+  { key: 'totals.total', type: 'number', inputMode: 'decimal' },
+  { key: 'totals.vatAmount', type: 'number', inputMode: 'decimal' },
+  { key: 'supplier.bankgiro', type: 'text' },
+  { key: 'supplier.plusgiro', type: 'text' },
+  { key: 'supplier.iban', type: 'text' },
+  { key: 'supplier.bic', type: 'text' },
+  { key: 'invoice.invoiceNumber', type: 'text' },
+  { key: 'invoice.paymentReference', type: 'text' },
+  { key: 'invoice.invoiceDate', type: 'date' },
+  { key: 'invoice.dueDate', type: 'date' },
 ]
 
 function readField(data: InvoiceExtractionResult, key: FieldKey): string {
@@ -3580,6 +3596,42 @@ export function EditableFieldsList({
   variant?: 'rail' | 'expanded'
 }) {
   const { toast } = useToast()
+  const t = useTranslations('inbox_workspace')
+  const fieldDefs: FieldDef[] = useMemo(() => {
+    const fieldLabel = (key: FieldKey): string => {
+      switch (key) {
+      case 'supplier.name':
+        return t('field_supplier')
+      case 'supplier.orgNumber':
+        return t('field_org_number')
+      case 'supplier.vatNumber':
+        return t('field_vat_number')
+      case 'invoice.currency':
+        return t('field_currency')
+      case 'totals.total':
+        return t('field_total')
+      case 'totals.vatAmount':
+        return t('field_vat')
+      case 'supplier.bankgiro':
+        return t('field_bankgiro')
+      case 'supplier.plusgiro':
+        return t('field_plusgiro')
+      case 'supplier.iban':
+        return t('field_iban')
+      case 'supplier.bic':
+        return t('field_bic')
+      case 'invoice.invoiceNumber':
+        return t('field_invoice_number')
+      case 'invoice.paymentReference':
+        return t('field_payment_reference')
+      case 'invoice.invoiceDate':
+        return t('field_invoice_date')
+      case 'invoice.dueDate':
+        return t('field_due_date')
+      }
+    }
+    return FIELD_DEFS.map((f) => ({ ...f, label: fieldLabel(f.key) }))
+  }, [t])
   const [drafts, setDrafts] = useState<Record<FieldKey, string>>(() =>
     Object.fromEntries(FIELD_DEFS.map((f) => [f.key, readField(data, f.key)])) as Record<FieldKey, string>
   )
@@ -3651,7 +3703,7 @@ export function EditableFieldsList({
     async (key: FieldKey, raw: string) => {
       const body = buildPatchBody(key, raw, currency)
       if (!body) {
-        toast({ variant: 'destructive', title: 'Ogiltigt värde' })
+        toast({ variant: 'destructive', title: t('invalid_value') })
         setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
         return
       }
@@ -3672,7 +3724,7 @@ export function EditableFieldsList({
           const failure = await resolveFailure(res)
           toast({
             variant: 'destructive',
-            title: res.status === 409 ? 'Posten är låst' : 'Kunde inte spara',
+            title: res.status === 409 ? t('item_locked') : t('save_failed'),
             description: failure.message,
           })
           setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
@@ -3685,13 +3737,13 @@ export function EditableFieldsList({
       } catch (err) {
         toast({
           variant: 'destructive',
-          title: 'Nätverksfel',
-          description: err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte spara',
+          title: t('network_error'),
+          description: err instanceof Error ? getUserErrorMessage(err) : t('save_failed'),
         })
         setDrafts((prev) => ({ ...prev, [key]: readField(data, key) }))
       }
     },
-    [itemId, currency, data, onUpdated, toast]
+    [itemId, currency, data, onUpdated, toast, t]
   )
 
   const onChange = useCallback(
@@ -3728,11 +3780,12 @@ export function EditableFieldsList({
     () =>
       selectInboxFields({
         documentKind: data.documentKind ?? null,
-        fields: FIELD_DEFS,
+        fields: fieldDefs,
         hasValue: (key) => (drafts[key as FieldKey] ?? '').trim() !== '',
         showAll: showAllFields,
+        receiptLabels: { 'invoice.invoiceDate': t('field_purchase_date') },
       }),
-    [data, drafts, showAllFields]
+    [data, drafts, showAllFields, fieldDefs, t]
   )
 
   return (
@@ -3759,7 +3812,7 @@ export function EditableFieldsList({
             </label>
             <AiFilledIndicator
               active={drafts[f.key].trim() !== '' && !edited[f.key]}
-              title="Ifyllt av AI: kontrollera mot dokumentet"
+              title={t('ai_filled_hint')}
             />
           </div>
           <Input
@@ -3789,13 +3842,13 @@ export function EditableFieldsList({
             variant === 'expanded' && 'sm:col-span-2'
           )}
         >
-          Visa fakturafält ({hiddenCount})
+          {t('show_invoice_fields', { count: hiddenCount })}
         </button>
       )}
       {vatRows.length > 0 && (
         <div className={cn('pt-2 border-t mt-3', variant === 'expanded' && 'sm:col-span-2 mt-1')}>
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
-            Momsfördelning
+            {t('vat_breakdown')}
           </p>
           <div className="space-y-1">
             {vatRows.map((row, i) => (
@@ -3817,7 +3870,7 @@ export function EditableFieldsList({
             variant === 'expanded' && 'sm:col-span-2 text-xs'
           )}
         >
-          Posten är kopplad till en leverantörsfaktura: fälten kan inte ändras.
+          {t('fields_locked_note')}
         </p>
       )}
     </div>

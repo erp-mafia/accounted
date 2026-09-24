@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatAmount, formatDate } from '@/lib/utils'
@@ -79,6 +80,7 @@ export function ReportRowExpansion({
   colSpan,
   rowId,
 }: ReportRowExpansionProps) {
+  const t = useTranslations('report_row_expansion')
   const [expanded, setExpanded] = useState(false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
 
@@ -96,7 +98,7 @@ export function ReportRowExpansion({
           onClick={toggle}
           aria-expanded={expanded}
           aria-controls={`expansion-${rowId}`}
-          aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
+          aria-label={expanded ? t('hide_vouchers') : t('show_vouchers')}
           className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
         >
           {expanded ? (
@@ -126,6 +128,7 @@ export function ReportRowExpansion({
  * colSpan={n}>` lines up with the rest of the table.
  */
 export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: string) {
+  const t = useTranslations('report_row_expansion')
   const [expanded, setExpanded] = useState(false)
   const { lines, loading, error, load } = useSourceLines(fetcher)
 
@@ -141,7 +144,7 @@ export function useReportRowExpansion(fetcher: ReportSourceFetcher, rowId: strin
       onClick={toggle}
       aria-expanded={expanded}
       aria-controls={`expansion-${rowId}`}
-      aria-label={expanded ? 'Dölj verifikat' : 'Visa verifikat'}
+      aria-label={expanded ? t('hide_vouchers') : t('show_vouchers')}
       className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
     >
       {expanded ? (
@@ -225,6 +228,7 @@ function ExpansionContent({
   error: string | null
   lines: ReportSourceLine[] | null
 }) {
+  const t = useTranslations('report_row_expansion')
   if (loading) {
     return (
       <div className="px-4 py-3 space-y-2">
@@ -247,7 +251,7 @@ function ExpansionContent({
   if (!lines || lines.length === 0) {
     return (
       <div className="px-4 py-3 text-sm text-muted-foreground">
-        Inga underliggande verifikat.
+        {t('empty')}
       </div>
     )
   }
@@ -257,11 +261,11 @@ function ExpansionContent({
       <table className="w-full text-xs">
         <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
           <tr className="text-left">
-            <th className="py-1 w-24">Verifikat</th>
-            <th className="py-1 w-24">Datum</th>
-            <th className="py-1">Beskrivning</th>
-            <th className="py-1 w-24 text-right">Debet</th>
-            <th className="py-1 w-24 text-right">Kredit</th>
+            <th className="py-1 w-24">{t('col_voucher')}</th>
+            <th className="py-1 w-24">{t('col_date')}</th>
+            <th className="py-1">{t('col_description')}</th>
+            <th className="py-1 w-24 text-right">{t('col_debit')}</th>
+            <th className="py-1 w-24 text-right">{t('col_credit')}</th>
           </tr>
         </thead>
         <tbody>

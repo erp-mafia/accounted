@@ -55,6 +55,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const { toast } = useToast()
   const router = useRouter()
   const t = useTranslations('journal_detail')
+  const tc = useTranslations('common')
   // The full chart (deactivated rows included) comes from the session cache
   // (lib/reference-data); only the static BAS catalogue is loaded per open,
   // and it is module-cached after the first time.
@@ -242,11 +243,11 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       const correctedId = result.data?.corrected?.id
 
       toast({
-        title: 'Ändringsverifikation skapad',
-        description: 'Storno och rättelse har bokförts.',
+        title: t('correction_dialog_toast_created'),
+        description: t('correction_dialog_toast_created_description'),
         action: correctedId ? (
           <Button variant="outline" size="sm" onClick={() => router.push(`/bookkeeping/${correctedId}`)}>
-            Visa rättelsen
+            {t('correction_dialog_view_correction')}
           </Button>
         ) : undefined,
       })
@@ -255,7 +256,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
     } catch (err) {
       const anyErr = err as { body?: unknown; status?: number }
       toast({
-        title: 'Kunde inte spara ändringsverifikation',
+        title: t('correction_dialog_toast_failed'),
         description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
         variant: 'destructive',
       })
@@ -271,24 +272,11 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
           <div className="flex items-center gap-2">
-            <DialogTitle>Skapa ändringsverifikation</DialogTitle>
+            <DialogTitle>{t('correction_dialog_title')}</DialogTitle>
             <RattelseExplainer>
-              <p>
-                Här skapas automatiskt en stornoverifikation som nollställer
-                originalet och en ny verifikation med dina rättade uppgifter.
-                Rättelsen bokförs i samma räkenskapsperiod som originalet: du
-                hittar den under originalets räkenskapsår.
-              </p>
-              <p>
-                Spårbarheten ligger i stornokedjan: originalet,
-                stornoverifikationen och ändringsverifikationen förblir synliga
-                i bokföringen och länkade till varandra.
-              </p>
-              <p>
-                Tar du bort ett konto ur de rättade raderna nollställs det
-                (stornon återför det). Vill du bara återföra hela verifikatet
-                utan att ersätta det, använd Återför (storno) istället.
-              </p>
+              <p>{t('correction_dialog_explainer_1')}</p>
+              <p>{t('correction_dialog_explainer_2')}</p>
+              <p>{t('correction_dialog_explainer_3')}</p>
             </RattelseExplainer>
           </div>
         </DialogHeader>
@@ -310,7 +298,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             the auto text; editable so a header named after the wrong account
             is not echoed on the correction (issue #1031). */}
         <div className="space-y-1">
-          <Label htmlFor="correction-description">Verifikationstext</Label>
+          <Label htmlFor="correction-description">{t('correction_dialog_description_label')}</Label>
           <Input
             id="correction-description"
             value={description}
@@ -321,17 +309,16 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
             className="ph-no-capture"
           />
           <p className="text-xs text-muted-foreground">
-            Texten på den nya verifikationen. Ändra den om originalets beskrivning inte längre
-            stämmer, till exempel när rättelsen byter konto.
+            {t('correction_dialog_description_hint')}
           </p>
         </div>
 
         {/* Corrected lines (editable) */}
         <div className="space-y-2">
           <div className="space-y-1">
-            <p className="text-sm font-medium">Rättade rader</p>
+            <p className="text-sm font-medium">{t('correction_dialog_lines_title')}</p>
             <p className="text-xs text-muted-foreground">
-              Det här är hela den nya verifikationen: alla konton som ska finnas kvar måste stå kvar.
+              {t('correction_dialog_lines_hint')}
             </p>
           </div>
 
@@ -383,7 +370,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                 <Input
                   value={line.line_description}
                   onChange={(e) => updateLine(index, 'line_description', e.target.value)}
-                  placeholder="Beskrivning"
+                  placeholder={t('col_description')}
                   className="h-8"
                 />
                 <div className="grid grid-cols-2 gap-2 sm:contents">
@@ -391,7 +378,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                     type="number"
                     value={line.debit_amount}
                     onChange={(e) => updateLine(index, 'debit_amount', e.target.value)}
-                    placeholder="Debet"
+                    placeholder={t('col_debit')}
                     className="h-8 text-right"
                     min={0}
                     step="0.01"
@@ -400,7 +387,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                     type="number"
                     value={line.credit_amount}
                     onChange={(e) => updateLine(index, 'credit_amount', e.target.value)}
-                    placeholder="Kredit"
+                    placeholder={t('col_credit')}
                     className="h-8 text-right"
                     min={0}
                     step="0.01"
@@ -412,19 +399,19 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
           <Button variant="outline" size="sm" onClick={addLine}>
             <Plus className="h-4 w-4 mr-1" />
-            Lägg till rad
+            {t('correction_dialog_add_line')}
           </Button>
 
           {/* Balance summary */}
           <div className="flex justify-end gap-6 text-sm pt-2 border-t">
             <div>
-              <span className="text-muted-foreground mr-2">Debet:</span>
+              <span className="text-muted-foreground mr-2">{t('correction_dialog_debit_label')}</span>
               <span className={!isBalanced ? 'text-destructive font-medium' : 'font-medium'}>
                 {roundedDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </span>
             </div>
             <div>
-              <span className="text-muted-foreground mr-2">Kredit:</span>
+              <span className="text-muted-foreground mr-2">{t('correction_dialog_credit_label')}</span>
               <span className={!isBalanced ? 'text-destructive font-medium' : 'font-medium'}>
                 {roundedCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
               </span>
@@ -433,20 +420,20 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
           {!isBalanced && roundedDebit + roundedCredit > 0 && (
             <p className="text-sm text-destructive">
-              Debet och kredit måste vara lika och större än 0.
+              {t('correction_dialog_unbalanced')}
             </p>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button
             onClick={() => handleSubmit()}
             disabled={!isBalanced || !hasValidLines || isSubmitting}
           >
-            {isSubmitting ? 'Skapar...' : 'Skapa ändringsverifikation'}
+            {isSubmitting ? t('correction_dialog_creating') : t('correction_dialog_title')}
           </Button>
         </DialogFooter>
 

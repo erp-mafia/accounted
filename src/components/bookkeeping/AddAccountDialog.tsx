@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -53,6 +54,8 @@ export function AddAccountDialog({
   // Loads the BAS chart chunk after mount so classification and the
   // standard-account check get the authoritative answer once it lands.
   useBasReference()
+  const t = useTranslations('add_account_dialog')
+  const tc = useTranslations('common')
   const [accountNumber, setAccountNumber] = useState('')
   const [accountName, setAccountName] = useState('')
   const [description, setDescription] = useState('')
@@ -94,12 +97,12 @@ export function AddAccountDialog({
     setInactiveConflict(false)
 
     if (!/^\d{4}$/.test(accountNumber)) {
-      setError('Kontonumret måste vara exakt 4 siffror')
+      setError(t('error_account_number_format'))
       return
     }
 
     if (!accountName.trim()) {
-      setError('Kontonamn krävs')
+      setError(t('error_name_required'))
       return
     }
 
@@ -146,7 +149,7 @@ export function AddAccountDialog({
       onCreated(createdAccount)
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('error_generic'))
     } finally {
       setIsSaving(false)
     }
@@ -182,7 +185,7 @@ export function AddAccountDialog({
       onCreated({ account_number: accountNumber })
       onOpenChange(false)
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('error_generic'))
     } finally {
       setIsSaving(false)
     }
@@ -192,9 +195,9 @@ export function AddAccountDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Lägg till eget konto</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Skapa ett eget konto utanför BAS-standarden
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -203,14 +206,14 @@ export function AddAccountDialog({
             <div className="flex items-start gap-2 rounded-lg bg-muted/30 border border-border p-3">
               <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
               <p className="text-sm text-attn">
-                Kontonummer {accountNumber} finns i BAS-standarden. Använd &quot;BAS-katalog&quot;-fliken för att aktivera standardkonton istället.
+                {t('bas_match_warning', { number: accountNumber })}
               </p>
             </div>
           )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Kontonummer</Label>
+              <Label>{t('account_number')}</Label>
               <Input
                 value={accountNumber}
                 onChange={(e) => {
@@ -234,20 +237,20 @@ export function AddAccountDialog({
                     setNormalBalance(classifyAccount(v).normal_balance)
                   }
                 }}
-                placeholder="T.ex. 1935"
+                placeholder={t('account_number_placeholder')}
                 maxLength={4}
                 className="font-mono"
               />
             </div>
             <div className="space-y-2">
-              <Label>Normal saldo</Label>
+              <Label>{t('normal_balance')}</Label>
               <Select value={normalBalance} onValueChange={(v) => { if (v) setNormalBalance(v as 'debit' | 'credit') }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="debit">Debet</SelectItem>
-                  <SelectItem value="credit">Kredit</SelectItem>
+                  <SelectItem value="debit">{t('debit')}</SelectItem>
+                  <SelectItem value="credit">{t('credit')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -255,33 +258,33 @@ export function AddAccountDialog({
 
           {derived && (
             <p className="text-xs text-muted-foreground">
-              Auto-detekterad typ:{' '}
+              {t('detected_type')}{' '}
               <span className="font-medium">
-                {derived.account_type === 'asset' ? 'Tillgång'
-                  : derived.account_type === 'liability' ? 'Skuld'
-                  : derived.account_type === 'equity' ? 'Eget kapital'
-                  : derived.account_type === 'untaxed_reserves' ? 'Obeskattade reserver'
-                  : derived.account_type === 'revenue' ? 'Intäkt'
-                  : 'Kostnad'}
+                {derived.account_type === 'asset' ? t('type_asset')
+                  : derived.account_type === 'liability' ? t('type_liability')
+                  : derived.account_type === 'equity' ? t('type_equity')
+                  : derived.account_type === 'untaxed_reserves' ? t('type_untaxed_reserves')
+                  : derived.account_type === 'revenue' ? t('type_revenue')
+                  : t('type_expense')}
               </span>
             </p>
           )}
 
           <div className="space-y-2">
-            <Label>Kontonamn</Label>
+            <Label>{t('account_name')}</Label>
             <Input
               value={accountName}
               onChange={(e) => setAccountName(e.target.value)}
-              placeholder="T.ex. Sparkonto företag"
+              placeholder={t('account_name_placeholder')}
             />
           </div>
 
           <div className="space-y-2">
-            <Label>Beskrivning <span className="text-muted-foreground">(valfritt)</span></Label>
+            <Label>{t('description_label')} <span className="text-muted-foreground">{t('optional')}</span></Label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Kort beskrivning av kontots användning"
+              placeholder={t('description_placeholder')}
               rows={2}
             />
           </div>
@@ -300,14 +303,14 @@ export function AddAccountDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Standard moms <span className="text-muted-foreground">(valfritt)</span></Label>
+              <Label>{t('default_vat')} <span className="text-muted-foreground">{t('optional')}</span></Label>
               <Select value={defaultVatRate} onValueChange={setDefaultVatRate}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Ingen standard</SelectItem>
-                  <SelectItem value="0">Ingen moms</SelectItem>
+                  <SelectItem value="none">{t('vat_no_default')}</SelectItem>
+                  <SelectItem value="0">{t('vat_none')}</SelectItem>
                   <SelectItem value="0.25">25 %</SelectItem>
                   <SelectItem value="0.12">12 %</SelectItem>
                   <SelectItem value="0.06">6 %</SelectItem>
@@ -315,11 +318,11 @@ export function AddAccountDialog({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>SRU-kod <span className="text-muted-foreground">(valfritt)</span></Label>
+              <Label>{t('sru_code')} <span className="text-muted-foreground">{t('optional')}</span></Label>
               <Input
                 value={sruCode}
                 onChange={(e) => setSruCode(e.target.value)}
-                placeholder="T.ex. 7201"
+                placeholder={t('sru_code_placeholder')}
               />
             </div>
           </div>
@@ -336,7 +339,7 @@ export function AddAccountDialog({
                 onClick={() => void handleReactivate()}
                 loading={isSaving}
               >
-                Aktivera kontot istället
+                {t('activate_instead')}
               </Button>
             </div>
           )}
@@ -344,14 +347,14 @@ export function AddAccountDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button
             onClick={handleCreate}
             disabled={inactiveConflict || accountNumber.length !== 4 || !accountName.trim()}
             loading={isSaving}
           >
-            Skapa konto
+            {t('create')}
           </Button>
         </DialogFooter>
       </DialogContent>

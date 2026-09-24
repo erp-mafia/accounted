@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -44,6 +45,8 @@ export function ActivateAccountsDialog({
   onCreateUnknown,
   confirmLabel,
 }: ActivateAccountsDialogProps) {
+  const t = useTranslations('activate_accounts_dialog')
+  const tc = useTranslations('common')
   const [rows, setRows] = useState<BasLookupRow[]>([])
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -97,11 +100,11 @@ export function ActivateAccountsDialog({
     <Dialog open={open} onOpenChange={(next) => { if (!next) onCancel() }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Aktivera konton</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
             {knownRows.length > 0
-              ? 'Följande konton behöver aktiveras i din kontoplan innan bokföringen kan slutföras.'
-              : 'Inga giltiga BAS-konton att aktivera.'}
+              ? t('description')
+              : t('description_none')}
           </DialogDescription>
         </DialogHeader>
 
@@ -109,7 +112,7 @@ export function ActivateAccountsDialog({
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Hämtar kontouppgifter...
+              {t('loading')}
             </div>
           )}
 
@@ -121,7 +124,7 @@ export function ActivateAccountsDialog({
                   <span className="truncate">{r.account_name}</span>
                   {r.in_chart && !r.is_active && (
                     <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                      Aktiveras igen
+                      {t('reactivated')}
                     </span>
                   )}
                 </li>
@@ -131,10 +134,10 @@ export function ActivateAccountsDialog({
 
           {!loading && unknownRows.length > 0 && (
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-attn">
-              <p className="font-medium">Finns inte i BAS-katalogen:</p>
+              <p className="font-medium">{t('unknown_title')}</p>
               <p className="mt-1 font-mono">{unknownRows.map((r) => r.account_number).join(', ')}</p>
               <p className="mt-1 text-attn/80">
-                Skapa dem som egna konton, eller kontrollera inmatningen.
+                {t('unknown_hint')}
               </p>
               {onCreateUnknown && (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -147,7 +150,10 @@ export function ActivateAccountsDialog({
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
                       <Plus className="mr-1 h-3 w-3" />
-                      Skapa <span data-ph-mask="">{r.account_number}</span>
+                      {t.rich('create_account', {
+                        number: r.account_number,
+                        mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+                      })}
                     </Button>
                   ))}
                 </div>
@@ -158,15 +164,15 @@ export function ActivateAccountsDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onCancel} disabled={submitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleConfirm} disabled={!canConfirm} loading={submitting}>
             {submitting ? (
-              'Aktiverar...'
+              t('activating')
             ) : (
               <>
                 <Plus className="mr-2 h-4 w-4" />
-                {confirmLabel ?? 'Aktivera och bokför'}
+                {confirmLabel ?? t('confirm_default')}
               </>
             )}
           </Button>

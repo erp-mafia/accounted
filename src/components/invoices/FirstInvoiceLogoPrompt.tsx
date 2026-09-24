@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -32,23 +33,25 @@ export function FirstInvoiceLogoPrompt({
   logoUrl,
   onLogoUpdate,
 }: FirstInvoiceLogoPromptProps) {
+  const t = useTranslations('first_invoice_logo_prompt')
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-display text-xl tracking-tight">
-            Lägg till en logotyp?
+            {t('title')}
           </DialogTitle>
           <DialogDescription>
-            Din första faktura är skapad. Vill du ladda upp en logotyp som
-            visas i sidhuvudet? Du kan ändra den senare i{' '}
-            <a
-              href="/settings/company"
-              className="underline underline-offset-2 hover:text-foreground"
-            >
-              Inställningar
-            </a>
-            .
+            {t.rich('description', {
+              link: (chunks) => (
+                <a
+                  href="/settings/company"
+                  className="underline underline-offset-2 hover:text-foreground"
+                >
+                  {chunks}
+                </a>
+              ),
+            })}
           </DialogDescription>
         </DialogHeader>
 
@@ -58,7 +61,7 @@ export function FirstInvoiceLogoPrompt({
 
         <DialogFooter>
           <Button variant={logoUrl ? 'default' : 'ghost'} onClick={onClose}>
-            {logoUrl ? 'Klar' : 'Hoppa över'}
+            {logoUrl ? t('done') : t('skip')}
           </Button>
         </DialogFooter>
       </DialogContent>

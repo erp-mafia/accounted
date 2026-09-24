@@ -52,7 +52,7 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('invoice.draft')
     expect(out.intentArgs).toEqual({})
     expect(out.contextRef).toBeUndefined()
-    expect(out.labelSuffix).toBe('om denna faktura')
+    expect(out.labelSuffix).toBe('invoice')
   })
 
   it('routes /invoices/[id] to invoice.draft with the id', () => {
@@ -60,7 +60,7 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('invoice.draft')
     expect(out.intentArgs).toEqual({ invoice_id: 'abc-123' })
     expect(out.contextRef).toBe('invoice:abc-123')
-    expect(out.labelSuffix).toBe('om denna faktura')
+    expect(out.labelSuffix).toBe('invoice')
   })
 
   it('routes /invoices/[id]/credit to invoice.draft with the parent id', () => {
@@ -77,7 +77,7 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('supplier_invoice.review')
     expect(out.intentArgs).toEqual({ supplier_invoice_id: 'sup-1' })
     expect(out.contextRef).toBe('supplier_invoice:sup-1')
-    expect(out.labelSuffix).toBe('om denna leverantörsfaktura')
+    expect(out.labelSuffix).toBe('supplier_invoice')
   })
 
   it('does NOT route /supplier-invoices/new to supplier_invoice.review (no entity yet)', () => {
@@ -103,7 +103,7 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('bokslut.step')
     expect(out.intentArgs).toEqual({ step_id: null })
     expect(out.contextRef).toBe('bokslut:overview')
-    expect(out.labelSuffix).toBe('om bokslutet')
+    expect(out.labelSuffix).toBe('year_end')
   })
 
   it('routes /kpi to kpi.explain (matches the page button)', () => {
@@ -111,7 +111,7 @@ describe('routeToIntent', () => {
     expect(out.intentId).toBe('kpi.explain')
     expect(out.intentArgs).toEqual({ kpi_key: 'översikt' })
     expect(out.contextRef).toBe('kpi:översikt')
-    expect(out.labelSuffix).toBe('om nyckeltalen')
+    expect(out.labelSuffix).toBe('kpi')
   })
 
   it('does NOT route bare /bookkeeping list page to verifikation.draft', () => {
@@ -146,33 +146,33 @@ describe('contextRefToTarget', () => {
    */
   it('resolves each ref the app writes today', () => {
     expect(contextRefToTarget('invoice:abc-123')).toEqual({
-      label: 'Faktura',
+      kind: 'invoice',
       href: '/invoices/abc-123',
     })
     expect(contextRefToTarget('supplier_invoice:abc-123')).toEqual({
-      label: 'Leverantörsfaktura',
+      kind: 'supplier_invoice',
       href: '/supplier-invoices/abc-123',
     })
     expect(contextRefToTarget('transaction:abc-123')).toEqual({
-      label: 'Transaktion',
+      kind: 'transaction',
       href: '/transactions',
     })
     expect(contextRefToTarget('verifikation:new')).toEqual({
-      label: 'Verifikation',
+      kind: 'verifikation',
       href: '/bookkeeping',
     })
     expect(contextRefToTarget('bokslut:overview')).toEqual({
-      label: 'Bokslut',
+      kind: 'bokslut',
       href: '/bookkeeping/year-end',
     })
-    expect(contextRefToTarget('kpi:översikt')).toEqual({ label: 'Nyckeltal', href: '/kpi' })
+    expect(contextRefToTarget('kpi:översikt')).toEqual({ kind: 'kpi', href: '/kpi' })
   })
 
   it('names the document inbox without linking it', () => {
     // It is an extension route under /e/[sector]; core cannot hardcode a path
     // that only exists when the extension is enabled.
     expect(contextRefToTarget('inbox:bulk')).toEqual({
-      label: 'Dokumentinkorgen',
+      kind: 'inbox',
       href: null,
     })
   })

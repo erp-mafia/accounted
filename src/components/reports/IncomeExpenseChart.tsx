@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatCurrency } from '@/lib/utils'
@@ -15,12 +16,13 @@ interface IncomeExpenseChartProps {
 }
 
 export function IncomeExpenseChart({ months }: IncomeExpenseChartProps) {
+  const t = useTranslations('income_expense_chart')
   if (months.length === 0) return null
 
   return (
     <Card className="mb-4">
       <CardHeader className="pb-2">
-        <CardTitle className="text-base">Intäkter vs Kostnader per månad</CardTitle>
+        <CardTitle className="text-base">{t('title')}</CardTitle>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={300}>
@@ -36,11 +38,11 @@ export function IncomeExpenseChart({ months }: IncomeExpenseChartProps) {
             <Tooltip
               formatter={(value, name) => [
                 formatCurrency(Number(value)),
-                name === 'income' ? 'Intäkter' : 'Kostnader',
+                name === 'income' ? t('income') : t('expenses'),
               ]}
             />
             <Legend
-              formatter={(value) => (value === 'income' ? 'Intäkter' : 'Kostnader')}
+              formatter={(value) => (value === 'income' ? t('income') : t('expenses'))}
             />
             <Bar dataKey="income" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} />
             <Bar dataKey="expenses" fill="hsl(var(--chart-2))" radius={[4, 4, 0, 0]} />

@@ -101,65 +101,130 @@ export function operationLabel(operationType: string, t: (key: string) => string
   return labelKey ? t(labelKey) : humanizeOperationType(operationType)
 }
 
-// Full-sentence warning for the single-op confirmation dialog AND the inline
-// list-view warning when risk is medium/high. The list-view truncates beyond
-// one line; the dialog shows it in full. Order roughly low → high risk so
-// reviewers scanning the source see the destructive paths grouped together.
-export const singleActionWarnings: Record<string, string> = {
-  // Low/medium risk: light verifikation work
-  create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
-  create_customer: 'Genom att klicka godkänn så skapar du en kund.',
-  create_invoice: 'Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).',
-  categorize_transaction: 'Genom att klicka godkänn så kategoriseras transaktionen och en verifikation skapas.',
-  match_transaction_invoice: 'Genom att klicka godkänn så matchas transaktionen mot fakturan.',
-  attach_document_to_transaction: 'Genom att klicka godkänn så bifogas dokumentet till transaktionen.',
-  uncategorize_transaction: 'Genom att klicka godkänn så tas kategoriseringen bort.',
-  send_invoice: 'Genom att klicka godkänn så skickas fakturan till kunden.',
-  mark_invoice_paid: 'Genom att klicka godkänn så bokförs en betalning på fakturan.',
-  mark_invoice_sent: 'Genom att klicka godkänn så märks fakturan som skickad och en verifikation skapas.',
-  // High risk: period/year-end/voucher edits. These are the ones the reviewer
-  // really needs the warning for, so we keep them concrete: name the
-  // irreversibility or compliance consequence, not the generic risk-level.
-  lock_period: 'Genom att klicka godkänn så låses perioden: inga nya verifikationer kan bokföras tills den låses upp.',
-  unlock_period: 'Genom att klicka godkänn så låses perioden upp. Använd endast för rättelser; lås igen efter.',
-  close_period: 'Genom att klicka godkänn så stängs perioden permanent (BFL). Stängningen kan inte ångras.',
-  run_year_end: 'Genom att klicka godkänn så körs bokslut: resultatkonton nollställs, perioden låses, nästa period skapas.',
-  set_opening_balances: 'Genom att klicka godkänn så bokförs ingående balans i nästa period.',
-  run_currency_revaluation: 'Genom att klicka godkänn så bokförs valutaomvärdering (3960/7960).',
-  create_voucher: 'Genom att klicka godkänn så bokförs verifikationen med ett nytt löpnummer.',
-  correct_entry: 'Genom att klicka godkänn så stornas originalverifikationen och en rättelse bokförs (BFL 5 kap 5§).',
-  reverse_entry: 'Genom att klicka godkänn så stornas verifikationen: originalet behålls synligt (BFL 5 kap).',
-  credit_invoice: 'Genom att klicka godkänn så skapas en kreditfaktura och originalverifikationen stornas.',
-  delete_draft_invoice: 'Genom att klicka godkänn så tas utkastet bort: onumrerade utkast raderas permanent, numrerade makuleras med bevarat fakturanummer.',
-  credit_supplier_invoice: 'Genom att klicka godkänn så krediteras leverantörsfakturan och registreringsverifikationen stornas.',
-  approve_supplier_invoice: 'Genom att klicka godkänn så attesteras leverantörsfakturan och blir betalningsbar.',
-  convert_invoice: 'Genom att klicka godkänn så konverteras proforman eller offerten till en riktig faktura med F-nummer.',
-  import_sie: 'Genom att klicka godkänn så importeras SIE-filen: räkenskapsperiod, ingående balans och verifikationer skapas.',
-  explain_voucher_gap: 'Genom att klicka godkänn så dokumenteras förklaringen för verifikationsluckan (BFNAR 2013:2).',
-  post_annual_depreciation: 'Genom att klicka godkänn så bokförs planenlig avskrivning: en verifikation per tillgång.',
-  create_asset: 'Genom att klicka godkänn så läggs tillgången till i anläggningsregistret. Ingen verifikation bokförs.',
-  update_asset: 'Genom att klicka godkänn så uppdateras tillgången i anläggningsregistret. Ingen verifikation bokförs.',
-  dispose_asset: 'Genom att klicka godkänn så bokförs avyttringen: tillgången lämnar registret och en verifikation med vinst eller förlust skapas.',
-}
+/** next-intl translator for the `pending_action_warning` and `rejection_category` namespaces. */
+export type VocabularyTranslate = (key: string, values?: Record<string, string | number>) => string
 
 /**
- * The consequence sentence the approver consents to. Keyed on the operation
- * type; the one type whose outcome depends on its params (convert_invoice
- * with target 'order' creates a draft kundorder, no F-number, nothing
- * booked) reads the params so the dialog never promises a faktura that the
- * approval will not create.
+ * The consequence sentence the approver consents to: the full-sentence warning
+ * for the single-op confirmation dialog AND the inline list-view warning when
+ * risk is medium/high. The list view truncates beyond one line; the dialog
+ * shows it in full. Keyed on the operation type; the one type whose outcome
+ * depends on its params (convert_invoice with target 'order' creates a draft
+ * kundorder, no F-number, nothing booked) reads the params so the dialog
+ * never promises a faktura that the approval will not create. Empty for an
+ * operation type with no warning.
+ *
+ * `t` is the `pending_action_warning` translator. High-risk entries (period,
+ * year-end, voucher edits) name the irreversibility or compliance
+ * consequence, not the generic risk level.
  */
-export function singleActionWarning(operationType: string, params?: Record<string, unknown> | null): string {
+export function singleActionWarning(
+  operationType: string,
+  params: Record<string, unknown> | null | undefined,
+  t: VocabularyTranslate,
+): string {
   if (operationType === 'convert_invoice' && params?.target === 'order') {
-    return 'Genom att klicka godkänn så skapas en kundorder (utkast, OR-nummer) från proforman eller offerten. Ingen faktura skapas och inget bokförs; fakturan skapas senare från kundordern.'
+    return t('convert_invoice_to_order')
   }
-  return singleActionWarnings[operationType] ?? ''
+  switch (operationType) {
+    case 'create_transaction':
+      return t('create_transaction')
+    case 'create_customer':
+      return t('create_customer')
+    case 'create_invoice':
+      return t('create_invoice')
+    case 'categorize_transaction':
+      return t('categorize_transaction')
+    case 'match_transaction_invoice':
+      return t('match_transaction_invoice')
+    case 'attach_document_to_transaction':
+      return t('attach_document_to_transaction')
+    case 'uncategorize_transaction':
+      return t('uncategorize_transaction')
+    case 'send_invoice':
+      return t('send_invoice')
+    case 'mark_invoice_paid':
+      return t('mark_invoice_paid')
+    case 'mark_invoice_sent':
+      return t('mark_invoice_sent')
+    case 'lock_period':
+      return t('lock_period')
+    case 'unlock_period':
+      return t('unlock_period')
+    case 'close_period':
+      return t('close_period')
+    case 'run_year_end':
+      return t('run_year_end')
+    case 'set_opening_balances':
+      return t('set_opening_balances')
+    case 'run_currency_revaluation':
+      return t('run_currency_revaluation')
+    case 'create_voucher':
+      return t('create_voucher')
+    case 'correct_entry':
+      return t('correct_entry')
+    case 'reverse_entry':
+      return t('reverse_entry')
+    case 'credit_invoice':
+      return t('credit_invoice')
+    case 'delete_draft_invoice':
+      return t('delete_draft_invoice')
+    case 'credit_supplier_invoice':
+      return t('credit_supplier_invoice')
+    case 'approve_supplier_invoice':
+      return t('approve_supplier_invoice')
+    case 'convert_invoice':
+      return t('convert_invoice')
+    case 'import_sie':
+      return t('import_sie')
+    case 'explain_voucher_gap':
+      return t('explain_voucher_gap')
+    case 'post_annual_depreciation':
+      return t('post_annual_depreciation')
+    case 'create_asset':
+      return t('create_asset')
+    case 'update_asset':
+      return t('update_asset')
+    case 'dispose_asset':
+      return t('dispose_asset')
+    default:
+      return ''
+  }
 }
 
 // Structured rejection categories. One canonical list: /pending's reject
 // dialog and the chat approval card's reject form render the same options
 // and store the same values (surfaced back to the agent via
 // gnubok_get_recent_rejections).
+export const REJECTION_CATEGORIES: PendingOperationRejectionCategory[] = [
+  'wrong_category',
+  'wrong_amount',
+  'duplicate',
+  'wrong_period',
+  'other',
+]
+
+/** The category as shown to the viewer; `t` is the `rejection_category` translator. */
+export function rejectionCategoryLabel(
+  category: PendingOperationRejectionCategory,
+  t: VocabularyTranslate,
+): string {
+  switch (category) {
+    case 'wrong_category':
+      return t('wrong_category')
+    case 'wrong_amount':
+      return t('wrong_amount')
+    case 'duplicate':
+      return t('duplicate')
+    case 'wrong_period':
+      return t('wrong_period')
+    case 'other':
+      return t('other')
+  }
+}
+
+// Swedish on purpose: this is the wording fed back to the agent in the
+// chat approval card's correction request, not display text.
 export const REJECTION_CATEGORY_LABELS: Record<PendingOperationRejectionCategory, string> = {
   wrong_category: 'Fel kategori / konto',
   wrong_amount: 'Fel belopp',

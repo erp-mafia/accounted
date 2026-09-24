@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -37,10 +38,11 @@ interface Props {
  * Tier-2 retro-tagging on a posted voucher line (dimensions plan PR6).
  * Edits ONLY the dimension tags via the audited retag RPC; the verifikat
  * itself is untouchable. Dims other than 1/6 pass through unedited (same
- * merge semantics as the voucher editor). Hardcoded Swedish: voucher
- * detail is a stays-Swedish surface.
+ * merge semantics as the voucher editor).
  */
 export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }: Props) {
+  const t = useTranslations('retag_line_dialog')
+  const tc = useTranslations('common')
   const { toast } = useToast()
   const [dims, setDims] = useState<Record<string, string>>({})
   const [reason, setReason] = useState('')
@@ -58,7 +60,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
   if (!line) return null
 
   const amount = Number(line.debit_amount) > 0 ? Number(line.debit_amount) : Number(line.credit_amount)
-  const side = Number(line.debit_amount) > 0 ? 'Debet' : 'Kredit'
+  const side = Number(line.debit_amount) > 0 ? t('debit') : t('credit')
 
   const handleChange = (dimNo: string, code: string | null) => {
     setDims((prev) => {
@@ -80,18 +82,18 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
       })
       const payload = await res.json()
       if (!res.ok) {
-        setError(typeof payload.error === 'string' ? payload.error : 'Kunde inte ändra dimensioner')
+        setError(typeof payload.error === 'string' ? payload.error : t('save_failed'))
         return
       }
       if (payload.data?.changed === false) {
-        toast({ title: 'Inga ändringar', description: 'Dimensionerna var redan de valda.' })
+        toast({ title: t('no_changes_title'), description: t('no_changes_description') })
       } else {
-        toast({ title: 'Dimensioner ändrade', description: 'Ändringen är loggad i ändringshistoriken.' })
+        toast({ title: t('saved_title'), description: t('saved_description') })
       }
       onOpenChange(false)
       onRetagged()
     } catch {
-      setError('Kunde inte ändra dimensioner')
+      setError(t('save_failed'))
     } finally {
       setIsSaving(false)
     }
@@ -103,10 +105,9 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Ändra dimensioner</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Påverkar endast internredovisningen, inte verifikatet. Ändringen
-            loggas med före/efter och anledning.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -123,12 +124,12 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
         <LineDimensionFields dimensions={dims} onChange={handleChange} />
 
         <div className="space-y-2">
-          <Label htmlFor="retag-reason">Anledning</Label>
+          <Label htmlFor="retag-reason">{t('reason_label')}</Label>
           <Input
             id="retag-reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="t.ex. Raden hörde till projekt P002"
+            placeholder={t('reason_placeholder')}
             maxLength={500}
           />
         </div>
@@ -137,10 +138,10 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSave} disabled={!reasonValid} loading={isSaving}>
-            Spara ändring
+            {t('save_change')}
           </Button>
         </DialogFooter>
       </DialogContent>

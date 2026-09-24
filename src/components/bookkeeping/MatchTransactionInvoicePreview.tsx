@@ -1,6 +1,7 @@
 'use client'
 
 import { ArrowDown } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
@@ -13,6 +14,7 @@ interface MatchTransactionInvoicePreviewProps {
  * AttachDocumentPreview's layout so reviewers learn one matching idiom.
  */
 export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoicePreviewProps) {
+  const t = useTranslations('match_transaction_invoice_preview')
   const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
@@ -46,35 +48,34 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
     <div className="space-y-3 text-sm">
       {complianceWarning && <AttnLine>{complianceWarning}</AttnLine>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <PreviewCard label="Transaktion">
-          {txDate && <Row label="Datum" value={formatDate(txDate)} tabular />}
-          <Row label="Beskrivning" value={txDescription} />
+        <PreviewCard label={t('transaction')}>
+          {txDate && <Row label={t('date')} value={formatDate(txDate)} tabular />}
+          <Row label={t('description')} value={txDescription} />
           <Row
-            label="Belopp"
+            label={t('amount')}
             value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '-'}
             tabular
           />
         </PreviewCard>
 
-        <PreviewCard label="Faktura">
-          <Row label="Nummer" value={invoiceNumber} tabular />
-          {invoiceDate && <Row label="Fakturadatum" value={formatDate(invoiceDate)} tabular />}
-          {customerName && <Row label="Kund" value={customerName} />}
+        <PreviewCard label={t('invoice')}>
+          <Row label={t('number')} value={invoiceNumber} tabular />
+          {invoiceDate && <Row label={t('invoice_date')} value={formatDate(invoiceDate)} tabular />}
+          {customerName && <Row label={t('customer')} value={customerName} />}
           {typeof invoiceTotal === 'number' && (
-            <Row label="Totalt" value={formatCurrency(invoiceTotal, invoiceCurrency)} tabular />
+            <Row label={t('total')} value={formatCurrency(invoiceTotal, invoiceCurrency)} tabular />
           )}
         </PreviewCard>
       </div>
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
         <ArrowDown className="h-3.5 w-3.5 mr-1" />
-        matchas mot fakturan
+        {t('matched_to_invoice')}
       </div>
 
       {showDateDriftHint && (
         <p className="text-xs text-muted-foreground">
-          Transaktionsdatum och fakturadatum skiljer sig med mer än en månad: kontrollera att
-          matchningen avser rätt affärshändelse.
+          {t('date_drift_hint')}
         </p>
       )}
     </div>

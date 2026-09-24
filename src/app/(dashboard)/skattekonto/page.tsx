@@ -103,6 +103,7 @@ export default function SkattekontoPage() {
   const { toast } = useToast()
   const t = useTranslations('skattekonto')
   const tStart = useTranslations('start_cards')
+  const tMatch = useTranslations('tx_skattekonto_match')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
@@ -280,7 +281,7 @@ export default function SkattekontoPage() {
         // the Error constructor stringifies a non-string body field, and the
         // mapper would discard the route's own Swedish reason.
         toast({
-          title: 'Synk misslyckades',
+          title: t('sync_failed'),
           description: getUserErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
@@ -289,13 +290,13 @@ export default function SkattekontoPage() {
       setReconnectMessage(null)
       setNeedsReconnect(false)
       toast({
-        title: 'Skattekonto synkroniserat',
-        description: `${json.data.booked} bokförda, ${json.data.upcoming} kommande`,
+        title: t('synced_toast_title'),
+        description: t('synced_toast_description', { booked: json.data.booked, upcoming: json.data.upcoming }),
       })
       await reload()
     } catch (err) {
       toast({
-        title: 'Synk misslyckades',
+        title: t('sync_failed'),
         description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
@@ -352,7 +353,7 @@ export default function SkattekontoPage() {
       const json = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte hämta kandidater',
+          title: tMatch('fetch_candidates_failed_title'),
           description: getUserErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
@@ -362,7 +363,7 @@ export default function SkattekontoPage() {
       setMatchCandidates(json.data.candidates as MatchCandidate[])
     } catch (err) {
       toast({
-        title: 'Kunde inte hämta kandidater',
+        title: tMatch('fetch_candidates_failed_title'),
         description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
@@ -387,19 +388,19 @@ export default function SkattekontoPage() {
       const json = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte koppla transaktionen',
+          title: tMatch('match_failed_title'),
           description: getUserErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
         return
       }
-      toast({ title: 'Transaktion kopplad till verifikat' })
+      toast({ title: tMatch('match_success_title') })
       setMatchOpenFor(null)
       setMatchCandidates(null)
       await reload()
     } catch (err) {
       toast({
-        title: 'Kunde inte koppla transaktionen',
+        title: tMatch('match_failed_title'),
         description: err instanceof Error ? getUserErrorMessage(err) : undefined,
         variant: 'destructive',
       })
@@ -411,7 +412,7 @@ export default function SkattekontoPage() {
   function copyOcr(ocr: string) {
     navigator.clipboard
       .writeText(ocr)
-      .then(() => toast({ title: 'OCR kopierat' }))
+      .then(() => toast({ title: t('ocr_copied') }))
       .catch(() => {})
   }
 
@@ -653,7 +654,7 @@ export default function SkattekontoPage() {
   if (notConnected && !hasLocalRows) {
     return (
       <div className="space-y-8">
-        <PageHeader title="Skattekonto" help={helpNode} />
+        <PageHeader title={t('page_title')} help={helpNode} />
         <div className="animate-fade-in">
           <StartCard
             card="abacus"
@@ -671,15 +672,15 @@ export default function SkattekontoPage() {
   if (loadError) {
     return (
       <div className="space-y-8">
-        <PageHeader title="Skattekonto" help={helpNode} />
+        <PageHeader title={t('page_title')} help={helpNode} />
         <EmptyState
           icon={AlertCircle}
-          title="Kunde inte hämta skattekontot"
-          description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
+          title={t('load_error_title')}
+          description={t('load_error_body')}
         >
           <Button variant="outline" onClick={() => void reload()}>
             <RefreshCw className="mr-2 h-4 w-4" />
-            Försök igen
+            {t('retry')}
           </Button>
         </EmptyState>
       </div>
@@ -691,7 +692,7 @@ export default function SkattekontoPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Skattekonto"
+        title={t('page_title')}
         help={helpNode}
         action={
           notConnected ? (
@@ -704,7 +705,7 @@ export default function SkattekontoPage() {
             </Button>
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
-            <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
+            <span title={!hasSkvCapability ? t('sync_requires_subscription') : undefined}>
               <Button size="sm"
                 variant="ghost"
                 onClick={syncNow}
@@ -712,7 +713,7 @@ export default function SkattekontoPage() {
                 className="text-muted-foreground hover:text-foreground"
               >
                 <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
-                {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
+                {syncing ? t('syncing') : t('sync_now')}
               </Button>
             </span>
           )
@@ -752,7 +753,7 @@ export default function SkattekontoPage() {
           </div>
         ) : !data ? (
           <p className="py-4 text-sm text-muted-foreground">
-            Inget saldo hämtat ännu: klicka på ”Synkronisera nu”.
+            {t('no_balance_yet')}
           </p>
         ) : (
           <>
@@ -764,7 +765,7 @@ export default function SkattekontoPage() {
                     alt=""
                     className="h-4 w-4 shrink-0 object-contain"
                   />
-                  <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
+                  <p className="text-xs text-muted-foreground">{t('balance_at_skv')}</p>
                 </div>
                 <p
                   className={cn(
@@ -780,33 +781,33 @@ export default function SkattekontoPage() {
                     type="button"
                     onClick={() => copyOcr(data.ocrNummer)}
                     className={QUIET_LINK_CLASS}
-                    aria-label="Kopiera OCR"
+                    aria-label={t('copy_ocr_aria')}
                   >
                     {t('copy')}
                   </button>
                   {saldo?.lastSyncedAt && (
                     <>
-                      {' '}· synkad{' '}
+                      {' '}· {t('synced_label')}{' '}
                       <span className="tabular-nums">{formatDateTime(saldo.lastSyncedAt)}</span>
                     </>
                   )}
                 </p>
                 {data.rantaSkatteverket !== 0 && (
                   <p className="mt-1 text-xs tabular-nums text-muted-foreground">
-                    Preliminär ränta: {formatCurrency(data.rantaSkatteverket)}
+                    {t('preliminary_interest', { amount: formatCurrency(data.rantaSkatteverket) })}
                   </p>
                 )}
                 {data.saldoKronofogden !== 0 && (
                   <p className="mt-1 text-xs font-medium tabular-nums text-destructive">
-                    Hos Kronofogden: {formatCurrency(data.saldoKronofogden)}
+                    {t('kronofogden_balance', { amount: formatCurrency(data.saldoKronofogden) })}
                     {data.rantaKronofogden !== 0 &&
-                      ` (ränta ${formatCurrency(data.rantaKronofogden)})`}
+                      ` ${t('kronofogden_interest', { amount: formatCurrency(data.rantaKronofogden) })}`}
                   </p>
                 )}
               </div>
 
               <div className="rounded-lg border border-border p-4">
-                <p className="text-xs text-muted-foreground">Nästa dragning</p>
+                <p className="text-xs text-muted-foreground">{t('next_charge')}</p>
                 {nextCharge ? (
                   <>
                     <p className="mt-2 font-display text-2xl tabular-nums tracking-tight">
@@ -814,12 +815,12 @@ export default function SkattekontoPage() {
                     </p>
                     <p className="mt-1 text-xs tabular-nums text-muted-foreground">
                       {formatDateLong(nextCharge.due)}
-                      {nextCharge.count > 1 && ` · ${nextCharge.count} händelser`}
+                      {nextCharge.count > 1 && ` · ${t('next_charge_events', { count: nextCharge.count })}`}
                     </p>
                   </>
                 ) : (
                   <p className="mt-2 text-sm text-muted-foreground">
-                    Inga kommande dragningar.
+                    {t('no_upcoming_charges')}
                   </p>
                 )}
               </div>
@@ -849,7 +850,7 @@ export default function SkattekontoPage() {
             {(data.informationstext?.length ?? 0) > 0 && (
               <div className="space-y-1">
                 <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Information från Skatteverket
+                  {t('info_from_skv')}
                 </p>
                 {(data.informationstext ?? []).map((info, i) => (
                   <p key={i} className="text-xs leading-5 text-muted-foreground">
@@ -984,7 +985,7 @@ export default function SkattekontoPage() {
                     type="button"
                     onClick={() => copyOcr(data.ocrNummer)}
                     className="text-muted-foreground transition-colors hover:text-foreground"
-                    aria-label="Kopiera OCR"
+                    aria-label={t('copy_ocr_aria')}
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </button>
@@ -1085,15 +1086,15 @@ function SkattekontoTable({
     <div
       className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8"
       role="region"
-      aria-label="Skattekontohändelser"
+      aria-label={t('table_aria')}
     >
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
             <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
-            <th className={cn(TH_CLASS, 'w-[110px]')}>Datum</th>
-            <th className={TH_CLASS}>Händelse</th>
-            <th className={cn(TH_CLASS, 'text-right')}>Belopp</th>
+            <th className={cn(TH_CLASS, 'w-[110px]')}>{t('col_date')}</th>
+            <th className={TH_CLASS}>{t('col_event')}</th>
+            <th className={cn(TH_CLASS, 'text-right')}>{t('col_amount')}</th>
             <th className={cn(TH_CLASS, 'w-[150px]')} />
           </tr>
         </thead>
@@ -1273,7 +1274,7 @@ function SkattekontoRow({
               type="button"
               onClick={() => onMatch(row)}
               className={QUIET_LINK_CLASS}
-              title="Koppla till befintligt verifikat"
+              title={t('action_match_title')}
             >
               {t('action_match')}
             </button>
@@ -1306,12 +1307,13 @@ function MatchDialog({
   onClose: () => void
   onConfirm: (journalEntryId: string) => void
 }) {
+  const tMatch = useTranslations('tx_skattekonto_match')
   const open = !!row
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
+          <DialogTitle>{tMatch('title')}</DialogTitle>
           {/* data-ph-mask: transaction text and amount are user data */}
           <DialogDescription data-ph-mask="">
             {row && (
@@ -1327,18 +1329,15 @@ function MatchDialog({
 
         {loading && (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            Söker kandidater…
+            {tMatch('searching')}
           </p>
         )}
 
         {!loading && candidates && candidates.length === 0 && (
           <div className="space-y-2 py-4 text-sm">
-            <p>Hittade inga verifikat med en matchande rad på konto 1630.</p>
+            <p>{tMatch('no_candidates_title')}</p>
             <p className="text-muted-foreground">
-              Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar
-              från transaktionsdatumet, och får inte redan vara kopplad till en
-              annan skattekonto-transaktion. Använd <strong>Bokför</strong> för
-              att skapa ett nytt verifikat istället.
+              {tMatch.rich('no_candidates_help', { strong: (c) => <strong>{c}</strong> })}
             </p>
           </div>
         )}
@@ -1348,10 +1347,10 @@ function MatchDialog({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Datum</TableHead>
-                  <TableHead>Verifikat</TableHead>
-                  <TableHead>Beskrivning</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>{tMatch('th_date')}</TableHead>
+                  <TableHead>{tMatch('th_voucher')}</TableHead>
+                  <TableHead>{tMatch('th_description')}</TableHead>
+                  <TableHead>{tMatch('th_status')}</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -1368,11 +1367,11 @@ function MatchDialog({
                     <TableCell>
                       {/* Chips mark exceptions: posted is the normal case. */}
                       {c.status === 'posted' ? (
-                        <span className="text-muted-foreground">Bokförd</span>
+                        <span className="text-muted-foreground">{tMatch('status_posted')}</span>
                       ) : c.status === 'draft' ? (
-                        <Badge variant="outline">Utkast</Badge>
+                        <Badge variant="outline">{tMatch('status_draft')}</Badge>
                       ) : (
-                        <Badge variant="destructive">Makulerad</Badge>
+                        <Badge variant="destructive">{tMatch('status_reversed')}</Badge>
                       )}
                     </TableCell>
                     <TableCell className="text-right">
@@ -1381,7 +1380,7 @@ function MatchDialog({
                         onClick={() => onConfirm(c.journal_entry_id)}
                         disabled={submittingId === c.journal_entry_id}
                       >
-                        {submittingId === c.journal_entry_id ? 'Kopplar…' : 'Koppla'}
+                        {submittingId === c.journal_entry_id ? tMatch('linking') : tMatch('link')}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -1393,7 +1392,7 @@ function MatchDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={onClose}>
-            Avbryt
+            {tMatch('cancel')}
           </Button>
         </DialogFooter>
       </DialogContent>

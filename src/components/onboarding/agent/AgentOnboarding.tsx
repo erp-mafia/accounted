@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Check, Loader2, Circle, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,18 +12,7 @@ import ReviewCard from './ReviewCard'
 type StepId = 'tic' | 'select' | 'narrative' | 'finalize'
 type StepStatus = 'pending' | 'in_progress' | 'success' | 'fallback' | 'error'
 
-interface StepConfig {
-  id: StepId
-  label: string
-  fallbackLabel?: string
-}
-
-const STEPS: StepConfig[] = [
-  { id: 'tic', label: 'Hämtar uppgifter', fallbackLabel: 'Inga företagsuppgifter, fortsätter ändå' },
-  { id: 'select', label: 'Identifierar din verksamhet', fallbackLabel: 'Använder standardval' },
-  { id: 'narrative', label: 'Sammanfattar', fallbackLabel: 'Standardsammanfattning' },
-  { id: 'finalize', label: 'Klar' },
-]
+const STEPS: StepId[] = ['tic', 'select', 'narrative', 'finalize']
 
 interface InitialFields {
   entity_type_label: string
@@ -67,6 +57,7 @@ export default function AgentOnboarding({
   alreadyVerified,
   existingSummary,
 }: Props) {
+  const t = useTranslations('agent_onboarding')
   const router = useRouter()
   const [phase, setPhase] = useState<'building' | 'review' | 'done'>(
     alreadyVerified ? 'review' : 'building',
@@ -111,7 +102,7 @@ export default function AgentOnboarding({
     if (alreadyVerified) return
 
     const controller = new AbortController()
-    void runStream(companyId, controller.signal, {
+    void runStream(companyId, controller.signal, t, {
       setStatus,
       onProfile: (p) => setProfile(p),
       onError: (msg) => setErrorMessage(msg),
@@ -121,7 +112,7 @@ export default function AgentOnboarding({
     return () => {
       controller.abort()
     }
-  }, [companyId, alreadyVerified, setStatus])
+  }, [companyId, alreadyVerified, setStatus, t])
 
   if (phase === 'review' || phase === 'done') {
     return (
@@ -140,13 +131,13 @@ export default function AgentOnboarding({
     <div className="w-full">
       <header className="mb-10 text-center">
         <p className="text-sm uppercase tracking-wider text-muted-foreground">
-          {firstName ? `${firstName}, ` : ''}ett ögonblick
+          {firstName ? t('one_moment_named', { name: firstName }) : t('one_moment')}
         </p>
         <h1 className="font-display text-3xl md:text-4xl tracking-tight mt-2">
-          Vi bygger din bokföringsassistent
+          {t('title')}
         </h1>
         <p className="text-muted-foreground mt-3 text-balance">
-          Skräddarsyr för {companyName}. Tar oftast under en halv minut.
+          {t('subtitle', { company: companyName })}
         </p>
       </header>
 
@@ -154,7 +145,7 @@ export default function AgentOnboarding({
         <CardContent className="p-6 md:p-8">
           <ol className="space-y-4">
             {STEPS.map((step) => (
-              <StepRow key={step.id} step={step} status={statuses[step.id]} />
+              <StepRow key={step} step={step} status={statuses[step]} />
             ))}
           </ol>
 
@@ -162,7 +153,7 @@ export default function AgentOnboarding({
             <div className="mt-6 flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm">
               <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
               <div>
-                <p className="font-medium">Något gick fel</p>
+                <p className="font-medium">{t('error_title')}</p>
                 <p className="text-muted-foreground mt-1">{errorMessage}</p>
                 <Button
                   variant="outline"
@@ -170,7 +161,7 @@ export default function AgentOnboarding({
                   className="mt-3"
                   onClick={() => window.location.reload()}
                 >
-                  Försök igen
+                  {t('retry')}
                 </Button>
               </div>
             </div>
@@ -182,7 +173,24 @@ export default function AgentOnboarding({
   )
 }
 
-function StepRow({ step, status }: { step: StepConfig; status: StepStatus }) {
+function StepRow({ step, status }: { step: StepId; status: StepStatus }) {
+  const t = useTranslations('agent_onboarding')
+  const fallback = status === 'fallback'
+  let label: string
+  switch (step) {
+    case 'tic':
+      label = fallback ? t('step_tic_fallback') : t('step_tic')
+      break
+    case 'select':
+      label = fallback ? t('step_select_fallback') : t('step_select')
+      break
+    case 'narrative':
+      label = fallback ? t('step_narrative_fallback') : t('step_narrative')
+      break
+    case 'finalize':
+      label = t('step_finalize')
+      break
+  }
   return (
     <li className="flex items-start gap-3">
       <span className="mt-0.5 shrink-0">
@@ -199,7 +207,7 @@ function StepRow({ step, status }: { step: StepConfig; status: StepStatus }) {
           status === 'fallback' && 'text-muted-foreground',
         )}
       >
-        {status === 'fallback' && step.fallbackLabel ? step.fallbackLabel : step.label}
+        {label}
       </span>
     </li>
   )
@@ -208,6 +216,7 @@ function StepRow({ step, status }: { step: StepConfig; status: StepStatus }) {
 async function runStream(
   companyId: string,
   signal: AbortSignal,
+  t: ReturnType<typeof useTranslations>,
   cbs: {
     setStatus: (id: StepId, status: StepStatus) => void
     onProfile: (p: ProfilePayload) => void
@@ -225,12 +234,12 @@ async function runStream(
     })
   } catch (err) {
     if (signal.aborted) return
-    cbs.onError(err instanceof Error ? err.message : 'Kunde inte starta byggsekvensen.')
+    cbs.onError(err instanceof Error ? err.message : t('stream_start_failed'))
     return
   }
 
   if (!response.ok || !response.body) {
-    cbs.onError(`HTTP ${response.status}: kunde inte starta byggsekvensen.`)
+    cbs.onError(t('stream_start_failed_http', { status: response.status }))
     return
   }
 
@@ -256,7 +265,7 @@ async function runStream(
             | { step: 'prewarm'; status: StepStatus }
 
           if (event.step === 'error') {
-            cbs.onError(event.message || 'Okänt fel under byggsekvensen.')
+            cbs.onError(event.message || t('stream_unknown_error'))
             continue
           }
 
@@ -279,7 +288,7 @@ async function runStream(
     }
   } catch (err) {
     if (!signal.aborted) {
-      cbs.onError(err instanceof Error ? err.message : 'Streamen avbröts.')
+      cbs.onError(err instanceof Error ? err.message : t('stream_aborted'))
     }
   } finally {
     try {

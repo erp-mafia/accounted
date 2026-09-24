@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -22,6 +23,7 @@ export default function OpeningBalanceColumnMappingStep({
   onConfirm,
   onBack,
 }: OpeningBalanceColumnMappingStepProps) {
+  const t = useTranslations('opening_balance_import_steps')
   const [accountNumberCol, setAccountNumberCol] = useState(
     detectedColumns.account_number_col,
   )
@@ -43,7 +45,7 @@ export default function OpeningBalanceColumnMappingStep({
 
   const columnOptions = headers.map((h, i) => ({
     value: String(i),
-    label: `${i + 1}: ${h || '(tom)'}`,
+    label: `${i + 1}: ${h || t('empty_header')}`,
   }))
 
   const canContinue =
@@ -65,23 +67,22 @@ export default function OpeningBalanceColumnMappingStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Kolumnmappning</CardTitle>
+        <CardTitle>{t('mapping_title')}</CardTitle>
         <CardDescription>
-          Vi kunde inte automatiskt identifiera alla kolumner. Ange vilka kolumner
-          som innehåller kontonummer och belopp.
+          {t('mapping_description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Layout toggle */}
         <div className="space-y-2">
-          <Label>Beloppslayout</Label>
+          <Label>{t('amount_layout')}</Label>
           <Select value={layout} onValueChange={(v) => setLayout(v as BalanceColumnLayout)}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="net">Nettobelopp (en kolumn)</SelectItem>
-              <SelectItem value="debit_credit">Debet &amp; kredit (två kolumner)</SelectItem>
+              <SelectItem value="net">{t('layout_net')}</SelectItem>
+              <SelectItem value="debit_credit">{t('layout_debit_credit')}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -89,13 +90,13 @@ export default function OpeningBalanceColumnMappingStep({
         {/* Required mappings */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label>Kontonummer *</Label>
+            <Label>{t('account_number_required')}</Label>
             <Select
               value={String(accountNumberCol)}
               onValueChange={(v) => setAccountNumberCol(Number(v))}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Välj kolumn" />
+                <SelectValue placeholder={t('choose_column')} />
               </SelectTrigger>
               <SelectContent>
                 {columnOptions.map((opt) => (
@@ -108,16 +109,16 @@ export default function OpeningBalanceColumnMappingStep({
           </div>
 
           <div className="space-y-2">
-            <Label>Kontonamn</Label>
+            <Label>{t('account_name')}</Label>
             <Select
               value={accountNameCol !== null ? String(accountNameCol) : 'none'}
               onValueChange={(v) => setAccountNameCol(v === 'none' ? null : Number(v))}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Välj kolumn" />
+                <SelectValue placeholder={t('choose_column')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">(ingen)</SelectItem>
+                <SelectItem value="none">{t('none_option')}</SelectItem>
                 {columnOptions.map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>
                     {opt.label}
@@ -129,13 +130,13 @@ export default function OpeningBalanceColumnMappingStep({
 
           {layout === 'net' && (
             <div className="space-y-2">
-              <Label>Saldo/Belopp *</Label>
+              <Label>{t('balance_required')}</Label>
               <Select
                 value={balanceCol !== null ? String(balanceCol) : ''}
                 onValueChange={(v) => setBalanceCol(Number(v))}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Välj kolumn" />
+                  <SelectValue placeholder={t('choose_column')} />
                 </SelectTrigger>
                 <SelectContent>
                   {columnOptions.map((opt) => (
@@ -151,13 +152,13 @@ export default function OpeningBalanceColumnMappingStep({
           {layout === 'debit_credit' && (
             <>
               <div className="space-y-2">
-                <Label>Debet *</Label>
+                <Label>{t('debit_required')}</Label>
                 <Select
                   value={debitCol !== null ? String(debitCol) : ''}
                   onValueChange={(v) => setDebitCol(Number(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj kolumn" />
+                    <SelectValue placeholder={t('choose_column')} />
                   </SelectTrigger>
                   <SelectContent>
                     {columnOptions.map((opt) => (
@@ -170,13 +171,13 @@ export default function OpeningBalanceColumnMappingStep({
               </div>
 
               <div className="space-y-2">
-                <Label>Kredit *</Label>
+                <Label>{t('credit_required')}</Label>
                 <Select
                   value={creditCol !== null ? String(creditCol) : ''}
                   onValueChange={(v) => setCreditCol(Number(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj kolumn" />
+                    <SelectValue placeholder={t('choose_column')} />
                   </SelectTrigger>
                   <SelectContent>
                     {columnOptions.map((opt) => (
@@ -194,7 +195,7 @@ export default function OpeningBalanceColumnMappingStep({
         {/* Preview */}
         {previewRows.length > 0 && (
           <div className="space-y-2">
-            <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
+            <Label className="text-muted-foreground">{t('preview_label')}</Label>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -202,7 +203,7 @@ export default function OpeningBalanceColumnMappingStep({
                     {headers.map((h, i) => (
                       /* data-ph-mask: CSV headers are user data */
                       <th key={i} data-ph-mask="" className="px-3 py-2 text-left whitespace-nowrap">
-                        {h || `Kolumn ${i + 1}`}
+                        {h || t('column_n', { n: i + 1 })}
                       </th>
                     ))}
                   </tr>
@@ -226,10 +227,10 @@ export default function OpeningBalanceColumnMappingStep({
         {/* Actions */}
         <div className="flex justify-between">
           <Button variant="ghost" onClick={onBack}>
-            Tillbaka
+            {t('back')}
           </Button>
           <Button onClick={handleConfirm} disabled={!canContinue}>
-            Fortsätt
+            {t('continue')}
           </Button>
         </div>
       </CardContent>

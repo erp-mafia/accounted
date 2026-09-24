@@ -156,21 +156,21 @@ export default function ImportResultStep({
               {result.success ? (
                 <>
                   <CheckCircle className="h-6 w-6 text-success" />
-                  Import genomförd
+                  {t('result_success_title')}
                 </>
               ) : (
                 <>
                   <XCircle className="h-6 w-6 text-destructive" />
-                  Import misslyckades
+                  {t('result_failed_title')}
                 </>
               )}
             </CardTitle>
             <CardDescription>
               {result.success
                 ? skipped && skipped.total > 0
-                  ? `Din bokföring har importerats. ${result.journalEntriesCreated} verifikationer skapades, ${skipped.total} hoppades över: se detaljer nedan.`
-                  : 'Din bokföring har importerats framgångsrikt.'
-                : 'Det uppstod fel under importen. Läs felmeddelanden nedan för att förstå vad som gick snett och hur du kan åtgärda det.'}
+                  ? t('result_success_with_skipped', { created: result.journalEntriesCreated, skipped: skipped.total })
+                  : t('result_success_description')
+                : t('result_failed_description')}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -192,12 +192,13 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CheckCircle className="h-5 w-5 text-success" />
-              Ingående balanser synkades om
+              {t('result_ib_resynced_title')}
             </CardTitle>
             <CardDescription>
-              Eftersom du importerade ett tidigare räkenskapsår uppdaterades ingående balanser för{' '}
-              <span className="font-medium">{result.nextPeriodIBResync.nextPeriodName}</span>{' '}
-              automatiskt (gammal IB makulerad, ny IB skapad från utgående balans).
+              {t.rich('result_ib_resynced_description', {
+                name: result.nextPeriodIBResync.nextPeriodName,
+                b: (c) => <span className="font-medium">{c}</span>,
+              })}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -208,11 +209,10 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base text-warning">
               <AlertCircle className="h-5 w-5" />
-              Ingående balanser för {result.nextPeriodIBResyncSkipped.nextPeriodName} kunde inte synkas
+              {t('result_ib_resync_skipped_title', { name: result.nextPeriodIBResyncSkipped.nextPeriodName })}
             </CardTitle>
             <CardDescription>
-              Nästa räkenskapsår är låst eller stängt. Lås upp perioden och kör importen igen om du
-              vill att ingående balanser ska uppdateras automatiskt.
+              {t('result_ib_resync_skipped_description')}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -224,22 +224,23 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <Info className="h-5 w-5 text-muted-foreground" />
-              Dimensioner följde med importen
+              {t('result_dimensions_title')}
             </CardTitle>
             <CardDescription>
-              Filen innehöll kostnadsställen/projekt: {result.dimensionsImported.taggedLines}{' '}
-              taggade rader importerades
-              {result.dimensionsImported.values > 0 && (
-                <> och {result.dimensionsImported.values} nya värden lades till i registret</>
-              )}
-              .{' '}
-              {result.dimensionsImported.toggleEnabled && (
-                <>Dimensioner aktiverades automatiskt för företaget: du hittar registret under{' '}
-                <Link href="/dimensions" className="underline underline-offset-4">
-                  Kostnadsställen &amp; projekt
-                </Link>
-                .</>
-              )}
+              {result.dimensionsImported.values > 0
+                ? t('result_dimensions_lines_and_values', {
+                    lines: result.dimensionsImported.taggedLines,
+                    values: result.dimensionsImported.values,
+                  })
+                : t('result_dimensions_lines', { lines: result.dimensionsImported.taggedLines })}{' '}
+              {result.dimensionsImported.toggleEnabled &&
+                t.rich('result_dimensions_enabled', {
+                  link: (c) => (
+                    <Link href="/dimensions" className="underline underline-offset-4">
+                      {c}
+                    </Link>
+                  ),
+                })}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -250,7 +251,7 @@ export default function ImportResultStep({
       {result.success && !showReveal && (
         <ImportStatRow
           stats={[
-            { key: 'vouchers', label: 'Verifikationer skapade', value: result.journalEntriesCreated },
+            { key: 'vouchers', label: t('result_vouchers_created'), value: result.journalEntriesCreated },
             {
               key: 'accounts',
               label: t('result_accounts_created'),
@@ -258,31 +259,31 @@ export default function ImportResultStep({
               note:
                 result.accountsRenamed !== undefined && result.accountsRenamed > 0
                   ? result.accountsRenamed === 1
-                    ? '1 konto fick sitt namn från källsystemet'
-                    : `${result.accountsRenamed} konton fick sina namn från källsystemet`
+                    ? t('result_accounts_renamed_one')
+                    : t('result_accounts_renamed_other', { count: result.accountsRenamed })
                   : undefined,
             },
             {
               key: 'fiscal_year',
-              label: 'Räkenskapsår',
-              value: result.fiscalPeriodId ? 'Skapat' : 'Befintligt',
+              label: t('result_fiscal_year'),
+              value: result.fiscalPeriodId ? t('result_fiscal_year_created') : t('result_fiscal_year_existing'),
               plain: true,
             },
             {
               key: 'opening_balances',
-              label: 'Ingående balanser',
+              label: t('result_opening_balances'),
               value: result.openingBalanceEntryId
-                ? 'Importerade'
+                ? t('result_opening_balances_imported')
                 : result.details?.openingBalanceSkipped === 'prior_activity'
-                  ? 'Härledda'
-                  : 'Inga',
+                  ? t('result_opening_balances_derived')
+                  : t('result_opening_balances_none'),
               plain: true,
               // The file's #IB was deliberately not booked: the company already
               // has posted entries, so this year's IB is the prior year's UB.
               // Said here, not as a warning (#2462).
               note:
                 !result.openingBalanceEntryId && result.details?.openingBalanceSkipped === 'prior_activity'
-                  ? 'Från föregående års utgående balans, eftersom bolaget redan har bokförda verifikationer.'
+                  ? t('result_opening_balances_derived_note')
                   : undefined,
             },
           ]}
@@ -295,7 +296,7 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-destructive">
               <XCircle className="h-5 w-5" />
-              Fel ({result.errors.length})
+              {t('result_errors_title', { count: result.errors.length })}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -309,11 +310,11 @@ export default function ImportResultStep({
             </div>
             {!result.success && (
               <div className="text-sm text-muted-foreground border-t pt-3 space-y-1">
-                <p className="font-medium">Vad kan du göra?</p>
+                <p className="font-medium">{t('result_what_to_do')}</p>
                 <ul className="list-disc list-inside space-y-0.5 text-muted-foreground">
-                  <li>Kontrollera att SIE-filen exporterades korrekt från källsystemet</li>
-                  <li>Prova att exportera filen igen och ladda upp på nytt</li>
-                  <li>Om felet kvarstår, kontakta support med felmeddelandet ovan</li>
+                  <li>{t('result_what_to_do_check_export')}</li>
+                  <li>{t('result_what_to_do_reexport')}</li>
+                  <li>{t('result_what_to_do_contact_support')}</li>
                 </ul>
               </div>
             )}
@@ -327,40 +328,40 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-muted-foreground">
               <Info className="h-5 w-5" />
-              Hoppade över {skipped.total} verifikationer
+              {t('result_skipped_title', { count: skipped.total })}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
               {skipped.empty > 0 && (
                 <div className="text-sm">
-                  <p className="font-medium">{skipped.empty} tomma verifikationer</p>
+                  <p className="font-medium">{t('result_skipped_empty', { count: skipped.empty })}</p>
                   <p className="text-muted-foreground">
-                    Platshållare utan bokföringsrader: vanligt i Fortnox och Visma. Påverkar inte din bokföring.
+                    {t('result_skipped_empty_description')}
                   </p>
                 </div>
               )}
               {skipped.unbalanced > 0 && (
                 <div className="text-sm">
-                  <p className="font-medium">{skipped.unbalanced} obalanserade verifikationer</p>
+                  <p className="font-medium">{t('result_skipped_unbalanced', { count: skipped.unbalanced })}</p>
                   <p className="text-muted-foreground">
-                    Debet och kredit stämmer inte överens i källsystemet. Saldon har justerats automatiskt.
+                    {t('result_skipped_unbalanced_description')}
                   </p>
                 </div>
               )}
               {skipped.singleLine > 0 && (
                 <div className="text-sm">
-                  <p className="font-medium">{skipped.singleLine} enradsverifikationer</p>
+                  <p className="font-medium">{t('result_skipped_single_line', { count: skipped.singleLine })}</p>
                   <p className="text-muted-foreground">
-                    Verifikationer med bara en rad (t.ex. periodiseringar). Kräver minst två rader för dubbelbokning.
+                    {t('result_skipped_single_line_description')}
                   </p>
                 </div>
               )}
               {skipped.unmapped > 0 && (
                 <div className="text-sm">
-                  <p className="font-medium">{skipped.unmapped} verifikationer med ej kopplade konton</p>
+                  <p className="font-medium">{t('result_skipped_unmapped', { count: skipped.unmapped })}</p>
                   <p className="text-muted-foreground">
-                    Innehåller konton som inte kunde kopplas till din kontoplan.
+                    {t('result_skipped_unmapped_description')}
                   </p>
                 </div>
               )}
@@ -375,12 +376,10 @@ export default function ImportResultStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />
-              Årets resultat är inte omfört
+              {t('result_untransferred_title')}
             </CardTitle>
             <CardDescription>
-              Följande räkenskapsår saknar omföring av årets resultat till eget kapital.
-              Senare års balansräkning visar en differens på beloppet tills omföringen
-              bokförs (konto 8999 mot eget kapital, t.ex. 2099) i respektive år.
+              {t('result_untransferred_description')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -438,12 +437,12 @@ export default function ImportResultStep({
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
             <RotateCcw className="mr-2 h-4 w-4" />
-            Ny import
+            {t('result_new_import')}
           </Button>
           {result.success && result.importId && onUndo && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
               <Undo2 className="mr-2 h-4 w-4" />
-              Ångra import
+              {t('result_undo_import')}
             </Button>
           )}
         </div>
@@ -452,13 +451,13 @@ export default function ImportResultStep({
             <>
               <Button variant="outline" asChild>
                 <Link href="/bookkeeping">
-                  Visa bokföring
+                  {t('result_view_bookkeeping')}
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
               <Button asChild>
                 <Link href="/reports">
-                  Visa rapporter
+                  {t('result_view_reports')}
                   <ExternalLink className="ml-2 h-4 w-4" />
                 </Link>
               </Button>

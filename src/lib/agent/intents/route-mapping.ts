@@ -18,10 +18,13 @@ export interface RouteIntent {
   intentArgs: Record<string, unknown>
   // Persisted on agent_conversations.context_ref so /chat can back-link.
   contextRef?: string
-  // Short suffix appended to the FAB label ("Fråga [namn] om denna faktura").
-  // null → just "Fråga [namn]".
-  labelSuffix: string | null
+  // What the FAB label names ("Fråga [namn] om denna faktura"); the trigger
+  // turns the topic into translated copy. null → just "Fråga [namn]".
+  labelSuffix: RouteLabelTopic | null
 }
+
+/** The page topic a FAB label can name, translated by the caller. */
+export type RouteLabelTopic = 'invoice' | 'supplier_invoice' | 'year_end' | 'kpi'
 
 const GENERAL_HELP = (route: string | null): RouteIntent => ({
   intentId: 'general.help',
@@ -55,7 +58,7 @@ export function routeToIntent(
     return {
       intentId: 'invoice.draft',
       intentArgs: {},
-      labelSuffix: 'om denna faktura',
+      labelSuffix: 'invoice',
     }
   }
 
@@ -65,7 +68,7 @@ export function routeToIntent(
       intentId: 'invoice.draft',
       intentArgs: { invoice_id: second },
       contextRef: `invoice:${second}`,
-      labelSuffix: 'om denna faktura',
+      labelSuffix: 'invoice',
     }
   }
 
@@ -78,7 +81,7 @@ export function routeToIntent(
       intentId: 'supplier_invoice.review',
       intentArgs: { supplier_invoice_id: second },
       contextRef: `supplier_invoice:${second}`,
-      labelSuffix: 'om denna leverantörsfaktura',
+      labelSuffix: 'supplier_invoice',
     }
   }
 
@@ -90,7 +93,7 @@ export function routeToIntent(
       intentId: 'bokslut.step',
       intentArgs: { step_id: null },
       contextRef: 'bokslut:overview',
-      labelSuffix: 'om bokslutet',
+      labelSuffix: 'year_end',
     }
   }
 
@@ -106,7 +109,7 @@ export function routeToIntent(
       intentId: 'kpi.explain',
       intentArgs: { kpi_key: 'översikt' },
       contextRef: 'kpi:översikt',
-      labelSuffix: 'om nyckeltalen',
+      labelSuffix: 'kpi',
     }
   }
 
@@ -142,9 +145,19 @@ export function routeToIntent(
  * A data map rather than a switch in a component (plan seam 8.5), so flows can
  * add their own ref kinds here and every surface picks them up at once.
  */
+/** The kinds of thing a stored context_ref can point at. */
+export type ContextRefKind =
+  | 'invoice'
+  | 'supplier_invoice'
+  | 'transaction'
+  | 'verifikation'
+  | 'bokslut'
+  | 'kpi'
+  | 'inbox'
+
 export interface ContextRefTarget {
-  /** Human noun for the thing, already in Swedish. */
-  label: string
+  /** What the thing is; the surface turns it into a translated noun. */
+  kind: ContextRefKind
   /** Where to go to look at it, or null when there is no stable page. */
   href: string | null
 }
@@ -159,24 +172,24 @@ export function contextRefToTarget(ref: string | null | undefined): ContextRefTa
 
   switch (kind) {
     case 'invoice':
-      return { label: 'Faktura', href: `/invoices/${encodeURIComponent(id)}` }
+      return { kind: 'invoice', href: `/invoices/${encodeURIComponent(id)}` }
     case 'supplier_invoice':
-      return { label: 'Leverantörsfaktura', href: `/supplier-invoices/${encodeURIComponent(id)}` }
+      return { kind: 'supplier_invoice', href: `/supplier-invoices/${encodeURIComponent(id)}` }
     // No /transactions/[id] route exists: the list is the only page that can
     // show it, so that is where the chip goes rather than a link that 404s.
     case 'transaction':
-      return { label: 'Transaktion', href: '/transactions' }
+      return { kind: 'transaction', href: '/transactions' }
     case 'verifikation':
-      return { label: 'Verifikation', href: '/bookkeeping' }
+      return { kind: 'verifikation', href: '/bookkeeping' }
     case 'bokslut':
-      return { label: 'Bokslut', href: '/bookkeeping/year-end' }
+      return { kind: 'bokslut', href: '/bookkeeping/year-end' }
     case 'kpi':
-      return { label: 'Nyckeltal', href: '/kpi' }
+      return { kind: 'kpi', href: '/kpi' }
     // The document inbox is an extension, mounted under /e/[sector]. Core must
     // not import from @/extensions or hardcode a route that only exists when
     // the extension is enabled, so this names the context without linking it.
     case 'inbox':
-      return { label: 'Dokumentinkorgen', href: null }
+      return { kind: 'inbox', href: null }
     default:
       return null
   }

@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { AccountNumber } from '@/components/ui/account-number'
 import {
   buildCorrectionRows,
@@ -21,6 +22,7 @@ function signClass(n: number): string {
 }
 
 export default function CorrectionPreview({ originalLines, correctedLines }: Props) {
+  const t = useTranslations('correction_preview')
   const rows = buildCorrectionRows(originalLines, correctedLines)
   const hasAnyCorrection = correctedLines.some((l) => {
     if (l.account_number.length !== 4) return false
@@ -46,9 +48,9 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <p className="text-sm font-medium">Effekt per konto</p>
+        <p className="text-sm font-medium">{t('title')}</p>
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
-          Debet − Kredit
+          {t('debit_minus_credit')}
         </p>
       </div>
 
@@ -56,11 +58,11 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground bg-muted/30">
             <tr>
-              <th className="px-3 py-2 text-left w-56">Konto</th>
-              <th className="px-3 py-2 text-right">Original</th>
-              <th className="px-3 py-2 text-right">Storno</th>
-              <th className="px-3 py-2 text-right">Rättelse</th>
-              <th className="px-3 py-2 text-right border-l">Förändring</th>
+              <th className="px-3 py-2 text-left w-56">{t('th_account')}</th>
+              <th className="px-3 py-2 text-right">{t('col_original')}</th>
+              <th className="px-3 py-2 text-right">{t('col_storno')}</th>
+              <th className="px-3 py-2 text-right">{t('col_correction')}</th>
+              <th className="px-3 py-2 text-right border-l">{t('col_change')}</th>
             </tr>
           </thead>
           <tbody>
@@ -76,7 +78,7 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
                   {formatSignedAmount(row.storno)}
                 </td>
                 <td className={`px-3 py-1.5 text-right tabular-nums ${isRemoved(row) ? 'text-muted-foreground' : signClass(row.correction)}`}>
-                  {!hasAnyCorrection ? '-' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
+                  {!hasAnyCorrection ? '-' : isRemoved(row) ? t('removed') : formatSignedAmount(row.correction)}
                 </td>
                 <td
                   className={`px-3 py-1.5 text-right tabular-nums border-l font-medium ${signClass(row.delta)}`}
@@ -100,17 +102,17 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
             </div>
             <dl className="grid grid-cols-3 gap-2 text-xs">
               <div>
-                <dt className="text-muted-foreground">Original</dt>
+                <dt className="text-muted-foreground">{t('col_original')}</dt>
                 <dd className={`tabular-nums ${signClass(row.original)}`}>{formatSignedAmount(row.original)}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Storno</dt>
+                <dt className="text-muted-foreground">{t('col_storno')}</dt>
                 <dd className={`tabular-nums ${signClass(row.storno)}`}>{formatSignedAmount(row.storno)}</dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Rättelse</dt>
+                <dt className="text-muted-foreground">{t('col_correction')}</dt>
                 <dd className={`tabular-nums ${isRemoved(row) ? 'text-muted-foreground' : signClass(row.correction)}`}>
-                  {!hasAnyCorrection ? '-' : isRemoved(row) ? 'tas bort' : formatSignedAmount(row.correction)}
+                  {!hasAnyCorrection ? '-' : isRemoved(row) ? t('removed') : formatSignedAmount(row.correction)}
                 </dd>
               </div>
             </dl>
@@ -119,12 +121,11 @@ export default function CorrectionPreview({ originalLines, correctedLines }: Pro
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Förändring = storno + rättelse. Det är det netto som tillkommer ovanpå originalet när du
-        bokför. Ett konto du tar bort nollställs av stornon.
+        {t('explanation')}
       </p>
       {unbalanced && (
         <p className="text-xs text-destructive">
-          Förslaget balanserar inte ännu: debet och kredit i rättelsen måste vara lika.
+          {t('unbalanced')}
         </p>
       )}
     </div>

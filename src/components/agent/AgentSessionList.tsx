@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react'
 import { Search, X, Loader2, MessageSquare, Pencil, Pin, PinOff, Archive } from 'lucide-react'
+import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import {
   type ConversationRow,
-  BUCKET_LABELS,
+  bucketLabel,
   relativeTime,
   intentLabel,
 } from './conversation-display'
@@ -43,6 +44,9 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
     cancelEdit,
     commitEdit,
   } = useConversationList([])
+  const t = useTranslations('agent_session_list')
+  const tDisplay = useTranslations('agent_conversation_display')
+  const locale = useLocale()
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -57,7 +61,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
         const json = (await res.json()) as { data?: ConversationRow[] }
         if (!cancelled) setConversations(json.data ?? [])
       } catch {
-        if (!cancelled) setError('Kunde inte hämta konversationer.')
+        if (!cancelled) setError(t('load_failed'))
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -79,14 +83,14 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Sök konversationer…"
+            placeholder={t('search_placeholder')}
             className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {query.length > 0 && (
             <button
               type="button"
               onClick={() => setQuery('')}
-              aria-label="Rensa sökning"
+              aria-label={t('clear_search')}
               className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
               <X className="h-3 w-3" />
@@ -98,20 +102,20 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Hämtar…
+            <Loader2 className="h-4 w-4 animate-spin" /> {t('loading')}
           </div>
         ) : error ? (
           <div className="p-6 text-sm text-destructive">{error}</div>
         ) : grouped.length === 0 ? (
           <div className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
             <MessageSquare className="h-6 w-6 opacity-40" />
-            {conversations.length === 0 ? 'Inga konversationer ännu.' : 'Inga träffar.'}
+            {conversations.length === 0 ? t('empty') : t('no_matches')}
           </div>
         ) : (
           grouped.map(({ bucket, rows }) => (
             <section key={bucket} className="py-2">
               <p className="px-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-                {BUCKET_LABELS[bucket]}
+                {bucketLabel(bucket, tDisplay)}
               </p>
               <ul className="space-y-1">
                 {rows.map((c) => (
@@ -132,9 +136,9 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                               cancelEdit()
                             }
                           }}
-                          placeholder="Namnge konversationen…"
+                          placeholder={t('rename_placeholder')}
                           maxLength={200}
-                          aria-label="Nytt namn på konversationen"
+                          aria-label={t('rename_aria')}
                           className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
                       </div>
@@ -155,14 +159,14 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5">
                               <p className="text-sm font-medium truncate flex-1 min-w-0">
-                                {c.title ?? intentLabel(c.intent_id)}
+                                {c.title ?? intentLabel(c.intent_id, tDisplay)}
                               </p>
                               <p className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                                {relativeTime(c.last_message_at ?? c.created_at)}
+                                {relativeTime(c.last_message_at ?? c.created_at, tDisplay, locale)}
                               </p>
                             </div>
                             <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
-                              {c.last_message_preview ?? intentLabel(c.intent_id)}
+                              {c.last_message_preview ?? intentLabel(c.intent_id, tDisplay)}
                             </p>
                           </div>
                         </button>
@@ -170,9 +174,9 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                           <button
                             type="button"
                             onClick={() => void togglePin(c.id, c.pinned)}
-                            title={c.pinned ? 'Lossa' : 'Fäst överst'}
+                            title={c.pinned ? t('unpin') : t('pin')}
                             aria-label={
-                              c.pinned ? 'Lossa konversationen' : 'Fäst konversationen överst'
+                              c.pinned ? t('unpin_aria') : t('pin_aria')
                             }
                             aria-pressed={c.pinned}
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
@@ -186,8 +190,8 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                           <button
                             type="button"
                             onClick={() => startEdit(c)}
-                            title="Byt namn"
-                            aria-label="Byt namn på konversation"
+                            title={t('rename')}
+                            aria-label={t('rename_conversation_aria')}
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
                           >
                             <Pencil className="h-3.5 w-3.5" />
@@ -195,8 +199,8 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                           <button
                             type="button"
                             onClick={() => void archive(c.id)}
-                            title="Arkivera"
-                            aria-label="Arkivera konversationen"
+                            title={t('archive')}
+                            aria-label={t('archive_aria')}
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
                           >
                             <Archive className="h-3.5 w-3.5" />

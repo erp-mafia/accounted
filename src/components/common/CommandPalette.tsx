@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   ReceiptText,
@@ -39,47 +40,55 @@ type Entry = {
   keywords?: string
 }
 
-const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices?new=1', keywords: 'fakturera ny invoice send create' },
-  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
-  { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
-  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
-  { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
-]
+type Translator = ReturnType<typeof useTranslations>
 
-const PAGE_ENTRIES: Entry[] = [
-  { id: 'kunder', label: 'Kunder', icon: Users, href: '/customers' },
-  { id: 'leverantörer', label: 'Leverantörer', icon: Truck, href: '/suppliers' },
-  { id: 'kundfakturor', label: 'Kundfakturor', icon: ReceiptText, href: '/invoices', keywords: 'fakturor fakturering invoices kundfaktura' },
-  { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
-  { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
-  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
-  { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
-  { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
-  { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
-  { id: 'rapport-balansrapport', label: 'Visa rapport: Balansrapport', icon: BarChart3, href: '/reports/balansrapport', keywords: 'rapport balans tillgångar skulder saldo per konto' },
-  { id: 'rapport-saldobalans', label: 'Visa rapport: Saldobalans', icon: BarChart3, href: '/reports/trial-balance', keywords: 'rapport saldobalans trial balance saldo per konto' },
-  { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
-  // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
-  // and matches() requires every typed token, so leaving it out made the exact
-  // phrase return nothing even though this report is precisely the answer.
-  // Deliberately NOT carrying "stäm av"/"avstämning" here: the palette
-  // auto-selects the first hit and huvudbok is listed above Bankavstämning, so
-  // those words would hijack Enter from the reconciliation page. They live in
-  // ReportDescriptor.searchTerms instead, where the library shows a list.
-  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
-  { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
-  { id: 'avstamning', label: 'Avstämning', hint: 'Stäm av bank och skattekonto', icon: Scale, href: '/reconciliation', keywords: 'avstämning stäm av bank skattekonto matcha reconcile reconciliation 1630 1930' },
-  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/reconciliation', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
-  { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
-  { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
-  { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
-  { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
-  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: '/e/general/invoice-inbox' },
-  { id: 'nyckeltal', label: 'Nyckeltal', icon: TrendingUp, href: '/kpi' },
-  { id: 'inställningar', label: 'Inställningar', icon: Settings, href: '/settings' },
-  { id: 'hjälp', label: 'Hjälp', icon: HelpCircle, href: '/help' },
-]
+// Labels and hints are translated; keywords stay Swedish on purpose: they are
+// search tokens a bookkeeper types, never rendered.
+function actionEntries(t: Translator): Entry[] {
+  return [
+    { id: 'new-invoice', label: t('action_new_invoice'), hint: t('action_new_invoice_hint'), icon: ReceiptText, href: '/invoices?new=1', keywords: 'fakturera ny invoice send create' },
+    { id: 'book-transaction', label: t('action_book_transaction'), hint: t('action_book_transaction_hint'), icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
+    { id: 'new-customer', label: t('action_new_customer'), icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
+    { id: 'new-supplier-invoice', label: t('action_new_supplier_invoice'), icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
+    { id: 'reports', label: t('action_income_statement'), hint: t('page_reports'), icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
+  ]
+}
+
+function pageEntries(t: Translator): Entry[] {
+  return [
+    { id: 'kunder', label: t('page_customers'), icon: Users, href: '/customers', keywords: 'kunder' },
+    { id: 'leverantörer', label: t('page_suppliers'), icon: Truck, href: '/suppliers', keywords: 'leverantörer' },
+    { id: 'kundfakturor', label: t('page_customer_invoices'), icon: ReceiptText, href: '/invoices', keywords: 'kundfakturor fakturor fakturering invoices kundfaktura' },
+    { id: 'leverantörsfakturor', label: t('page_supplier_invoices'), icon: Wallet, href: '/supplier-invoices', keywords: 'leverantörsfakturor' },
+    { id: 'bokföring', label: t('page_bookkeeping'), icon: BookOpen, href: '/bookkeeping', keywords: 'bokföring verifikat journal ledger' },
+    { id: 'kontoplan', label: t('page_chart_of_accounts'), icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
+    { id: 'anläggningstillgångar', label: t('page_assets'), icon: Package, href: '/assets', keywords: 'anläggningstillgångar tillgångar assets' },
+    { id: 'rapporter', label: t('page_reports'), icon: BarChart3, href: '/reports', keywords: 'rapporter' },
+    { id: 'rapport-resultatrapport', label: t('report_resultatrapport'), icon: BarChart3, href: '/reports/resultatrapport', keywords: 'visa rapport resultatrapport resultat intäkter kostnader' },
+    { id: 'rapport-balansrapport', label: t('report_balansrapport'), icon: BarChart3, href: '/reports/balansrapport', keywords: 'visa rapport balansrapport balans tillgångar skulder saldo per konto' },
+    { id: 'rapport-saldobalans', label: t('report_saldobalans'), icon: BarChart3, href: '/reports/trial-balance', keywords: 'visa rapport saldobalans trial balance saldo per konto' },
+    { id: 'rapport-moms', label: t('report_moms'), icon: BarChart3, href: '/reports/vat-declaration', keywords: 'visa rapport momsdeklaration moms vat deklaration' },
+    // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
+    // and matches() requires every typed token, so leaving it out made the exact
+    // phrase return nothing even though this report is precisely the answer.
+    // Deliberately NOT carrying "stäm av"/"avstämning" here: the palette
+    // auto-selects the first hit and huvudbok is listed above Bankavstämning, so
+    // those words would hijack Enter from the reconciliation page. They live in
+    // ReportDescriptor.searchTerms instead, where the library shows a list.
+    { id: 'rapport-huvudbok', label: t('report_huvudbok'), icon: BookOpen, href: '/reports/huvudbok', keywords: 'visa rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
+    { id: 'rapport-kundreskontra', label: t('report_kundreskontra'), icon: Users, href: '/reports/kundreskontra', keywords: 'visa rapport kundreskontra ar kundfordringar' },
+    { id: 'avstamning', label: t('page_reconciliation'), hint: t('page_reconciliation_hint'), icon: Scale, href: '/reconciliation', keywords: 'avstämning stäm av bank och skattekonto matcha reconcile reconciliation 1630 1930' },
+    { id: 'rapport-bankavstamning', label: t('page_bank_reconciliation'), hint: t('page_bank_reconciliation_hint'), icon: ArrowLeftRight, href: '/reconciliation', keywords: 'bankavstämning avstämning stäm av bank mot bokföring matcha banktransaktioner reconcile reconciliation 1930' },
+    { id: 'importera', label: t('page_import'), icon: Upload, href: '/import', keywords: 'importera' },
+    { id: 'granskning', label: t('page_review'), icon: ClipboardCheck, href: '/pending', keywords: 'granskning pending review' },
+    { id: 'löner', label: t('page_salary'), icon: HandCoins, href: '/salary', keywords: 'löner' },
+    { id: 'anställda', label: t('page_employees'), icon: Users, href: '/salary/employees', keywords: 'anställda' },
+    { id: 'dokumentinkorg', label: t('page_document_inbox'), icon: Inbox, href: '/e/general/invoice-inbox', keywords: 'dokumentinkorg' },
+    { id: 'nyckeltal', label: t('page_kpi'), icon: TrendingUp, href: '/kpi', keywords: 'nyckeltal' },
+    { id: 'inställningar', label: t('page_settings'), icon: Settings, href: '/settings', keywords: 'inställningar' },
+    { id: 'hjälp', label: t('page_help'), icon: HelpCircle, href: '/help', keywords: 'hjälp' },
+  ]
+}
 
 function matches(entry: Entry, q: string): boolean {
   const hay = `${entry.label} ${entry.hint ?? ''} ${entry.keywords ?? ''}`.toLowerCase()
@@ -88,6 +97,9 @@ function matches(entry: Entry, q: string): boolean {
 
 export default function CommandPalette({ initialOpen = false }: { initialOpen?: boolean } = {}) {
   const router = useRouter()
+  const t = useTranslations('command_palette')
+  const ACTION_ENTRIES = useMemo(() => actionEntries(t), [t])
+  const PAGE_ENTRIES = useMemo(() => pageEntries(t), [t])
   // initialOpen: LazyCommandPalette mounts this component on the first ⌘K,
   // so the palette must come up already open rather than waiting for a
   // second keypress.
@@ -141,28 +153,28 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
   const filteredActions = useMemo(() => {
     const visible = ACTION_ENTRIES.filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible
-  }, [q, allowedByCapability])
+  }, [q, allowedByCapability, ACTION_ENTRIES])
   const filteredPages = useMemo(() => {
     const visible = PAGE_ENTRIES.filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)
-  }, [q, allowedByCapability])
+  }, [q, allowedByCapability, PAGE_ENTRIES])
 
   // The hand-off-to-assistant entries use the agent name the user chose in
   // /onboarding/agent, and hide entirely until that onboarding is done: the
   // same gate as the nav entry and the FAB.
-  const assistantName = identity.displayName?.trim() || 'assistenten'
+  const assistantName = identity.displayName?.trim() || t('assistant_default_name')
   const assistantFallback: Entry | null = !identity.isVerified || !q
     ? null
     : filteredActions.length === 0 && filteredPages.length === 0
       ? {
           id: 'assistant-fallback',
-          label: `Fråga ${assistantName}: "${query.trim()}"`,
+          label: t('ask_assistant', { name: assistantName, query: query.trim() }),
           icon: Wand2,
           href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
       : {
           id: 'assistant-followup',
-          label: `Fråga ${assistantName} istället: "${query.trim()}"`,
+          label: t('ask_assistant_instead', { name: assistantName, query: query.trim() }),
           icon: Wand2,
           href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
@@ -200,12 +212,12 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
           className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
         />
         <DialogPrimitive.Content
-          aria-label="Snabbkommandon"
+          aria-label={t('title')}
           className="fixed left-[50%] top-[20%] z-50 w-[calc(100vw-2rem)] max-w-xl translate-x-[-50%] rounded-xl border border-border bg-card data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
         >
-          <DialogPrimitive.Title className="sr-only">Snabbkommandon</DialogPrimitive.Title>
+          <DialogPrimitive.Title className="sr-only">{t('title')}</DialogPrimitive.Title>
           <DialogPrimitive.Description className="sr-only">
-            Sök efter sidor och åtgärder, eller fråga Anna.
+            {t('description')}
           </DialogPrimitive.Description>
           <div className="px-4 py-3 border-b border-border">
             <input
@@ -213,15 +225,15 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
               value={query}
               onChange={e => { setQuery(e.target.value); setActiveIndex(0) }}
               onKeyDown={onInputKey}
-              placeholder="Sök eller skriv vad du vill göra…"
-              aria-label="Sök eller skriv vad du vill göra"
+              placeholder={t('search_placeholder')}
+              aria-label={t('search_label')}
               className="w-full bg-transparent text-base placeholder:text-muted-foreground outline-none"
             />
           </div>
 
           <div className="max-h-[60vh] overflow-y-auto py-1.5" role="listbox">
             {filteredActions.length > 0 && (
-              <Section title="Åtgärder">
+              <Section title={t('section_actions')}>
                 {filteredActions.map((entry) => {
                   const idx = flatEntries.indexOf(entry)
                   return (
@@ -237,7 +249,7 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
               </Section>
             )}
             {filteredPages.length > 0 && (
-              <Section title="Sidor">
+              <Section title={t('section_pages')}>
                 {filteredPages.map((entry) => {
                   const idx = flatEntries.indexOf(entry)
                   return (
@@ -264,13 +276,13 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
             )}
             {flatEntries.length === 0 && (
               <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-                Inget hittades. Tryck Enter eller börja om.
+                {t('empty')}
               </div>
             )}
           </div>
 
           <div className="px-4 py-2 border-t border-border flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>↑↓ navigera · Enter välj · Esc stäng</span>
+            <span>{t('keyboard_hint')}</span>
             <span className="font-mono">⌘K</span>
           </div>
         </DialogPrimitive.Content>

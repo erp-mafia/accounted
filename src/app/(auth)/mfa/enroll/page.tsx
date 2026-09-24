@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,6 +23,7 @@ export default function MfaEnrollPage() {
 }
 
 function MfaEnrollContent() {
+  const t = useTranslations('mfa')
   const [qrCode, setQrCode] = useState<string | null>(null)
   const [secret, setSecret] = useState<string | null>(null)
   const [factorId, setFactorId] = useState<string | null>(null)
@@ -100,7 +102,7 @@ function MfaEnrollContent() {
 
       if (error) {
         toast({
-          title: 'Kunde inte aktivera 2FA',
+          title: t('enroll_failed_title'),
           description: getUserErrorMessage(error),
           variant: 'destructive',
         })
@@ -116,8 +118,8 @@ function MfaEnrollContent() {
       setTimeout(() => inputRef.current?.focus(), 100)
     } catch {
       toast({
-        title: 'Kunde inte aktivera 2FA',
-        description: 'Ett oväntat fel uppstod.',
+        title: t('enroll_failed_title'),
+        description: t('enroll_unexpected_error'),
         variant: 'destructive',
       })
     } finally {
@@ -138,8 +140,8 @@ function MfaEnrollContent() {
 
       if (challengeError) {
         toast({
-          title: 'Verifiering misslyckades',
-          description: 'Kunde inte starta verifiering. Försök igen.',
+          title: t('verify_failed_title'),
+          description: t('verify_challenge_failed_description'),
           variant: 'destructive',
         })
         setIsVerifying(false)
@@ -154,8 +156,8 @@ function MfaEnrollContent() {
 
       if (verifyError) {
         toast({
-          title: 'Fel kod',
-          description: 'Kontrollera att koden stämmer och försök igen.',
+          title: t('wrong_code_title'),
+          description: t('enroll_wrong_code_description'),
           variant: 'destructive',
         })
         setCode('')
@@ -165,15 +167,15 @@ function MfaEnrollContent() {
       }
 
       toast({
-        title: 'Tvåfaktorsautentisering aktiverad',
-        description: 'Ditt konto är nu skyddat med 2FA.',
+        title: t('enroll_success_title'),
+        description: t('enroll_success_description'),
       })
 
       leave()
     } catch {
       toast({
-        title: 'Verifiering misslyckades',
-        description: 'Ett oväntat fel uppstod. Försök igen.',
+        title: t('verify_failed_title'),
+        description: t('unexpected_error'),
         variant: 'destructive',
       })
     } finally {
@@ -199,9 +201,9 @@ function MfaEnrollContent() {
                 <ShieldCheck className="h-7 w-7 text-primary" />
               </div>
             </div>
-            <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
+            <h1 className="text-2xl tracking-tight">{t('enroll_title')}</h1>
             <p className="text-muted-foreground text-sm mt-2">
-              Skydda ditt konto med en autentiseringsapp som Google Authenticator eller Authy
+              {t('enroll_subtitle')}
             </p>
           </div>
 
@@ -209,8 +211,7 @@ function MfaEnrollContent() {
             <div className="space-y-4">
               <div className="rounded-lg border bg-muted/50 p-4">
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  Du behöver en autentiseringsapp på din telefon. Appen genererar en
-                  tidsbegränsad kod som du anger vid varje inloggning.
+                  {t('enroll_app_info')}
                 </p>
               </div>
               <Button
@@ -219,9 +220,9 @@ function MfaEnrollContent() {
                 loading={isEnrolling}
               >
                 {isEnrolling ? (
-                  'Förbereder...'
+                  t('enroll_preparing')
                 ) : (
-                  'Fortsätt'
+                  t('enroll_continue')
                 )}
               </Button>
             </div>
@@ -233,7 +234,7 @@ function MfaEnrollContent() {
             onClick={abort}
           >
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Tillbaka
+            {t('enroll_back')}
           </Button>
         </div>
       </div>
@@ -250,9 +251,9 @@ function MfaEnrollContent() {
               <ShieldCheck className="h-7 w-7 text-primary" />
             </div>
           </div>
-          <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
+          <h1 className="text-2xl tracking-tight">{t('enroll_scan_title')}</h1>
           <p className="text-muted-foreground text-sm mt-2">
-            Öppna din autentiseringsapp och skanna koden nedan
+            {t('enroll_scan_subtitle')}
           </p>
         </div>
 
@@ -268,7 +269,7 @@ function MfaEnrollContent() {
           {/* Manual secret */}
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground text-center">
-              Kan du inte skanna? Ange denna nyckel manuellt:
+              {t('enroll_manual_key')}
             </p>
             <div className="flex items-center gap-2">
               <code className="flex-1 rounded-sm border bg-muted/50 px-3 py-2 text-xs font-mono text-center break-all select-all">
@@ -292,7 +293,7 @@ function MfaEnrollContent() {
           {/* Verification code */}
           <form onSubmit={handleVerify} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="code">Ange koden från appen</Label>
+              <Label htmlFor="code">{t('enroll_code_label')}</Label>
               <Input
                 ref={inputRef}
                 id="code"
@@ -316,9 +317,9 @@ function MfaEnrollContent() {
               disabled={code.length !== 6}
             >
               {isVerifying ? (
-                'Verifierar...'
+                t('verifying')
               ) : (
-                'Aktivera 2FA'
+                t('enroll_submit')
               )}
             </Button>
           </form>
@@ -330,7 +331,7 @@ function MfaEnrollContent() {
           onClick={abort}
         >
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('enroll_back')}
         </Button>
       </div>
     </div>

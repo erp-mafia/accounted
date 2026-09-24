@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { Lock } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { isSelfHosted } from '@/lib/env/public-flags'
 
@@ -16,6 +17,7 @@ import { isSelfHosted } from '@/lib/env/public-flags'
  * Copy mirrors CAPABILITY_BLOCKED_MESSAGE_SELF_HOSTED_SV.
  */
 export function UpgradeNote({ children, className }: { children?: React.ReactNode; className?: string }) {
+  const t = useTranslations('upgrade_note')
   const frame = (content: React.ReactNode) => (
     <div
       className={cn(
@@ -29,17 +31,14 @@ export function UpgradeNote({ children, className }: { children?: React.ReactNod
   )
   if (isSelfHosted()) {
     return frame(
-      <>
-        Den här funktionen kräver en connector-nyckel från Accounted (GNUBOK_CONNECTOR_KEY) eller
-        instansens egna API-uppgifter för tjänsten.
-      </>,
+      <>{t('self_hosted_requires_key')}</>,
     )
   }
   return frame(
     <>
-      {children ?? 'Den här funktionen kräver ett abonnemang.'}{' '}
+      {children ?? t('requires_subscription')}{' '}
       <Link href="/settings/billing" className="underline underline-offset-2 text-foreground">
-        Uppgradera
+        {t('upgrade')}
       </Link>
     </>,
   )

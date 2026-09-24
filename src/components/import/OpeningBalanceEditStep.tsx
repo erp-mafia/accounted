@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import type { ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -30,6 +31,7 @@ export default function OpeningBalanceEditStep({
   onBack,
   notices = [],
 }: OpeningBalanceEditStepProps) {
+  const t = useTranslations('opening_balance_import_steps')
   const seedRows = useMemo<EditableRow[]>(
     () =>
       initialRows.map((r) => ({
@@ -48,10 +50,9 @@ export default function OpeningBalanceEditStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Granska och redigera</CardTitle>
+        <CardTitle>{t('edit_title')}</CardTitle>
         <CardDescription>
-          Kontrollera att kontonummer och belopp stämmer. Du kan lägga till, ta bort och ändra
-          rader. Debet och kredit måste balansera innan du kan fortsätta.
+          {t('edit_description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -62,10 +63,10 @@ export default function OpeningBalanceEditStep({
 
         <div className="flex justify-between pt-2">
           <Button variant="ghost" onClick={onBack}>
-            Tillbaka
+            {t('back')}
           </Button>
           <Button onClick={() => state && onContinue(state.rows)} disabled={!state?.canSubmit}>
-            Fortsätt
+            {t('continue')}
           </Button>
         </div>
       </CardContent>

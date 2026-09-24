@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Sparkles, ArrowRight } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
@@ -23,8 +24,9 @@ export default function SandboxAgentPreview({
 }: {
   agentName: string | null
 }) {
+  const t = useTranslations('sandbox_agent_preview')
   const router = useRouter()
-  const name = agentName?.trim() || 'din assistent'
+  const name = agentName?.trim() || t('default_name')
 
   async function handleCreateAccount() {
     const supabase = createClient()
@@ -46,18 +48,13 @@ export default function SandboxAgentPreview({
           <div className="rounded-lg border border-border bg-secondary/40 p-5">
             <div className="flex items-center gap-2 text-sm font-medium">
               <Sparkles className="h-4 w-4" />
-              Förhandsvisning i sandlådan
+              {t('title')}
             </div>
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-              {name} är en specialiserad bokföringsassistent som kan
-              kategorisera transaktioner, granska leverantörsfakturor och
-              svara på frågor om din bokföring: kalibrerad mot dina
-              kontoplaner, verksamhet och svensk skattelagstiftning.
+              {t('intro', { name })}
             </p>
             <p className="text-sm text-muted-foreground mt-3 leading-relaxed">
-              I sandlådan är AI-funktionerna avstängda eftersom de använder
-              externa AI-tjänster som kostar pengar att köra. Skapa ett
-              konto för att aktivera assistenten på riktigt.
+              {t('disabled_reason')}
             </p>
           </div>
 
@@ -65,22 +62,25 @@ export default function SandboxAgentPreview({
             <li className="flex items-start gap-2">
               <span className="text-foreground mt-0.5">·</span>
               <span>
-                <span className="text-foreground">Föreslår bokföring</span>{' '}
-                för oklassificerade transaktioner: du godkänner i ett klick.
+                {t.rich('feature_suggests', {
+                  em: (c) => <span className="text-foreground">{c}</span>,
+                })}
               </span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-foreground mt-0.5">·</span>
               <span>
-                <span className="text-foreground">Förklarar momsrutor</span>,
-                årets resultat och vad som driver KPI:erna.
+                {t.rich('feature_explains', {
+                  em: (c) => <span className="text-foreground">{c}</span>,
+                })}
               </span>
             </li>
             <li className="flex items-start gap-2">
               <span className="text-foreground mt-0.5">·</span>
               <span>
-                <span className="text-foreground">Granskar verifikat</span>{' '}
-                och föreslår rättningar enligt BFL och K2.
+                {t.rich('feature_reviews', {
+                  em: (c) => <span className="text-foreground">{c}</span>,
+                })}
               </span>
             </li>
           </ul>
@@ -94,14 +94,14 @@ export default function SandboxAgentPreview({
             className="flex-1"
             onClick={handleCreateAccount}
           >
-            Skapa konto för att använda {name}
+            {t('create_account_to_use', { name })}
             <ArrowRight className="ml-1.5 h-4 w-4" />
           </Button>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">
-          Sandlådedata raderas efter 24 timmar.{' '}
+          {t('data_deleted_after')}{' '}
           <Link href="/register" className="underline underline-offset-2 hover:text-foreground">
-            Skapa konto
+            {t('create_account')}
           </Link>
           .
         </p>

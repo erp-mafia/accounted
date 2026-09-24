@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -55,6 +56,28 @@ export function DeadlineForm({
   initialDate,
   customers,
 }: DeadlineFormProps) {
+  const t = useTranslations('deadline_form')
+  const tc = useTranslations('common')
+  const td = useTranslations('deadlines')
+  const typeLabel = (value: string): string => {
+    switch (value) {
+      case 'delivery': return t('type_delivery')
+      case 'approval': return t('type_approval')
+      case 'invoicing': return t('type_invoicing')
+      case 'report': return t('type_report')
+      case 'revision': return t('type_revision')
+      case 'other': return t('type_other')
+      default: return DEADLINE_TYPE_LABELS[value] ?? value
+    }
+  }
+  const priorityLabel = (value: string): string => {
+    switch (value) {
+      case 'critical': return t('priority_critical')
+      case 'important': return t('priority_important')
+      case 'normal': return t('priority_normal')
+      default: return PRIORITY_LABELS[value] ?? value
+    }
+  }
   const { canWrite } = useCanWrite()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
@@ -137,17 +160,17 @@ export function DeadlineForm({
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>
-            {initialData?.id ? 'Redigera deadline' : 'Ny deadline'}
+            {initialData?.id ? t('edit_title') : t('new_title')}
           </DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {/* Title */}
           <div className="space-y-2">
-            <Label htmlFor="title">Titel *</Label>
+            <Label htmlFor="title">{t('title_label')}</Label>
             <Input
               id="title"
-              placeholder="t.ex. Leverera video till Företag AB"
+              placeholder={t('title_placeholder')}
               value={formData.title}
               onChange={(e) => updateField('title', e.target.value)}
               required
@@ -157,7 +180,7 @@ export function DeadlineForm({
           {/* Date and Time */}
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="due_date">Datum *</Label>
+              <Label htmlFor="due_date">{t('date_label')}</Label>
               <Input
                 id="due_date"
                 type="date"
@@ -167,7 +190,7 @@ export function DeadlineForm({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="due_time">Tid (valfritt)</Label>
+              <Label htmlFor="due_time">{t('time_label')}</Label>
               <Input
                 id="due_time"
                 type="time"
@@ -180,7 +203,7 @@ export function DeadlineForm({
           {/* Type and Priority */}
           <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label>Typ *</Label>
+              <Label>{t('type_label')}</Label>
               <Select
                 value={formData.deadline_type}
                 onValueChange={(v) => { if (v) updateField('deadline_type', v as DeadlineType) }}
@@ -189,16 +212,16 @@ export function DeadlineForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(DEADLINE_TYPE_LABELS).map(([value, label]) => (
+                  {Object.keys(DEADLINE_TYPE_LABELS).map((value) => (
                     <SelectItem key={value} value={value}>
-                      {label}
+                      {typeLabel(value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Prioritet</Label>
+              <Label>{t('priority_label')}</Label>
               <Select
                 value={formData.priority}
                 onValueChange={(v) => { if (v) updateField('priority', v as DeadlinePriority) }}
@@ -207,9 +230,9 @@ export function DeadlineForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
+                  {Object.keys(PRIORITY_LABELS).map((value) => (
                     <SelectItem key={value} value={value}>
-                      {label}
+                      {priorityLabel(value)}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -220,24 +243,24 @@ export function DeadlineForm({
           {/* Customer */}
           {customers.length > 0 && (
             <div className="space-y-2">
-              <Label htmlFor="deadline-customer">Kund (valfritt)</Label>
+              <Label htmlFor="deadline-customer">{t('customer_label')}</Label>
               <CustomerCombobox
                 id="deadline-customer"
                 value={formData.customer_id || ''}
                 customers={customers}
                 onChange={(v) => updateField('customer_id', v)}
-                placeholder="Välj kund..."
-                noneLabel="Ingen kund"
+                placeholder={t('customer_placeholder')}
+                noneLabel={t('no_customer')}
               />
             </div>
           )}
 
           {/* Notes */}
           <div className="space-y-2">
-            <Label htmlFor="notes">Anteckningar (valfritt)</Label>
+            <Label htmlFor="notes">{t('notes_label')}</Label>
             <Textarea
               id="notes"
-              placeholder="Lägg till anteckningar..."
+              placeholder={t('notes_placeholder')}
               value={formData.notes}
               onChange={(e) => updateField('notes', e.target.value)}
               rows={3}
@@ -250,14 +273,14 @@ export function DeadlineForm({
               <div className="flex items-center gap-2">
                 {confirmDelete ? (
                   <>
-                    <span className="text-sm text-muted-foreground mr-1">Ta bort?</span>
+                    <span className="text-sm text-muted-foreground mr-1">{t('delete_confirm')}</span>
                     <Button
                       type="button"
                       variant="ghost"
                       size="sm"
                       onClick={() => setConfirmDelete(false)}
                     >
-                      Avbryt
+                      {tc('cancel')}
                     </Button>
                     <Button
                       type="button"
@@ -268,7 +291,7 @@ export function DeadlineForm({
                         onOpenChange(false)
                       }}
                     >
-                      Ta bort
+                      {tc('delete')}
                     </Button>
                   </>
                 ) : (
@@ -279,7 +302,7 @@ export function DeadlineForm({
                     className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     onClick={() => setConfirmDelete(true)}
                   >
-                    Ta bort
+                    {tc('delete')}
                   </Button>
                 )}
               </div>
@@ -293,15 +316,15 @@ export function DeadlineForm({
                 variant="outline"
                 onClick={() => onOpenChange(false)}
               >
-                Avbryt
+                {tc('cancel')}
               </Button>
               <Button
                 type="submit"
                 disabled={isLoading || !formData.title || !canWrite}
-                title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+                title={!canWrite ? td('read_only_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-                {isLoading ? 'Sparar...' : initialData?.id ? 'Spara' : 'Skapa'}
+                {isLoading ? tc('saving') : initialData?.id ? tc('save') : t('create')}
               </Button>
             </div>
           </DialogFooter>

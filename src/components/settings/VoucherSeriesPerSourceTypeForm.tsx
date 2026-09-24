@@ -60,27 +60,6 @@ const METHOD_BOUND: Partial<Record<JournalEntrySourceType, 'accrual' | 'cash'>> 
   supplier_invoice_cash_payment: 'cash',
 }
 
-// Swedish labels. Kept inline so this component is self-contained: these
-// labels are bookkeeping-domain terms that intentionally stay Swedish across
-// locales (see CLAUDE.md i18n table).
-const SV_LABELS: Record<string, string> = {
-  manual: 'Manuella verifikat',
-  invoice_created: 'Kundfakturor (skapande)',
-  invoice_paid: 'Kundfakturor (betalning, fakturametod)',
-  invoice_cash_payment: 'Kundfakturor (betalning, kontantmetod)',
-  supplier_invoice_registered: 'Leverantörsfakturor (registrering)',
-  supplier_invoice_paid: 'Leverantörsfakturor (betalning, fakturametod)',
-  supplier_invoice_cash_payment: 'Leverantörsfakturor (betalning, kontantmetod)',
-  supplier_invoice_privately_paid: 'Leverantörsfakturor (privat utlägg)',
-  salary_payment: 'Lön',
-  bank_transaction: 'Banktransaktioner',
-  reminder_fee: 'Påminnelseavgifter',
-  webshop_order: 'Webshopordrar',
-  vat_settlement: 'Momsredovisning',
-  opening_balance: 'Ingående balanser',
-  year_end: 'Bokslut',
-}
-
 interface Props {
   settings: CompanySettings
   onSettingsUpdated: (settings: Partial<CompanySettings>) => void
@@ -88,7 +67,7 @@ interface Props {
 
 export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: Props) {
   // Generic fold labels ("Visa alla (n)" / "Visa färre") shared with the
-  // dashboard widgets; the domain labels themselves stay hardcoded Swedish.
+  // dashboard widgets.
   const tCommon = useTranslations('dashboard')
   const t = useTranslations('settings_bookkeeping')
   const { toast } = useToast()
@@ -123,6 +102,28 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
     ],
   )
 
+  // One literal key per source type so the message-keys test can verify them.
+  const sourceTypeLabel = (labelKey: string): string | null => {
+    switch (labelKey) {
+      case 'manual': return t('series_type_manual')
+      case 'invoice_created': return t('series_type_invoice_created')
+      case 'invoice_paid': return t('series_type_invoice_paid')
+      case 'invoice_cash_payment': return t('series_type_invoice_cash_payment')
+      case 'supplier_invoice_registered': return t('series_type_supplier_invoice_registered')
+      case 'supplier_invoice_paid': return t('series_type_supplier_invoice_paid')
+      case 'supplier_invoice_cash_payment': return t('series_type_supplier_invoice_cash_payment')
+      case 'supplier_invoice_privately_paid': return t('series_type_supplier_invoice_privately_paid')
+      case 'salary_payment': return t('series_type_salary_payment')
+      case 'bank_transaction': return t('series_type_bank_transaction')
+      case 'reminder_fee': return t('series_type_reminder_fee')
+      case 'webshop_order': return t('series_type_webshop_order')
+      case 'vat_settlement': return t('series_type_vat_settlement')
+      case 'opening_balance': return t('series_type_opening_balance')
+      case 'year_end': return t('series_type_year_end')
+      default: return null
+    }
+  }
+
   const handleChange = (sourceType: JournalEntrySourceType, value: string) => {
     setDraft((prev) => ({ ...prev, [sourceType]: value }))
   }
@@ -152,7 +153,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
       const json = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte spara',
+          title: t('series_save_failed'),
           description: getErrorMessage(json, { context: 'settings', statusCode: res.status }),
           variant: 'destructive',
         })
@@ -162,12 +163,12 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         default_voucher_series_per_source_type: draft as Record<JournalEntrySourceType, string>,
       })
       toast({
-        title: 'Verifikationsserier sparade',
-        description: 'Nya verifikat använder de uppdaterade serierna.',
+        title: t('series_saved_title'),
+        description: t('series_saved_description'),
       })
     } catch (err) {
       toast({
-        title: 'Kunde inte spara',
+        title: t('series_save_failed'),
         description: getErrorMessage(err, { context: 'settings' }),
         variant: 'destructive',
       })
@@ -185,7 +186,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
     return (
       <SettingsRow
         key={key}
-        label={SV_LABELS[labelKey] ?? key}
+        label={sourceTypeLabel(labelKey) ?? key}
         htmlFor={`series-${key}`}
         help={
           dimmed ? t(boundTo === 'cash' ? 'series_row_cash_only' : 'series_row_accrual_only') : undefined
@@ -214,8 +215,8 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
 
   return (
     <SettingsGroup
-      label="Verifikationsserier per typ"
-      help="Tilldela en standardserie per typ av verifikat. Namnen i listan följer Fortnox-konventionen: kundfakturor på serie B, leverantörsfakturor på serie D, löner på serie K, övrigt på serie A. Andra program använder andra bokstäver; bokstaven är ett fritt val. Kan alltid ändras per verifikat när du bokför."
+      label={t('series_per_type_label')}
+      help={t('series_per_type_help')}
     >
       {alwaysVisible.map((entry, i) =>
         // The last always-visible row sits right above the fold toggle:
@@ -260,7 +261,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           disabled={!hasChanges}
           loading={isSaving}
         >
-          Spara serier
+          {t('series_save_button')}
         </Button>
       </div>
     </SettingsGroup>

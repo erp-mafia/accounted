@@ -162,6 +162,7 @@ function clearDocumentOAuthResume(): void {
 async function consumeMigrationStream(
   body: ReadableStream<Uint8Array>,
   onProgress: (currentStep: string | undefined, progress: number) => void,
+  messages: { failed: string; connectionDropped: string },
 ): Promise<MigrationResults> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
@@ -189,7 +190,7 @@ async function consumeMigrationStream(
     } else if (event.kind === 'done') {
       results = event.results ?? {}
     } else if (event.kind === 'error') {
-      throw apiError(event, 'Migreringen misslyckades.')
+      throw apiError(event, messages.failed)
     }
   }
 
@@ -211,9 +212,7 @@ async function consumeMigrationStream(
   if (!results) {
     // The connection dropped before the terminal line. The migration keeps
     // running server-side, so a blind retry could double-import.
-    throw new UserFacingError(
-      'Anslutningen bröts innan migreringen bekräftades. Ladda om sidan och kontrollera om kunder och fakturor redan har importerats innan du försöker igen.'
-    )
+    throw new UserFacingError(messages.connectionDropped)
   }
   return results
 }
@@ -263,14 +262,18 @@ type WizardStep = 'provider' | 'connect' | 'preview' | 'mapping' | 'options' | '
 
 const STEPS: WizardStep[] = ['provider', 'connect', 'preview', 'mapping', 'options', 'migrating', 'result']
 
-const STEP_LABELS: Record<WizardStep, string> = {
-  provider: 'Välj system',
-  connect: 'Anslut',
-  preview: 'Förhandsgranskning',
-  mapping: 'Kontomappning',
-  options: 'Alternativ',
-  migrating: 'Migrerar',
-  result: 'Resultat',
+type Translator = ReturnType<typeof useTranslations>
+
+function stepLabel(t: Translator, step: WizardStep): string {
+  switch (step) {
+    case 'provider': return t('ext_arcim_step_provider')
+    case 'connect': return t('ext_arcim_step_connect')
+    case 'preview': return t('ext_arcim_step_preview')
+    case 'mapping': return t('ext_arcim_step_mapping')
+    case 'options': return t('ext_arcim_step_options')
+    case 'migrating': return t('ext_arcim_step_migrating')
+    case 'result': return t('ext_arcim_step_result')
+  }
 }
 
 interface MigrationOptions {
@@ -411,7 +414,8 @@ function SectionKicker({ children }: { children: React.ReactNode }) {
   )
 }
 
-function SieFallbackLine({ message, label = 'Ladda upp SIE-fil' }: { message: string; label?: string }) {
+function SieFallbackLine({ message, label }: { message: string; label?: string }) {
+  const t = useTranslations('extensions')
   return (
     <p className="text-[13px] text-muted-foreground">
       {message}{' '}
@@ -419,7 +423,7 @@ function SieFallbackLine({ message, label = 'Ladda upp SIE-fil' }: { message: st
         href="/import?mode=sie"
         className="underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground"
       >
-        {label}
+        {label ?? t('ext_arcim_upload_sie_file')}
       </Link>
     </p>
   )
@@ -441,11 +445,12 @@ function SpinnerLine({ children }: { children: React.ReactNode }) {
  * ink segment is the progress. No card, no fat bar.
  */
 function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: number }) {
+  const t = useTranslations('extensions')
   const progressPercent = ((currentIndex + 1) / steps.length) * 100
   return (
-    <nav aria-label="Migreringens steg">
+    <nav aria-label={t('ext_arcim_steps_aria')}>
       <p className="text-[11px] font-medium uppercase tracking-wider sm:hidden">
-        Steg {currentIndex + 1} av {steps.length}: {STEP_LABELS[steps[currentIndex]]}
+        {t('ext_arcim_step_of', { current: currentIndex + 1, total: steps.length, label: stepLabel(t, steps[currentIndex]) })}
       </p>
       <ol className="hidden flex-wrap items-center gap-x-6 gap-y-1 sm:flex">
         {steps.map((s, i) => (
@@ -462,7 +467,7 @@ function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: 
             )}
           >
             {i < currentIndex && <Check className="h-3 w-3" aria-hidden="true" />}
-            {STEP_LABELS[s]}
+            {stepLabel(t, s)}
           </li>
         ))}
       </ol>
@@ -556,18 +561,16 @@ function ProviderStep({
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
-        title={activeConsents.length > 0 ? 'Anslut ytterligare system' : 'Välj ditt nuvarande bokföringssystem'}
-        lede="Vi hämtar bokföringsdata via SIE och kunder, leverantörer och fakturor via API:et."
+        title={activeConsents.length > 0 ? t('ext_arcim_provider_title_additional') : t('ext_arcim_provider_title')}
+        lede={t('ext_arcim_provider_lede')}
       />
 
       {/* SIE-required attention (not relevant for Fortnox/Briox: they fetch
           SIE via API): one ochre sentence with the action embedded, never a
           banner. */}
       {showSieRequiredBanner && (
-        <AttnLine action={{ label: 'Ladda upp SIE-fil', href: '/import?mode=sie' }}>
-          Bokio och Visma hämtar endast kunder, leverantörer och fakturor via API:et: importera
-          bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
-          Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
+        <AttnLine action={{ label: t('ext_arcim_upload_sie_file'), href: '/import?mode=sie' }}>
+          {t('ext_arcim_sie_required_banner')}
         </AttnLine>
       )}
 
@@ -575,7 +578,7 @@ function ProviderStep({
           is the normal state here, so it reads as muted text, not a chip. */}
       {activeConsents.length > 0 && (
         <section className="space-y-3">
-          <SectionKicker>Aktiva anslutningar</SectionKicker>
+          <SectionKicker>{t('ext_arcim_active_connections')}</SectionKicker>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {activeConsents.map((consent) => {
               const providerInfo = ARCIM_PROVIDERS.find(p => p.id === consent.provider)
@@ -595,18 +598,18 @@ function ProviderStep({
                       {consent.companyName && <>{consent.companyName} · </>}
                       {lastImport ? (
                         <>
-                          Senaste import {new Date(lastImport.imported_at ?? lastImport.created_at).toLocaleDateString('sv-SE')}
+                          {t('ext_arcim_latest_import', { date: new Date(lastImport.imported_at ?? lastImport.created_at).toLocaleDateString('sv-SE') })}
                           {lastImport.transactions_count != null && (
-                            <span className="tabular-nums">, {lastImport.transactions_count} verifikationer</span>
+                            <span className="tabular-nums">{t('ext_arcim_latest_import_vouchers', { count: lastImport.transactions_count })}</span>
                           )}
                         </>
                       ) : (
-                        <>Ansluten {consent.createdAt ? new Date(consent.createdAt).toLocaleDateString('sv-SE') : ''}</>
+                        <>{t('ext_arcim_connected_on', { date: consent.createdAt ? new Date(consent.createdAt).toLocaleDateString('sv-SE') : '' })}</>
                       )}
                     </p>
                     {(connectionStatus?.entityCounts.customers ?? 0) > 0 && (
                       <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-                        {connectionStatus?.entityCounts.customers} kunder, {connectionStatus?.entityCounts.suppliers} leverantörer, {connectionStatus?.entityCounts.invoices} fakturor
+                        {t('ext_arcim_entity_counts', { customers: connectionStatus?.entityCounts.customers ?? 0, suppliers: connectionStatus?.entityCounts.suppliers ?? 0, invoices: connectionStatus?.entityCounts.invoices ?? 0 })}
                       </p>
                     )}
                   </div>
@@ -617,7 +620,7 @@ function ProviderStep({
                       onClick={() => onResync(consent.provider, consent.id)}
                     >
                       <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
-                      Synka igen
+                      {t('ext_arcim_resync')}
                     </Button>
                     {/* The underlag offer used to live only in the result step
                         of the run that just finished; closing or reloading
@@ -637,7 +640,7 @@ function ProviderStep({
                       variant="ghost"
                       size="sm"
                       className="text-muted-foreground hover:text-destructive"
-                      aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
+                      aria-label={t('ext_arcim_disconnect_aria', { provider: providerInfo?.name ?? consent.provider })}
                       onClick={() => onDisconnect(consent.id)}
                     >
                       <XCircle className="h-3.5 w-3.5" />
@@ -697,25 +700,25 @@ function ProviderStep({
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium">{provider.name}</p>
                     {comingSoon && (
-                      <Badge variant="secondary">Kommer snart</Badge>
+                      <Badge variant="secondary">{t('ext_arcim_coming_soon')}</Badge>
                     )}
                     {alreadyConnected && (
-                      <span className="text-xs text-muted-foreground">Ansluten</span>
+                      <span className="text-xs text-muted-foreground">{t('ext_arcim_connected')}</span>
                     )}
                     {needsSieFirst && !comingSoon && !alreadyConnected && (
-                      <Badge variant="warning">SIE krävs först</Badge>
+                      <Badge variant="warning">{t('ext_arcim_sie_required_first')}</Badge>
                     )}
                   </div>
                   <p className="mt-0.5 text-xs text-muted-foreground">
                     {alreadyConnected
-                      ? 'Använd "Synka igen" ovan'
+                      ? t('ext_arcim_use_resync_above')
                       : needsSieFirst
-                        ? 'Importera SIE-fil först'
+                        ? t('ext_arcim_import_sie_first')
                         : provider.authType === 'oauth'
-                          ? 'Anslut via inloggning'
+                          ? t('ext_arcim_connect_via_login')
                           : provider.id === 'bjornlunden'
-                            ? 'Anslut med företagsnyckel'
-                            : 'Anslut med API-nyckel'}
+                            ? t('ext_arcim_connect_with_company_key')
+                            : t('ext_arcim_connect_with_api_key')}
                   </p>
                 </div>
                 {!isDisabled && (
@@ -796,38 +799,38 @@ function ConnectStep({
   // WINT reuses the same field for the login e-mail.
   const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox' || provider === 'wint'
   const companyIdLabel = provider === 'briox'
-    ? 'Konto-ID'
+    ? t('ext_arcim_account_id_label')
     : provider === 'bjornlunden'
-      ? 'Företagsnyckel (User-Key)'
+      ? t('ext_arcim_company_key_label')
       : provider === 'wint'
-        ? 'E-postadress'
+        ? t('ext_arcim_email_label')
         : provider === 'bokio'
           ? t('ext_arcim_bokio_company_id_label')
-          : 'Företags-ID'
+          : t('ext_arcim_company_id_label')
 
   const tokenDescription = hasLundifyActivation
     ? t('ext_arcim_bl_activate_description', { appName: branding.appName })
     : isClientCredentials
     ? t('ext_arcim_bl_token_description', { appName: branding.appName })
     : isWintLogin
-      ? `Logga in med dina WINT-uppgifter för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata. Lösenordet används en gång för att skapa anslutningen och sparas aldrig.`
+      ? t('ext_arcim_wint_token_description', { appName: branding.appName.toLowerCase() })
       : provider === 'briox'
-        ? `Ange ditt konto-ID och din applikationstoken från Briox för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
+        ? t('ext_arcim_briox_token_description', { appName: branding.appName.toLowerCase() })
         : provider === 'bokio'
           ? t('ext_arcim_bokio_token_description', {
               appName: branding.appName.toLowerCase(),
             })
-        : `Ange din API-nyckel från ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`
+        : t('ext_arcim_api_key_token_description', { provider: providerName, appName: branding.appName.toLowerCase() })
 
   const tokenHelpText = isClientCredentials
     ? t('ext_arcim_bl_token_help')
     : isWintLogin
-      ? `Använd samma e-postadress och lösenord som när du loggar in på app.wint.se. Kräver ditt WINT-konto BankID-inloggning kan anslutningen inte skapas ännu: be i så fall WINT om en SIE-fil och importera den manuellt.`
+      ? t('ext_arcim_wint_token_help')
       : provider === 'bokio'
       ? t('ext_arcim_bokio_token_help')
       : provider === 'briox'
-        ? `Skapa din applikationstoken i Briox under Admin \u2192 Anv\u00e4ndare \u2192 kugghjulet vid din anv\u00e4ndare \u2192 Applikationstoken. Ditt konto-ID \u00e4r det l\u00e5nga numret inom parentes bredvid f\u00f6retagsnamnet under "Ditt konto" i menyn till h\u00f6ger.`
-        : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
+        ? t('ext_arcim_briox_token_help')
+        : t('ext_arcim_generic_token_help', { provider: providerName })
 
   const canSubmit = isClientCredentials
     ? !!companyId
@@ -836,26 +839,26 @@ function ConnectStep({
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
-        title={`Anslut till ${providerName}`}
+        title={t('ext_arcim_connect_to', { provider: providerName })}
         lede={authType === 'token'
           ? tokenDescription
-          : `Logga in i ${providerName} för att ge ${branding.appName.toLowerCase()} tillgång att läsa din bokföringsdata.`}
+          : t('ext_arcim_oauth_description', { provider: providerName, appName: branding.appName.toLowerCase() })}
       />
 
-      {isLoading && <SpinnerLine>Förbereder anslutning...</SpinnerLine>}
+      {isLoading && <SpinnerLine>{t('ext_arcim_preparing_connection')}</SpinnerLine>}
 
       {error && (
         <div className="space-y-3">
           <div className="space-y-1">
-            <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
+            <p className="text-sm font-medium text-destructive">{t('ext_arcim_connection_failed')}</p>
             <p className="text-sm text-muted-foreground">{error}</p>
             {provider === 'fortnox' && (
               <p className="text-sm text-muted-foreground">
-                Obs: Fortnox kräver ett aktivt integrationstillägg (tillkostnadsbelagd tilläggstjänst) för att kunna använda integrationer. Kontrollera att detta är aktiverat i ditt Fortnox-konto.
+                {t('ext_arcim_fortnox_integration_note')}
               </p>
             )}
           </div>
-          <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+          <SieFallbackLine message={t('ext_arcim_sie_fallback_also')} />
         </div>
       )}
 
@@ -863,11 +866,10 @@ function ConnectStep({
       {authType === 'oauth' && authUrl && !isLoading && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Klicka nedan för att logga in i {providerName}.
-            Fönstret stängs automatiskt när du är klar.
+            {t('ext_arcim_oauth_click_below', { provider: providerName })}
           </p>
           <Button onClick={() => openProviderWindow(authUrl)}>
-            Logga in i {providerName}
+            {t('ext_arcim_oauth_login_button', { provider: providerName })}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
         </div>
@@ -908,12 +910,12 @@ function ConnectStep({
               <div className={cn(isWintLogin && 'order-2')}>
                 <label htmlFor="apiToken" className="text-sm font-medium">
                   {provider === 'briox'
-                    ? 'Applikationstoken'
+                    ? t('ext_arcim_app_token_label')
                     : isWintLogin
-                      ? 'Lösenord'
+                      ? t('ext_arcim_password_label')
                       : provider === 'bokio'
                         ? t('ext_arcim_bokio_token_label')
-                        : 'API-nyckel'}
+                        : t('ext_arcim_api_key_label')}
                 </label>
                 <Input
                   id="apiToken"
@@ -922,12 +924,12 @@ function ConnectStep({
                   autoComplete="new-password"
                   placeholder={
                     provider === 'briox'
-                      ? 'Klistra in din applikationstoken'
+                      ? t('ext_arcim_app_token_placeholder')
                       : isWintLogin
-                        ? 'Ditt lösenord hos WINT'
+                        ? t('ext_arcim_wint_password_placeholder')
                         : provider === 'bokio'
                           ? t('ext_arcim_bokio_token_placeholder')
-                        : 'Klistra in din API-nyckel'
+                        : t('ext_arcim_api_key_placeholder')
                   }
                   value={apiToken}
                   onChange={(e) => setApiToken(e.target.value)}
@@ -946,12 +948,12 @@ function ConnectStep({
                   autoComplete="new-password"
                   placeholder={
                     isClientCredentials
-                      ? 'Företagsnyckel, t.ex. 1f0e2d3c-4b5a-...'
+                      ? t('ext_arcim_company_key_placeholder')
                       : provider === 'briox'
-                        ? 'Det långa numret inom parentes, t.ex. 35649125'
+                        ? t('ext_arcim_briox_account_id_placeholder')
                         : isWintLogin
-                          ? 'namn@foretaget.se'
-                          : 'GUID från URL:en, t.ex. 14ccad83-67f6-49bd-...'
+                          ? t('ext_arcim_email_placeholder')
+                          : t('ext_arcim_guid_placeholder')
                   }
                   value={companyId}
                   onChange={(e) => setCompanyId(e.target.value)}
@@ -963,7 +965,7 @@ function ConnectStep({
               onClick={() => onTokenSubmit(apiToken, companyId)}
               disabled={!canSubmit}
             >
-              Anslut
+              {t('ext_arcim_connect_button')}
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
@@ -973,7 +975,7 @@ function ConnectStep({
       <div className="flex border-t border-border pt-6">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('ext_arcim_back')}
         </Button>
       </div>
     </div>
@@ -1028,12 +1030,12 @@ function PreviewStep({
     <div className="stagger-enter space-y-8">
       <div>
         <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
-          {preview ? `Anslutet till ${providerName}` : 'Förhandsgranskning'}
+          {preview ? t('ext_arcim_connected_to', { provider: providerName }) : t('ext_arcim_step_preview')}
         </h2>
 
         {isLoading && (
           <div className="mt-3">
-            <SpinnerLine>Hämtar bokföringsdata...</SpinnerLine>
+            <SpinnerLine>{t('ext_arcim_fetching_bookkeeping')}</SpinnerLine>
           </div>
         )}
 
@@ -1047,16 +1049,16 @@ function PreviewStep({
           if (!sieStats && assetCount === 0) return null
           const parts: string[] = []
           if (sieStats) {
-            parts.push(`${sieStats.accountCount.toLocaleString('sv-SE')} konton`)
-            parts.push(`${sieStats.transactionCount.toLocaleString('sv-SE')} verifikationer`)
+            parts.push(t('ext_arcim_stat_accounts', { count: sieStats.accountCount.toLocaleString('sv-SE') }))
+            parts.push(t('ext_arcim_stat_vouchers', { count: sieStats.transactionCount.toLocaleString('sv-SE') }))
             parts.push(
               sieStats.fiscalYears.length === 1
-                ? `räkenskapsåret ${sieStats.fiscalYears[0]}`
-                : `${sieStats.fiscalYears.length} räkenskapsår: ${sieStats.fiscalYears.join(', ')}`,
+                ? t('ext_arcim_stat_fiscal_year_single', { year: sieStats.fiscalYears[0] })
+                : t('ext_arcim_stat_fiscal_years', { count: sieStats.fiscalYears.length, years: sieStats.fiscalYears.join(', ') }),
             )
           }
           if (assetCount > 0) {
-            parts.push(`${assetCount.toLocaleString('sv-SE')} anläggningstillgångar`)
+            parts.push(t('ext_arcim_stat_assets', { count: assetCount.toLocaleString('sv-SE') }))
           }
           return (
             <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground tabular-nums">
@@ -1067,8 +1069,7 @@ function PreviewStep({
 
         {preview && !preview.sieAvailable && !isLoading && preview.hasSieData && (
           <p className="animate-fade-in mt-3 text-[13px] text-muted-foreground">
-            Bokföringsdatan är redan importerad via SIE-fil. Du kan fortsätta med att importera
-            kunder, leverantörer och fakturor.
+            {t('ext_arcim_already_imported_via_sie')}
           </p>
         )}
       </div>
@@ -1115,20 +1116,20 @@ function PreviewStep({
       {error && (
         <div className="space-y-3">
           <div className="space-y-1">
-            <p className="text-sm font-medium text-destructive">Kunde inte hämta bokföringsdata</p>
+            <p className="text-sm font-medium text-destructive">{t('ext_arcim_fetch_bookkeeping_failed')}</p>
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
           {authExpired && (
             <Button size="sm" onClick={onReconnect} disabled={isLoading}>
               <RotateCcw className="mr-2 h-4 w-4" />
-              Återanslut {providerName}
+              {t('ext_arcim_reconnect_provider', { provider: providerName })}
             </Button>
           )}
           {/* License-missing keeps the SIE fallback visible: re-auth loops
               until the customer re-orders the Fortnox Integration license,
               so a manual SIE import is the reliable escape hatch. */}
           {(!authExpired || licenseMissing) && (
-            <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+            <SieFallbackLine message={t('ext_arcim_sie_fallback_also')} />
           )}
         </div>
       )}
@@ -1136,25 +1137,28 @@ function PreviewStep({
       {preview && !preview.sieAvailable && !isLoading && !preview.hasSieData && (
         <div className="space-y-3">
           <div className="space-y-1">
-            <p className="text-sm font-medium text-destructive">SIE-import krävs</p>
+            <p className="text-sm font-medium text-destructive">{t('ext_arcim_sie_import_required')}</p>
             <p className="text-sm text-muted-foreground">
-              Bokföringsdata (kontoplan, verifikationer och balanser) måste importeras via SIE-fil innan kunder, leverantörer och fakturor kan hämtas. Exportera en SIE-fil från {ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? 'ditt bokföringssystem'} och ladda upp den i {branding.appName.toLowerCase()}.
+              {t('ext_arcim_sie_import_required_body', {
+                provider: ARCIM_PROVIDERS.find(p => p.id === preview.consent.provider)?.name ?? t('ext_arcim_your_accounting_system'),
+                appName: branding.appName.toLowerCase(),
+              })}
             </p>
           </div>
-          <SieFallbackLine message="När filen är exporterad:" label="Gå till SIE-importen" />
+          <SieFallbackLine message={t('ext_arcim_when_exported')} label={t('ext_arcim_go_to_sie_import')} />
         </div>
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('ext_arcim_back')}
         </Button>
         <Button
           onClick={onContinue}
           disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
-          Fortsätt
+          {t('ext_arcim_continue')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
@@ -1189,15 +1193,16 @@ function MappingStep({
   onContinue: () => void
   onBack: () => void
 }) {
+  const t = useTranslations('extensions')
   if (isLoading) {
-    return <SpinnerLine>Analyserar bokföringsdata och förbereder kontomappning...</SpinnerLine>
+    return <SpinnerLine>{t('ext_arcim_analyzing')}</SpinnerLine>
   }
 
   if (error) {
     return (
       <div className="stagger-enter space-y-8">
         <div className="space-y-1">
-          <p className="text-sm font-medium text-destructive">Kunde inte ladda SIE-data</p>
+          <p className="text-sm font-medium text-destructive">{t('ext_arcim_load_sie_failed')}</p>
           <p className="text-sm text-muted-foreground">{error}</p>
           {errorDetails && errorDetails.length > 0 && (
             <ul className="mt-2 list-disc space-y-1 pl-4 text-sm text-muted-foreground">
@@ -1205,16 +1210,16 @@ function MappingStep({
                 <li key={i} className="break-words">{detail}</li>
               ))}
               {errorDetails.length > 8 && (
-                <li>… och {errorDetails.length - 8} fel till</li>
+                <li>{t('ext_arcim_more_errors', { count: errorDetails.length - 8 })}</li>
               )}
             </ul>
           )}
         </div>
-        <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
+        <SieFallbackLine message={t('ext_arcim_sie_fallback_persisting')} />
         <div className="flex border-t border-border pt-6">
           <Button variant="outline" onClick={onBack}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Tillbaka
+            {t('ext_arcim_back')}
           </Button>
         </div>
       </div>
@@ -1277,13 +1282,13 @@ function OptionsStep({
   const failedYears = sieData?.failedYears ?? []
 
   const selectedItems: string[] = []
-  if (options.importCompanyInfo) selectedItems.push('Företagsinformation')
-  if (sieAvailable && options.importSIEData) selectedItems.push('Bokföringsdata (SIE)')
-  if (options.importCustomers) selectedItems.push('Kunder')
-  if (options.importSuppliers) selectedItems.push('Leverantörer')
-  if (options.importSalesInvoices) selectedItems.push('Kundfakturor')
-  if (options.importSupplierInvoices) selectedItems.push('Leverantörsfakturor')
-  if (provider === 'fortnox' && options.importAssets) selectedItems.push('Anläggningstillgångar')
+  if (options.importCompanyInfo) selectedItems.push(t('ext_arcim_item_company_info'))
+  if (sieAvailable && options.importSIEData) selectedItems.push(t('ext_arcim_item_sie'))
+  if (options.importCustomers) selectedItems.push(t('ext_arcim_item_customers'))
+  if (options.importSuppliers) selectedItems.push(t('ext_arcim_item_suppliers'))
+  if (options.importSalesInvoices) selectedItems.push(t('ext_arcim_item_sales_invoices'))
+  if (options.importSupplierInvoices) selectedItems.push(t('ext_arcim_item_supplier_invoices'))
+  if (provider === 'fortnox' && options.importAssets) selectedItems.push(t('ext_arcim_item_assets'))
 
   // Entities without the SIE-derived ledger leave an incomplete bokföring:
   // POST /migrate refuses with PROVIDER_SIE_IMPORT_REQUIRED unless a completed
@@ -1300,8 +1305,8 @@ function OptionsStep({
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
-        title="Vad vill du importera?"
-        lede="Bokföringsdata importeras via SIE-fil. Kunder, leverantörer och fakturor hämtas via API:et."
+        title={t('ext_arcim_options_title')}
+        lede={t('ext_arcim_options_lede')}
       />
 
       {/* Years whose provider export failed: must be visible before the user
@@ -1311,8 +1316,8 @@ function OptionsStep({
       {sieAvailable && failedYears.length > 0 && !sieRequiredButUnchecked && (
         <AttnLine>
           {failedYears.length === 1
-            ? `Räkenskapsår ${failedYears[0].year} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp en SIE-fil för det saknade året manuellt.`
-            : `Räkenskapsår ${failedYears.map(f => f.year).join(', ')} kunde inte hämtas från källsystemet: om du fortsätter importeras övriga år, men ingående och utgående balanser kan sakna kontinuitet. Försök igen senare eller ladda upp SIE-filer för de saknade åren manuellt.`}
+            ? t('ext_arcim_failed_year_single', { year: failedYears[0].year })
+            : t('ext_arcim_failed_years', { years: failedYears.map(f => f.year).join(', ') })}
         </AttnLine>
       )}
 
@@ -1320,8 +1325,8 @@ function OptionsStep({
           per row, no nested boxes. */}
       <div className="stagger-enter divide-y divide-border" data-no-stagger>
         <OptionRow
-          label="Företagsinformation"
-          description="Namn, organisationsnummer, adress"
+          label={t('ext_arcim_item_company_info')}
+          description={t('ext_arcim_option_company_info_desc')}
           checked={options.importCompanyInfo}
           onChange={() => toggleOption('importCompanyInfo')}
         />
@@ -1329,15 +1334,15 @@ function OptionsStep({
         {sieAvailable && (
           <div>
             <OptionRow
-              label="Bokföringsdata (SIE)"
+              label={t('ext_arcim_item_sie')}
               description={
                 replacedFileCount > 0 && newFileCount > 0
-                  ? `${newFileCount} nya och ${replacedFileCount} uppdaterade räkenskapsår`
+                  ? t('ext_arcim_option_sie_new_and_replaced', { newCount: newFileCount, replacedCount: replacedFileCount })
                   : replacedFileCount > 0
-                    ? `${replacedFileCount} räkenskapsår med uppdaterad data: tidigare import ersätts`
+                    ? t('ext_arcim_option_sie_replaced', { count: replacedFileCount })
                     : newFileCount > 0
-                      ? `${newFileCount} ny(a) räkenskapsår att importera`
-                      : 'Kontoplan, ingående balanser och verifikationer'
+                      ? t('ext_arcim_option_sie_new', { count: newFileCount })
+                      : t('ext_arcim_option_sie_desc')
               }
               checked={options.importSIEData}
               onChange={() => toggleOption('importSIEData')}
@@ -1348,12 +1353,10 @@ function OptionsStep({
                 {fileStatuses.map((fs) => (
                   <p key={fs.fiscalYear} className="text-xs text-muted-foreground tabular-nums">
                     {fs.previousImport
-                      ? `Räkenskapsår ${fs.fiscalYear}: ersätter tidigare import${
-                          fs.previousImport.importedAt
-                            ? ` från ${new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE')}`
-                            : ''
-                        }`
-                      : `Räkenskapsår ${fs.fiscalYear}: ny data att importera`}
+                      ? fs.previousImport.importedAt
+                        ? t('ext_arcim_file_replaces_import_from', { year: fs.fiscalYear, date: new Date(fs.previousImport.importedAt).toLocaleDateString('sv-SE') })
+                        : t('ext_arcim_file_replaces_import', { year: fs.fiscalYear })
+                      : t('ext_arcim_file_new_data', { year: fs.fiscalYear })}
                   </p>
                 ))}
               </div>
@@ -1362,12 +1365,12 @@ function OptionsStep({
             {options.importSIEData && (
               <div className="flex items-center gap-3 border-t border-border py-3">
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium">Verifikationsserie</p>
+                  <p className="text-sm font-medium">{t('ext_arcim_voucher_series')}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{t('ext_arcim_option_series_help')}</p>
                 </div>
                 <Input
                   className="w-16 text-center"
-                  aria-label="Verifikationsserie"
+                  aria-label={t('ext_arcim_voucher_series')}
                   value={options.voucherSeries}
                   onChange={(e) => onChange({ ...options, voucherSeries: e.target.value.toUpperCase() || 'B' })}
                   maxLength={2}
@@ -1378,35 +1381,35 @@ function OptionsStep({
         )}
 
         <OptionRow
-          label="Kunder"
-          description="Kund-register med kontaktuppgifter"
+          label={t('ext_arcim_item_customers')}
+          description={t('ext_arcim_option_customers_desc')}
           checked={options.importCustomers}
           onChange={() => toggleOption('importCustomers')}
         />
         <OptionRow
-          label="Leverantörer"
-          description="Leverantör-register med bankuppgifter"
+          label={t('ext_arcim_item_suppliers')}
+          description={t('ext_arcim_option_suppliers_desc')}
           checked={options.importSuppliers}
           onChange={() => toggleOption('importSuppliers')}
         />
         <OptionRow
-          label="Kundfakturor"
-          description="Alla kundfakturor (betalda och obetalda)"
+          label={t('ext_arcim_item_sales_invoices')}
+          description={t('ext_arcim_option_sales_invoices_desc')}
           checked={options.importSalesInvoices}
           onChange={() => toggleOption('importSalesInvoices')}
         />
         <OptionRow
-          label="Leverantörsfakturor"
+          label={t('ext_arcim_item_supplier_invoices')}
           description={provider === 'fortnox'
-            ? 'Endast obetalda leverantörsfakturor hämtas. Historiska betalda fakturor finns kvar i Fortnox.'
-            : 'Alla leverantörsfakturor (betalda och obetalda)'}
+            ? t('ext_arcim_option_supplier_invoices_fortnox_desc')
+            : t('ext_arcim_option_supplier_invoices_desc')}
           checked={options.importSupplierInvoices}
           onChange={() => toggleOption('importSupplierInvoices')}
         />
         {provider === 'fortnox' && (
           <OptionRow
-            label="Anläggningstillgångar"
-            description="Anläggningsregistret med avskrivningsplaner. Bokförda värden kommer via SIE; registret gör att avskrivningarna fortsätter automatiskt."
+            label={t('ext_arcim_item_assets')}
+            description={t('ext_arcim_option_assets_desc')}
             checked={options.importAssets}
             onChange={() => toggleOption('importAssets')}
           />
@@ -1420,10 +1423,10 @@ function OptionsStep({
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('ext_arcim_back')}
         </Button>
         <Button onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
-          Starta migrering
+          {t('ext_arcim_start_migration')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
@@ -1436,15 +1439,15 @@ function OptionsStep({
           onStart()
         }}
         isSubmitting={isStarting}
-        title="Starta migrering"
-        confirmLabel="Starta migrering"
+        title={t('ext_arcim_start_migration')}
+        confirmLabel={t('ext_arcim_start_migration')}
       >
         {/* One sentence naming what happens, the selection as a compact muted
             line list, no caution: nothing here needs one. */}
         <div className="space-y-4">
           <div className="space-y-2">
             <p className="text-sm">
-              Det här hämtas från källsystemet och importeras till {branding.appName.toLowerCase()}:
+              {t('ext_arcim_confirm_intro', { appName: branding.appName.toLowerCase() })}
             </p>
             <ul className="space-y-1">
               {selectedItems.map((item) => (
@@ -1455,12 +1458,7 @@ function OptionsStep({
 
           {options.importSIEData && yearsToReplace.length > 0 && (
             <p className="text-sm text-muted-foreground">
-              {yearsToReplace.length === 1
-                ? `Räkenskapsår ${yearsToReplace[0]} ersätts:`
-                : `Räkenskapsår ${yearsToReplace.join(', ')} ersätts:`}{' '}
-              tidigare importerade verifikationer markeras som annullerade och ersätts av
-              uppdaterad data från källsystemet. Verifikationer som du själv skapat i {branding.appName.toLowerCase()}{' '}
-              (kategoriserade banktransaktioner, fakturor m.m.) påverkas inte.
+              {t('ext_arcim_confirm_replace', { years: yearsToReplace.join(', '), appName: branding.appName.toLowerCase() })}
             </p>
           )}
         </div>
@@ -1507,11 +1505,12 @@ function OptionRow({
 // ── Migrating step (progress) ───────────────────────────────────
 
 function MigratingStep({ currentStep, progress }: { currentStep: string; progress: number }) {
+  const t = useTranslations('extensions')
   return (
     <div className="stagger-enter space-y-8">
       <StepHeading
-        title="Migrering pågår"
-        lede="Vänta medan vi hämtar och importerar din bokföringsdata. Det kan ta några minuter."
+        title={t('ext_arcim_migrating_title')}
+        lede={t('ext_arcim_migrating_lede')}
       />
       <div className="max-w-md space-y-3">
         <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
@@ -1542,65 +1541,54 @@ function formatFiscalYearLabel(start: string, end: string): string {
  * users read a correct import as broken). "Delvis importerad" only when
  * vouchers were actually lost; "Misslyckades" when nothing landed.
  */
-function getFYStatus(r: ImportResult): { tone: 'success' | 'warning' | 'error'; label: string } {
+function getFYStatus(t: Translator, r: ImportResult): { tone: 'success' | 'warning' | 'error'; label: string } {
   if (r.errors.length > 0 && r.journalEntriesCreated === 0) {
-    return { tone: 'error', label: 'Misslyckades' }
+    return { tone: 'error', label: t('ext_arcim_fy_status_failed') }
   }
   if (r.errors.length > 0 || (r.details?.skippedVouchers && r.details.skippedVouchers.total > 0)) {
-    return { tone: 'warning', label: 'Delvis importerad' }
+    return { tone: 'warning', label: t('ext_arcim_fy_status_partial') }
   }
-  return { tone: 'success', label: 'Importerad' }
+  return { tone: 'success', label: t('ext_arcim_fy_status_imported') }
 }
 
 /** Compose the opening-balance adjustment into one quiet sentence. */
-function openingBalanceSentence(ob: NonNullable<NonNullable<ImportResult['details']>['openingBalance']>): string {
+function openingBalanceSentence(t: Translator, ob: NonNullable<NonNullable<ImportResult['details']>['openingBalance']>): string {
   const amount = `${Math.abs(ob.imbalance).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK`
+  const account = ob.bookedToAccount ?? ''
   if (ob.explanation === 'unallocated_result') {
-    return `Ingående balanser justerade: differens på ${amount} bokförd på konto ${ob.bookedToAccount}, troligen för att föregående års resultat inte allokerats till eget kapital i källsystemet (vanligt vid byte av bokföringsprogram).`
+    return t('ext_arcim_ob_unallocated_result', { amount, account })
   }
   if (ob.explanation === 'excluded_accounts') {
-    return `Ingående balanser justerade: exkluderade systemkonton (t.ex. Fortnox 0099) hade ingående saldon, differensen (${amount}) bokförd på konto ${ob.bookedToAccount}.`
+    return t('ext_arcim_ob_excluded_accounts', { amount, account })
   }
   if (ob.explanation === 'rounding') {
-    return `Ingående balanser justerade: avrundningsdifferens (${amount}) bokförd på konto ${ob.bookedToAccount}.`
+    return t('ext_arcim_ob_rounding', { amount, account })
   }
-  return `Ingående balanser justerade: differens på ${amount} bokförd på konto ${ob.bookedToAccount}.`
+  return t('ext_arcim_ob_generic', { amount, account })
 }
 
 /**
  * What the import did that is worth knowing but needs no action: shown
  * behind a small info icon next to the status label, never as lines.
  */
-function fiscalYearInfoLines(result: ImportResult): string[] {
+function fiscalYearInfoLines(t: Translator, result: ImportResult): string[] {
   const d = result.details
   const lines: string[] = []
   if (result.accountsCreated && result.accountsCreated > 0) {
-    lines.push(
-      result.accountsCreated === 1
-        ? '1 nytt konto lades till i kontoplanen med namn från källsystemet.'
-        : `${result.accountsCreated} nya konton lades till i kontoplanen med namn från källsystemet.`
-    )
+    lines.push(t('ext_arcim_info_accounts_created', { count: result.accountsCreated }))
   }
   if (result.accountsRenamed && result.accountsRenamed > 0) {
-    lines.push(
-      result.accountsRenamed === 1
-        ? '1 konto fick sitt namn från källsystemet.'
-        : `${result.accountsRenamed} konton fick sina namn från källsystemet.`
-    )
+    lines.push(t('ext_arcim_info_accounts_renamed', { count: result.accountsRenamed }))
   }
   if (d?.openingBalanceSkipped === 'prior_activity') {
-    lines.push(
-      'Ingående balanser härleddes från föregående års utgående balans, eftersom bolaget redan hade bokförda verifikationer.'
-    )
+    lines.push(t('ext_arcim_info_ob_derived'))
   }
-  if (d?.openingBalance) lines.push(openingBalanceSentence(d.openingBalance))
+  if (d?.openingBalance) lines.push(openingBalanceSentence(t, d.openingBalance))
   if (d?.migrationAdjustment?.created) {
-    lines.push(
-      `Omföringsverifikation skapad: ${d.migrationAdjustment.accountsAdjusted} konton justerade så att balansräkning och resultaträkning matchar källsystemet.`
-    )
+    lines.push(t('ext_arcim_info_adjustment_created', { count: d.migrationAdjustment.accountsAdjusted }))
   }
   if (d && d.retriedBatches > 0 && d.failedBatches === 0) {
-    lines.push(`${d.retriedBatches} ${d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök.`)
+    lines.push(t('ext_arcim_info_batches_retried', { count: d.retriedBatches }))
   }
   return lines
 }
@@ -1627,14 +1615,17 @@ function remainingWarnings(result: ImportResult): string[] {
  * scoped, so the same year would otherwise be named under every later year
  * of a multi-year migration (#2462).
  */
-function untransferredResultSentences(results: ImportResult[]): string[] {
+function untransferredResultSentences(t: Translator, results: ImportResult[]): string[] {
   const seen = new Map<string, string>()
   for (const r of results) {
     for (const u of r.details?.untransferredResults ?? []) {
       if (seen.has(u.fiscal_period_id)) continue
       seen.set(
         u.fiscal_period_id,
-        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital, senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).`
+        t('ext_arcim_untransferred_result', {
+          period: u.period_name,
+          amount: u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 }),
+        })
       )
     }
   }
@@ -1649,44 +1640,47 @@ function untransferredResultSentences(results: ImportResult[]): string[] {
  * the info icon next to the status. Nothing gets a box.
  */
 function FiscalYearLine({ result, index }: { result: ImportResult; index: number }) {
+  const t = useTranslations('extensions')
   const [showRemarks, setShowRemarks] = useState(false)
-  const status = getFYStatus(result)
+  const status = getFYStatus(t, result)
   const d = result.details
   const fyLabel = d?.fiscalYear
     ? formatFiscalYearLabel(d.fiscalYear.start, d.fiscalYear.end)
-    : `Räkenskapsår ${index + 1}`
+    : t('ext_arcim_fiscal_year_n', { n: index + 1 })
 
   // The one ochre sentence: vouchers the import could not carry over.
   let skippedSentence: string | null = null
   if (d?.skippedVouchers && d.skippedVouchers.total > 0) {
     const parts: string[] = []
-    if (d.skippedVouchers.empty > 0) parts.push(`${d.skippedVouchers.empty} tomma`)
-    if (d.skippedVouchers.unbalanced > 0) parts.push(`${d.skippedVouchers.unbalanced} obalanserade`)
-    if (d.skippedVouchers.singleLine > 0) parts.push(`${d.skippedVouchers.singleLine} enradiga`)
+    if (d.skippedVouchers.empty > 0) parts.push(t('ext_arcim_skipped_empty', { count: d.skippedVouchers.empty }))
+    if (d.skippedVouchers.unbalanced > 0) parts.push(t('ext_arcim_skipped_unbalanced', { count: d.skippedVouchers.unbalanced }))
+    if (d.skippedVouchers.singleLine > 0) parts.push(t('ext_arcim_skipped_single_line', { count: d.skippedVouchers.singleLine }))
     if (d.skippedVouchers.unmapped > 0) {
       // Name the accounts (issue #2212): a count alone sends the user to diff
       // the general ledger against the source system by hand.
       const perAccount = (d.skippedVouchers.unmappedAccounts ?? [])
-        .map((a) => `konto ${a.account}: ${a.vouchers}`)
+        .map((a) => t('ext_arcim_skipped_account_entry', { account: a.account, count: a.vouchers }))
         .join(', ')
       parts.push(
-        `${d.skippedVouchers.unmapped} med ej kopplade konton${perAccount ? ` (${perAccount})` : ''}`
+        perAccount
+          ? t('ext_arcim_skipped_unmapped_accounts', { count: d.skippedVouchers.unmapped, accounts: perAccount })
+          : t('ext_arcim_skipped_unmapped', { count: d.skippedVouchers.unmapped })
       )
     }
-    skippedSentence = `${d.skippedVouchers.total} verifikationer hoppades över (${parts.join(', ')}): saldon har justerats automatiskt via omföringsverifikation.`
+    skippedSentence = t('ext_arcim_skipped_sentence', { count: d.skippedVouchers.total, parts: parts.join(', ') })
   }
 
   const remarks = remainingWarnings(result)
-  const infoLines = fiscalYearInfoLines(result)
+  const infoLines = fiscalYearInfoLines(t, result)
 
   return (
     <div className="py-3">
       <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <span className="text-sm font-medium tabular-nums">{fyLabel}</span>
         <span className="text-sm text-muted-foreground tabular-nums">
-          {result.journalEntriesCreated.toLocaleString('sv-SE')} verifikationer
+          {t('ext_arcim_stat_vouchers', { count: result.journalEntriesCreated.toLocaleString('sv-SE') })}
           {result.replacedPriorImport && result.replacedPriorImport.deletedEntries > 0 && (
-            <> · ersatte {result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE')} tidigare importerade</>
+            <>{t('ext_arcim_replaced_prior', { count: result.replacedPriorImport.deletedEntries.toLocaleString('sv-SE') })}</>
           )}
         </span>
         <span className="ml-auto inline-flex items-center gap-2 text-xs">
@@ -1697,7 +1691,7 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
               aria-expanded={showRemarks}
               className="text-muted-foreground underline-offset-2 hover:underline"
             >
-              {remarks.length === 1 ? '1 anmärkning' : `${remarks.length} anmärkningar`}
+              {t('ext_arcim_remarks', { count: remarks.length })}
             </button>
           )}
           <span
@@ -1743,7 +1737,7 @@ function FiscalYearLine({ result, index }: { result: ImportResult; index: number
       )}
       {d && d.failedBatches > 0 && (
         <p className="mt-1 text-[12.5px] leading-5 text-destructive">
-          {d.retriedBatches} {d.retriedBatches === 1 ? 'batch' : 'batcher'} behövde omförsök, {d.failedBatches} misslyckades trots omförsök.
+          {t('ext_arcim_batches_failed', { retried: d.retriedBatches, failed: d.failedBatches })}
         </p>
       )}
     </div>
@@ -1972,11 +1966,13 @@ function DocumentImportFollowUp({
   )
 }
 
-const NEXT_STEPS: { title: string; sub: string }[] = [
-  { title: 'Granska importerade verifikationer', sub: 'Kontrollera att bokföringen ser korrekt ut i huvudboken' },
-  { title: 'Stäm av balansräkningen', sub: 'Jämför ingående balanser och saldon mot ditt tidigare system' },
-  { title: 'Kontrollera kunder och leverantörer', sub: 'Verifiera kontaktuppgifter, organisationsnummer och bankinfo' },
-]
+function nextSteps(t: Translator): { title: string; sub: string }[] {
+  return [
+    { title: t('ext_arcim_next_review_title'), sub: t('ext_arcim_next_review_sub') },
+    { title: t('ext_arcim_next_balance_title'), sub: t('ext_arcim_next_balance_sub') },
+    { title: t('ext_arcim_next_parties_title'), sub: t('ext_arcim_next_parties_sub') },
+  ]
+}
 
 function ResultStep({
   results,
@@ -2015,19 +2011,19 @@ function ResultStep({
     // Steps run one request each (#2469), so a failure in a later request
     // leaves earlier steps' rows in place. Name them: the user must not
     // re-import what already landed, and must see what still needs a rerun.
-    const completed = completedStepLines(results)
+    const completed = completedStepLines(t, results)
     return (
       <div className="stagger-enter space-y-8">
         <div>
           <h2 className="font-display text-2xl leading-8 tracking-tight text-balance">
-            {completed.length > 0 ? 'Migreringen avbröts' : 'Migreringen misslyckades'}
+            {completed.length > 0 ? t('ext_arcim_migration_aborted') : t('ext_arcim_migration_failed_title')}
           </h2>
           <p className="mt-3 whitespace-pre-line text-sm text-destructive">{error}</p>
         </div>
         {completed.length > 0 && (
           <div>
             <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-              Hann slutföras innan felet
+              {t('ext_arcim_completed_before_error')}
             </h3>
             <ul className="mt-3 space-y-1 text-sm">
               {completed.map((line) => (
@@ -2035,16 +2031,16 @@ function ResultStep({
               ))}
             </ul>
             <p className="mt-3 text-sm text-muted-foreground">
-              Kör migreringen igen med de steg som saknas: det som redan finns hoppas över.
+              {t('ext_arcim_rerun_missing_steps')}
             </p>
           </div>
         )}
-        <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
+        <SieFallbackLine message={t('ext_arcim_sie_fallback_instead')} />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-          <Button variant="outline" onClick={onDone}>Klar</Button>
+          <Button variant="outline" onClick={onDone}>{t('ext_arcim_done')}</Button>
           <Button onClick={onRetry}>
             <RotateCcw className="mr-2 h-4 w-4" />
-            Försök igen
+            {t('ext_arcim_try_again')}
           </Button>
         </div>
       </div>
@@ -2082,7 +2078,7 @@ function ResultStep({
           </Button>
           <Button asChild>
             <Link href="/bookkeeping">
-              Visa bokföring
+              {t('ext_arcim_view_bookkeeping')}
               <ExternalLink className="ml-2 h-4 w-4" />
             </Link>
           </Button>
@@ -2123,25 +2119,25 @@ function ResultStep({
   // ── The reveal: a serif verdict derived from the real results ──
   const fyCount = sieResults.length
   const verdict = nothingNew
-    ? 'Allt är redan uppdaterat.'
+    ? t('ext_arcim_verdict_up_to_date')
     : (anySieFailed || apiFailed)
-      ? 'Migreringen är delvis genomförd.'
+      ? t('ext_arcim_verdict_partial')
       : totalJournalEntries > 0
         ? fyCount === 1
-          ? `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer är på plats.`
-          : `${totalJournalEntries.toLocaleString('sv-SE')} verifikationer över ${fyCount} räkenskapsår är på plats.`
+          ? t('ext_arcim_verdict_vouchers', { count: totalJournalEntries.toLocaleString('sv-SE') })
+          : t('ext_arcim_verdict_vouchers_years', { count: totalJournalEntries.toLocaleString('sv-SE'), years: fyCount })
         : (sieResults.length > 0 && !allSieSucceeded) || totalErrors > 0
-          ? 'Migreringen är klar, med anmärkningar.'
-          : 'Migreringen är klar.'
+          ? t('ext_arcim_verdict_done_with_remarks')
+          : t('ext_arcim_verdict_done')
 
   const statParts: string[] = []
-  if (totalJournalEntries > 0) statParts.push(`${totalJournalEntries.toLocaleString('sv-SE')} verifikat`)
-  if (fyCount > 0) statParts.push(`${fyCount} räkenskapsår`)
+  if (totalJournalEntries > 0) statParts.push(t('ext_arcim_result_stat_vouchers', { count: totalJournalEntries.toLocaleString('sv-SE') }))
+  if (fyCount > 0) statParts.push(t('ext_arcim_result_stat_fiscal_years', { count: fyCount }))
   const customerCount = (results?.customers?.imported ?? 0) + (results?.customers?.updated ?? 0)
-  if (customerCount > 0) statParts.push(`${customerCount.toLocaleString('sv-SE')} kunder`)
-  if ((results?.suppliers?.imported ?? 0) > 0) statParts.push(`${results!.suppliers!.imported.toLocaleString('sv-SE')} leverantörer`)
+  if (customerCount > 0) statParts.push(t('ext_arcim_result_stat_customers', { count: customerCount.toLocaleString('sv-SE') }))
+  if ((results?.suppliers?.imported ?? 0) > 0) statParts.push(t('ext_arcim_result_stat_suppliers', { count: results!.suppliers!.imported.toLocaleString('sv-SE') }))
   const invoiceCount = (results?.salesInvoices?.imported ?? 0) + (results?.supplierInvoices?.imported ?? 0)
-  if (invoiceCount > 0) statParts.push(`${invoiceCount.toLocaleString('sv-SE')} fakturor`)
+  if (invoiceCount > 0) statParts.push(t('ext_arcim_result_stat_invoices', { count: invoiceCount.toLocaleString('sv-SE') }))
 
   // The settled constellation only appears over a story that is true:
   // it needs the model and actually imported entries.
@@ -2151,36 +2147,36 @@ function ResultStep({
   const entityLines: { label: string; value: string; detail?: string; failed: boolean }[] = []
   if (results) {
     if (results.companyInfo?.imported) {
-      entityLines.push({ label: 'Företagsinformation', value: 'Importerad', failed: false })
+      entityLines.push({ label: t('ext_arcim_item_company_info'), value: t('ext_arcim_fy_status_imported'), failed: false })
     }
     if (results.customers && (results.customers.imported > 0 || (results.customers.updated ?? 0) > 0 || results.customers.skipped > 0)) {
       entityLines.push({
-        label: 'Kunder',
+        label: t('ext_arcim_item_customers'),
         value: results.customers.updated
-          ? `${results.customers.imported} importerade, ${results.customers.updated} kompletterade`
-          : `${results.customers.imported} importerade`,
+          ? t('ext_arcim_imported_and_completed', { imported: results.customers.imported, updated: results.customers.updated })
+          : t('ext_arcim_imported_count', { count: results.customers.imported }),
         detail: results.customers.skipped > 0
-          ? formatSkipReasons(results.customers.skipReasons, 'customer', results.customers.errorSample) ?? `${results.customers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.customers.skipReasons, 'customer', results.customers.errorSample) ?? t('ext_arcim_skipped_count', { count: results.customers.skipped })
           : undefined,
         failed: entityRowStatus(results.customers.imported, results.customers.skipReasons) === 'error',
       })
     }
     if (results.suppliers && (results.suppliers.imported > 0 || results.suppliers.skipped > 0)) {
       entityLines.push({
-        label: 'Leverantörer',
-        value: `${results.suppliers.imported} importerade`,
+        label: t('ext_arcim_item_suppliers'),
+        value: t('ext_arcim_imported_count', { count: results.suppliers.imported }),
         detail: results.suppliers.skipped > 0
-          ? formatSkipReasons(results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? `${results.suppliers.skipped} hoppades över`
+          ? formatSkipReasons(t, results.suppliers.skipReasons, 'supplier', results.suppliers.errorSample) ?? t('ext_arcim_skipped_count', { count: results.suppliers.skipped })
           : undefined,
         failed: entityRowStatus(results.suppliers.imported, results.suppliers.skipReasons) === 'error',
       })
     }
     if (results.salesInvoices && (results.salesInvoices.imported > 0 || results.salesInvoices.skipped > 0)) {
       entityLines.push({
-        label: 'Kundfakturor',
-        value: `${results.salesInvoices.imported} importerade`,
+        label: t('ext_arcim_item_sales_invoices'),
+        value: t('ext_arcim_imported_count', { count: results.salesInvoices.imported }),
         detail: results.salesInvoices.skipped > 0
-          ? formatSkipReasons(results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? `${results.salesInvoices.skipped} hoppades över`
+          ? formatSkipReasons(t, results.salesInvoices.skipReasons, 'invoice', results.salesInvoices.errorSample) ?? t('ext_arcim_skipped_count', { count: results.salesInvoices.skipped })
           : undefined,
         failed: entityRowStatus(results.salesInvoices.imported, results.salesInvoices.skipReasons) === 'error',
       })
@@ -2209,7 +2205,7 @@ function ResultStep({
       const linked = results.salesInvoices.creditNotesLinked ?? 0
       entityLines.push({
         label: t('ext_arcim_credit_notes_label'),
-        value: `${unlinked + linked} importerade`,
+        value: t('ext_arcim_imported_count', { count: unlinked + linked }),
         detail: [
           linked > 0 ? t('ext_arcim_credit_notes_linked_detail', { count: linked }) : null,
           unlinked > 0 ? t('ext_arcim_credit_notes_unlinked_detail', { count: unlinked }) : null,
@@ -2219,10 +2215,10 @@ function ResultStep({
     }
     if (results.supplierInvoices && (results.supplierInvoices.imported > 0 || results.supplierInvoices.skipped > 0)) {
       entityLines.push({
-        label: 'Leverantörsfakturor',
-        value: `${results.supplierInvoices.imported} importerade`,
+        label: t('ext_arcim_item_supplier_invoices'),
+        value: t('ext_arcim_imported_count', { count: results.supplierInvoices.imported }),
         detail: results.supplierInvoices.skipped > 0
-          ? formatSkipReasons(results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? `${results.supplierInvoices.skipped} hoppades över`
+          ? formatSkipReasons(t, results.supplierInvoices.skipReasons, 'invoice', results.supplierInvoices.errorSample) ?? t('ext_arcim_skipped_count', { count: results.supplierInvoices.skipped })
           : undefined,
         failed: entityRowStatus(results.supplierInvoices.imported, results.supplierInvoices.skipReasons) === 'error',
       })
@@ -2264,12 +2260,12 @@ function ResultStep({
     }
     if (results.assets && (results.assets.imported > 0 || results.assets.skipped > 0 || results.assets.scopesMissing)) {
       entityLines.push({
-        label: 'Anläggningstillgångar',
-        value: results.assets.scopesMissing ? 'Hoppades över' : `${results.assets.imported} importerade`,
+        label: t('ext_arcim_item_assets'),
+        value: results.assets.scopesMissing ? t('ext_arcim_skipped_label') : t('ext_arcim_imported_count', { count: results.assets.imported }),
         detail: results.assets.scopesMissing
-          ? 'Fortnox-anslutningen saknar behörighet till anläggningsregistret (assets-scope). Bokförda värden är ändå med via SIE.'
+          ? t('ext_arcim_assets_scope_missing')
           : results.assets.skipped > 0
-            ? formatSkipReasons(results.assets.skipReasons, 'asset', results.assets.errorSample) ?? `${results.assets.skipped} hoppades över`
+            ? formatSkipReasons(t, results.assets.skipReasons, 'asset', results.assets.errorSample) ?? t('ext_arcim_skipped_count', { count: results.assets.skipped })
             : undefined,
         failed: !results.assets.scopesMissing &&
           entityRowStatus(results.assets.imported, results.assets.skipReasons) === 'error',
@@ -2283,14 +2279,14 @@ function ResultStep({
       <div className={cn('grid items-center gap-6', showCanvas && 'md:grid-cols-[minmax(280px,380px)_1fr]')}>
         <div>
           <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Migrering
+            {t('ext_arcim_result_kicker')}
           </p>
           <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
             {verdict}
           </h2>
           {nothingNew ? (
             <p className="mt-3 text-[13px] text-muted-foreground">
-              Det finns ingen ny data att importera från leverantören.
+              {t('ext_arcim_no_new_data')}
             </p>
           ) : statParts.length > 0 ? (
             <p className="mt-3 text-[13px] text-muted-foreground tabular-nums">
@@ -2311,7 +2307,7 @@ function ResultStep({
           {groupStepErrors(stepErrors).map((group, i) => (
             <div key={i} className="space-y-1">
               <p className="text-sm font-medium text-destructive">
-                Kunde inte hämta: {group.steps.map((s) => STEP_ERROR_LABELS[s]).join(', ')}
+                {t('ext_arcim_could_not_fetch', { steps: group.steps.map((s) => stepErrorLabel(t, s)).join(', ') })}
               </p>
               <p className="text-sm text-muted-foreground">{group.message}</p>
             </div>
@@ -2322,7 +2318,7 @@ function ResultStep({
       {/* ── Per-fiscal-year outcomes as lines ── */}
       {sieResults.length > 0 && (
         <section className="space-y-3">
-          <SectionKicker>Bokföringsdata (SIE)</SectionKicker>
+          <SectionKicker>{t('ext_arcim_item_sie')}</SectionKicker>
           <div className="stagger-enter divide-y divide-border" data-no-stagger>
             {sieResults.map((r, i) => (
               <FiscalYearLine key={i} result={r} index={i} />
@@ -2330,7 +2326,7 @@ function ResultStep({
           </div>
           {/* Company-level fact, said once: a prior year whose result was
               never transferred to equity skews every later opening balance. */}
-          {untransferredResultSentences(sieResults).map((sentence, i) => (
+          {untransferredResultSentences(t, sieResults).map((sentence, i) => (
             <AttnLine key={i}>{sentence}</AttnLine>
           ))}
         </section>
@@ -2360,7 +2356,7 @@ function ResultStep({
       {/* ── API import results: quiet two-column line list ── */}
       {entityLines.length > 0 && (
         <section className="space-y-3">
-          <SectionKicker>Övriga data</SectionKicker>
+          <SectionKicker>{t('ext_arcim_other_data')}</SectionKicker>
           <div className="stagger-enter grid gap-x-10 sm:grid-cols-2" data-no-stagger>
             {entityLines.map((line) => (
               <div key={line.label} className="border-b border-border py-2">
@@ -2395,9 +2391,9 @@ function ResultStep({
       {/* ── Next steps: quiet numbered lines, no card, no filled discs ── */}
       {!nothingNew && (
         <section className="space-y-3">
-          <SectionKicker>Nästa steg</SectionKicker>
+          <SectionKicker>{t('ext_arcim_next_steps')}</SectionKicker>
           <ol className="stagger-enter divide-y divide-border" data-no-stagger>
-            {NEXT_STEPS.map((step, i) => (
+            {nextSteps(t).map((step, i) => (
               <li key={step.title} className="flex items-baseline gap-4 py-3">
                 <span className="text-[13px] text-muted-foreground tabular-nums">{i + 1}</span>
                 <div className="min-w-0">
@@ -2413,18 +2409,18 @@ function ResultStep({
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onDone}>
           <RotateCcw className="mr-2 h-4 w-4" />
-          Ny migrering
+          {t('ext_arcim_new_migration')}
         </Button>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" asChild>
             <Link href="/customers">
-              Visa kunder
+              {t('ext_arcim_view_customers')}
               <ExternalLink className="ml-2 h-4 w-4" />
             </Link>
           </Button>
           <Button asChild>
             <Link href="/bookkeeping">
-              Visa bokföring
+              {t('ext_arcim_view_bookkeeping')}
               <ExternalLink className="ml-2 h-4 w-4" />
             </Link>
           </Button>
@@ -2434,15 +2430,17 @@ function ResultStep({
   )
 }
 
-const STEP_ERROR_LABELS: Record<MigrationStepError['step'], string> = {
-  companyInfo: 'Företagsinformation',
-  customers: 'Kunder',
-  suppliers: 'Leverantörer',
-  salesInvoices: 'Kundfakturor',
-  supplierInvoices: 'Leverantörsfakturor',
-  assets: 'Anläggningstillgångar',
-  registrationLinks: 'Koppling till verifikationer',
-  reconciliation: 'Avstämning av betalningar',
+function stepErrorLabel(t: Translator, step: MigrationStepError['step']): string {
+  switch (step) {
+    case 'companyInfo': return t('ext_arcim_item_company_info')
+    case 'customers': return t('ext_arcim_item_customers')
+    case 'suppliers': return t('ext_arcim_item_suppliers')
+    case 'salesInvoices': return t('ext_arcim_item_sales_invoices')
+    case 'supplierInvoices': return t('ext_arcim_item_supplier_invoices')
+    case 'assets': return t('ext_arcim_item_assets')
+    case 'registrationLinks': return t('ext_arcim_step_error_registration_links')
+    case 'reconciliation': return t('ext_arcim_step_error_reconciliation')
+  }
 }
 
 /**
@@ -2460,39 +2458,37 @@ function groupStepErrors(errors: MigrationStepError[]): { message: string; steps
 }
 
 function formatSkipReasons(
+  t: Translator,
   reasons?: AssetSkipReasons,
   entityType?: 'customer' | 'supplier' | 'invoice' | 'asset',
   errorSample?: string,
 ): string | undefined {
   if (!reasons) return undefined
   const parts: string[] = []
-  if (reasons.duplicate) parts.push(`${reasons.duplicate} fanns redan`)
+  if (reasons.duplicate) parts.push(t('ext_arcim_skip_duplicate', { count: reasons.duplicate }))
   if (reasons.outsideFiscalYears) {
-    parts.push(
-      `${reasons.outsideFiscalYears} avslutad${reasons.outsideFiscalYears > 1 ? 'e' : ''} före importerade räkenskapsår`,
-    )
+    parts.push(t('ext_arcim_skip_outside_fiscal_years', { count: reasons.outsideFiscalYears }))
   }
   // The source returned the record without an amount and without rader, so
   // there is nothing to import: say that, rather than let the count vanish
   // into an unexplained "hoppades över".
-  if (reasons.zeroTotal) parts.push(`${reasons.zeroTotal} saknar belopp hos leverantören`)
+  if (reasons.zeroTotal) parts.push(t('ext_arcim_skip_zero_total', { count: reasons.zeroTotal }))
   if (reasons.inactive) {
     parts.push(
       entityType === 'asset'
-        ? `${reasons.inactive} avyttrad${reasons.inactive > 1 ? 'e' : ''} eller annullerad${reasons.inactive > 1 ? 'e' : ''}`
-        : `${reasons.inactive} inaktiv${reasons.inactive > 1 ? 'a' : ''}`,
+        ? t('ext_arcim_skip_disposed', { count: reasons.inactive })
+        : t('ext_arcim_skip_inactive', { count: reasons.inactive }),
     )
   }
-  if (reasons.unsupported) parts.push(`${reasons.unsupported} kunde inte tolkas`)
+  if (reasons.unsupported) parts.push(t('ext_arcim_skip_unsupported', { count: reasons.unsupported }))
   if (reasons.noMatch) {
-    const matchLabel = entityType === 'invoice' ? 'utan matchning' : 'utan matchning'
-    parts.push(`${reasons.noMatch} ${matchLabel}`)
+    parts.push(t('ext_arcim_skip_no_match', { count: reasons.noMatch }))
   }
   if (reasons.failed) {
     parts.push(
       errorSample
-        ? `${reasons.failed} misslyckades: ${errorSample.slice(0, 140)}`
-        : `${reasons.failed} misslyckades`
+        ? t('ext_arcim_skip_failed_sample', { count: reasons.failed, sample: errorSample.slice(0, 140) })
+        : t('ext_arcim_skip_failed', { count: reasons.failed })
     )
   }
   return parts.length > 0 ? parts.join(', ') : undefined
@@ -2502,19 +2498,23 @@ function formatSkipReasons(
  * One line per step that reported a result: what the earlier per-step
  * requests already wrote before a later one failed.
  */
-function completedStepLines(results: MigrationResults | null): string[] {
+function completedStepLines(t: Translator, results: MigrationResults | null): string[] {
   if (!results) return []
   const lines: string[] = []
   const count = (label: string, r?: { imported: number; skipped: number }) => {
     if (!r) return
-    lines.push(`${label}: ${r.imported} importerade${r.skipped > 0 ? `, ${r.skipped} hoppades över` : ''}`)
+    lines.push(
+      r.skipped > 0
+        ? t('ext_arcim_completed_line_skipped', { label, imported: r.imported, skipped: r.skipped })
+        : t('ext_arcim_completed_line', { label, imported: r.imported }),
+    )
   }
-  if (results.companyInfo?.imported) lines.push('Företagsinformation: uppdaterad')
-  count('Kunder', results.customers)
-  count('Leverantörer', results.suppliers)
-  count('Kundfakturor', results.salesInvoices)
-  count('Leverantörsfakturor', results.supplierInvoices)
-  count('Anläggningstillgångar', results.assets)
+  if (results.companyInfo?.imported) lines.push(t('ext_arcim_completed_company_info'))
+  count(t('ext_arcim_item_customers'), results.customers)
+  count(t('ext_arcim_item_suppliers'), results.suppliers)
+  count(t('ext_arcim_item_sales_invoices'), results.salesInvoices)
+  count(t('ext_arcim_item_supplier_invoices'), results.supplierInvoices)
+  count(t('ext_arcim_item_assets'), results.assets)
   return lines
 }
 
@@ -2675,7 +2675,7 @@ export default function ArcimMigrationWorkspace({
         const response = await fetch('/api/extensions/ext/arcim-migration/migration-jobs/retry', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId, consentId: cId }),
         })
-        if (!response.ok) throw apiError(await response.json(), 'Kunde inte återuppta importen')
+        if (!response.ok) throw apiError(await response.json(), t('ext_arcim_resume_failed'))
         reconnectJobRef.current = null
         setProviderJobId(jobId)
         return
@@ -2718,11 +2718,11 @@ export default function ArcimMigrationWorkspace({
         setMigrationOptions(prev => ({ ...prev, importSIEData: false }))
       }
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte hämta förhandsgranskning')
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('ext_arcim_preview_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [t])
 
   const handleSelectProvider = useCallback(async (provider: ArcimProvider) => {
     setSelectedProvider(provider)
@@ -2766,11 +2766,11 @@ export default function ArcimMigrationWorkspace({
       }
       // Token-based providers stay on connect step for credential input
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Anslutning misslyckades')
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('ext_arcim_connection_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [loadPreview])
+  }, [loadPreview, t])
 
   // Re-sync with existing consent: go straight to preview
   const handleResync = useCallback(async (provider: ArcimProvider, existingConsentId: string) => {
@@ -2873,7 +2873,7 @@ export default function ArcimMigrationWorkspace({
             if (options?.onFailure) {
               options.onFailure()
             } else {
-              setError('Inloggningsfönstret stängdes innan anslutningen var klar. Försök igen.')
+              setError(t('ext_arcim_login_window_closed'))
               setAuthExpired(true)
             }
           })
@@ -2892,13 +2892,13 @@ export default function ArcimMigrationWorkspace({
       if (options?.onFailure) {
         options.onFailure()
       } else {
-        setError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte återansluta')
+        setError(err instanceof Error ? getUserErrorMessage(err) : t('ext_arcim_reconnect_failed'))
         setAuthExpired(true)
       }
     } finally {
       setIsLoading(false)
     }
-  }, [clearOAuthPopupWatch])
+  }, [clearOAuthPopupWatch, t])
 
   const runDocumentDiscovery = useCallback(async (
     currentConsentId: string,
@@ -3012,14 +3012,14 @@ export default function ArcimMigrationWorkspace({
       })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        throw new Error(apiErrorMessage(data, 'Kunde inte koppla från'))
+        throw new Error(apiErrorMessage(data, t('ext_arcim_disconnect_failed')))
       }
-      toast({ title: 'Frånkopplad', description: 'Anslutningen har tagits bort.' })
+      toast({ title: t('ext_arcim_disconnected_title'), description: t('ext_arcim_disconnected_description') })
       await fetchStatus()
     } catch (err) {
-      toast({ title: err instanceof Error ? getUserErrorMessage(err) : 'Något gick fel', variant: 'destructive' })
+      toast({ title: err instanceof Error ? getUserErrorMessage(err) : t('ext_arcim_something_went_wrong'), variant: 'destructive' })
     }
-  }, [toast, fetchStatus])
+  }, [toast, fetchStatus, t])
 
   // Handle token submission for token-based providers (Bokio, etc.)
   const handleTokenSubmit = useCallback(async (apiToken: string, companyId: string) => {
@@ -3048,11 +3048,11 @@ export default function ArcimMigrationWorkspace({
       // Token stored: consent is now accepted, proceed to preview
       await loadPreview(consentId)
     } catch (err) {
-      setError(displayError(err, 'Kunde inte ansluta'))
+      setError(displayError(err, t('ext_arcim_connect_failed')))
     } finally {
       setIsLoading(false)
     }
-  }, [consentId, selectedProvider, loadPreview])
+  }, [consentId, selectedProvider, loadPreview, t])
 
   // Handle OAuth callback via URL params
   const handleOAuthReturn = useCallback(async () => {
@@ -3086,7 +3086,7 @@ export default function ArcimMigrationWorkspace({
       }
     } else if (migrationStatus === 'error') {
       const callbackProvider = url.searchParams.get('provider') as ArcimProvider | null
-      const reason = url.searchParams.get('reason') || 'OAuth-anslutningen misslyckades. Försök igen.'
+      const reason = url.searchParams.get('reason') || t('ext_arcim_oauth_failed')
       url.searchParams.delete('migration')
       url.searchParams.delete('provider')
       url.searchParams.delete('reason')
@@ -3107,7 +3107,7 @@ export default function ArcimMigrationWorkspace({
         return
       }
       setError(reason)
-      toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
+      toast({ title: t('ext_arcim_connection_failed'), description: reason, variant: 'destructive' })
       if (callbackProvider) {
         setSelectedProvider(callbackProvider)
         setStep('connect')
@@ -3121,6 +3121,7 @@ export default function ArcimMigrationWorkspace({
     runDocumentDiscovery,
     runDocumentImport,
     toast,
+    t,
   ])
 
   // Check for OAuth callback on mount (fallback for non-popup flow)
@@ -3172,7 +3173,7 @@ export default function ArcimMigrationWorkspace({
         clearDocumentReconnectFailureCleanup()
         const reason = typeof event.data.reason === 'string' && event.data.reason
           ? event.data.reason
-          : 'OAuth-anslutningen misslyckades. Försök igen.'
+          : t('ext_arcim_oauth_failed')
         const reconnectAction = documentReconnectActionRef.current
         if (reconnectAction) {
           documentReconnectActionRef.current = null
@@ -3190,7 +3191,7 @@ export default function ArcimMigrationWorkspace({
           return
         }
         setError(reason)
-        toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
+        toast({ title: t('ext_arcim_connection_failed'), description: reason, variant: 'destructive' })
       }
     }
     window.addEventListener('message', handleMessage)
@@ -3203,6 +3204,7 @@ export default function ArcimMigrationWorkspace({
     runDocumentDiscovery,
     runDocumentImport,
     toast,
+    t,
   ])
 
   // Load SIE data when entering mapping step
@@ -3228,7 +3230,7 @@ export default function ArcimMigrationWorkspace({
         if (Array.isArray(validationErrors)) {
           setErrorDetails(validationErrors.filter((e): e is string => typeof e === 'string'))
           throw new UserFacingError(
-            'Bokföringsdatan hos leverantören klarade inte valideringen. Felen nedan måste rättas i källsystemet innan importen kan fortsätta.'
+            t('ext_arcim_validation_failed')
           )
         }
         throw apiError(data, `HTTP ${res.status}`)
@@ -3254,11 +3256,11 @@ export default function ArcimMigrationWorkspace({
         setStep('options')
       }
     } catch (err) {
-      setError(displayError(err, 'Kunde inte hämta SIE-data'))
+      setError(displayError(err, t('ext_arcim_fetch_sie_failed')))
     } finally {
       setIsLoading(false)
     }
-  }, [consentId, refreshCompanyAccounts, selectedYears])
+  }, [consentId, refreshCompanyAccounts, selectedYears, t])
 
   const handlePreviewContinue = useCallback(() => {
     if (preview?.sieAvailable) {
@@ -3323,7 +3325,7 @@ export default function ArcimMigrationWorkspace({
 
     setStep('migrating')
     setDocumentsOnly(false)
-    setMigrationStep('Startar migrering...')
+    setMigrationStep(t('ext_arcim_progress_starting'))
     setMigrationProgress(5)
     setError(null)
     dispatchDocumentImport({ type: 'reset' })
@@ -3344,7 +3346,7 @@ export default function ArcimMigrationWorkspace({
     try {
       // ── Phase 1: SIE import ──────────────────────────────────
       if (migrationOptions.importSIEData && sieData && sieData.rawContent.length > 0) {
-        setMigrationStep('Importerar bokföringsdata (SIE)...')
+        setMigrationStep(t('ext_arcim_progress_importing_sie'))
         setMigrationProgress(10)
         setSieImportResults([])
 
@@ -3358,14 +3360,14 @@ export default function ArcimMigrationWorkspace({
         for (let i = 0; i < filesToImport.length; i++) {
           const progress = 10 + Math.round((i / filesToImport.length) * 40)
           setMigrationProgress(progress)
-          setMigrationStep(`Importerar bokföringsdata (SIE): fil ${i + 1} av ${filesToImport.length}...`)
+          setMigrationStep(t('ext_arcim_progress_importing_sie_file', { current: i + 1, total: filesToImport.length }))
 
           // Name the year in every per-file failure: a multi-year re-sync
           // that dies on ONE year must say which, or the user cannot act on
           // it (issue #1667: the current year re-imported, the prior year
           // refused, and the error never said so).
           const fiscalYear = filesToImport[i].status?.fiscalYear
-          const yearLabel = fiscalYear ? `Räkenskapsår ${fiscalYear}: ` : ''
+          const yearLabel = fiscalYear ? t('ext_arcim_year_prefix', { year: fiscalYear }) + ' ' : ''
 
           const filename = 'migration-sie-'+(fiscalYear ?? i)+'.se'
           const storagePath = await uploadSIEFile(new File([filesToImport[i].content],filename,{type:'text/plain'}))
@@ -3418,7 +3420,7 @@ export default function ArcimMigrationWorkspace({
           if (!result.success) {
             throw new UserFacingError(result.errors.length > 0
               ? `${yearLabel}${result.errors.join('\n')}`
-              : `${yearLabel}SIE-importen misslyckades utan felmeddelande.`)
+              : `${yearLabel}${t('ext_arcim_sie_import_failed_no_message')}`)
           }
         }
       }
@@ -3440,7 +3442,7 @@ export default function ArcimMigrationWorkspace({
 
       let hadStepErrors = false
       if (hasApiImport) {
-        setMigrationStep('Importerar kunder, leverantörer och fakturor...')
+        setMigrationStep(t('ext_arcim_progress_importing_entities'))
         setMigrationProgress(55)
 
         // Company metadata and the optional asset register retain their existing
@@ -3459,7 +3461,10 @@ export default function ArcimMigrationWorkspace({
           })
           if (!res.ok) throw apiError(await res.json().catch(() => ({})), `HTTP ${res.status}`)
           const results = res.headers.get('content-type')?.includes('application/x-ndjson') && res.body
-            ? await consumeMigrationStream(res.body, label => { if (label) setMigrationStep(label) })
+            ? await consumeMigrationStream(res.body, label => { if (label) setMigrationStep(label) }, {
+                failed: t('ext_arcim_migration_failed'),
+                connectionDropped: t('ext_arcim_stream_dropped'),
+              })
             : (await res.json()).results as MigrationResults
           merged = mergeMigrationResults(merged, results)
           setMigrationResults(merged)
@@ -3504,14 +3509,14 @@ export default function ArcimMigrationWorkspace({
 
       if (hadStepErrors) {
         toast({
-          title: 'Migrering delvis genomförd',
-          description: 'Vissa delar kunde inte hämtas från leverantören. Se detaljerna i resultatet.',
+          title: t('ext_arcim_toast_partial_title'),
+          description: t('ext_arcim_toast_partial_description'),
           variant: 'destructive',
         })
       } else {
         toast({
-          title: 'Migrering klar',
-          description: 'Din bokföringsdata har importerats.',
+          title: t('ext_arcim_toast_done_title'),
+          description: t('ext_arcim_toast_done_description'),
         })
       }
     } catch (err) {
@@ -3521,7 +3526,7 @@ export default function ArcimMigrationWorkspace({
       migrationInFlightRef.current = false
       setIsStartingMigration(false)
     }
-  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast])
+  }, [consentId, migrationOptions, preview, runDocumentDiscovery, selectedProvider, sieData, toast, t])
 
   const handleDone = useCallback(() => {
     // Reset wizard

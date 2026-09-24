@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -29,11 +30,13 @@ export function DestructiveConfirmDialog({
   onOpenChange,
   title,
   description,
-  confirmLabel = 'Bekräfta',
-  cancelLabel = 'Avbryt',
+  confirmLabel,
+  cancelLabel,
   variant = 'destructive',
   onConfirm,
 }: DestructiveConfirmDialogProps) {
+  const t = useTranslations('destructive_confirm_dialog')
+  const tc = useTranslations('common')
   const [isLoading, setIsLoading] = useState(false)
 
   const handleConfirm = async () => {
@@ -87,7 +90,7 @@ export function DestructiveConfirmDialog({
             onClick={() => onOpenChange(false)}
             disabled={isLoading}
           >
-            {cancelLabel}
+            {cancelLabel ?? tc('cancel')}
           </Button>
           {/* Warning-variant confirms use the default primary button: in
               chrome only --destructive survives as a colored action. */}
@@ -96,7 +99,7 @@ export function DestructiveConfirmDialog({
             onClick={handleConfirm}
             loading={isLoading}
           >
-            {confirmLabel}
+            {confirmLabel ?? t('confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>

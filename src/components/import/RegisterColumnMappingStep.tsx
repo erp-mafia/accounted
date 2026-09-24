@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -30,11 +31,12 @@ export default function RegisterColumnMappingStep<K extends string>({
   onConfirm,
   onBack,
 }: RegisterColumnMappingStepProps<K>) {
+  const t = useTranslations('register_column_mapping_step')
   const [mapping, setMapping] = useState<Record<K, number | null>>(initial)
 
   const columnOptions = headers.map((h, i) => ({
     value: String(i),
-    label: `${i + 1}: ${h || '(tom)'}`,
+    label: `${i + 1}: ${h || t('empty_header')}`,
   }))
 
   const canContinue = specs
@@ -44,10 +46,9 @@ export default function RegisterColumnMappingStep<K extends string>({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Kolumnmappning</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Vi kunde inte automatiskt identifiera alla kolumner. Ange vilka kolumner i din fil
-          som motsvarar respektive fält. Lämna tomt för fält som inte finns.
+          {t('description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -68,10 +69,10 @@ export default function RegisterColumnMappingStep<K extends string>({
                 }
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Välj kolumn" />
+                  <SelectValue placeholder={t('select_column')} />
                 </SelectTrigger>
                 <SelectContent>
-                  {!spec.required && <SelectItem value="none">(ingen)</SelectItem>}
+                  {!spec.required && <SelectItem value="none">{t('none_option')}</SelectItem>}
                   {columnOptions.map((opt) => (
                     <SelectItem key={opt.value} value={opt.value}>
                       {opt.label}
@@ -85,7 +86,7 @@ export default function RegisterColumnMappingStep<K extends string>({
 
         {previewRows.length > 0 && (
           <div className="space-y-2">
-            <Label className="text-muted-foreground">Förhandsgranskning (5 första raderna)</Label>
+            <Label className="text-muted-foreground">{t('preview_label')}</Label>
             <div className="overflow-x-auto rounded-lg border">
               <table className="w-full text-sm">
                 <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
@@ -93,7 +94,7 @@ export default function RegisterColumnMappingStep<K extends string>({
                     {headers.map((h, i) => (
                       /* data-ph-mask: CSV headers are user data */
                       <th key={i} data-ph-mask="" className="px-3 py-2 text-left whitespace-nowrap">
-                        {h || `Kolumn ${i + 1}`}
+                        {h || t('column_fallback', { number: i + 1 })}
                       </th>
                     ))}
                   </tr>
@@ -115,9 +116,9 @@ export default function RegisterColumnMappingStep<K extends string>({
         )}
 
         <div className="flex justify-between">
-          <Button variant="ghost" onClick={onBack}>Tillbaka</Button>
+          <Button variant="ghost" onClick={onBack}>{t('back')}</Button>
           <Button onClick={() => onConfirm(mapping)} disabled={!canContinue}>
-            Fortsätt
+            {t('continue')}
           </Button>
         </div>
       </CardContent>

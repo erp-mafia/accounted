@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import TheaterCanvas, { type TheaterCanvasHandle } from '@/components/import/TheaterCanvas'
@@ -41,6 +42,7 @@ export default function ArcimMigrationTheater({
   currentStep,
   progress,
 }: ArcimMigrationTheaterProps) {
+  const t = useTranslations('arcim_migration_theater')
   const canvasRef = useRef<TheaterCanvasHandle | null>(null)
   const [log, setLog] = useState<LogLine[]>([])
   const [elapsed, setElapsed] = useState(0)
@@ -138,9 +140,9 @@ export default function ArcimMigrationTheater({
       <CardContent className="p-6">
         <div className="grid gap-6 md:grid-cols-[280px_1fr]">
           <div>
-            <p className="text-sm font-medium">Migrering pågår</p>
+            <p className="text-sm font-medium">{t('in_progress')}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Vi hämtar och importerar din bokföringsdata. Det kan ta några minuter.
+              {t('in_progress_description')}
             </p>
             {/* The live region covers only the step labels: the per-second
                 timer below would drown them out in a screen reader. */}

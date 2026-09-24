@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
+import { useLocale, useTranslations } from 'next-intl'
 import { usePathname, useRouter } from 'next/navigation'
 import { Pin, PinOff, Archive, Pencil, Search, X, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -9,7 +10,7 @@ import { useAgentSheet } from './AgentSheetProvider'
 import AgentAvatar from './AgentAvatar'
 import {
   type ConversationRow,
-  BUCKET_LABELS,
+  bucketLabel,
   relativeTime,
   intentLabel,
 } from './conversation-display'
@@ -20,6 +21,9 @@ interface Props {
 }
 
 export default function ChatSidebar({ initialConversations }: Props) {
+  const t = useTranslations('chat_sidebar')
+  const tDisplay = useTranslations('agent_conversation_display')
+  const locale = useLocale()
   const router = useRouter()
   const pathname = usePathname()
   const { openAgentSheet, identity } = useAgentSheet()
@@ -74,13 +78,13 @@ export default function ChatSidebar({ initialConversations }: Props) {
   const railAside = collapsed ? (
     <aside
       className="hidden md:flex md:w-12 flex-col items-center border-r border-border bg-card/40 shrink-0 py-3 gap-2"
-      aria-label="Konversationer (hopfälld)"
+      aria-label={t('collapsed_aria')}
     >
       <button
         type="button"
         onClick={toggleCollapsed}
-        aria-label="Visa konversationer"
-        title="Visa konversationer"
+        aria-label={t('show_conversations')}
+        title={t('show_conversations')}
         className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
       >
         <PanelLeftOpen className="h-4 w-4" />
@@ -89,8 +93,8 @@ export default function ChatSidebar({ initialConversations }: Props) {
       <button
         type="button"
         onClick={() => openAgentSheet({ intentId: 'general.help' })}
-        aria-label="Ny konversation"
-        title="Ny konversation"
+        aria-label={t('new_conversation')}
+        title={t('new_conversation')}
         className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors text-lg"
       >
         +
@@ -112,17 +116,17 @@ export default function ChatSidebar({ initialConversations }: Props) {
     >
       <div className="border-b border-border px-5 py-4 space-y-3">
         <div className="flex items-center gap-2">
-          <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
+          <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? t('assistant')} />
           <div className="flex-1 min-w-0">
             <h2 className="font-display text-base tracking-tight truncate">
-              {agentName ?? 'Din assistent'}
+              {agentName ?? t('your_assistant')}
             </h2>
-            <p className="text-[11px] text-muted-foreground">Konversationer</p>
+            <p className="text-[11px] text-muted-foreground">{t('conversations')}</p>
           </div>
           <button
             onClick={toggleCollapsed}
-            aria-label="Dölj konversationer"
-            title="Dölj konversationer"
+            aria-label={t('hide_conversations')}
+            title={t('hide_conversations')}
             className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           >
             <PanelLeftClose className="h-4 w-4" />
@@ -131,7 +135,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
             onClick={() => openAgentSheet({ intentId: 'general.help' })}
             className="text-xs uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
           >
-            + Ny
+            {t('new_short')}
           </button>
         </div>
         <div className="relative">
@@ -140,14 +144,14 @@ export default function ChatSidebar({ initialConversations }: Props) {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Sök…"
+            placeholder={t('search_placeholder')}
             className="w-full rounded-lg border border-border bg-background pl-8 pr-7 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
           {query.length > 0 && (
             <button
               type="button"
               onClick={() => setQuery('')}
-              aria-label="Rensa sökning"
+              aria-label={t('clear_search')}
               className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
               <X className="h-3 w-3" />
@@ -160,14 +164,14 @@ export default function ChatSidebar({ initialConversations }: Props) {
         {grouped.length === 0 ? (
           <div className="p-6 text-sm text-muted-foreground">
             {conversations.length === 0
-              ? 'Inga konversationer ännu. Klicka på + Ny för att börja.'
-              : 'Inga träffar.'}
+              ? t('empty')
+              : t('no_matches')}
           </div>
         ) : (
           grouped.map(({ bucket, rows }) => (
             <section key={bucket} className="py-2">
               <p className="px-4 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground">
-                {BUCKET_LABELS[bucket]}
+                {bucketLabel(bucket, tDisplay)}
               </p>
               <ul className="space-y-1">
                 {rows.map((c) => (
@@ -188,9 +192,9 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               cancelEdit()
                             }
                           }}
-                          placeholder="Namnge konversationen…"
+                          placeholder={t('rename_placeholder')}
                           maxLength={200}
-                          aria-label="Nytt namn på konversationen"
+                          aria-label={t('rename_aria')}
                           className="w-full rounded-lg border border-border bg-background px-2 py-1 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                         />
                       </div>
@@ -207,14 +211,14 @@ export default function ChatSidebar({ initialConversations }: Props) {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
                             <p className="text-sm font-medium truncate flex-1 min-w-0">
-                              {c.title ?? intentLabel(c.intent_id)}
+                              {c.title ?? intentLabel(c.intent_id, tDisplay)}
                             </p>
                             <p className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                              {relativeTime(c.last_message_at ?? c.created_at)}
+                              {relativeTime(c.last_message_at ?? c.created_at, tDisplay, locale)}
                             </p>
                           </div>
                           <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">
-                            {c.last_message_preview ?? intentLabel(c.intent_id)}
+                            {c.last_message_preview ?? intentLabel(c.intent_id, tDisplay)}
                           </p>
                         </div>
                         {/* Always-visible action icons. Touch-friendly, no
@@ -228,8 +232,8 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               e.stopPropagation()
                               startEdit(c)
                             }}
-                            title="Byt namn"
-                            aria-label="Byt namn på konversation"
+                            title={t('rename')}
+                            aria-label={t('rename_conversation')}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
                             <Pencil className="h-3 w-3" />
@@ -240,8 +244,8 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               e.stopPropagation()
                               void togglePin(c.id, c.pinned)
                             }}
-                            title={c.pinned ? 'Avfäst' : 'Fäst'}
-                            aria-label={c.pinned ? 'Avfäst konversation' : 'Fäst konversation'}
+                            title={c.pinned ? t('unpin') : t('pin')}
+                            aria-label={c.pinned ? t('unpin_conversation') : t('pin_conversation')}
                             className={cn(
                               'inline-flex h-8 w-8 items-center justify-center rounded-sm transition-colors',
                               c.pinned
@@ -261,8 +265,8 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               e.stopPropagation()
                               void archive(c.id)
                             }}
-                            title="Arkivera"
-                            aria-label="Arkivera konversation"
+                            title={t('archive')}
+                            aria-label={t('archive_conversation')}
                             className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
                             <Archive className="h-3 w-3" />

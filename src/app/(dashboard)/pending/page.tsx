@@ -57,31 +57,33 @@ import { useAccountNamesSource } from '@/components/pending-operations/use-accou
 import {
   operationLabel,
   singleActionWarning,
-  REJECTION_CATEGORY_LABELS,
+  REJECTION_CATEGORIES,
+  rejectionCategoryLabel,
 } from '@/components/pending-operations/vocabulary'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
-const bulkActionDescriptions: Record<string, (count: number) => string> = {
-  create_transaction: (n) =>
-    n === 1 ? 'En transaktion skapas.' : `${n} transaktioner skapas.`,
-  create_customer: (n) => (n === 1 ? 'En ny kund skapas.' : `${n} nya kunder skapas.`),
-  create_invoice: (n) =>
-    n === 1 ? 'Ett fakturautkast skapas (skickas inte).' : `${n} fakturautkast skapas (skickas inte).`,
-  categorize_transaction: (n) =>
-    n === 1 ? 'En transaktion kategoriseras och bokförs.' : `${n} transaktioner kategoriseras och bokförs.`,
-  match_transaction_invoice: (n) =>
-    n === 1 ? 'En transaktion matchas mot en faktura.' : `${n} transaktioner matchas mot fakturor.`,
-  attach_document_to_transaction: (n) =>
-    n === 1 ? 'Ett dokument bifogas en transaktion.' : `${n} dokument bifogas transaktioner.`,
-  uncategorize_transaction: (n) =>
-    n === 1 ? 'En kategorisering tas bort.' : `${n} kategoriseringar tas bort.`,
-}
+type Translator = ReturnType<typeof useTranslations>
 
-function bulkActionLabel(operationType: string, count: number, t: (key: string) => string): string {
-  const fn = bulkActionDescriptions[operationType]
-  if (fn) return fn(count)
-  return `${count} × ${operationLabel(operationType, t)}`
+function bulkActionLabel(operationType: string, count: number, t: Translator): string {
+  switch (operationType) {
+    case 'create_transaction':
+      return t('bulk_desc_create_transaction', { count })
+    case 'create_customer':
+      return t('bulk_desc_create_customer', { count })
+    case 'create_invoice':
+      return t('bulk_desc_create_invoice', { count })
+    case 'categorize_transaction':
+      return t('bulk_desc_categorize_transaction', { count })
+    case 'match_transaction_invoice':
+      return t('bulk_desc_match_transaction_invoice', { count })
+    case 'attach_document_to_transaction':
+      return t('bulk_desc_attach_document_to_transaction', { count })
+    case 'uncategorize_transaction':
+      return t('bulk_desc_uncategorize_transaction', { count })
+    default:
+      return `${count} × ${operationLabel(operationType, t)}`
+  }
 }
 
 // Period status carried inside preview_data when stagePendingOperation can
@@ -165,18 +167,18 @@ function isAutoExpired(op: PendingOperation): boolean {
   return op.status === 'rejected' && rd?.auto_rejected === true && rd?.reason === 'expired'
 }
 
-function formatRelativeTime(dateStr: string): string {
+function formatRelativeTime(dateStr: string, t: Translator): string {
   const now = new Date()
   const date = new Date(dateStr)
   const diffMs = now.getTime() - date.getTime()
   const diffMin = Math.floor(diffMs / 60000)
 
-  if (diffMin < 1) return 'just nu'
-  if (diffMin < 60) return `${diffMin} min sedan`
+  if (diffMin < 1) return t('relative_just_now')
+  if (diffMin < 60) return t('relative_minutes_ago', { count: diffMin })
   const diffHours = Math.floor(diffMin / 60)
-  if (diffHours < 24) return `${diffHours} tim sedan`
+  if (diffHours < 24) return t('relative_hours_ago', { count: diffHours })
   const diffDays = Math.floor(diffHours / 24)
-  return `${diffDays} dagar sedan`
+  return t('relative_days_ago', { count: diffDays })
 }
 
 /**
@@ -201,6 +203,7 @@ function formatRelativeTime(dateStr: string): string {
  * goes to the periods management page where unlocking is possible.
  */
 function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
+  const t = useTranslations('pending')
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
   return (
     <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
@@ -208,13 +211,15 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
       <div className="flex-1">
         <p className="font-medium text-destructive">
           {period.status === 'closed'
-            ? 'Perioden är stängd permanent (BFL): kan inte ändras.'
-            : `Perioden är låst${lockedThrough ? ` t.o.m. ${lockedThrough}` : ''}.`}
+            ? t('period_closed_banner')
+            : lockedThrough
+              ? t('period_locked_through_banner', { date: lockedThrough })
+              : t('period_locked_banner')}
         </p>
         <p className="text-xs text-muted-foreground mt-0.5">
           {period.status === 'closed'
-            ? 'Använd en omprövning i en öppen period i stället.'
-            : 'Lås upp perioden via Bokföring → Räkenskapsperioder, ändra entry-datum, eller avvisa.'}
+            ? t('period_closed_hint')
+            : t('period_locked_hint')}
         </p>
       </div>
     </div>
@@ -237,6 +242,9 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const tc = useTranslations('common')
+  const tWarning = useTranslations('pending_action_warning')
+  const tRejection = useTranslations('rejection_category')
   const router = useRouter()
   const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
@@ -369,7 +377,7 @@ export default function PendingOperationsPage() {
       }
     } catch {
       if (!isCurrent()) return
-      toast({ title: 'Kunde inte ladda operationer', variant: 'destructive' })
+      toast({ title: t('toast_load_failed'), variant: 'destructive' })
       // The rows on screen belong to another tab (or no load has succeeded
       // yet): dropping the loading state here would render those foreign rows
       // under this tab's header as if they were its content. Hold the loading
@@ -380,7 +388,7 @@ export default function PendingOperationsPage() {
     if (!isCurrent()) return
     setIsLoading(false)
     setIsRefreshing(false)
-  }, [activeTab, sortOrder, toast])
+  }, [activeTab, sortOrder, toast, t])
 
   useEffect(() => {
     fetchOperations()
@@ -435,7 +443,7 @@ export default function PendingOperationsPage() {
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-      toast({ title: 'Godkänd', description: op.title })
+      toast({ title: t('badge_approved'), description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
       // Drop the committed op from the bulk selection: the row leaves the
@@ -450,8 +458,8 @@ export default function PendingOperationsPage() {
       fetchOperations()
     } catch (err) {
       toast({
-        title: 'Misslyckades',
-        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
+        title: t('toast_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('toast_unknown_error'),
         variant: 'destructive',
       })
     }
@@ -503,13 +511,13 @@ export default function PendingOperationsPage() {
 
       if (summary) {
         const parts: string[] = []
-        if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
-        if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
-        if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
-        if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
+        if (summary.committed > 0) parts.push(t('summary_committed', { count: summary.committed }))
+        if (summary.failed > 0) parts.push(t('summary_failed', { count: summary.failed }))
+        if (summary.rejected > 0) parts.push(t('summary_rejected', { count: summary.rejected }))
+        if (summary.skipped > 0) parts.push(t('summary_skipped', { count: summary.skipped }))
 
         toast({
-          title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
+          title: summary.failed > 0 ? t('toast_done_with_errors') : t('toast_approved'),
           description: committedInvoiceDrafts
             ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
             : parts.join(', '),
@@ -517,7 +525,7 @@ export default function PendingOperationsPage() {
           ...draftsCta,
         })
       } else {
-        toast({ title: 'Godkänt', ...draftsCta })
+        toast({ title: t('toast_approved'), ...draftsCta })
       }
 
       setShowBulkDialog(false)
@@ -525,8 +533,8 @@ export default function PendingOperationsPage() {
       fetchOperations()
     } catch (err) {
       toast({
-        title: 'Misslyckades',
-        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
+        title: t('toast_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('toast_unknown_error'),
         variant: 'destructive',
       })
     }
@@ -562,16 +570,16 @@ export default function PendingOperationsPage() {
           | undefined
         if (summary) {
           const parts: string[] = []
-          if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
-          if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
-          if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
+          if (summary.rejected > 0) parts.push(t('summary_rejected', { count: summary.rejected }))
+          if (summary.skipped > 0) parts.push(t('summary_skipped', { count: summary.skipped }))
+          if (summary.failed > 0) parts.push(t('summary_failed', { count: summary.failed }))
           toast({
-            title: summary.failed > 0 ? 'Klart med fel' : 'Avvisade',
+            title: summary.failed > 0 ? t('toast_done_with_errors') : t('toast_rejected_plural'),
             description: parts.join(', '),
             variant: summary.failed > 0 ? 'destructive' : 'default',
           })
         } else {
-          toast({ title: 'Avvisade' })
+          toast({ title: t('toast_rejected_plural') })
         }
         setSelectedIds(new Set())
       } else {
@@ -586,15 +594,15 @@ export default function PendingOperationsPage() {
           const json = await res.json().catch(() => ({}))
           throw new Error(getErrorMessage(json, { statusCode: res.status }))
         }
-        toast({ title: 'Avvisad', description: rejectTarget.title })
+        toast({ title: t('badge_rejected'), description: rejectTarget.title })
       }
 
       setRejectTarget(null)
       fetchOperations()
     } catch (err) {
       toast({
-        title: 'Kunde inte avvisa',
-        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
+        title: t('toast_reject_failed'),
+        description: err instanceof Error ? getErrorMessage(err) : t('toast_unknown_error'),
         variant: 'destructive',
       })
     }
@@ -702,7 +710,7 @@ export default function PendingOperationsPage() {
       operationLabel(op.operation_type, t),
       isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
       op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: op.agent_metadata.skills_loaded.join(', ') }) : null,
-      formatRelativeTime(op.created_at),
+      formatRelativeTime(op.created_at, t),
     ]
       .filter(Boolean)
       .join(' · ')
@@ -897,7 +905,7 @@ export default function PendingOperationsPage() {
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
               const isAgent = op.actor_type && op.actor_type !== 'user'
-              const warningSentence = singleActionWarning(op.operation_type, op.params)
+              const warningSentence = singleActionWarning(op.operation_type, op.params, tWarning)
               const showHighRiskWarning =
                 op.risk_level === 'high' && warningSentence && op.status === 'pending'
 
@@ -905,7 +913,7 @@ export default function PendingOperationsPage() {
                 // Historik row (concept k-row): status chip + text + sub line.
                 const resolvedAt = op.resolved_at ?? op.created_at
                 const sub = [
-                  formatRelativeTime(resolvedAt),
+                  formatRelativeTime(resolvedAt, t),
                   operationLabel(op.operation_type, t),
                   originLabel(op, t),
                 ]
@@ -1052,7 +1060,7 @@ export default function PendingOperationsPage() {
                         type="button"
                         className={cn(GACT_CLASS, GACT_OK_CLASS)}
                         disabled={periodLocked || isCommitting || isBulkCommitting}
-                        title={periodLocked ? 'Perioden är låst' : undefined}
+                        title={periodLocked ? t('period_locked_title') : undefined}
                         onClick={(e) => {
                           e.stopPropagation()
                           if (periodLocked) return
@@ -1135,17 +1143,17 @@ export default function PendingOperationsPage() {
                     <p className="mt-0.5 whitespace-pre-wrap text-xs leading-snug">{detailOp.params.notes}</p>
                   </div>
                 )}
-                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params) && (
+                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params, tWarning) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
-                      {singleActionWarning(detailOp.operation_type, detailOp.params)}
+                      {singleActionWarning(detailOp.operation_type, detailOp.params, tWarning)}
                     </p>
                   </div>
                 )}
                 {detailOp.status === 'rejected' && detailOp.rejection_category && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
-                      Avvisad: {REJECTION_CATEGORY_LABELS[detailOp.rejection_category]}
+                      {t('rejected_with_category', { category: rejectionCategoryLabel(detailOp.rejection_category, tRejection) })}
                       {detailOp.rejection_reason ? `, "${detailOp.rejection_reason}"` : ''}
                     </p>
                   </div>
@@ -1188,7 +1196,7 @@ export default function PendingOperationsPage() {
                     </Button>
                     <Button
                       disabled={detailPeriodLocked || isCommitting}
-                      title={detailPeriodLocked ? 'Perioden är låst' : undefined}
+                      title={detailPeriodLocked ? t('period_locked_title') : undefined}
                       onClick={() => {
                         // Same risk gate as the review-row pill: the detail
                         // panel already shows the full preview, so low/medium
@@ -1216,7 +1224,7 @@ export default function PendingOperationsPage() {
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
         title={selectedOp?.title || t('approve_operation_title')}
-        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params) : ''}
+        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params, tWarning) : ''}
         confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}
@@ -1259,7 +1267,7 @@ export default function PendingOperationsPage() {
             <DialogTitle>
               {rejectTarget === 'bulk'
                 ? t('reject_bulk_title', { count: selectedCount })
-                : 'Avvisa operation'}
+                : t('reject_operation_title')}
             </DialogTitle>
             {/* data-ph-mask: the operation title carries counterparty and amount */}
             <DialogDescription data-ph-mask="">
@@ -1271,48 +1279,48 @@ export default function PendingOperationsPage() {
           <div className="space-y-3">
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="reject-category">
-                Anledning (valfritt)
+                {t('reject_category_label')}
               </label>
               <Select
                 value={rejectCategory}
                 onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
               >
                 <SelectTrigger id="reject-category">
-                  <SelectValue placeholder="Välj kategori" />
+                  <SelectValue placeholder={t('reject_category_placeholder')} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
-                    <SelectItem key={cat} value={cat}>{REJECTION_CATEGORY_LABELS[cat]}</SelectItem>
+                  {REJECTION_CATEGORIES.map((cat) => (
+                    <SelectItem key={cat} value={cat}>{rejectionCategoryLabel(cat, tRejection)}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
               <label className="text-sm font-medium" htmlFor="reject-reason">
-                Notering (valfritt)
+                {t('reject_note_label')}
               </label>
               <Textarea
                 id="reject-reason"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                placeholder="T.ex. fel kund matchades, beloppet stämmer inte med fakturan…"
+                placeholder={t('reject_note_placeholder')}
                 rows={3}
                 maxLength={2000}
               />
               <p className="text-xs text-muted-foreground">
-                Synlig för agenten via gnubok_get_recent_rejections: hjälper den att korrigera nästa förslag.
+                {t('reject_note_hint')}
               </p>
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
-              Avbryt
+              {tc('cancel')}
             </Button>
             <Button variant="destructive" onClick={handleReject} loading={isRejecting}>
               {rejectTarget === 'bulk' ? (
                 t('reject_count', { count: selectedCount })
               ) : (
-                'Avvisa'
+                t('reject')
               )}
             </Button>
           </DialogFooter>

@@ -84,9 +84,9 @@ export default function BankFileConfirmStep({
           <Loader2 className="h-12 w-12 animate-spin text-primary" />
         </div>
         <div className="text-center space-y-2">
-          <p className="text-lg font-medium">Importerar transaktioner...</p>
+          <p className="text-lg font-medium">{t('bank_confirm_importing_title')}</p>
           <p className="text-sm text-muted-foreground">
-            {stats.parsed_rows} transaktioner bearbetas
+            {t('bank_confirm_processing', { count: stats.parsed_rows })}
           </p>
         </div>
         <Skeleton className="h-1 w-48 rounded-full" />
@@ -99,9 +99,9 @@ export default function BankFileConfirmStep({
       {/* Summary */}
       <Card>
         <CardHeader>
-          <CardTitle>Bekräfta import</CardTitle>
+          <CardTitle>{t('bank_confirm_title')}</CardTitle>
           <CardDescription>
-            Granska sammanfattningen och importera transaktionerna.
+            {t('bank_confirm_description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -110,12 +110,12 @@ export default function BankFileConfirmStep({
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <FileText className="h-4 w-4" />
-                <span className="text-xs">Transaktioner</span>
+                <span className="text-xs">{t('bank_confirm_stat_transactions')}</span>
               </div>
               <p className="text-xl font-display tabular-nums">{stats.parsed_rows}</p>
               {stats.skipped_rows > 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {stats.skipped_rows} rader hoppades över
+                  {t('bank_confirm_skipped_rows', { count: stats.skipped_rows })}
                 </p>
               )}
             </div>
@@ -123,7 +123,7 @@ export default function BankFileConfirmStep({
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
                 <Calendar className="h-4 w-4" />
-                <span className="text-xs">Period</span>
+                <span className="text-xs">{t('bank_confirm_stat_period')}</span>
               </div>
               <p className="text-sm font-medium">
                 {date_from}: {date_to}
@@ -132,7 +132,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Inkomster</span>
+                <span className="text-xs">{t('bank_confirm_stat_income')}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -143,7 +143,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Utgifter</span>
+                <span className="text-xs">{t('bank_confirm_stat_expenses')}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -158,7 +158,7 @@ export default function BankFileConfirmStep({
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <Landmark className="h-4 w-4 text-muted-foreground" />
-                Bankkonto
+                {t('bank_confirm_bank_account')}
               </Label>
               <Select value={selectedAccount} onValueChange={setSelectedAccount}>
                 <SelectTrigger className="w-full sm:w-72">
@@ -175,7 +175,7 @@ export default function BankFileConfirmStep({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Välj vilket bankkonto transaktionerna ska bokföras mot.
+                {t('bank_confirm_bank_account_hint')}
               </p>
             </div>
           )}
@@ -184,7 +184,7 @@ export default function BankFileConfirmStep({
           {refsCount > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Link2 className="h-3 w-3" />
-              {refsCount} med OCR/referens
+              {t('bank_confirm_with_reference', { count: refsCount })}
             </div>
           )}
         </CardContent>
@@ -206,7 +206,7 @@ export default function BankFileConfirmStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {t('bank_confirm_back')}
         </Button>
         <Button
           onClick={() => onExecute({
@@ -219,11 +219,11 @@ export default function BankFileConfirmStep({
           loading={isLoading}
         >
           {isLoading ? (
-            'Importerar...'
+            t('bank_confirm_importing')
           ) : (
             <>
               <Play className="mr-2 h-4 w-4" />
-              Importera {stats.parsed_rows - duplicateCount} transaktioner
+              {t('bank_confirm_import_count', { count: stats.parsed_rows - duplicateCount })}
             </>
           )}
         </Button>

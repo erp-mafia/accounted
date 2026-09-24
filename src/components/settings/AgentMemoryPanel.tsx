@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useLocale } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Brain, Pin, Plus } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
@@ -31,30 +31,45 @@ interface AgentMemoryRow {
   updated_at: string
 }
 
-const KIND_LABEL: Record<Kind, string> = {
-  fact: 'Fakta',
-  preference: 'Preferens',
-  pattern: 'Mönster',
-  correction: 'Korrigering',
-}
-
-const SOURCE_LABEL: Record<Source, string> = {
-  composer: 'Inläst vid uppstart',
-  user_taught: 'Du lärde mig',
-  agent_learned: 'Jag noterade',
-  derived: 'Härlett',
-}
-
-const KIND_FILTER: { value: 'all' | Kind; label: string }[] = [
-  { value: 'all', label: 'Alla' },
-  { value: 'fact', label: 'Fakta' },
-  { value: 'preference', label: 'Preferenser' },
-  { value: 'pattern', label: 'Mönster' },
-  { value: 'correction', label: 'Korrigeringar' },
-]
+const KINDS: Kind[] = ['fact', 'preference', 'pattern', 'correction']
 
 export function AgentMemoryPanel() {
+  const t = useTranslations('agent_memory_panel')
   const { toast } = useToast()
+
+  function kindLabel(kind: Kind): string {
+    switch (kind) {
+      case 'fact':
+        return t('kind_fact')
+      case 'preference':
+        return t('kind_preference')
+      case 'pattern':
+        return t('kind_pattern')
+      case 'correction':
+        return t('kind_correction')
+    }
+  }
+
+  function sourceLabel(source: Source): string {
+    switch (source) {
+      case 'composer':
+        return t('source_composer')
+      case 'user_taught':
+        return t('source_user_taught')
+      case 'agent_learned':
+        return t('source_agent_learned')
+      case 'derived':
+        return t('source_derived')
+    }
+  }
+
+  const kindFilterOptions: { value: 'all' | Kind; label: string }[] = [
+    { value: 'all', label: t('filter_all') },
+    { value: 'fact', label: t('kind_fact') },
+    { value: 'preference', label: t('filter_preference') },
+    { value: 'pattern', label: t('kind_pattern') },
+    { value: 'correction', label: t('filter_correction') },
+  ]
   const { canWrite } = useCanWrite()
   const errorLocale = useLocale() as ErrorLocale
 
@@ -150,7 +165,7 @@ export function AgentMemoryPanel() {
         // getErrorMessage falls back to the status map.
         const json = await res.json().catch(() => null)
         toast({
-          title: 'Kunde inte uppdatera',
+          title: t('update_failed'),
           description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
@@ -165,7 +180,7 @@ export function AgentMemoryPanel() {
       // One toast per failed click, never two: TOAST_LIMIT is 1
       // (components/ui/use-toast.tsx) and a second would evict the first.
       toast({
-        title: 'Kunde inte uppdatera',
+        title: t('update_failed'),
         description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
@@ -188,7 +203,7 @@ export function AgentMemoryPanel() {
         // getErrorMessage falls back to the status map.
         const json = await res.json().catch(() => null)
         toast({
-          title: 'Kunde inte spara minne',
+          title: t('save_failed'),
           description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
@@ -199,14 +214,14 @@ export function AgentMemoryPanel() {
       setNewContent('')
       setNewKind('fact')
       setShowAdd(false)
-      toast({ title: 'Minne sparat' })
+      toast({ title: t('saved') })
     } catch (err) {
       // A rejected fetch or a 200 whose body will not parse never reaches the
       // !res.ok arm above: the draft stays in the form and one toast says the
       // save did not land. One toast per outcome, never two: TOAST_LIMIT is 1
       // (components/ui/use-toast.tsx) and a second would evict the first.
       toast({
-        title: 'Kunde inte spara minne',
+        title: t('save_failed'),
         description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
@@ -236,24 +251,22 @@ export function AgentMemoryPanel() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <SettingsSeg value={kindFilter} onChange={setKindFilter} options={KIND_FILTER} aria-label="Filtrera minnen" />
+        <SettingsSeg value={kindFilter} onChange={setKindFilter} options={kindFilterOptions} aria-label={t('filter_aria')} />
         <button
           type="button"
           onClick={() => setIncludeDismissed((v) => !v)}
           aria-pressed={includeDismissed}
           className={cn(QUIET_LINK_CLASS, 'ml-1 text-[12.5px]')}
         >
-          {includeDismissed ? 'Dölj dolda' : 'Visa dolda'}
+          {includeDismissed ? t('hide_hidden') : t('show_hidden')}
         </button>
         <HelpPopover className="shrink-0">
-          Bokföringsassistenten använder dessa anteckningar för att ge dig rätt råd. Fäst det som alltid
-          ska vara med, redigera fel, eller dölj det som inte längre stämmer. Upp till 30 minnen ingår i
-          samtal per tur.
+          {t('help')}
         </HelpPopover>
         {canWrite && (
           <Button size="sm" className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
             <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
-            Lägg till minne
+            {t('add')}
           </Button>
         )}
       </div>
@@ -263,28 +276,28 @@ export function AgentMemoryPanel() {
           <SettingsTextarea
             value={newContent}
             onChange={(e) => setNewContent(e.target.value)}
-            placeholder="T.ex. Vi använder Stripe för B2C-betalningar; utbetalningar landar på 1930 var måndag."
+            placeholder={t('new_placeholder')}
             rows={3}
             maxLength={2000}
             autoFocus
-            aria-label="Nytt minne"
+            aria-label={t('new_aria')}
             className="w-full border-border"
           />
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground">Typ</span>
-              <SettingsSelect value={newKind} onChange={(e) => setNewKind(e.target.value as Kind)} aria-label="Typ">
-                {(Object.keys(KIND_LABEL) as Kind[]).map((k) => (
-                  <option key={k} value={k}>{KIND_LABEL[k]}</option>
+              <span className="text-xs text-muted-foreground">{t('type')}</span>
+              <SettingsSelect value={newKind} onChange={(e) => setNewKind(e.target.value as Kind)} aria-label={t('type')}>
+                {KINDS.map((k) => (
+                  <option key={k} value={k}>{kindLabel(k)}</option>
                 ))}
               </SettingsSelect>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => { setShowAdd(false); setNewContent('') }}>
-                Avbryt
+                {t('cancel')}
               </Button>
               <Button size="sm" onClick={addMemory} disabled={newContent.trim().length < 2} loading={adding}>
-                Spara
+                {t('save')}
               </Button>
             </div>
           </div>
@@ -293,8 +306,8 @@ export function AgentMemoryPanel() {
 
       {rows && rows.length > 0 && (
         <p className="text-[12.5px] tabular-nums text-muted-foreground">
-          {counts.active} aktiva · {counts.pinned} fästa
-          {includeDismissed && counts.dismissed > 0 ? ` · ${counts.dismissed} dolda` : ''}
+          {t('counts', { active: counts.active, pinned: counts.pinned })}
+          {includeDismissed && counts.dismissed > 0 ? ` · ${t('counts_hidden', { count: counts.dismissed })}` : ''}
         </p>
       )}
 
@@ -303,9 +316,9 @@ export function AgentMemoryPanel() {
       <div role="status" aria-live="polite" className="min-w-0">
         {loadError && (
           <AttnLine
-            action={loadError.detail ? undefined : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }}
+            action={loadError.detail ? undefined : { label: t('retry'), onClick: () => setReloadKey((k) => k + 1) }}
           >
-            {loadError.detail ? `Minnena kunde inte läsas in just nu. ${loadError.detail}` : 'Minnena kunde inte läsas in just nu.'}
+            {loadError.detail ? t('load_failed_detail', { detail: loadError.detail }) : t('load_failed')}
           </AttnLine>
         )}
       </div>
@@ -324,8 +337,8 @@ export function AgentMemoryPanel() {
       {rows && rows.length === 0 && (
         <EmptyState
           icon={Brain}
-          title="Inga minnen ännu"
-          description="När du lär assistenten saker (eller när den noterar saker själv med ditt godkännande) dyker de upp här."
+          title={t('empty_title')}
+          description={t('empty_description')}
         />
       )}
 
@@ -346,8 +359,8 @@ export function AgentMemoryPanel() {
                       'mt-0.5 shrink-0 rounded-sm p-1 transition-colors duration-150',
                       row.is_pinned ? 'text-foreground' : 'text-muted-foreground/50 hover:text-foreground',
                     )}
-                    aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
-                    title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
+                    aria-label={row.is_pinned ? t('unpin') : t('pin')}
+                    title={row.is_pinned ? t('unpin') : t('pin_title')}
                   >
                     <Pin className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
                   </button>
@@ -365,15 +378,15 @@ export function AgentMemoryPanel() {
                         rows={3}
                         maxLength={2000}
                         autoFocus
-                        aria-label="Redigera minne"
+                        aria-label={t('edit_aria')}
                         className="w-full border-border"
                       />
                       <div className="flex items-center gap-2">
                         <Button size="sm" onClick={() => saveEdit(row)} disabled={editDraft.trim().length < 2} loading={isBusy}>
-                          Spara
+                          {t('save')}
                         </Button>
                         <Button variant="outline" size="sm" onClick={() => setEditingId(null)} disabled={isBusy}>
-                          Avbryt
+                          {t('cancel')}
                         </Button>
                       </div>
                     </div>
@@ -381,9 +394,9 @@ export function AgentMemoryPanel() {
                     <p className="whitespace-pre-wrap break-words text-[13px] leading-6 text-foreground">{row.content}</p>
                   )}
                   <p className="mt-1 text-[11px] tabular-nums text-muted-foreground">
-                    {KIND_LABEL[row.kind]} · {SOURCE_LABEL[row.source]} · {formatDateLong(row.created_at)}
-                    {row.updated_at !== row.created_at && ` · uppdaterad ${formatDateLong(row.updated_at)}`}
-                    {dimmed && ' · dold'}
+                    {kindLabel(row.kind)} · {sourceLabel(row.source)} · {formatDateLong(row.created_at)}
+                    {row.updated_at !== row.created_at && ` · ${t('updated_at', { date: formatDateLong(row.updated_at) })}`}
+                    {dimmed && ` · ${t('hidden')}`}
                   </p>
                 </div>
                 {canWrite && !isEditing && (
@@ -391,15 +404,15 @@ export function AgentMemoryPanel() {
                     {row.is_active ? (
                       <>
                         <button type="button" onClick={() => startEdit(row)} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
-                          Redigera
+                          {t('edit')}
                         </button>
                         <button type="button" onClick={() => patch(row.id, { is_active: false })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
-                          Dölj
+                          {t('hide')}
                         </button>
                       </>
                     ) : (
                       <button type="button" onClick={() => patch(row.id, { is_active: true })} disabled={isBusy} className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}>
-                        Återställ
+                        {t('restore')}
                       </button>
                     )}
                   </div>

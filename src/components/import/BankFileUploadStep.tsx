@@ -35,7 +35,6 @@ const FORMAT_NAMES: Record<string, string> = {
   lunar: 'Lunar',
   northmill: 'Northmill',
   wise: 'Wise',
-  generic_csv: 'CSV (manuell mappning)',
   camt053: 'ISO 20022 camt.053',
 }
 
@@ -113,25 +112,25 @@ export default function BankFileUploadStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
-            Ladda upp kontoutdrag
+            {t('bankfile_upload_title')}
           </CardTitle>
           <CardDescription>
-            Exportera transaktioner som CSV eller XML från din internetbank och ladda upp filen.
+            {t('bankfile_upload_description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Format override */}
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-            <label className="text-sm font-medium whitespace-nowrap">Bank/format:</label>
+            <label className="text-sm font-medium whitespace-nowrap">{t('bankfile_upload_format_label')}</label>
             <Select
               value={formatOverride || 'auto'}
               onValueChange={handleFormatChange}
             >
               <SelectTrigger className="w-full sm:w-64">
-                <SelectValue placeholder="Automatisk identifiering" />
+                <SelectValue placeholder={t('bankfile_upload_format_auto')} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Automatisk identifiering</SelectItem>
+                <SelectItem value="auto">{t('bankfile_upload_format_auto')}</SelectItem>
                 <SelectItem value="nordea">Nordea</SelectItem>
                 <SelectItem value="nordea_business">Nordea Företag</SelectItem>
                 <SelectItem value="seb">SEB</SelectItem>
@@ -145,7 +144,7 @@ export default function BankFileUploadStep({
                 <SelectItem value="wise">Wise</SelectItem>
                 <SelectItem value="wise_statement">{t('bank_format_wise_statement')}</SelectItem>
                 <SelectItem value="camt053">ISO 20022 camt.053 (XML)</SelectItem>
-                <SelectItem value="generic_csv">Annan CSV (manuell mappning)</SelectItem>
+                <SelectItem value="generic_csv">{t('bankfile_upload_format_generic_csv')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -177,7 +176,7 @@ export default function BankFileUploadStep({
                 <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
                 <p className="flex items-center justify-center gap-2 text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                  Analyserar fil...
+                  {t('bankfile_upload_analyzing')}
                 </p>
               </div>
             ) : selectedFile && detectedFormat ? (
@@ -192,7 +191,11 @@ export default function BankFileUploadStep({
                     <Landmark className="mr-1 h-3 w-3" />
                     {detectedFormat === 'wise_statement'
                       ? t('bank_format_wise_statement')
-                      : detectedFormatName || FORMAT_NAMES[detectedFormat] || detectedFormat}
+                      : detectedFormatName ||
+                        (detectedFormat === 'generic_csv'
+                          ? t('bankfile_upload_generic_csv_name')
+                          : FORMAT_NAMES[detectedFormat]) ||
+                        detectedFormat}
                   </Badge>
                 </div>
               </div>
@@ -200,10 +203,10 @@ export default function BankFileUploadStep({
               <div className="space-y-4">
                 <Upload className="mx-auto h-12 w-12 text-muted-foreground" />
                 <div>
-                  <p className="font-medium hidden sm:block">Dra och släpp bankfil här</p>
-                  <p className="font-medium sm:hidden">Tryck för att välja bankfil</p>
+                  <p className="font-medium hidden sm:block">{t('bankfile_upload_drop')}</p>
+                  <p className="font-medium sm:hidden">{t('bankfile_upload_tap')}</p>
                   <p className="text-sm text-muted-foreground">
-                    CSV, TXT eller XML (max 10 MB)
+                    {t('bankfile_upload_accepted')}
                   </p>
                 </div>
               </div>
@@ -231,7 +234,7 @@ export default function BankFileUploadStep({
             <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
               <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
-                <p className="font-medium text-destructive">{errorTitle || 'Kunde inte läsa filen'}</p>
+                <p className="font-medium text-destructive">{errorTitle || t('bankfile_upload_read_failed')}</p>
                 <p className="text-sm text-muted-foreground">{error}</p>
               </div>
             </div>
@@ -244,62 +247,62 @@ export default function BankFileUploadStep({
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <HelpCircle className="h-4 w-4" />
-            Så exporterar du från din bank
+            {t('bankfile_upload_howto_title')}
           </CardTitle>
         </CardHeader>
         <CardContent className="text-sm space-y-3">
           <div>
             <p className="font-medium">Nordea</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Välj konto → Transaktioner → Exportera (CSV)
+              {t('bankfile_upload_howto_nordea')}
             </p>
           </div>
           <div>
             <p className="font-medium">SEB</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera (CSV), eller Kontoutdrag → Hämta som fil (CSV)
+              {t('bankfile_upload_howto_seb')}
             </p>
           </div>
           <div>
             <p className="font-medium">Swedbank</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera kontoutdrag (CSV)
+              {t('bankfile_upload_howto_swedbank')}
             </p>
           </div>
           <div>
             <p className="font-medium">Handelsbanken</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Ladda ner (CSV)
+              {t('bankfile_upload_howto_handelsbanken')}
             </p>
           </div>
           <div>
             <p className="font-medium">Länsförsäkringar</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Kontoutdrag → Exportera (CSV)
+              {t('bankfile_upload_howto_lansforsakringar')}
             </p>
           </div>
           <div>
             <p className="font-medium">ICA Banken</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera till fil (CSV)
+              {t('bankfile_upload_howto_ica_banken')}
             </p>
           </div>
           <div>
             <p className="font-medium">Skandia</p>
             <p className="text-muted-foreground">
-              Logga in → Konton → Transaktioner → Exportera (CSV)
+              {t('bankfile_upload_howto_skandia')}
             </p>
           </div>
           <div>
             <p className="font-medium">Lunar</p>
             <p className="text-muted-foreground">
-              Logga in → Konto → Transaktioner → Exportera (CSV)
+              {t('bankfile_upload_howto_lunar')}
             </p>
           </div>
           <div>
             <p className="font-medium">Northmill</p>
             <p className="text-muted-foreground">
-              Logga in → Konto → Kontoutdrag → Ladda ner (CSV)
+              {t('bankfile_upload_howto_northmill')}
             </p>
           </div>
         </CardContent>

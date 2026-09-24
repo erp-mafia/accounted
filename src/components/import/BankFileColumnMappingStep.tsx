@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
@@ -56,6 +57,8 @@ export default function BankFileColumnMappingStep({
   onConfirm,
   onBack,
 }: BankFileColumnMappingStepProps) {
+  const t = useTranslations('bank_file_column_mapping')
+  const tc = useTranslations('common')
   const [dateCol, setDateCol] = useState<number>(-1)
   const [descCol, setDescCol] = useState<number>(-1)
   const [amountCol, setAmountCol] = useState<number>(-1)
@@ -134,8 +137,8 @@ export default function BankFileColumnMappingStep({
   const columnHeaders = useMemo(() => {
     if (hasHeader && parsedRows[detectedHeaderRow]) return parsedRows[detectedHeaderRow]
     const count = parsedRows[0]?.length ?? 0
-    return Array.from({ length: count }, (_, i) => `Kolumn ${i + 1}`)
-  }, [parsedRows, hasHeader, detectedHeaderRow])
+    return Array.from({ length: count }, (_, i) => t('column_n', { n: i + 1 }))
+  }, [parsedRows, hasHeader, detectedHeaderRow, t])
 
   const dataRows = hasHeader ? parsedRows.slice(detectedHeaderRow + 1) : parsedRows
 
@@ -180,21 +183,21 @@ export default function BankFileColumnMappingStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Columns3 className="h-5 w-5" />
-            Kolumnmappning
+            {t('title')}
           </CardTitle>
           <CardDescription>
-            Vi kunde inte identifiera bankformatet automatiskt. Mappa kolumnerna manuellt.
+            {t('description')}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Header row toggle */}
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div className="space-y-0.5">
-              <Label htmlFor="has-header">Har filen rubrikrad?</Label>
+              <Label htmlFor="has-header">{t('has_header')}</Label>
               <p className="text-xs text-muted-foreground">
                 {hasHeader && detectedHeaderRow > 0
-                  ? `Hoppar över ${detectedHeaderRow} metadatarader. Rubrikraden upptäcktes på rad ${detectedHeaderRow + 1}.`
-                  : 'Slå av om filen saknar rubrikrad och första raden redan innehåller transaktionsdata.'}
+                  ? t('skipping_metadata', { count: detectedHeaderRow, row: detectedHeaderRow + 1 })
+                  : t('header_off_hint')}
               </p>
             </div>
             <Switch id="has-header" checked={hasHeader} onCheckedChange={setHasHeaderOverride} />
@@ -203,32 +206,32 @@ export default function BankFileColumnMappingStep({
           {/* Delimiter, decimal, and date format settings */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <Label>Avgränsare</Label>
+              <Label>{t('delimiter')}</Label>
               <Select value={delimiter} onValueChange={(v) => { if (v) setDelimiter(v) }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value=",">Komma (,)</SelectItem>
-                  <SelectItem value=";">Semikolon (;)</SelectItem>
-                  <SelectItem value="\t">Tab</SelectItem>
+                  <SelectItem value=",">{t('delimiter_comma')}</SelectItem>
+                  <SelectItem value=";">{t('delimiter_semicolon')}</SelectItem>
+                  <SelectItem value="\t">{t('delimiter_tab')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Decimalavgränsare</Label>
+              <Label>{t('decimal_separator')}</Label>
               <Select value={decimalSep} onValueChange={(v) => { if (v) setDecimalSep(v as ',' | '.') }}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value=",">Komma (1 234,56)</SelectItem>
-                  <SelectItem value=".">Punkt (1234.56)</SelectItem>
+                  <SelectItem value=",">{t('decimal_comma')}</SelectItem>
+                  <SelectItem value=".">{t('decimal_point')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Datumformat</Label>
+              <Label>{t('date_format')}</Label>
               <Select value={dateFormat} onValueChange={(v) => { if (v) setDateFormat(v) }}>
                 <SelectTrigger>
                   <SelectValue />
@@ -245,16 +248,16 @@ export default function BankFileColumnMappingStep({
 
           {/* Required column mappings */}
           <div>
-            <h3 className="text-sm mb-3">Obligatoriska kolumner</h3>
+            <h3 className="text-sm mb-3">{t('required_columns')}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label>Datum *</Label>
+                <Label>{t('date_required')}</Label>
                 <Select
                   value={dateCol >= 0 ? dateCol.toString() : ''}
                   onValueChange={(v) => setDateCol(parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj kolumn" />
+                    <SelectValue placeholder={t('choose_column')} />
                   </SelectTrigger>
                   <SelectContent>
                     {columnOptions.map((opt) => (
@@ -267,13 +270,13 @@ export default function BankFileColumnMappingStep({
               </div>
 
               <div className="space-y-2">
-                <Label>Beskrivning *</Label>
+                <Label>{t('description_required')}</Label>
                 <Select
                   value={descCol >= 0 ? descCol.toString() : ''}
                   onValueChange={(v) => setDescCol(parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj kolumn" />
+                    <SelectValue placeholder={t('choose_column')} />
                   </SelectTrigger>
                   <SelectContent>
                     {columnOptions.map((opt) => (
@@ -286,13 +289,13 @@ export default function BankFileColumnMappingStep({
               </div>
 
               <div className="space-y-2">
-                <Label>Belopp *</Label>
+                <Label>{t('amount_required')}</Label>
                 <Select
                   value={amountCol >= 0 ? amountCol.toString() : ''}
                   onValueChange={(v) => setAmountCol(parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Välj kolumn" />
+                    <SelectValue placeholder={t('choose_column')} />
                   </SelectTrigger>
                   <SelectContent>
                     {columnOptions.map((opt) => (
@@ -308,19 +311,19 @@ export default function BankFileColumnMappingStep({
 
           {/* Optional column mappings */}
           <div>
-            <h3 className="text-sm mb-3">Valfria kolumner</h3>
+            <h3 className="text-sm mb-3">{t('optional_columns')}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="space-y-2">
-                <Label>Referens/OCR</Label>
+                <Label>{t('reference_ocr')}</Label>
                 <Select
                   value={referenceCol >= 0 ? referenceCol.toString() : 'none'}
                   onValueChange={(v) => setReferenceCol(v === 'none' ? -1 : parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Ingen" />
+                    <SelectValue placeholder={t('none')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Ingen</SelectItem>
+                    <SelectItem value="none">{t('none')}</SelectItem>
                     {columnOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value.toString()}>
                         {opt.label}
@@ -331,16 +334,16 @@ export default function BankFileColumnMappingStep({
               </div>
 
               <div className="space-y-2">
-                <Label>Motpart</Label>
+                <Label>{t('counterparty')}</Label>
                 <Select
                   value={counterpartyCol >= 0 ? counterpartyCol.toString() : 'none'}
                   onValueChange={(v) => setCounterpartyCol(v === 'none' ? -1 : parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Ingen" />
+                    <SelectValue placeholder={t('none')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Ingen</SelectItem>
+                    <SelectItem value="none">{t('none')}</SelectItem>
                     {columnOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value.toString()}>
                         {opt.label}
@@ -351,16 +354,16 @@ export default function BankFileColumnMappingStep({
               </div>
 
               <div className="space-y-2">
-                <Label>Saldo</Label>
+                <Label>{t('balance')}</Label>
                 <Select
                   value={balanceCol >= 0 ? balanceCol.toString() : 'none'}
                   onValueChange={(v) => setBalanceCol(v === 'none' ? -1 : parseInt(v))}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder="Ingen" />
+                    <SelectValue placeholder={t('none')} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">Ingen</SelectItem>
+                    <SelectItem value="none">{t('none')}</SelectItem>
                     {columnOptions.map((opt) => (
                       <SelectItem key={opt.value} value={opt.value.toString()}>
                         {opt.label}
@@ -378,9 +381,9 @@ export default function BankFileColumnMappingStep({
       {isValid && dataRows.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Förhandsgranskning</CardTitle>
+            <CardTitle className="text-base">{t('preview_title')}</CardTitle>
             <CardDescription>
-              Så tolkas dina data med den valda mappningen
+              {t('preview_description')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -388,9 +391,9 @@ export default function BankFileColumnMappingStep({
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Datum</TableHead>
-                    <TableHead>Beskrivning</TableHead>
-                    <TableHead className="text-right">Belopp</TableHead>
+                    <TableHead>{t('col_date')}</TableHead>
+                    <TableHead>{t('col_description')}</TableHead>
+                    <TableHead className="text-right">{t('col_amount')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -429,10 +432,10 @@ export default function BankFileColumnMappingStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Tillbaka
+          {tc('back')}
         </Button>
         <Button onClick={handleConfirm} disabled={!isValid}>
-          Fortsätt
+          {t('continue')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

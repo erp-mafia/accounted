@@ -1,6 +1,7 @@
 'use client'
 
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import type { TheaterBucket, TheaterModel } from '@/lib/import/theater-model'
 
 /**
@@ -24,12 +25,6 @@ const BUCKET_ANGLE: Record<TheaterBucket, number> = {
   skulder: 1.62,
   intakter: -0.92,
   kostnader: 2.75,
-}
-const BUCKET_LABEL: Record<TheaterBucket, string> = {
-  tillgangar: 'TILLGÅNGAR',
-  skulder: 'SKULDER',
-  intakter: 'INTÄKTER',
-  kostnader: 'KOSTNADER',
 }
 
 /** Real BAS names run long ("4531 Inköp av tjänster från ett land utanför
@@ -72,7 +67,11 @@ interface Engine {
   cam: number
 }
 
-function buildEngine(model: TheaterModel, allBorn: boolean): Engine {
+function buildEngine(
+  model: TheaterModel,
+  allBorn: boolean,
+  bucketLabels: Record<TheaterBucket, string>,
+): Engine {
   const nodes: Node[] = []
   const edges: { a: string; b: string }[] = []
   nodes.push({ id: 'hub', kind: 'hub', x: 0, y: 0, r: 7, label: model.companyName, lab: true, wave: 0, born: null })
@@ -81,7 +80,7 @@ function buildEngine(model: TheaterModel, allBorn: boolean): Engine {
   })
   for (const bucket of model.buckets) {
     const p = BUCKET_ANGLE[bucket.id]
-    nodes.push({ id: bucket.id, kind: 'bucket', x: Math.cos(p) * 148, y: Math.sin(p) * 148, r: 2.2, label: BUCKET_LABEL[bucket.id], lab: true, wave: 0, born: null })
+    nodes.push({ id: bucket.id, kind: 'bucket', x: Math.cos(p) * 148, y: Math.sin(p) * 148, r: 2.2, label: bucketLabels[bucket.id], lab: true, wave: 0, born: null })
     edges.push({ a: 'hub', b: bucket.id })
   }
   const maxAccountWeight = Math.max(1, ...model.accounts.map((a) => a.weight))
@@ -147,6 +146,13 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
   settled?: boolean
   className?: string
 }>(function TheaterCanvas({ model, settled = false, className }, ref) {
+  const t = useTranslations('theater_canvas')
+  const bucketLabels: Record<TheaterBucket, string> = {
+    tillgangar: t('bucket_assets'),
+    skulder: t('bucket_liabilities'),
+    intakter: t('bucket_revenue'),
+    kostnader: t('bucket_expenses'),
+  }
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<Engine | null>(null)
   const reduced =
@@ -171,7 +177,7 @@ const TheaterCanvas = forwardRef<TheaterCanvasHandle, {
   }))
 
   useEffect(() => {
-    const engine = buildEngine(model, settled || reduced)
+    const engine = buildEngine(model, settled || reduced, bucketLabels)
     engineRef.current = engine
     if (!settled && !reduced) {
       const now = performance.now()

@@ -59,15 +59,15 @@ function newComponentRow(): ComponentRow {
 // Defaults are K2-redovisning (BFNAR 2016:10) schablon, NOT skattemässig
 // avskrivning. Building / markanläggning values are conservative: IL 19/20
 // kap may allow longer (50 yr) or shorter (10 yr) depending on byggnadstyp.
-const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: number }[] = [
-  { value: 'computer', label: 'Dator / IT-utrustning', defaultYears: 3 },
-  { value: 'equipment', label: 'Inventarier', defaultYears: 5 },
-  { value: 'machinery', label: 'Maskiner', defaultYears: 10 },
-  { value: 'vehicle', label: 'Fordon', defaultYears: 5 },
-  { value: 'building', label: 'Byggnad', defaultYears: 25 },
-  { value: 'land_improvement', label: 'Markanläggning', defaultYears: 10 },
-  { value: 'immaterial', label: 'Immateriell tillgång', defaultYears: 5 },
-  { value: 'other_tangible', label: 'Övrig materiell tillgång', defaultYears: 5 },
+const CATEGORY_OPTIONS: { value: AssetCategory; defaultYears: number }[] = [
+  { value: 'computer', defaultYears: 3 },
+  { value: 'equipment', defaultYears: 5 },
+  { value: 'machinery', defaultYears: 10 },
+  { value: 'vehicle', defaultYears: 5 },
+  { value: 'building', defaultYears: 25 },
+  { value: 'land_improvement', defaultYears: 10 },
+  { value: 'immaterial', defaultYears: 5 },
+  { value: 'other_tangible', defaultYears: 5 },
 ]
 
 // No account override here on purpose. The server resolves the immaterial
@@ -79,7 +79,18 @@ const CATEGORY_OPTIONS: { value: AssetCategory; label: string; defaultYears: num
 
 export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAssetDialogProps) {
   const t = useTranslations('assets')
+  const tc = useTranslations('common')
   const { toast } = useToast()
+  const categoryLabels: Record<AssetCategory, string> = {
+    computer: t('dialog.category_computer'),
+    equipment: t('dialog.category_equipment'),
+    machinery: t('dialog.category_machinery'),
+    vehicle: t('dialog.category_vehicle'),
+    building: t('dialog.category_building'),
+    land_improvement: t('dialog.category_land_improvement'),
+    immaterial: t('dialog.category_immaterial'),
+    other_tangible: t('dialog.category_other_tangible'),
+  }
   // useCompanyOptional so the dialog still works in tests / storyboards
   // that don't wrap it in CompanyProvider. K3 features simply hide.
   const companyCtx = useCompanyOptional()
@@ -151,7 +162,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     const cost = parseFloat(acquisitionCost)
     const years = parseInt(usefulLifeYears, 10)
     if (!name.trim() || !Number.isFinite(cost) || cost <= 0 || !Number.isFinite(years) || years <= 0) {
-      setError('Fyll i namn, anskaffningsvärde och avskrivningstid.')
+      setError(t('dialog.error_required_fields'))
       return
     }
     // K3 components: only when both the framework permits (gate at API)
@@ -161,7 +172,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     let componentsPayload: K3Component[] | null = null
     if (useComponents && isK3) {
       if (componentRows.length === 0) {
-        setError('Lägg till minst en komponent eller stäng av komponentuppdelningen.')
+        setError(t('dialog.error_no_components'))
         return
       }
       const parsed: K3Component[] = []
@@ -172,23 +183,23 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
         const salvage = salvageRaw === '' ? undefined : parseFloat(salvageRaw)
         const trimmedName = row.name.trim()
         if (!trimmedName) {
-          setError(`Komponent ${index + 1}: ange ett namn.`)
+          setError(t('dialog.error_component_name', { index: index + 1 }))
           return
         }
         if (!Number.isFinite(componentCost) || componentCost <= 0) {
-          setError(`${trimmedName}: anskaffningsvärdet måste vara större än 0.`)
+          setError(t('dialog.error_component_cost', { name: trimmedName }))
           return
         }
         if (!Number.isFinite(months) || months <= 0) {
-          setError(`${trimmedName}: ange ett positivt heltal månader.`)
+          setError(t('dialog.error_component_months', { name: trimmedName }))
           return
         }
         if (salvage !== undefined && (!Number.isFinite(salvage) || salvage < 0)) {
-          setError(`${trimmedName}: restvärdet får inte vara negativt.`)
+          setError(t('dialog.error_component_salvage_negative', { name: trimmedName }))
           return
         }
         if (salvage !== undefined && salvage > componentCost) {
-          setError(`${trimmedName}: restvärdet får inte överstiga anskaffningsvärdet.`)
+          setError(t('dialog.error_component_salvage_exceeds', { name: trimmedName }))
           return
         }
         parsed.push({
@@ -201,7 +212,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       const sum = parsed.reduce((s, c) => s + c.cost, 0)
       if (Math.abs(sum - cost) > 1) {
         setError(
-          `Komponenter summerar till ${formatCurrency(sum)} men anskaffningsvärdet är ${formatCurrency(cost)}.`,
+          t('dialog.error_component_sum', {
+            sum: formatCurrency(sum),
+            cost: formatCurrency(cost),
+          }),
         )
         return
       }
@@ -243,10 +257,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(getUserErrorMessage(body?.error) ?? 'Kunde inte spara tillgången')
+        setError(getUserErrorMessage(body?.error) ?? t('dialog.save_failed'))
         return
       }
-      toast({ title: 'Tillgång sparad', description: name.trim() })
+      toast({ title: t('dialog.created_toast'), description: name.trim() })
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
@@ -256,7 +270,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       setComponentRows([])
       onCreated()
     } catch (err) {
-      setError(err instanceof Error ? getUserErrorMessage(err) : 'Okänt fel')
+      setError(err instanceof Error ? getUserErrorMessage(err) : t('dialog.unknown_error'))
     } finally {
       setSubmitting(false)
     }
@@ -266,21 +280,21 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className={isK3 ? 'sm:max-w-2xl' : 'sm:max-w-md'}>
         <DialogHeader>
-          <DialogTitle>Ny anläggningstillgång</DialogTitle>
+          <DialogTitle>{t('dialog.create_title')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="asset-name">Namn</Label>
+            <Label htmlFor="asset-name">{t('th_name')}</Label>
             <Input
               id="asset-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="t.ex. MacBook Pro 14"
+              placeholder={t('dialog.name_placeholder')}
               autoFocus
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="asset-category">Kategori</Label>
+            <Label htmlFor="asset-category">{t('th_category')}</Label>
             <Select value={category} onValueChange={(v) => handleCategoryChange(v as AssetCategory)}>
               <SelectTrigger id="asset-category">
                 <SelectValue />
@@ -288,28 +302,25 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               <SelectContent>
                 {CATEGORY_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
-                    {o.label}
+                    {categoryLabels[o.value]}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
             {category === 'immaterial' && !isK3 && (
               <p className="text-xs text-muted-foreground">
-                Bokförs som förvärvad immateriell tillgång (konto 1090). Egenupparbetad
-                utveckling får inte aktiveras enligt K2 (BFNAR 2016:10 punkt 10.4): det kräver K3.
+                {t('dialog.immaterial_hint_k2')}
               </p>
             )}
             {category === 'immaterial' && isK3 && (
               <p className="text-xs text-muted-foreground">
-                För aktiebolag medför aktivering av egenupparbetad utveckling (konto 1010) att
-                motsvarande belopp sätts av till fond för utvecklingsutgifter (konto 2089) enligt
-                ÅRL 4 kap. 2 §.
+                {t('dialog.immaterial_hint_k3')}
               </p>
             )}
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="asset-date">Anskaffat</Label>
+              <Label htmlFor="asset-date">{t('th_acquired')}</Label>
               <Input
                 id="asset-date"
                 type="date"
@@ -318,7 +329,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="asset-cost">Anskaffningsvärde (kr)</Label>
+              <Label htmlFor="asset-cost">{t('dialog.acquisition_cost_label')}</Label>
               <Input
                 id="asset-cost"
                 type="number"
@@ -326,13 +337,13 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                 min="0"
                 value={acquisitionCost}
                 onChange={(e) => setAcquisitionCost(e.target.value)}
-                placeholder="t.ex. 25000"
+                placeholder={t('dialog.cost_placeholder')}
                 className="tabular-nums"
               />
             </div>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="asset-life">Avskrivningstid (år)</Label>
+            <Label htmlFor="asset-life">{t('dialog.useful_life_label')}</Label>
             <Input
               id="asset-life"
               type="number"
@@ -344,8 +355,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               className="tabular-nums"
             />
             <p className="text-xs text-muted-foreground">
-              K2-schablon för redovisning: datorer 3 år, inventarier 5 år, byggnader 25 år.
-              För skattemässig avskrivning kan annan livslängd gälla (IL 18-20 kap).
+              {t('dialog.useful_life_hint')}
             </p>
           </div>
           <div className="space-y-3 rounded-lg border border-border p-4">
@@ -387,12 +397,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               <div className="flex items-start justify-between gap-4">
                 <div className="space-y-1">
                   <Label className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-                    Avancerat: komponentuppdelning
+                    {t('dialog.components_title')}
                   </Label>
                   <p className="text-xs text-muted-foreground">
-                    K3 (BFNAR 2012:1 17.4): när väsentliga komponenter har olika nyttjandeperiod
-                    skrivs varje komponent av för sig. Typisk för fastigheter (tak, fasad, stomme,
-                    installationer).
+                    {t('dialog.components_hint')}
                   </p>
                 </div>
                 <Button
@@ -401,7 +409,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                   size="sm"
                   onClick={() => toggleUseComponents(!useComponents)}
                 >
-                  {useComponents ? 'Aktiverad' : 'Aktivera'}
+                  {useComponents ? t('dialog.components_enabled') : t('dialog.components_enable')}
                 </Button>
               </div>
 
@@ -417,7 +425,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           htmlFor={`cmp-name-${row.id}`}
                           className="text-xs text-muted-foreground"
                         >
-                          Komponent
+                          {t('dialog.component_label')}
                         </Label>
                         <Input
                           id={`cmp-name-${row.id}`}
@@ -425,7 +433,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           onChange={(e) =>
                             updateComponentRow(row.id, { name: e.target.value })
                           }
-                          placeholder={idx === 0 ? 't.ex. Stomme' : 'Namn'}
+                          placeholder={idx === 0 ? t('dialog.component_placeholder_first') : t('th_name')}
                         />
                       </div>
                       <div className="col-span-6 sm:col-span-3 space-y-1">
@@ -433,7 +441,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           htmlFor={`cmp-cost-${row.id}`}
                           className="text-xs text-muted-foreground"
                         >
-                          Kostnad (kr)
+                          {t('dialog.component_cost_label')}
                         </Label>
                         <Input
                           id={`cmp-cost-${row.id}`}
@@ -452,7 +460,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           htmlFor={`cmp-life-${row.id}`}
                           className="text-xs text-muted-foreground"
                         >
-                          Liv (mån)
+                          {t('dialog.component_life_label')}
                         </Label>
                         <Input
                           id={`cmp-life-${row.id}`}
@@ -471,7 +479,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           htmlFor={`cmp-salvage-${row.id}`}
                           className="text-xs text-muted-foreground"
                         >
-                          Restvärde
+                          {t('dialog.component_salvage_label')}
                         </Label>
                         <Input
                           id={`cmp-salvage-${row.id}`}
@@ -492,7 +500,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           variant="ghost"
                           size="icon"
                           onClick={() => removeComponentRow(row.id)}
-                          aria-label="Ta bort komponent"
+                          aria-label={t('dialog.remove_component')}
                           disabled={componentRows.length === 1}
                         >
                           <X className="h-4 w-4" />
@@ -508,10 +516,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                       size="sm"
                       onClick={addComponentRow}
                     >
-                      <Plus className="mr-1 h-4 w-4" /> Lägg till komponent
+                      <Plus className="mr-1 h-4 w-4" /> {t('dialog.add_component')}
                     </Button>
                     <div className="text-xs tabular-nums text-muted-foreground">
-                      Summa komponenter:{' '}
+                      {t('dialog.components_sum_label')}{' '}
                       <span
                         className={
                           componentMismatch
@@ -526,8 +534,9 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
 
                   {componentMismatch && (
                     <p className="text-xs text-destructive">
-                      Komponenter summerar inte till anskaffningsvärdet (
-                      {formatCurrency(parsedAcquisitionCost)}).
+                      {t('dialog.components_mismatch', {
+                        cost: formatCurrency(parsedAcquisitionCost),
+                      })}
                     </p>
                   )}
                 </div>
@@ -535,10 +544,9 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
             </div>
           )}
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            <strong className="text-foreground">Tips:</strong> Anskaffningen måste redan vara
-            bokförd (debet på 1xxx-kontot mot t.ex. 1930/2440): registret bokför inte
-            själva köpet. Det här registret styr enbart de planenliga avskrivningarna under
-            bokslutet.
+            {t.rich('dialog.tip', {
+              strong: (chunks) => <strong className="text-foreground">{chunks}</strong>,
+            })}
           </div>
           {error && (
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
@@ -548,13 +556,13 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSubmit} loading={submitting}>
             {submitting ? (
-              'Sparar…'
+              t('dialog.saving')
             ) : (
-              'Spara'
+              tc('save')
             )}
           </Button>
         </DialogFooter>

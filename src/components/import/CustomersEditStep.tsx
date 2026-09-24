@@ -1,6 +1,7 @@
 'use client'
 
 import { useMemo, useState, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice, type ImportNotice } from '@/lib/import/notices'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
@@ -31,12 +32,12 @@ interface CustomersEditStepProps {
   notices?: ImportNotice[]
 }
 
-const TYPE_LABELS: Record<CustomerType, string> = {
-  individual: 'Privatperson',
-  swedish_business: 'Svenskt företag eller organisation',
-  eu_business: 'EU-företag',
-  non_eu_business: 'Utomeuropeiskt företag',
-}
+const CUSTOMER_TYPES: CustomerType[] = [
+  'individual',
+  'swedish_business',
+  'eu_business',
+  'non_eu_business',
+]
 
 export default function CustomersEditStep({
   rows: initialRows,
@@ -46,6 +47,19 @@ export default function CustomersEditStep({
   error,
   notices = [],
 }: CustomersEditStepProps) {
+  const t = useTranslations('customers_edit_step')
+  const typeLabel = (type: CustomerType): string => {
+    switch (type) {
+      case 'individual':
+        return t('type_individual')
+      case 'swedish_business':
+        return t('type_swedish_business')
+      case 'eu_business':
+        return t('type_eu_business')
+      case 'non_eu_business':
+        return t('type_non_eu_business')
+    }
+  }
   const [rows, setRows] = useState<EditableCustomerRow[]>(() =>
     initialRows.map((r) => ({ ...r, id: newId() })),
   )
@@ -84,11 +98,9 @@ export default function CustomersEditStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Granska kunder</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Kontrollera att uppgifterna stämmer. Du kan justera namn och kundtyp inline,
-          eller ta bort rader. {newCount} ny{newCount === 1 ? '' : 'a'} kund{newCount === 1 ? '' : 'er'} skapas
-          {liveDuplicateCount > 0 ? ` och ${liveDuplicateCount} matchar befintliga.` : '.'}
+          {t('description', { newCount, duplicateCount: liveDuplicateCount })}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -98,8 +110,10 @@ export default function CustomersEditStep({
             <RefreshCw className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
-                <span className="font-medium">{liveDuplicateCount} rader</span> matchar befintliga
-                kunder (på orgnummer eller e-post).
+                {t.rich('duplicates_banner', {
+                  count: liveDuplicateCount,
+                  b: (chunks) => <span className="font-medium">{chunks}</span>,
+                })}
               </p>
               <div className="flex items-center gap-3">
                 <Switch
@@ -109,14 +123,13 @@ export default function CustomersEditStep({
                 />
                 <Label htmlFor="update-duplicates" className="text-sm cursor-pointer">
                   {updateDuplicates
-                    ? 'Uppdatera befintliga kunder med ny information'
-                    : 'Hoppa över befintliga kunder'}
+                    ? t('update_existing')
+                    : t('skip_existing')}
                 </Label>
               </div>
               {updateDuplicates && (
                 <p className="text-xs text-muted-foreground">
-                  Endast fält med värden i filen skrivs över. Tomma fält i filen lämnar
-                  befintliga värden orörda.
+                  {t('update_existing_hint')}
                 </p>
               )}
             </div>
@@ -128,11 +141,11 @@ export default function CustomersEditStep({
           <table className="w-full text-sm">
             <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
               <tr className="border-b">
-                <th className="px-3 py-2 text-left">Namn</th>
-                <th className="px-3 py-2 text-left w-44">Kundtyp</th>
-                <th className="px-3 py-2 text-left w-36">Orgnr</th>
-                <th className="px-3 py-2 text-left">E-post</th>
-                <th className="px-3 py-2 text-left w-32">Status</th>
+                <th className="px-3 py-2 text-left">{t('col_name')}</th>
+                <th className="px-3 py-2 text-left w-44">{t('col_customer_type')}</th>
+                <th className="px-3 py-2 text-left w-36">{t('col_org_number')}</th>
+                <th className="px-3 py-2 text-left">{t('col_email')}</th>
+                <th className="px-3 py-2 text-left w-32">{t('col_status')}</th>
                 <th className="px-3 py-2 w-10" />
               </tr>
             </thead>
@@ -161,9 +174,9 @@ export default function CustomersEditStep({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(Object.keys(TYPE_LABELS) as CustomerType[]).map((t) => (
-                          <SelectItem key={t} value={t}>
-                            {TYPE_LABELS[t]}
+                        {CUSTOMER_TYPES.map((type) => (
+                          <SelectItem key={type} value={type}>
+                            {typeLabel(type)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -193,13 +206,13 @@ export default function CustomersEditStep({
                               ? 'bg-muted text-warning'
                               : 'bg-muted text-muted-foreground',
                           )}
-                          title={`Matchar ${row.duplicate_match.existing_name} (${row.duplicate_match.matched_by})`}
+                          title={t('matches_existing', { name: row.duplicate_match.existing_name, matchedBy: row.duplicate_match.matched_by })}
                         >
-                          {updateDuplicates ? 'Uppdateras' : 'Hoppas över'}
+                          {updateDuplicates ? t('status_updated') : t('status_skipped')}
                         </span>
                       ) : (
                         <span className="text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-success/15 text-success">
-                          Ny
+                          {t('status_new')}
                         </span>
                       )}
                     </div>
@@ -235,12 +248,12 @@ export default function CustomersEditStep({
 
         <div className="flex justify-between pt-2">
           <Button variant="ghost" onClick={onBack} disabled={isLoading}>
-            Tillbaka
+            {t('back')}
           </Button>
           <Button onClick={handleExecute} disabled={!canContinue} loading={isLoading}>
             {isLoading
-              ? 'Importerar...'
-              : `Importera ${rows.length} rad${rows.length === 1 ? '' : 'er'}`}
+              ? t('importing')
+              : t('import_rows', { count: rows.length })}
           </Button>
         </div>
       </CardContent>

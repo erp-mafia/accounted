@@ -27,7 +27,10 @@ export const INVOICE_ONLY_FIELD_KEYS: ReadonlySet<string> = new Set([
   'supplier.bic',
 ])
 
-/** Labels that read wrong on a receipt. */
+/**
+ * Labels that read wrong on a receipt. The Swedish default serves callers
+ * without a locale; translated surfaces pass their own `receiptLabels`.
+ */
 export const RECEIPT_FIELD_LABELS: Readonly<Record<string, string>> = {
   'invoice.invoiceDate': 'Inköpsdatum',
 }
@@ -45,8 +48,10 @@ export function selectInboxFields<T extends VisibleField>(opts: {
   hasValue: (key: string) => boolean
   /** User clicked "show invoice fields". */
   showAll: boolean
+  /** Receipt relabels in the viewer's language; defaults to RECEIPT_FIELD_LABELS. */
+  receiptLabels?: Readonly<Record<string, string>>
 }): { shown: T[]; hiddenCount: number } {
-  const { documentKind, fields, hasValue, showAll } = opts
+  const { documentKind, fields, hasValue, showAll, receiptLabels = RECEIPT_FIELD_LABELS } = opts
   if (documentKind !== 'receipt') return { shown: [...fields], hiddenCount: 0 }
 
   const shown: T[] = []
@@ -56,7 +61,7 @@ export function selectInboxFields<T extends VisibleField>(opts: {
       hiddenCount += 1
       continue
     }
-    const label = RECEIPT_FIELD_LABELS[field.key]
+    const label = receiptLabels[field.key]
     shown.push(label ? { ...field, label } : field)
   }
   return { shown, hiddenCount }

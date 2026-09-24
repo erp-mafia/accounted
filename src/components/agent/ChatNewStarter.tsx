@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import AgentChat from './AgentChat'
 import AskConsole from './AskConsole'
 import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
@@ -21,11 +22,12 @@ export default function ChatNewStarter({
   intentId: string
   seedUserMessage?: string
 }) {
+  const t = useTranslations('chat_new_starter')
   const router = useRouter()
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
   const isSandbox = companyCtx?.isSandbox ?? false
-  const agentName = identity.displayName?.trim() || 'Din assistent'
+  const agentName = identity.displayName?.trim() || t('default_agent_name')
   const [swapped, setSwapped] = useState(false)
   const isSingleCall = intentId === CHAT_INTENT_ID
 
@@ -45,7 +47,7 @@ export default function ChatNewStarter({
         <div className="min-w-0">
           <h1 className="font-display text-lg tracking-tight truncate">{agentName}</h1>
           <p className="text-xs text-muted-foreground truncate">
-            {isSandbox ? 'Förhandsvisning: avstängd i sandlådan' : 'Ny konversation'}
+            {isSandbox ? t('sandbox_preview') : t('new_conversation')}
           </p>
         </div>
       </header>

@@ -9,12 +9,14 @@ import type { DeadlineFormValues } from '@/components/deadlines/DeadlineForm'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import type { Invoice, Deadline } from '@/types'
 import { Skeleton } from '@/components/ui/skeleton'
+import { useTranslations } from 'next-intl'
 
 export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [deadlines, setDeadlines] = useState<Deadline[]>([])
   const [customers, setCustomers] = useState<{ id: string; name: string }[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const t = useTranslations('calendar_workspace')
   const { toast } = useToast()
   const supabase = createClient()
 
@@ -50,13 +52,13 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       setCustomers(customersData || [])
     } catch {
       toast({
-        title: 'Kunde inte hämta data',
+        title: t('fetch_failed'),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [supabase, toast])
+  }, [supabase, toast, t])
 
   useEffect(() => {
     fetchData()
@@ -72,14 +74,14 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       if (error) throw error
 
       toast({
-        title: 'Deadline skapad',
-        description: 'Din deadline har sparats',
+        title: t('deadline_created'),
+        description: t('deadline_saved'),
       })
 
       fetchData()
     } catch (error) {
       toast({
-        title: 'Kunde inte skapa deadline',
+        title: t('deadline_create_failed'),
         variant: 'destructive',
       })
       throw error
@@ -100,13 +102,13 @@ export default function CalendarWorkspace({ userId }: WorkspaceComponentProps) {
       if (error) throw error
 
       toast({
-        title: deadline.is_completed ? 'Markerad som ej klar' : 'Markerad som klar',
+        title: deadline.is_completed ? t('marked_not_done') : t('marked_done'),
       })
 
       fetchData()
     } catch {
       toast({
-        title: 'Kunde inte uppdatera deadline',
+        title: t('deadline_update_failed'),
         variant: 'destructive',
       })
     }

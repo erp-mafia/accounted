@@ -95,8 +95,40 @@ import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
-  { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
+  { ssr: false, loading: () => <MigrationLoading /> }
 )
+
+function MigrationLoading() {
+  const t = useTranslations('import')
+  return <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />{t('loading_migration')}</div>
+}
+
+type ImportT = ReturnType<typeof useTranslations>
+
+// Wizard step labels, shared by every import flow on this page.
+function stepLabel(t: ImportT, step: string): string {
+  switch (step) {
+    case 'upload':
+      return t('step_upload')
+    case 'preview':
+      return t('step_preview')
+    case 'column_mapping':
+      return t('step_column_mapping')
+    case 'mapping':
+      return t('step_account_mapping')
+    case 'confirm':
+    case 'review':
+      return t('step_confirm')
+    case 'edit':
+      return t('step_review')
+    case 'period':
+      return t('step_period')
+    case 'result':
+      return t('step_result')
+    default:
+      return step
+  }
+}
 
 function ImportStepLoading() {
   return (
@@ -142,17 +174,10 @@ type BankFileStep = 'upload' | 'preview' | 'column_mapping' | 'confirm' | 'resul
 const BANK_STEPS: BankFileStep[] = ['upload', 'preview', 'confirm', 'result']
 const BANK_STEPS_WITH_MAPPING: BankFileStep[] = ['upload', 'column_mapping', 'confirm', 'result']
 
-const BANK_STEP_LABELS: Record<BankFileStep, string> = {
-  upload: 'Ladda upp',
-  preview: 'Förhandsgranskning',
-  column_mapping: 'Kolumnmappning',
-  confirm: 'Bekräfta',
-  result: 'Resultat',
-}
-
 function BankFileImportWizard() {
   const { toast } = useToast()
   const tTx = useTranslations('transactions')
+  const t = useTranslations('import')
   const { company } = useCompany()
 
   const [bankStep, setBankStep] = useState<BankFileStep>('upload')
@@ -258,21 +283,21 @@ function BankFileImportWizard() {
           if (err.code === 'BANK_FILE_DUPLICATE') {
             const importedAt = err.details?.importedAt ? formatDate(err.details.importedAt) : null
             const count = typeof err.details?.importedCount === 'number' ? err.details.importedCount : null
-            const when = importedAt
-              ? ` ${importedAt}${count !== null ? ` (${count} transaktioner)` : ''}`
-              : ''
-            setBankErrorTitle('Filen är redan importerad')
+            setBankErrorTitle(t('bank_duplicate_title'))
             setBankError(
-              `Den här filen är redan importerad${when}. Transaktionerna finns redan under Transaktioner. ` +
-                'Exportera en ny fil från banken om du vill lägga till fler transaktioner.'
+              importedAt
+                ? count !== null
+                  ? t('bank_duplicate_body_date_count', { date: importedAt, count })
+                  : t('bank_duplicate_body_date', { date: importedAt })
+                : t('bank_duplicate_body')
             )
           } else if (err.code === 'BANK_FILE_SKATTEKONTO_DETECTED') {
             setSkattekontoDetected(true)
           } else {
-            setBankError(getErrorMessage(err) || 'Kunde inte läsa filen')
+            setBankError(getErrorMessage(err) || t('read_file_failed'))
           }
         } else {
-          setBankError(typeof err === 'string' ? err : 'Kunde inte läsa filen')
+          setBankError(typeof err === 'string' ? err : t('read_file_failed'))
         }
         return
       }
@@ -304,8 +329,8 @@ function BankFileImportWizard() {
         void checkDuplicates(data.data.parse_result.transactions, data.data.parse_result.format)
         setBankStep('preview')
         toast({
-          title: 'Fil analyserad',
-          description: `${txCount} transaktioner hittades`,
+          title: t('file_analyzed'),
+          description: t('bank_transactions_found', { count: txCount }),
         })
       } else {
         // Format detected but no transactions parsed: surface the parser's
@@ -316,19 +341,19 @@ function BankFileImportWizard() {
           setBankError(
             parseIssues
               .slice(0, 5)
-              .map((issue) => (issue.row > 0 ? `Rad ${issue.row}: ${issue.message}` : issue.message))
+              .map((issue) => (issue.row > 0 ? t('parse_issue_row', { row: issue.row, message: issue.message }) : issue.message))
               .join(' ')
           )
         } else {
-          setBankError('Filen kunde läsas men inga transaktioner hittades. Kontrollera att filen innehåller transaktionsdata och inte bara rubriker.')
+          setBankError(t('bank_no_transactions'))
         }
       }
     } catch (err) {
-      setBankError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setBankError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setBankIsLoading(false)
     }
-  }, [toast, checkDuplicates])
+  }, [toast, checkDuplicates, t])
 
   const handleColumnMappingConfirm = useCallback(async (mapping: GenericCSVColumnMapping) => {
     // Re-parse with mapping via the generic CSV parser
@@ -375,15 +400,15 @@ function BankFileImportWizard() {
       setBankStep('result')
 
       toast({
-        title: 'Import genomförd',
-        description: `${data.data.imported} transaktioner importerades`,
+        title: t('result_success_title'),
+        description: t('bank_transactions_imported', { count: data.data.imported }),
       })
     } catch (err) {
-      setBankError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
+      setBankError(err instanceof Error ? getErrorMessage(err) : t('import_failed'))
     } finally {
       setBankIsLoading(false)
     }
-  }, [parseResult, filename, fileHash, toast])
+  }, [parseResult, filename, fileHash, toast, t])
 
   const handleNewImport = () => {
     setBankStep('upload')
@@ -418,7 +443,7 @@ function BankFileImportWizard() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {BANK_STEP_LABELS[bankStep]}
+                {t('step_counter', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(t, bankStep) })}
               </span>
               {steps.map((s, i) => (
                 <span
@@ -428,7 +453,7 @@ function BankFileImportWizard() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
                   )}
                 >
-                  {BANK_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -506,12 +531,6 @@ function BankFileImportWizard() {
 type SkattekontoFileStep = 'upload' | 'preview' | 'result'
 
 const SKATTEKONTO_STEPS: SkattekontoFileStep[] = ['upload', 'preview', 'result']
-
-const SKATTEKONTO_STEP_LABELS: Record<SkattekontoFileStep, string> = {
-  upload: 'Ladda upp',
-  preview: 'Förhandsgranskning',
-  result: 'Resultat',
-}
 
 function SkattekontoImportWizard() {
   const { toast } = useToast()
@@ -633,8 +652,7 @@ function SkattekontoImportWizard() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{SKATTEKONTO_STEPS.length}:{' '}
-                {SKATTEKONTO_STEP_LABELS[step]}
+                {t('step_counter', { current: currentStepIndex + 1, total: SKATTEKONTO_STEPS.length, label: stepLabel(t, step) })}
               </span>
               {SKATTEKONTO_STEPS.map((s, i) => (
                 <span
@@ -644,7 +662,7 @@ function SkattekontoImportWizard() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
                   )}
                 >
-                  {SKATTEKONTO_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -689,14 +707,6 @@ function SkattekontoImportWizard() {
 // SIE Import Wizard (unchanged, extracted into component)
 // ============================================================
 
-const SIE_STEP_LABELS: Record<ImportWizardStep, string> = {
-  upload: 'Ladda upp',
-  preview: 'Förhandsgranskning',
-  mapping: 'Kontomappning',
-  review: 'Bekräfta',
-  result: 'Resultat',
-}
-
 function SIEImportWizard({
   onOpenManualOpeningBalances,
 }: {
@@ -704,6 +714,7 @@ function SIEImportWizard({
   onOpenManualOpeningBalances?: () => void
 }) {
   const { toast } = useToast()
+  const t = useTranslations('import')
 
   const [step, setStep] = useState<ImportWizardStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -790,7 +801,7 @@ function SIEImportWizard({
             setDuplicateImportId(details.importId)
           }
           toast({
-            title: isPeriod ? 'Överlappande räkenskapsår' : 'Filen har redan importerats',
+            title: isPeriod ? t('sie_overlapping_fiscal_year') : t('sie_file_already_imported'),
             description: message,
             variant: 'destructive',
           })
@@ -800,14 +811,14 @@ function SIEImportWizard({
           setValidationErrors(details.errors || [])
           setValidationWarnings(details.warnings || [])
           toast({
-            title: 'Valideringsfel i SIE-filen',
-            description: `${(details.errors || []).length} fel hittades som måste åtgärdas.`,
+            title: t('sie_validation_error_title'),
+            description: t('sie_validation_error_count', { count: (details.errors || []).length }),
             variant: 'destructive',
           })
         } else {
           setErrorType('parse')
           setError(message)
-          toast({ title: 'Kunde inte läsa filen', description: message, variant: 'destructive' })
+          toast({ title: t('read_file_failed'), description: message, variant: 'destructive' })
         }
         return
       }
@@ -830,7 +841,7 @@ function SIEImportWizard({
       setSieAccounts(data.parsed.accounts)
 
       const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
+        throw new Error(t('sie_chart_fetch_failed'))
       })
       setBasAccounts(accounts)
       setMappings(enrichAccountMappingsWithVat(data.mappings, accounts))
@@ -844,21 +855,24 @@ function SIEImportWizard({
       setStep('preview')
 
       toast({
-        title: 'Fil analyserad',
-        description: `${data.parsed.stats.totalAccounts} konton och ${data.parsed.stats.totalVouchers} verifikationer hittades`,
+        title: t('file_analyzed'),
+        description: t('sie_file_analyzed_description', {
+          accounts: data.parsed.stats.totalAccounts,
+          vouchers: data.parsed.stats.totalVouchers,
+        }),
       })
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const message = isNetworkError
-        ? 'Kunde inte nå servern. Kontrollera din internetanslutning och försök igen.'
+        ? t('network_error')
         : getErrorMessage(err)
       setErrorType(isNetworkError ? 'network' : 'parse')
       setError(message)
-      toast({ title: isNetworkError ? 'Anslutningsfel' : 'Ett fel uppstod', description: message, variant: 'destructive' })
+      toast({ title: isNetworkError ? t('connection_error_title') : t('generic_error_title'), description: message, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleUndo = useCallback(async (importId:string) => {
     const response = await fetch('/api/import/sie/'+importId+'/action',{
@@ -989,26 +1003,26 @@ function SIEImportWizard({
           [
             err instanceof Error
               ? getErrorMessage(err)
-              : 'Kontoplanen kunde inte läsas in. Kontrollera att filen finns kvar och försök igen.',
+              : t('source_chart_read_failed'),
           ],
           'action',
         ),
       }))
     }
-  }, [])
+  }, [t])
 
   const confirmVatReview = useCallback(() => {
     if (mappings.some((mapping) =>
       mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed
     )) {
-      setError('Granska momshanteringen för alla markerade konton innan du fortsätter.')
+      setError(t('vat_review_required'))
       return
     }
     setStep('review')
     setError(null)
     setValidationErrors([])
     setValidationWarnings([])
-  }, [mappings])
+  }, [mappings, t])
 
   const missingAccounts = mappings
     .filter((m) => !m.targetAccount && isValidBASRange(m.sourceAccount))
@@ -1029,18 +1043,18 @@ function SIEImportWizard({
       const data = await res.json()
 
       if (!res.ok) {
-        toast({ title: 'Kunde inte skapa konton', description: getErrorMessage(data), variant: 'destructive' })
+        toast({ title: t('create_accounts_failed'), description: getErrorMessage(data), variant: 'destructive' })
         return
       }
 
-      toast({ title: 'Konton skapade', description: `${data.created} nya konton har lagts till i din kontoplan` })
+      toast({ title: t('accounts_created_title'), description: t('accounts_created_description', { count: data.created }) })
 
       const createdSet = new Set(missingAccounts.map(a => a.number))
       // New accounts exist now: refresh every cached chart (pickers app-wide)
       // and re-read the full chart for the VAT review below.
       await invalidateReferenceData('ref:accounts')
       const accounts = await fetchAccounts(false).catch(() => {
-        throw new Error('Kunde inte hämta kontoplanen för momsgranskning.')
+        throw new Error(t('sie_chart_fetch_failed'))
       })
       setBasAccounts(accounts)
       setMappings(prev => {
@@ -1074,11 +1088,11 @@ function SIEImportWizard({
         }
       })
     } catch (err) {
-      toast({ title: 'Kunde inte skapa konton', description: err instanceof Error ? getErrorMessage(err) : 'Försök igen.', variant: 'destructive' })
+      toast({ title: t('create_accounts_failed'), description: err instanceof Error ? getErrorMessage(err) : t('try_again'), variant: 'destructive' })
     } finally {
       setIsCreatingAccounts(false)
     }
-  }, [missingAccounts, toast])
+  }, [missingAccounts, toast, t])
 
   const handleExecuteImport = useCallback(async (options: ImportExecuteOptions) => {
     if (!file) { setError('No file selected'); return }
@@ -1088,7 +1102,7 @@ function SIEImportWizard({
 
     try {
       const formData = new FormData()
-      if (!storagePath) throw new Error('SIE-filen måste laddas upp igen.')
+      if (!storagePath) throw new Error(t('sie_reupload_required'))
       formData.append('storagePath',storagePath)
       formData.append('filename',file.name)
       formData.append('mappings', JSON.stringify(mappings))
@@ -1103,21 +1117,21 @@ function SIEImportWizard({
         // The theater's last narration line is not the failing step.
         const failure = describeImportResponseFailure({ status: res.status, body: data })
         setError(formatImportFailure(failure))
-        toast({ title: 'Import avbröts', description: failure.message, variant: 'destructive' })
+        toast({ title: t('import_aborted'), description: failure.message, variant: 'destructive' })
         return
       }
       showJob(data.data.importId)
     } catch (err) {
       const isNetworkError = err instanceof TypeError && (err.message === 'Failed to fetch' || err.message.includes('NetworkError'))
       const msg = isNetworkError
-        ? 'Tappade anslutningen till servern under importen. Kontrollera din internetanslutning och se om importen genomfördes under Bokföring.'
+        ? t('import_connection_lost')
         : getErrorMessage(err)
       setError(msg)
-      toast({ title: 'Import avbröts', description: msg, variant: 'destructive' })
+      toast({ title: t('import_aborted'), description: msg, variant: 'destructive' })
     } finally {
       setIsLoading(false)
     }
-  }, [file, mappings, storagePath, replaceExisting, duplicateImportId, showJob, toast])
+  }, [file, mappings, storagePath, replaceExisting, duplicateImportId, showJob, toast, t])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
@@ -1144,14 +1158,14 @@ function SIEImportWizard({
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{sieSteps.length}: {SIE_STEP_LABELS[step]}
+                {t('step_counter', { current: currentStepIndex + 1, total: sieSteps.length, label: stepLabel(t, step) })}
               </span>
               {sieSteps.map((s, i) => (
                 <span key={s} className={cn(
                   'hidden sm:inline',
                   i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground'
                 )}>
-                  {SIE_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -1197,16 +1211,9 @@ function SIEImportWizard({
 
 type OpeningBalanceStep = 'upload' | 'column_mapping' | 'edit' | 'period' | 'result'
 
-const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
-  upload: 'Ladda upp',
-  column_mapping: 'Kolumnmappning',
-  edit: 'Granska',
-  period: 'Period',
-  result: 'Resultat',
-}
-
 function OpeningBalanceFlow() {
   const { toast } = useToast()
+  const t = useTranslations('import')
   const { dialogProps, confirm } = useDestructiveConfirm()
   const router = useRouter()
 
@@ -1261,16 +1268,16 @@ function OpeningBalanceFlow() {
         if (result.detected_bank_format) {
           // The file is a bank statement uploaded to the wrong importer (#918)
           setObBankFormatHint(result.detected_bank_format)
-          setObError(`Filen ser ut som ett kontoutdrag från ${result.detected_bank_format}, inte ingående balanser. Kontoutdrag importeras under "Banktransaktioner".`)
+          setObError(t('ob_bank_statement_detected', { bank: result.detected_bank_format }))
         } else {
-          setObError('Inga konton med belopp hittades i filen. Kontrollera att filen innehåller kontonummer och belopp.')
+          setObError(t('ob_no_accounts_found'))
         }
         return
       }
 
       toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} konton hittades`,
+        title: t('file_analyzed'),
+        description: t('ob_accounts_found', { count: result.rows.length }),
       })
 
       // Skip column mapping if confidence >= 0.8
@@ -1280,11 +1287,11 @@ function OpeningBalanceFlow() {
         setObStep('edit')
       }
     } catch (err) {
-      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setObIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleColumnMappingConfirm = useCallback(async (columns: DetectedColumns) => {
     if (!obFile) return
@@ -1312,11 +1319,11 @@ function OpeningBalanceFlow() {
       setParseResult(data.data)
       setObStep('edit')
     } catch (err) {
-      setObError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setObError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setObIsLoading(false)
     }
-  }, [obFile])
+  }, [obFile, t])
 
   const handleEditContinue = useCallback((rows: typeof editedRows) => {
     setEditedRows(rows)
@@ -1326,10 +1333,9 @@ function OpeningBalanceFlow() {
   const handleExecute = useCallback(async (fiscalPeriodId: string, replace: boolean) => {
     if (replace) {
       const ok = await confirm({
-        title: 'Ersätt ingående balanser?',
-        description:
-          'Den befintliga IB-verifikationen makuleras (stornas) och en ny bokförs med beloppen du angett. Detta går inte att ångra automatiskt.',
-        confirmLabel: 'Ersätt',
+        title: t('ob_replace_confirm_title'),
+        description: t('ob_replace_confirm_description'),
+        confirmLabel: t('ob_replace_confirm_label'),
         variant: 'warning',
       })
       if (!ok) return
@@ -1368,16 +1374,16 @@ function OpeningBalanceFlow() {
 
       if (data.data.success) {
         toast({
-          title: replace ? 'Ingående balanser korrigerade' : 'Ingående balanser bokförda',
-          description: `${data.data.lines_created} kontorader skapades`,
+          title: replace ? t('ob_corrected_title') : t('ob_posted_title'),
+          description: t('ob_lines_created', { count: data.data.lines_created }),
         })
       }
     } catch (err) {
-      setObError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
+      setObError(err instanceof Error ? getErrorMessage(err) : t('import_failed'))
     } finally {
       setObIsLoading(false)
     }
-  }, [editedRows, toast, confirm])
+  }, [editedRows, toast, confirm, t])
 
   const handleNewImport = () => {
     setObStep('upload')
@@ -1397,7 +1403,7 @@ function OpeningBalanceFlow() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {OB_STEP_LABELS[obStep]}
+                {t('step_counter', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(t, obStep) })}
               </span>
               {steps.map((s, i) => (
                 <span
@@ -1407,7 +1413,7 @@ function OpeningBalanceFlow() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
                   )}
                 >
-                  {OB_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -1424,7 +1430,7 @@ function OpeningBalanceFlow() {
           error={obError}
           errorAction={
             obBankFormatHint
-              ? { label: 'Importera banktransaktioner', onClick: () => router.push('/import?mode=bank') }
+              ? { label: t('ob_import_bank_transactions'), onClick: () => router.push('/import?mode=bank') }
               : undefined
           }
         />
@@ -1483,28 +1489,23 @@ function OpeningBalanceFlow() {
 
 type RegisterStep = 'upload' | 'column_mapping' | 'edit' | 'result'
 
-const REGISTER_STEP_LABELS: Record<RegisterStep, string> = {
-  upload: 'Ladda upp',
-  column_mapping: 'Kolumnmappning',
-  edit: 'Granska',
-  result: 'Resultat',
+function customerColumnSpecs(t: ImportT): RegisterColumnSpec<keyof DetectedCustomerColumns>[] {
+  return [
+    { key: 'name_col', label: t('col_name'), required: true },
+    { key: 'org_number_col', label: t('col_org_number'), required: false },
+    { key: 'customer_type_col', label: t('col_customer_type'), required: false },
+    { key: 'email_col', label: t('col_email'), required: false },
+    { key: 'phone_col', label: t('col_phone'), required: false },
+    { key: 'address_line1_col', label: t('col_address'), required: false },
+    { key: 'address_line2_col', label: t('col_address_line2'), required: false },
+    { key: 'postal_code_col', label: t('col_postal_code'), required: false },
+    { key: 'city_col', label: t('col_city'), required: false },
+    { key: 'country_col', label: t('col_country'), required: false },
+    { key: 'vat_number_col', label: t('col_vat_number'), required: false },
+    { key: 'payment_terms_col', label: t('col_payment_terms'), required: false },
+    { key: 'notes_col', label: t('col_notes'), required: false },
+  ]
 }
-
-const CUSTOMER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedCustomerColumns>[] = [
-  { key: 'name_col', label: 'Namn', required: true },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'customer_type_col', label: 'Kundtyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
 
 function columnsToMapping<K extends string>(
   cols: { readonly [key: string]: unknown },
@@ -1520,6 +1521,8 @@ function columnsToMapping<K extends string>(
 
 function CustomersFlow() {
   const { toast } = useToast()
+  const t = useTranslations('import')
+  const columnSpecs = customerColumnSpecs(t)
 
   const [step, setStep] = useState<RegisterStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -1551,7 +1554,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || t('read_file_failed'))
         return
       }
 
@@ -1559,22 +1562,24 @@ function CustomersFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setError('Inga giltiga kundrader hittades. Kontrollera att filen innehåller en namnkolumn.')
+        setError(t('customers_none_found'))
         return
       }
 
       toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} kunder hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
+        title: t('file_analyzed'),
+        description: result.duplicate_count > 0
+          ? t('customers_found_with_duplicates', { count: result.rows.length, duplicates: result.duplicate_count })
+          : t('customers_found', { count: result.rows.length }),
       })
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleColumnMappingConfirm = useCallback(async (
     mapping: Record<keyof DetectedCustomerColumns, number | null>,
@@ -1612,18 +1617,18 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('parse_with_columns_failed'))
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [file])
+  }, [file, t])
 
   const handleExecute = useCallback(async (
     rows: AnnotatedCustomerRow[],
@@ -1644,7 +1649,7 @@ function CustomersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('import_failed'))
         return
       }
 
@@ -1653,16 +1658,18 @@ function CustomersFlow() {
 
       const r = data.data as RegisterResult
       toast({
-        title: r.success ? 'Kunder importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
+        title: r.success ? t('customers_imported') : t('import_completed_with_errors'),
+        description: r.failed > 0
+          ? t('register_result_summary_with_failed', { created: r.created, updated: r.updated, skipped: r.skipped, failed: r.failed })
+          : t('register_result_summary', { created: r.created, updated: r.updated, skipped: r.skipped }),
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : t('import_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleNewImport = () => {
     setStep('upload')
@@ -1673,7 +1680,7 @@ function CustomersFlow() {
   }
 
   const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedCustomerColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, CUSTOMER_COLUMN_SPECS)
+    ? columnsToMapping<keyof DetectedCustomerColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, columnSpecs)
     : null
 
   return (
@@ -1683,7 +1690,7 @@ function CustomersFlow() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
+                {t('step_counter', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(t, step) })}
               </span>
               {steps.map((s, i) => (
                 <span
@@ -1693,7 +1700,7 @@ function CustomersFlow() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
                   )}
                 >
-                  {REGISTER_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -1715,7 +1722,7 @@ function CustomersFlow() {
         <RegisterColumnMappingStep<keyof DetectedCustomerColumns>
           headers={parseResult.headers}
           previewRows={parseResult.preview_rows}
-          specs={CUSTOMER_COLUMN_SPECS}
+          specs={columnSpecs}
           initial={initialMapping}
           onConfirm={handleColumnMappingConfirm}
           onBack={() => setStep('upload')}
@@ -1748,30 +1755,34 @@ function CustomersFlow() {
 // Suppliers Flow (entity = "suppliers" inside CSVDataImportWizard)
 // ============================================================
 
-const SUPPLIER_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedSupplierColumns>[] = [
-  { key: 'name_col', label: 'Namn', required: true },
-  { key: 'org_number_col', label: 'Org-/personnummer', required: false },
-  { key: 'supplier_type_col', label: 'Leverantörstyp', required: false },
-  { key: 'email_col', label: 'E-post', required: false },
-  { key: 'phone_col', label: 'Telefon', required: false },
-  { key: 'address_line1_col', label: 'Adress', required: false },
-  { key: 'address_line2_col', label: 'Adress rad 2', required: false },
-  { key: 'postal_code_col', label: 'Postnummer', required: false },
-  { key: 'city_col', label: 'Ort', required: false },
-  { key: 'country_col', label: 'Land', required: false },
-  { key: 'vat_number_col', label: 'VAT-nummer', required: false },
-  { key: 'bankgiro_col', label: 'Bankgiro', required: false },
-  { key: 'plusgiro_col', label: 'Plusgiro', required: false },
-  { key: 'bank_account_col', label: 'Bankkonto', required: false },
-  { key: 'iban_col', label: 'IBAN', required: false },
-  { key: 'bic_col', label: 'BIC/SWIFT', required: false },
-  { key: 'payment_terms_col', label: 'Betalningsvillkor (dagar)', required: false },
-  { key: 'default_currency_col', label: 'Valuta', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
+function supplierColumnSpecs(t: ImportT): RegisterColumnSpec<keyof DetectedSupplierColumns>[] {
+  return [
+    { key: 'name_col', label: t('col_name'), required: true },
+    { key: 'org_number_col', label: t('col_org_number'), required: false },
+    { key: 'supplier_type_col', label: t('col_supplier_type'), required: false },
+    { key: 'email_col', label: t('col_email'), required: false },
+    { key: 'phone_col', label: t('col_phone'), required: false },
+    { key: 'address_line1_col', label: t('col_address'), required: false },
+    { key: 'address_line2_col', label: t('col_address_line2'), required: false },
+    { key: 'postal_code_col', label: t('col_postal_code'), required: false },
+    { key: 'city_col', label: t('col_city'), required: false },
+    { key: 'country_col', label: t('col_country'), required: false },
+    { key: 'vat_number_col', label: t('col_vat_number'), required: false },
+    { key: 'bankgiro_col', label: 'Bankgiro', required: false },
+    { key: 'plusgiro_col', label: 'Plusgiro', required: false },
+    { key: 'bank_account_col', label: t('col_bank_account'), required: false },
+    { key: 'iban_col', label: 'IBAN', required: false },
+    { key: 'bic_col', label: 'BIC/SWIFT', required: false },
+    { key: 'payment_terms_col', label: t('col_payment_terms'), required: false },
+    { key: 'default_currency_col', label: t('col_currency'), required: false },
+    { key: 'notes_col', label: t('col_notes'), required: false },
+  ]
+}
 
 function SuppliersFlow() {
   const { toast } = useToast()
+  const t = useTranslations('import')
+  const columnSpecs = supplierColumnSpecs(t)
 
   const [step, setStep] = useState<RegisterStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -1803,7 +1814,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || t('read_file_failed'))
         return
       }
 
@@ -1811,22 +1822,24 @@ function SuppliersFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setError('Inga giltiga leverantörsrader hittades. Kontrollera att filen innehåller en namnkolumn.')
+        setError(t('suppliers_none_found'))
         return
       }
 
       toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} leverantörer hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
+        title: t('file_analyzed'),
+        description: result.duplicate_count > 0
+          ? t('suppliers_found_with_duplicates', { count: result.rows.length, duplicates: result.duplicate_count })
+          : t('suppliers_found', { count: result.rows.length }),
       })
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleColumnMappingConfirm = useCallback(async (
     mapping: Record<keyof DetectedSupplierColumns, number | null>,
@@ -1870,18 +1883,18 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('parse_failed'))
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [file])
+  }, [file, t])
 
   const handleExecute = useCallback(async (
     rows: AnnotatedSupplierRow[],
@@ -1902,7 +1915,7 @@ function SuppliersFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('import_failed'))
         return
       }
 
@@ -1911,16 +1924,18 @@ function SuppliersFlow() {
 
       const r = data.data as RegisterResult
       toast({
-        title: r.success ? 'Leverantörer importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
+        title: r.success ? t('suppliers_imported') : t('import_completed_with_errors'),
+        description: r.failed > 0
+          ? t('register_result_summary_with_failed', { created: r.created, updated: r.updated, skipped: r.skipped, failed: r.failed })
+          : t('register_result_summary', { created: r.created, updated: r.updated, skipped: r.skipped }),
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : t('import_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleNewImport = () => {
     setStep('upload')
@@ -1931,7 +1946,7 @@ function SuppliersFlow() {
   }
 
   const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedSupplierColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, SUPPLIER_COLUMN_SPECS)
+    ? columnsToMapping<keyof DetectedSupplierColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, columnSpecs)
     : null
 
   return (
@@ -1941,7 +1956,7 @@ function SuppliersFlow() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
+                {t('step_counter', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(t, step) })}
               </span>
               {steps.map((s, i) => (
                 <span
@@ -1951,7 +1966,7 @@ function SuppliersFlow() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
                   )}
                 >
-                  {REGISTER_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -1973,7 +1988,7 @@ function SuppliersFlow() {
         <RegisterColumnMappingStep<keyof DetectedSupplierColumns>
           headers={parseResult.headers}
           previewRows={parseResult.preview_rows}
-          specs={SUPPLIER_COLUMN_SPECS}
+          specs={columnSpecs}
           initial={initialMapping}
           onConfirm={handleColumnMappingConfirm}
           onBack={() => setStep('upload')}
@@ -2006,24 +2021,28 @@ function SuppliersFlow() {
 // Articles Flow (entity = "articles" inside CSVDataImportWizard)
 // ============================================================
 
-const ARTICLE_COLUMN_SPECS: RegisterColumnSpec<keyof DetectedArticleColumns>[] = [
-  { key: 'name_col', label: 'Benämning', required: true },
-  { key: 'article_number_col', label: 'Artikelnummer', required: false },
-  { key: 'type_col', label: 'Typ (vara/tjänst)', required: false },
-  { key: 'unit_col', label: 'Enhet', required: false },
-  { key: 'price_col', label: 'Pris exkl moms', required: false },
-  { key: 'currency_col', label: 'Valuta', required: false },
-  { key: 'vat_rate_col', label: 'Moms (%)', required: false },
-  { key: 'revenue_account_col', label: 'Försäljningskonto', required: false },
-  { key: 'cost_price_col', label: 'Inköpspris', required: false },
-  { key: 'ean_col', label: 'EAN', required: false },
-  { key: 'housework_type_col', label: 'ROT/RUT-arbetstyp', required: false },
-  { key: 'name_en_col', label: 'Benämning (engelska)', required: false },
-  { key: 'notes_col', label: 'Anteckning', required: false },
-]
+function articleColumnSpecs(t: ImportT): RegisterColumnSpec<keyof DetectedArticleColumns>[] {
+  return [
+    { key: 'name_col', label: t('col_article_name'), required: true },
+    { key: 'article_number_col', label: t('col_article_number'), required: false },
+    { key: 'type_col', label: t('col_article_type'), required: false },
+    { key: 'unit_col', label: t('col_unit'), required: false },
+    { key: 'price_col', label: t('col_price_ex_vat'), required: false },
+    { key: 'currency_col', label: t('col_currency'), required: false },
+    { key: 'vat_rate_col', label: t('col_vat_rate'), required: false },
+    { key: 'revenue_account_col', label: t('col_revenue_account'), required: false },
+    { key: 'cost_price_col', label: t('col_cost_price'), required: false },
+    { key: 'ean_col', label: 'EAN', required: false },
+    { key: 'housework_type_col', label: t('col_housework_type'), required: false },
+    { key: 'name_en_col', label: t('col_article_name_en'), required: false },
+    { key: 'notes_col', label: t('col_notes'), required: false },
+  ]
+}
 
 function ArticlesFlow() {
   const { toast } = useToast()
+  const t = useTranslations('import')
+  const columnSpecs = articleColumnSpecs(t)
 
   const [step, setStep] = useState<RegisterStep>('upload')
   const [isLoading, setIsLoading] = useState(false)
@@ -2055,7 +2074,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || 'Kunde inte läsa filen')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || data.error || t('read_file_failed'))
         return
       }
 
@@ -2063,22 +2082,24 @@ function ArticlesFlow() {
       setParseResult(result)
 
       if (result.rows.length === 0) {
-        setError('Inga giltiga artiklar hittades. Kontrollera att filen innehåller en benämningskolumn.')
+        setError(t('articles_none_found'))
         return
       }
 
       toast({
-        title: 'Fil analyserad',
-        description: `${result.rows.length} artiklar hittades${result.duplicate_count > 0 ? ` (${result.duplicate_count} matchar befintliga)` : ''}`,
+        title: t('file_analyzed'),
+        description: result.duplicate_count > 0
+          ? t('articles_found_with_duplicates', { count: result.rows.length, duplicates: result.duplicate_count })
+          : t('articles_found', { count: result.rows.length }),
       })
 
       setStep(result.detected_columns.confidence < 0.8 ? 'column_mapping' : 'edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleColumnMappingConfirm = useCallback(async (
     mapping: Record<keyof DetectedArticleColumns, number | null>,
@@ -2116,18 +2137,18 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Kunde inte tolka filen med de valda kolumnerna')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('parse_with_columns_failed'))
         return
       }
 
       setParseResult(data.data)
       setStep('edit')
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Kunde inte läsa filen')
+      setError(err instanceof Error ? getErrorMessage(err) : t('read_file_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [file])
+  }, [file, t])
 
   const handleExecute = useCallback(async (
     rows: AnnotatedArticleRow[],
@@ -2148,7 +2169,7 @@ function ArticlesFlow() {
       const data = await res.json()
 
       if (!res.ok) {
-        setError(data.error?.message_sv || getErrorMessage(data.error) || 'Importen misslyckades')
+        setError(data.error?.message_sv || getErrorMessage(data.error) || t('import_failed'))
         return
       }
 
@@ -2157,16 +2178,18 @@ function ArticlesFlow() {
 
       const r = data.data as RegisterResult
       toast({
-        title: r.success ? 'Artiklar importerade' : 'Importen slutfördes med fel',
-        description: `${r.created} skapade, ${r.updated} uppdaterade, ${r.skipped} hoppade över${r.failed > 0 ? `, ${r.failed} misslyckades` : ''}`,
+        title: r.success ? t('articles_imported') : t('import_completed_with_errors'),
+        description: r.failed > 0
+          ? t('register_result_summary_with_failed', { created: r.created, updated: r.updated, skipped: r.skipped, failed: r.failed })
+          : t('register_result_summary', { created: r.created, updated: r.updated, skipped: r.skipped }),
         variant: r.success ? 'default' : 'destructive',
       })
     } catch (err) {
-      setError(err instanceof Error ? getErrorMessage(err) : 'Importen misslyckades')
+      setError(err instanceof Error ? getErrorMessage(err) : t('import_failed'))
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   const handleNewImport = () => {
     setStep('upload')
@@ -2177,7 +2200,7 @@ function ArticlesFlow() {
   }
 
   const initialMapping = parseResult
-    ? columnsToMapping<keyof DetectedArticleColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, ARTICLE_COLUMN_SPECS)
+    ? columnsToMapping<keyof DetectedArticleColumns>(parseResult.detected_columns as unknown as { [key: string]: unknown }, columnSpecs)
     : null
 
   return (
@@ -2187,7 +2210,7 @@ function ArticlesFlow() {
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
               <span className="sm:hidden text-primary font-medium">
-                Steg {currentStepIndex + 1}/{steps.length}: {REGISTER_STEP_LABELS[step]}
+                {t('step_counter', { current: currentStepIndex + 1, total: steps.length, label: stepLabel(t, step) })}
               </span>
               {steps.map((s, i) => (
                 <span
@@ -2197,7 +2220,7 @@ function ArticlesFlow() {
                     i <= currentStepIndex ? 'text-primary font-medium' : 'text-muted-foreground',
                   )}
                 >
-                  {REGISTER_STEP_LABELS[s]}
+                  {stepLabel(t, s)}
                 </span>
               ))}
             </div>
@@ -2219,7 +2242,7 @@ function ArticlesFlow() {
         <RegisterColumnMappingStep<keyof DetectedArticleColumns>
           headers={parseResult.headers}
           previewRows={parseResult.preview_rows}
-          specs={ARTICLE_COLUMN_SPECS}
+          specs={columnSpecs}
           initial={initialMapping}
           onConfirm={handleColumnMappingConfirm}
           onBack={() => setStep('upload')}
@@ -2254,20 +2277,20 @@ function ArticlesFlow() {
 
 type CSVDataEntity = 'opening_balance' | 'customers' | 'suppliers' | 'articles'
 
-const ENTITY_OPTIONS: { value: CSVDataEntity; label: string }[] = [
-  { value: 'opening_balance', label: 'Ingående balanser' },
-  { value: 'customers', label: 'Kunder' },
-  { value: 'suppliers', label: 'Leverantörer' },
-  { value: 'articles', label: 'Artiklar' },
-]
-
 function CSVDataImportWizard() {
+  const t = useTranslations('import')
   const [entity, setEntity] = useState<CSVDataEntity | null>('opening_balance')
+  const entityOptions: { value: CSVDataEntity; label: string }[] = [
+    { value: 'opening_balance', label: t('csv_chip_opening_balances') },
+    { value: 'customers', label: t('csv_chip_customers') },
+    { value: 'suppliers', label: t('csv_chip_suppliers') },
+    { value: 'articles', label: t('csv_chip_articles') },
+  ]
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3">
-        {ENTITY_OPTIONS.map((opt) => {
+        {entityOptions.map((opt) => {
           const selected = entity === opt.value
           return (
             <div key={opt.value} className="relative">

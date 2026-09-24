@@ -1,6 +1,7 @@
 import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
+import { getTranslations } from 'next-intl/server'
 import DashboardNav from '@/components/dashboard/DashboardNav'
 import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
@@ -80,6 +81,9 @@ export default async function DashboardLayout({
   if (!user) {
     redirect('/login')
   }
+
+  const t = await getTranslations('dashboard_layout')
+  const tCompany = await getTranslations('company_switcher')
 
   // Deployment-level: can the in-app assistant (the tool-loop runtime behind
   // /api/agent/invoke) run here at all? Env reads only. Handed to every
@@ -573,12 +577,12 @@ export default async function DashboardLayout({
             href="#main-content"
             className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-lg focus:text-sm focus:font-medium"
           >
-            Hoppa till innehåll
+            {t('skip_to_content')}
           </a>
           {isSandbox && <SandboxBanner />}
           {systemNoticeBanner}
           <DashboardNav
-            companyName={settings?.company_name || 'Min verksamhet'}
+            companyName={settings?.company_name || tCompany('default_company_name')}
             entityType={entityType}
             paysSalaries={paysSalaries}
             dimensionsEnabled={dimensionsEnabled}

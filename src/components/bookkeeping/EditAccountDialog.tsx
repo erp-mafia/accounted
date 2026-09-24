@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { Plus, X } from 'lucide-react'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import {
@@ -49,23 +50,25 @@ interface EditAccountDialogProps {
   onSaved: () => void
 }
 
-// Hardcoded Swedish per the file's convention (chart-of-accounts editing is a
-// bookkeeping surface). Labels mirror the rule semantics enforced by the
-// engine at commit time.
-const RULE_TYPE_LABELS: Record<DimensionRuleType, string> = {
-  required: 'Krävs',
-  default: 'Förval',
-  fixed: 'Låst',
-}
-
-const RULE_TYPE_HELP: Record<DimensionRuleType, string> = {
-  required: 'Krävs — verifikat på kontot kan inte bokföras utan värde',
-  default: 'Förval — värdet föreslås men kan ändras',
-  fixed: 'Låst — värdet sätts alltid automatiskt',
-}
+// Rule types in display order. Labels mirror the rule semantics enforced by
+// the engine at commit time.
+const RULE_TYPES: DimensionRuleType[] = ['required', 'default', 'fixed']
 
 export function EditAccountDialog({ open, onOpenChange, account, onSaved }: EditAccountDialogProps) {
+  const t = useTranslations('edit_account_dialog')
+  const tc = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
+  const ruleTypeLabels: Record<DimensionRuleType, string> = {
+    required: t('rule_type_required'),
+    default: t('rule_type_default'),
+    fixed: t('rule_type_fixed'),
+  }
+  const ruleTypeHelp: Record<DimensionRuleType, string> = {
+    required: t('rule_type_required_help'),
+    default: t('rule_type_default_help'),
+    fixed: t('rule_type_fixed_help'),
+  }
   const [accountName, setAccountName] = useState(account.account_name)
   const [description, setDescription] = useState(account.description || '')
   // "Standard moms": the moms-sats a booking line defaults to when this konto is
@@ -156,8 +159,8 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
         }
         if (!valueId) {
           toast({
-            title: 'Kunde inte lägga till regeln',
-            description: `Värdet ${code} hittades inte i registret.`,
+            title: t('add_rule_failed'),
+            description: t('value_not_found', { code }),
             variant: 'destructive',
           })
           return
@@ -178,15 +181,15 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
       const json = await res.json().catch(() => null)
       if (!res.ok) {
         toast({
-          title: 'Kunde inte lägga till regeln',
-          description: getErrorMessage(json, { locale: 'sv' }),
+          title: t('add_rule_failed'),
+          description: getErrorMessage(json, { locale: errorLocale }),
           variant: 'destructive',
         })
         return
       }
       const created = json?.data?.rule as AccountDimensionRuleDto | undefined
       if (created) setRules((prev) => [...prev, created])
-      toast({ title: 'Regel tillagd' })
+      toast({ title: t('rule_added') })
       resetAddRuleForm()
     } finally {
       setIsAddingRule(false)
@@ -214,8 +217,8 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
         ),
       )
       toast({
-        title: 'Kunde inte uppdatera regeln',
-        description: getErrorMessage(json, { locale: 'sv' }),
+        title: t('update_rule_failed'),
+        description: getErrorMessage(json, { locale: errorLocale }),
         variant: 'destructive',
       })
       return
@@ -236,14 +239,14 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
     if (!res?.ok) {
       const json = await res?.json().catch(() => null)
       toast({
-        title: 'Kunde inte ta bort regeln',
-        description: getErrorMessage(json, { locale: 'sv' }),
+        title: t('delete_rule_failed'),
+        description: getErrorMessage(json, { locale: errorLocale }),
         variant: 'destructive',
       })
       return
     }
     setRules((prev) => prev.filter((r) => r.account_dimension_rule_id !== ruleId))
-    toast({ title: 'Regel borttagen' })
+    toast({ title: t('rule_deleted') })
   }
 
   async function handleSave() {
@@ -270,8 +273,8 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
         // Keep the dialog open so the user can correct and retry; map the
         // server error to Swedish like the dimension-rule handlers above.
         toast({
-          title: 'Kunde inte uppdatera kontot',
-          description: getErrorMessage(data, { locale: 'sv' }),
+          title: t('update_failed'),
+          description: getErrorMessage(data, { locale: errorLocale }),
           variant: 'destructive',
         })
         return
@@ -281,7 +284,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
       onOpenChange(false)
     } catch {
       toast({
-        title: 'Kunde inte uppdatera kontot',
+        title: t('update_failed'),
         variant: 'destructive',
       })
     } finally {
@@ -294,13 +297,16 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
       <DialogContent className="max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            Redigera konto <span data-ph-mask="">{account.account_number}</span>
+            {t.rich('title', {
+              account: account.account_number,
+              mask: (chunks) => <span data-ph-mask="">{chunks}</span>,
+            })}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-2">
           <div className="space-y-2">
-            <Label>Kontonamn</Label>
+            <Label>{t('account_name_label')}</Label>
             <Input
               value={accountName}
               onChange={(e) => setAccountName(e.target.value)}
@@ -308,11 +314,11 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           </div>
 
           <div className="space-y-2">
-            <Label>Beskrivning</Label>
+            <Label>{t('description_label')}</Label>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Kort beskrivning av kontots användning"
+              placeholder={t('description_placeholder')}
               rows={2}
             />
           </div>
@@ -339,14 +345,14 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Standard moms</Label>
+              <Label>{t('default_vat_label')}</Label>
               <Select value={defaultVatRate} onValueChange={setDefaultVatRate}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Ingen standard</SelectItem>
-                  <SelectItem value="0">Ingen moms</SelectItem>
+                  <SelectItem value="none">{t('default_vat_none')}</SelectItem>
+                  <SelectItem value="0">{t('default_vat_zero')}</SelectItem>
                   <SelectItem value="0.25">25 %</SelectItem>
                   <SelectItem value="0.12">12 %</SelectItem>
                   <SelectItem value="0.06">6 %</SelectItem>
@@ -354,18 +360,18 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>SRU-kod</Label>
+              <Label>{t('sru_code_label')}</Label>
               <Input
                 value={sruCode}
                 onChange={(e) => setSruCode(e.target.value)}
-                placeholder="T.ex. 7201"
+                placeholder={t('sru_code_placeholder')}
               />
             </div>
           </div>
 
           {dimensionsEnabled && (
             <div className="space-y-3">
-              <p className="text-sm font-medium">Dimensionsregler</p>
+              <p className="text-sm font-medium">{t('dimension_rules_title')}</p>
 
               {rulesLoading ? (
                 <Skeleton className="h-10 w-full" />
@@ -374,7 +380,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                   {rules.length === 0 && !addRuleOpen && (
                     <div className="flex items-center justify-between gap-3">
                       <p className="text-xs text-muted-foreground">
-                        Inga dimensionsregler för det här kontot.
+                        {t('no_rules')}
                       </p>
                       <Button
                         variant="ghost"
@@ -382,7 +388,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         onClick={() => setAddRuleOpen(true)}
                       >
                         <Plus className="mr-1 h-3.5 w-3.5" />
-                        Lägg till regel
+                        {t('add_rule')}
                       </Button>
                     </div>
                   )}
@@ -397,7 +403,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                           {rule.dimension_name}
                         </p>
                         <p className="text-xs text-muted-foreground truncate">
-                          {RULE_TYPE_LABELS[rule.rule_type]}
+                          {ruleTypeLabels[rule.rule_type]}
                           {rule.value_code && (
                             <>
                               {' · '}
@@ -412,12 +418,12 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       <Switch
                         checked={rule.is_active}
                         onCheckedChange={(checked) => handleToggleRule(rule, checked)}
-                        aria-label={`Regel för ${rule.dimension_name} aktiv`}
+                        aria-label={t('rule_active_aria', { dimension: rule.dimension_name })}
                       />
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`Ta bort regel för ${rule.dimension_name}`}
+                        aria-label={t('rule_delete_aria', { dimension: rule.dimension_name })}
                         onClick={() => handleDeleteRule(rule)}
                       >
                         <X className="h-4 w-4" />
@@ -430,7 +436,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1">
                           <Label className="text-xs text-muted-foreground">
-                            Dimension
+                            {t('dimension_label')}
                           </Label>
                           <Select
                             value={newRuleDimensionId || undefined}
@@ -440,7 +446,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                             }}
                           >
                             <SelectTrigger>
-                              <SelectValue placeholder="Välj dimension" />
+                              <SelectValue placeholder={t('dimension_placeholder')} />
                             </SelectTrigger>
                             <SelectContent>
                               {activeDims.map((dim) => (
@@ -452,7 +458,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                           </Select>
                         </div>
                         <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">Typ</Label>
+                          <Label className="text-xs text-muted-foreground">{t('type_label')}</Label>
                           <Select
                             value={newRuleType}
                             onValueChange={(v) => {
@@ -464,23 +470,21 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                              {(Object.keys(RULE_TYPE_LABELS) as DimensionRuleType[]).map(
-                                (type) => (
-                                  <SelectItem key={type} value={type}>
-                                    {RULE_TYPE_LABELS[type]}
-                                  </SelectItem>
-                                ),
-                              )}
+                              {RULE_TYPES.map((type) => (
+                                <SelectItem key={type} value={type}>
+                                  {ruleTypeLabels[type]}
+                                </SelectItem>
+                              ))}
                             </SelectContent>
                           </Select>
                         </div>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {RULE_TYPE_HELP[newRuleType]}
+                        {ruleTypeHelp[newRuleType]}
                       </p>
                       {newRuleNeedsValue && newRuleDim && (
                         <div className="space-y-1">
-                          <Label className="text-xs text-muted-foreground">Värde</Label>
+                          <Label className="text-xs text-muted-foreground">{t('value_label')}</Label>
                           <DimensionCombobox
                             sieDimNo={String(newRuleDim.sie_dim_no)}
                             value={newRuleValueCode}
@@ -495,7 +499,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                           disabled={isAddingRule}
                           onClick={resetAddRuleForm}
                         >
-                          Avbryt
+                          {tc('cancel')}
                         </Button>
                         <Button
                           size="sm"
@@ -506,7 +510,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                           loading={isAddingRule}
                           onClick={handleAddRule}
                         >
-                          Lägg till
+                          {t('add')}
                         </Button>
                       </div>
                     </div>
@@ -518,7 +522,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         onClick={() => setAddRuleOpen(true)}
                       >
                         <Plus className="mr-1 h-3.5 w-3.5" />
-                        Lägg till regel
+                        {t('add_rule')}
                       </Button>
                     )
                   )}
@@ -529,9 +533,9 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
           <div className="flex items-center justify-between rounded-lg border p-3">
             <div>
-              <p className="text-sm font-medium">Aktivt konto</p>
+              <p className="text-sm font-medium">{t('active_label')}</p>
               <p className="text-xs text-muted-foreground">
-                Inaktiva konton visas inte i bokföringsformulär
+                {t('active_hint')}
               </p>
             </div>
             <Switch checked={isActive} onCheckedChange={setIsActive} />
@@ -539,17 +543,17 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
 
           {account.is_system_account && (
             <p className="text-xs text-muted-foreground bg-muted rounded-sm p-2">
-              Detta är ett systemkonto och kan inte tas bort.
+              {t('system_account')}
             </p>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSave} disabled={!accountName.trim()} loading={isSaving}>
-            Spara
+            {tc('save')}
           </Button>
         </DialogFooter>
       </DialogContent>

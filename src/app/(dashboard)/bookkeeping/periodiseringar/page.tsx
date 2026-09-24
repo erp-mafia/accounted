@@ -1,12 +1,12 @@
 'use client'
 
 // Periodiseringar: löpande accrual schedules (förutbetalda kostnader 17xx /
-// förutbetalda intäkter 29xx) skapade från fakturarader. Djupt regulatorisk
-// bokföringsyta → svenska i båda locales, i linje med bokslutsguiden.
+// förutbetalda intäkter 29xx) skapade från fakturarader.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { CalendarClock } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -33,14 +33,6 @@ type ScheduleWithInstallments = AccrualSchedule & {
 
 type StatusFilter = 'active' | 'completed' | 'all'
 
-// Chips mark exceptions (design.md): Aktiv/Avslutad are normal states and
-// render as muted text; only Makulerad deviates.
-const SCHEDULE_STATUS_TEXT: Record<AccrualScheduleStatus, string> = {
-  active: 'Aktiv',
-  completed: 'Avslutad',
-  cancelled: 'Makulerad',
-}
-
 function monthLabel(periodMonth: string): string {
   return periodMonth.slice(0, 7)
 }
@@ -56,7 +48,21 @@ function sumPosted(installments: AccrualScheduleInstallment[]): number {
 }
 
 export default function AccrualSchedulesPage() {
+  const t = useTranslations('accrual_schedules_page')
   const { toast } = useToast()
+
+  // Chips mark exceptions (design.md): Aktiv/Avslutad are normal states and
+  // render as muted text; only Makulerad deviates.
+  function scheduleStatusText(status: AccrualScheduleStatus): string {
+    switch (status) {
+      case 'active':
+        return t('status_active')
+      case 'completed':
+        return t('status_completed')
+      case 'cancelled':
+        return t('status_cancelled')
+    }
+  }
   const { canWrite } = useCanWrite()
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
@@ -80,14 +86,14 @@ export default function AccrualSchedulesPage() {
       if (filter === 'active') setActiveCount((json.data ?? []).length)
     } catch (error) {
       toast({
-        title: 'Kunde inte ladda periodiseringar',
+        title: t('load_failed_title'),
         description: getErrorMessage(error, { context: 'journal_entry' }),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [toast])
+  }, [toast, t])
 
   useEffect(() => {
     fetchSchedules(statusFilter)
@@ -112,18 +118,18 @@ export default function AccrualSchedulesPage() {
       toast({
         title:
           result.failed > 0
-            ? 'Periodiseringar bokförda med fel'
-            : 'Periodiseringar bokförda',
+            ? t('post_due_done_with_errors_title')
+            : t('post_due_done_title'),
         description:
           result.failed > 0
-            ? `${result.posted} verifikat bokfördes, ${result.failed} misslyckades: se felmeddelandet på respektive månad.`
-            : `${result.posted} verifikat bokfördes.`,
+            ? t('post_due_done_with_errors_description', { posted: result.posted, failed: result.failed })
+            : t('post_due_done_description', { posted: result.posted }),
         variant: result.failed > 0 ? 'destructive' : undefined,
       })
       await fetchSchedules(statusFilter)
     } catch (error) {
       toast({
-        title: 'Bokföringen misslyckades',
+        title: t('post_due_failed_title'),
         description: getErrorMessage(error, { context: 'journal_entry' }),
         variant: 'destructive',
       })
@@ -141,14 +147,14 @@ export default function AccrualSchedulesPage() {
       const json = await res.json()
       if (!res.ok) throw new Error(getErrorMessage(json, { context: 'journal_entry' }))
       toast({
-        title: 'Periodiseringen upplöst',
-        description: `Återstående ${formatCurrency(json.data.amount)} bokfördes i ett verifikat.`,
+        title: t('dissolve_done_title'),
+        description: t('dissolve_done_description', { amount: formatCurrency(json.data.amount) }),
       })
       setDissolveTarget(null)
       await fetchSchedules(statusFilter)
     } catch (error) {
       toast({
-        title: 'Upplösningen misslyckades',
+        title: t('dissolve_failed_title'),
         description: getErrorMessage(error, { context: 'journal_entry' }),
         variant: 'destructive',
       })
@@ -173,14 +179,10 @@ export default function AccrualSchedulesPage() {
   return (
     <div className="space-y-8">
       <PageHeader
-        title="Periodiseringar"
+        title={t('page_title')}
         help={
           <HelpPopover>
-            <p>
-              Periodisera en fakturarad när du registrerar en leverantörsfaktura eller
-              skapar en kundfaktura, så fördelas beloppet över månaderna här. Månadens
-              andel bokförs automatiskt den sista dagen i varje månad.
-            </p>
+            <p>{t('help_body')}</p>
           </HelpPopover>
         }
       />
@@ -190,7 +192,7 @@ export default function AccrualSchedulesPage() {
           action={
             canWrite
               ? {
-                  label: isPosting ? 'Bokför…' : 'Bokför förfallna',
+                  label: isPosting ? t('posting') : t('post_due_action'),
                   onClick: () => {
                     if (!isPosting) setPostConfirmOpen(true)
                   },
@@ -198,16 +200,11 @@ export default function AccrualSchedulesPage() {
               : undefined
           }
         >
-          {dueCount === 1
-            ? '1 månad väntar på att bokföras.'
-            : `${dueCount} månader väntar på att bokföras.`}{' '}
-          Förfallna månader bokförs annars automatiskt varje natt.
+          {t('due_attn', { count: dueCount })}
         </AttnLine>
       ) : blockedInstallments > 0 ? (
         <AttnLine>
-          {blockedInstallments === 1
-            ? '1 månad kunde inte bokföras automatiskt: öppna raden för felmeddelandet.'
-            : `${blockedInstallments} månader kunde inte bokföras automatiskt: öppna raden för felmeddelandet.`}
+          {t('blocked_attn', { count: blockedInstallments })}
         </AttnLine>
       ) : null}
 
@@ -216,9 +213,9 @@ export default function AccrualSchedulesPage() {
         value={statusFilter}
         onChange={setStatusFilter}
         options={[
-          { value: 'active', label: 'Aktiva', count: activeCount ?? undefined },
-          { value: 'completed', label: 'Avslutade' },
-          { value: 'all', label: 'Alla' },
+          { value: 'active', label: t('filter_active'), count: activeCount ?? undefined },
+          { value: 'completed', label: t('filter_completed') },
+          { value: 'all', label: t('filter_all') },
         ]}
       />
 
@@ -231,21 +228,21 @@ export default function AccrualSchedulesPage() {
       ) : schedules.length === 0 ? (
         <EmptyState
           icon={CalendarClock}
-          title="Inga periodiseringar"
-          description="Periodisera en fakturarad när du registrerar en leverantörsfaktura eller skapar en kundfaktura, så fördelas beloppet automatiskt över månaderna här."
+          title={t('empty_title')}
+          description={t('empty_description')}
         />
       ) : (
         <>
-          <div className="overflow-x-auto" role="region" aria-label="Periodiseringar">
+          <div className="overflow-x-auto" role="region" aria-label={t('page_title')}>
             <table className="w-full border-collapse text-[13px]">
               <thead>
                 <tr>
-                  <th className={TH_CLASS}>Beskrivning</th>
-                  <th className={TH_CLASS}>Konto</th>
-                  <th className={TH_CLASS}>Period</th>
-                  <th className={cn(TH_CLASS, 'text-right')}>Totalt</th>
-                  <th className={cn(TH_CLASS, 'text-right')}>Kvar</th>
-                  <th className={TH_CLASS}>Status</th>
+                  <th className={TH_CLASS}>{t('th_description')}</th>
+                  <th className={TH_CLASS}>{t('th_account')}</th>
+                  <th className={TH_CLASS}>{t('th_period')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_total')}</th>
+                  <th className={cn(TH_CLASS, 'text-right')}>{t('th_remaining')}</th>
+                  <th className={TH_CLASS}>{t('th_status')}</th>
                   <th className={cn(TH_CLASS, 'w-28')} />
                 </tr>
               </thead>
@@ -279,7 +276,7 @@ export default function AccrualSchedulesPage() {
                           {schedule.balance_account} → {schedule.target_account}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums text-muted-foreground')}>
-                          {formatDate(schedule.period_start)} till {formatDate(schedule.period_end)}
+                          {t('period_range', { start: formatDate(schedule.period_start), end: formatDate(schedule.period_end) })}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')}>
                           {formatCurrency(schedule.total_amount)}
@@ -290,11 +287,11 @@ export default function AccrualSchedulesPage() {
                         <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                           {schedule.status === 'cancelled' ? (
                             <Badge variant="outline" className="font-normal">
-                              {SCHEDULE_STATUS_TEXT.cancelled}
+                              {scheduleStatusText('cancelled')}
                             </Badge>
                           ) : (
                             <span className="text-xs text-muted-foreground">
-                              {SCHEDULE_STATUS_TEXT[schedule.status]}
+                              {scheduleStatusText(schedule.status)}
                             </span>
                           )}
                         </td>
@@ -308,7 +305,7 @@ export default function AccrualSchedulesPage() {
                               }}
                               className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
                             >
-                              Lös upp nu
+                              {t('dissolve_now')}
                             </button>
                           )}
                         </td>
@@ -320,16 +317,16 @@ export default function AccrualSchedulesPage() {
                               <div className="space-y-3 px-6 py-4">
                                 {sourceHref && (
                                   <Link href={sourceHref} className={QUIET_LINK_CLASS}>
-                                    {schedule.supplier_invoice_id ? 'Leverantörsfaktura' : 'Kundfaktura'}
+                                    {schedule.supplier_invoice_id ? t('source_supplier_invoice') : t('source_customer_invoice')}
                                   </Link>
                                 )}
                                 <table className="w-full text-sm">
                                   <thead>
                                     <tr className="text-left text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                                      <th className="pb-2">Månad</th>
-                                      <th className="pb-2 text-right">Belopp</th>
-                                      <th className="pb-2 pl-6">Status</th>
-                                      <th className="pb-2 pl-6">Verifikat</th>
+                                      <th className="pb-2">{t('th_month')}</th>
+                                      <th className="pb-2 text-right">{t('th_amount')}</th>
+                                      <th className="pb-2 pl-6">{t('th_status')}</th>
+                                      <th className="pb-2 pl-6">{t('th_voucher')}</th>
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -343,18 +340,18 @@ export default function AccrualSchedulesPage() {
                                         </td>
                                         <td className="py-1.5 pl-6">
                                           {installment.status === 'posted' ? (
-                                            <span className="text-xs text-muted-foreground">Bokförd</span>
+                                            <span className="text-xs text-muted-foreground">{t('installment_posted')}</span>
                                           ) : installment.status === 'cancelled' ? (
-                                            <Badge variant="outline" className="font-normal">Makulerad</Badge>
+                                            <Badge variant="outline" className="font-normal">{t('status_cancelled')}</Badge>
                                           ) : installment.last_error ? (
                                             <span className="inline-flex items-center gap-1.5">
-                                              <Badge variant="destructive" className="font-normal">Fel</Badge>
+                                              <Badge variant="destructive" className="font-normal">{t('installment_error')}</Badge>
                                               <span className="text-xs text-muted-foreground">
                                                 {installment.last_error}
                                               </span>
                                             </span>
                                           ) : (
-                                            <span className="text-xs text-muted-foreground">Väntar</span>
+                                            <span className="text-xs text-muted-foreground">{t('installment_pending')}</span>
                                           )}
                                         </td>
                                         <td className="py-1.5 pl-6">
@@ -363,7 +360,7 @@ export default function AccrualSchedulesPage() {
                                               href={`/bookkeeping/${installment.journal_entry_id}`}
                                               className="text-xs underline-offset-2 hover:underline"
                                             >
-                                              Öppna verifikat
+                                              {t('open_voucher')}
                                             </Link>
                                           ) : (
                                             <span className="text-xs text-muted-foreground">-</span>
@@ -390,34 +387,34 @@ export default function AccrualSchedulesPage() {
       <ConfirmDialog
         open={postConfirmOpen}
         onOpenChange={setPostConfirmOpen}
-        title="Bokför förfallna månader?"
+        title={t('post_due_confirm_title')}
         description={
           dueCount === 1
-            ? 'Ett verifikat bokförs för den väntande månaden.'
-            : `${dueCount} verifikat bokförs, ett per väntande månad.`
+            ? t('post_due_confirm_one')
+            : t('post_due_confirm_many', { count: dueCount })
         }
-        confirmLabel="Bokför"
+        confirmLabel={t('post_due_confirm_cta')}
         onConfirm={handlePostDue}
       />
 
       <ConfirmDialog
         open={dissolveTarget !== null}
         onOpenChange={(open) => !open && setDissolveTarget(null)}
-        title="Lös upp periodiseringen nu?"
+        title={t('dissolve_confirm_title')}
         description={
           dissolveTarget
-            ? `Återstående ${formatCurrency(dissolveRemaining)} bokförs i ett verifikat daterat idag, och periodiseringen avslutas.`
+            ? t('dissolve_confirm_body', { amount: formatCurrency(dissolveRemaining) })
             : undefined
         }
-        confirmLabel="Lös upp nu"
+        confirmLabel={t('dissolve_now')}
         onConfirm={handleDissolve}
       >
         {dissolveTarget && (
           <div className="space-y-1 text-sm">
-            <p className="font-medium">{dissolveTarget.description || 'Periodisering'}</p>
+            <p className="font-medium">{dissolveTarget.description || t('fallback_description')}</p>
             <p className="tabular-nums text-muted-foreground">
               {dissolveTarget.target_account} ← {dissolveTarget.balance_account} ·{' '}
-              {formatDate(dissolveTarget.period_start)} till {formatDate(dissolveTarget.period_end)}
+              {t('period_range', { start: formatDate(dissolveTarget.period_start), end: formatDate(dissolveTarget.period_end) })}
             </p>
           </div>
         )}

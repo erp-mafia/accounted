@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
+import { useTranslations } from 'next-intl'
 import { AlertTriangle, MessageSquare, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -71,24 +72,6 @@ function useMarkdownReady(): boolean {
 const ANSWER_PROSE =
   'prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0'
 
-// Mirrors ChatEmptyState's three so the in-console empty state and the /chat
-// index offer the same way in.
-const SUGGESTIONS: { label: string; prompt: string }[] = [
-  {
-    label: 'Vad är min största utgiftspost den här månaden?',
-    prompt: 'Vad är min största utgiftspost den här månaden? Visa de fem största kategorierna.',
-  },
-  {
-    label: 'Hur ser min momsrapport ut för senaste perioden?',
-    prompt:
-      'Hur ser min momsrapport ut för den senaste perioden? Vad blir moms att betala eller få tillbaka, och ser något ovanligt ut?',
-  },
-  {
-    label: 'När är min nästa skatte- eller momsdeadline?',
-    prompt: 'När är min nästa skatte- eller momsdeadline, och vad behöver jag göra inför den?',
-  },
-]
-
 export interface AskConsoleMessage {
   role: 'user' | 'assistant'
   text: string
@@ -118,6 +101,7 @@ export default function AskConsole({
   scrollerClassName,
 }: AskConsoleProps) {
   const hasAi = useCapability(CAPABILITY.ai)
+  const t = useTranslations('ask_console')
   const [messages, setMessages] = useState<AskConsoleMessage[]>(initialMessages ?? [])
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
@@ -165,7 +149,7 @@ export default function AskConsole({
           return
         }
         if (!res.ok) {
-          let message = 'Något gick fel. Försök igen.'
+          let message = t('error_generic')
           try {
             const b = (await res.json()) as { error?: unknown }
             if (typeof b?.error === 'string') message = b.error
@@ -190,17 +174,17 @@ export default function AskConsole({
           // empty must not append an invisible bubble ("Tänker" collapses and
           // nothing appears). Same message the server sends on 502; the thread
           // id (if one was created) is kept above so a retry lands in it.
-          setError('Assistenten gav inget svar. Försök igen.')
+          setError(t('error_empty_answer'))
           return
         }
         setMessages((prev) => [...prev, { role: 'assistant', text: answer }])
       } catch {
-        setError('Kunde inte nå assistenten. Kontrollera anslutningen och försök igen.')
+        setError(t('error_unreachable'))
       } finally {
         setPending(false)
       }
     },
-    [pending, contextRef, onConversationCreated],
+    [pending, contextRef, onConversationCreated, t],
   )
 
   // Auto-fire a seeded question exactly once (a suggestion chip the user
@@ -245,7 +229,7 @@ export default function AskConsole({
           so replace the composer with an upsell rather than offer an input that can't send. */}
       {!hasAi ? (
         <div className="border-t border-border px-5 pt-4 pb-[calc(env(safe-area-inset-bottom,0px)+1rem)]">
-          <UpgradeNote>AI-assistenten kräver ett abonnemang.</UpgradeNote>
+          <UpgradeNote>{t('upgrade_note')}</UpgradeNote>
         </div>
       ) : (
         <form
@@ -259,7 +243,7 @@ export default function AskConsole({
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Skriv din fråga…"
+              placeholder={t('input_placeholder')}
               rows={1}
               disabled={pending}
               className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto disabled:opacity-60"
@@ -274,13 +258,13 @@ export default function AskConsole({
               type="submit"
               size="icon"
               disabled={pending || input.trim().length === 0}
-              aria-label="Skicka"
+              aria-label={t('send')}
             >
               <Send className="h-4 w-4" />
             </Button>
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
-            Enter att skicka · Shift+Enter för ny rad
+            {t('keyboard_hint')}
           </p>
         </form>
       )}
@@ -317,6 +301,7 @@ function MessageRow({ message }: { message: AskConsoleMessage }) {
 }
 
 function ThinkingRow() {
+  const t = useTranslations('ask_console')
   return (
     <div className="flex" aria-live="polite">
       <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
@@ -325,25 +310,33 @@ function ThinkingRow() {
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-typing-dot [animation-delay:150ms]" />
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/70 animate-typing-dot [animation-delay:300ms]" />
         </span>
-        Tänker
+        {t('thinking')}
       </div>
     </div>
   )
 }
 
 function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; canSend: boolean }) {
+  const t = useTranslations('ask_console')
+  // Mirrors ChatEmptyState's three so the in-console empty state and the /chat
+  // index offer the same way in.
+  const suggestions: { label: string; prompt: string }[] = [
+    { label: t('suggestion_expenses_label'), prompt: t('suggestion_expenses_prompt') },
+    { label: t('suggestion_vat_label'), prompt: t('suggestion_vat_prompt') },
+    { label: t('suggestion_deadline_label'), prompt: t('suggestion_deadline_prompt') },
+  ]
   return (
     <div className="flex flex-1 flex-col items-center justify-center py-10 text-center">
       <div className="mb-3.5 grid h-9 w-9 place-items-center rounded-lg bg-secondary text-foreground">
         <MessageSquare className="h-[18px] w-[18px]" />
       </div>
-      <h3 className="mb-1.5 text-[15px] font-medium text-foreground">Fråga om det du ser</h3>
+      <h3 className="mb-1.5 text-[15px] font-medium text-foreground">{t('empty_title')}</h3>
       <p className="mx-auto max-w-[34ch] text-sm text-muted-foreground">
-        Assistenten svarar utifrån den här sidan och din bokföring.
+        {t('empty_description')}
       </p>
       {canSend && (
         <div className="mt-5 flex flex-col gap-2 w-full max-w-md">
-          {SUGGESTIONS.map((s) => (
+          {suggestions.map((s) => (
             <button
               key={s.label}
               type="button"
@@ -360,16 +353,18 @@ function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; can
 }
 
 function UnconfiguredNotice() {
+  const t = useTranslations('ask_console')
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-sm">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div>
-        <strong className="font-medium">Assistenten är inte konfigurerad</strong>
+        <strong className="font-medium">{t('unconfigured_title')}</strong>
         <p className="mt-1 text-muted-foreground">
-          Den här installationen har ingen AI-modell inställd. Sätt{' '}
-          <code className="rounded-sm bg-secondary px-1 py-0.5 text-xs">AI_BASE_URL</code> och{' '}
-          <code className="rounded-sm bg-secondary px-1 py-0.5 text-xs">AI_MODEL</code> (t.ex. en
-          lokal modell) så svarar assistenten. Bokföringen och underlagstolkningen påverkas inte.
+          {t.rich('unconfigured_body', {
+            code: (chunks) => (
+              <code className="rounded-sm bg-secondary px-1 py-0.5 text-xs">{chunks}</code>
+            ),
+          })}
         </p>
       </div>
     </div>

@@ -77,6 +77,7 @@ interface Props {
  * (no per-section cards) with a sticky Spara bar, to keep scrolling short.
  */
 export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Props) {
+  const t = useTranslations('employees')
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -93,7 +94,7 @@ export default function NewEmployeeDialog({ open, onOpenChange, onCreated }: Pro
         onInteractOutside={(e) => e.preventDefault()}
       >
         <DialogHeader className="border-b border-border px-6 pb-4 pt-6">
-          <DialogTitle>Ny anställd</DialogTitle>
+          <DialogTitle>{t('new_employee')}</DialogTitle>
         </DialogHeader>
         <NewEmployeeForm onCreated={onCreated} onCancel={() => onOpenChange(false)} />
       </DialogContent>
@@ -163,6 +164,7 @@ async function submitEmployee(body: unknown, locale: ErrorLocale): Promise<Submi
 // unmounts DialogContent children on close).
 function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCancel: () => void }) {
   const t = useTranslations('employees')
+  const tf = useTranslations('salary_employee')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [saving, setSaving] = useState(false)
@@ -211,7 +213,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     const bankIssues = validateEmployeeBankAccount(clearing, account)
     if (bankIssues.length > 0) {
       toast({
-        title: 'Kontrollera bankuppgifterna',
+        title: t('check_bank_details'),
         description: bankIssues.map((i) => i.message).join('. '),
         variant: 'destructive',
       })
@@ -270,7 +272,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     }
 
     if (!failure) {
-      toast({ title: 'Anställd skapad' })
+      toast({ title: t('employee_created') })
       onCreated()
       return
     }
@@ -279,7 +281,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
     // the inline line that the modal's aria-hiding cannot swallow.
     setSubmitError(failure)
     toast({
-      title: 'Kunde inte skapa anställd',
+      title: t('create_failed'),
       description: failure.message,
       variant: 'destructive',
     })
@@ -301,47 +303,47 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
         <div className="divide-y divide-border">
         {/* Personuppgifter */}
         <section className="space-y-3 py-4 first:pt-0">
-          <h3 className={SECTION_HEADER}>Personuppgifter</h3>
+          <h3 className={SECTION_HEADER}>{tf('form_personal_info')}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Förnamn" htmlFor="first_name" required>
+            <Field label={tf('form_first_name')} htmlFor="first_name" required>
               <Input id="first_name" name="first_name" required />
             </Field>
-            <Field label="Efternamn" htmlFor="last_name" required>
+            <Field label={tf('form_last_name')} htmlFor="last_name" required>
               <Input id="last_name" name="last_name" required />
             </Field>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Personnummer" htmlFor="personnummer" required>
+            <Field label={t('th_personnummer')} htmlFor="personnummer" required>
               <Input
                 id="personnummer"
                 name="personnummer"
-                placeholder="ÅÅÅÅMMDDNNNN"
+                placeholder={t('personnummer_placeholder')}
                 required
                 maxLength={13}
                 value={personnummer}
                 onChange={(e) => setPersonnummer(e.target.value)}
               />
             </Field>
-            <Field label="E-post" htmlFor="email">
-              <Input id="email" name="email" type="email" placeholder="Krävs för lönebesked" />
+            <Field label={tf('form_email')} htmlFor="email">
+              <Input id="email" name="email" type="email" placeholder={t('email_placeholder')} />
             </Field>
           </div>
-          <Field label="Telefon" htmlFor="phone" className="max-w-xs">
+          <Field label={tf('form_phone')} htmlFor="phone" className="max-w-xs">
             <Input id="phone" name="phone" />
           </Field>
         </section>
 
         {/* Adress */}
         <section className="space-y-3 py-4">
-          <h3 className={SECTION_HEADER}>Adress</h3>
+          <h3 className={SECTION_HEADER}>{tf('form_address')}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_160px_1fr] gap-3">
-            <Field label="Gatuadress" htmlFor="address_line1">
+            <Field label={tf('form_street_address')} htmlFor="address_line1">
               <Input id="address_line1" name="address_line1" />
             </Field>
-            <Field label="Postnummer" htmlFor="postal_code">
+            <Field label={tf('form_postal_code')} htmlFor="postal_code">
               <Input id="postal_code" name="postal_code" />
             </Field>
-            <Field label="Ort" htmlFor="city">
+            <Field label={tf('form_city')} htmlFor="city">
               <Input id="city" name="city" />
             </Field>
           </div>
@@ -349,53 +351,53 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
         {/* Anställning & lön */}
         <section className="space-y-3 py-4">
-          <h3 className={SECTION_HEADER}>Anställning &amp; lön</h3>
+          <h3 className={SECTION_HEADER}>{t('section_employment_salary')}</h3>
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            <Field label="Typ" htmlFor="employment_type">
+            <Field label={tf('form_employment_type')} htmlFor="employment_type">
               <Select value={employmentType} onValueChange={setEmploymentType}>
                 <SelectTrigger id="employment_type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="employee">Anställd</SelectItem>
-                  <SelectItem value="company_owner">Företagsledare</SelectItem>
-                  <SelectItem value="board_member">Styrelseledamot</SelectItem>
+                  <SelectItem value="employee">{t('employment_employee')}</SelectItem>
+                  <SelectItem value="company_owner">{t('employment_company_owner')}</SelectItem>
+                  <SelectItem value="board_member">{t('employment_board_member')}</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
-            <Field label="Anställningsdatum" htmlFor="employment_start" required>
+            <Field label={tf('form_employment_start')} htmlFor="employment_start" required>
               <Input id="employment_start" name="employment_start" type="date" required />
             </Field>
-            <Field label="Slutdatum" htmlFor="employment_end">
+            <Field label={tf('form_employment_end')} htmlFor="employment_end">
               <Input id="employment_end" name="employment_end" type="date" />
             </Field>
-            <Field label="Sysselsättningsgrad (%)" htmlFor="employment_degree">
+            <Field label={tf('form_employment_degree')} htmlFor="employment_degree">
               <Input id="employment_degree" name="employment_degree" type="number" defaultValue="100" min="1" max="100" />
-              <p className="text-xs text-muted-foreground">Under 100 % räknas grundlönen som månadslön × sysselsättningsgrad.</p>
+              <p className="text-xs text-muted-foreground">{tf('form_employment_degree_hint')}</p>
             </Field>
-            <Field label="Timmar per vecka" htmlFor="hours_per_week">
+            <Field label={tf('form_hours_per_week')} htmlFor="hours_per_week">
               <Input id="hours_per_week" name="hours_per_week" type="number" defaultValue="40" min="1" max="80" step="0.5" />
             </Field>
-            <Field label="Arbetsdagar per vecka" htmlFor="workdays_per_week">
+            <Field label={tf('form_workdays_per_week')} htmlFor="workdays_per_week">
               <Input id="workdays_per_week" name="workdays_per_week" type="number" defaultValue="5" min="1" max="7" step="1" />
             </Field>
-            <Field label="Löneform" htmlFor="salary_type" required>
+            <Field label={tf('form_salary_type')} htmlFor="salary_type" required>
               <Select value={salaryType} onValueChange={setSalaryType}>
                 <SelectTrigger id="salary_type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="monthly">Månadslön</SelectItem>
-                  <SelectItem value="hourly">Timlön</SelectItem>
+                  <SelectItem value="monthly">{tf('form_salary_type_monthly')}</SelectItem>
+                  <SelectItem value="hourly">{tf('form_salary_type_hourly')}</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
             {salaryType === 'monthly' ? (
-              <Field label="Månadslön (brutto)" htmlFor="monthly_salary" required>
+              <Field label={t('monthly_salary_gross')} htmlFor="monthly_salary" required>
                 <Input id="monthly_salary" name="monthly_salary" type="number" step="1" min="1" required />
               </Field>
             ) : (
-              <Field label="Timlön (SEK)" htmlFor="hourly_rate" required>
+              <Field label={tf('form_hourly_rate')} htmlFor="hourly_rate" required>
                 <Input id="hourly_rate" name="hourly_rate" type="number" step="0.01" min="0.01" required />
               </Field>
             )}
@@ -404,46 +406,46 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
 
         {/* Skatt */}
         <section className="space-y-3 py-4">
-          <h3 className={SECTION_HEADER}>Skatt</h3>
+          <h3 className={SECTION_HEADER}>{t('section_tax')}</h3>
           <EmployeeTaxCard personnummer={personnummer} onChange={setTax} flat />
         </section>
 
         {/* Semester */}
         <section className="space-y-3 py-4">
-          <h3 className={SECTION_HEADER}>Semester</h3>
+          <h3 className={SECTION_HEADER}>{tf('form_vacation')}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Semesterregel" htmlFor="vacation_rule">
+            <Field label={tf('form_vacation_rule')} htmlFor="vacation_rule">
               <Select value={vacationRule} onValueChange={setVacationRule}>
                 <SelectTrigger id="vacation_rule">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="procentregeln">Procentregeln (12 %)</SelectItem>
-                  <SelectItem value="sammaloneregeln">Sammalöneregeln</SelectItem>
-                  <SelectItem value="semesterersattning">Semesterersättning (betalas ut direkt)</SelectItem>
-                  <SelectItem value="none">Ingen semesteravsättning</SelectItem>
+                  <SelectItem value="procentregeln">{tf('form_vacation_rule_procentregeln')}</SelectItem>
+                  <SelectItem value="sammaloneregeln">{tf('form_vacation_rule_sammaloneregeln')}</SelectItem>
+                  <SelectItem value="semesterersattning">{tf('form_vacation_rule_semesterersattning')}</SelectItem>
+                  <SelectItem value="none">{tf('form_vacation_rule_none')}</SelectItem>
                 </SelectContent>
               </Select>
               {vacationRule === 'none' && (
                 <p className="text-xs text-muted-foreground">
-                  Ingen avsättning till 2920 bokas. Vanligt för ägare som är enda anställd.
+                  {t('vacation_none_hint')}
                 </p>
               )}
               {vacationRule === 'semesterersattning' && (
                 <p className="text-xs text-muted-foreground">
-                  12 % läggs på varje lönekörning och bokas mot 7285. Ingen semesterlöneskuld byggs upp. Vanligt för tim- och visstidsanställda.
+                  {t('vacation_semesterersattning_hint')}
                 </p>
               )}
             </Field>
-            <Field label="Semesterdagar per år" htmlFor="vacation_days_per_year">
+            <Field label={tf('form_vacation_days')} htmlFor="vacation_days_per_year">
               <Input id="vacation_days_per_year" name="vacation_days_per_year" type="number" min="25" max="40" defaultValue="25" />
-              <p className="text-xs text-muted-foreground">Lagstadgat minimum: 25 dagar</p>
+              <p className="text-xs text-muted-foreground">{tf('form_vacation_days_hint')}</p>
             </Field>
             {(vacationRule === 'procentregeln' || vacationRule === 'semesterersattning') && (
-              <Field label="Semesterlön, procentsats" htmlFor="vacation_pay_rate">
+              <Field label={tf('form_vacation_pay_rate')} htmlFor="vacation_pay_rate">
                 <Input id="vacation_pay_rate" name="vacation_pay_rate" type="number" step="0.01" min="12" max="30" placeholder="12" />
                 <p className="text-xs text-muted-foreground">
-                  Lämna tomt för lagens 12 % (14,4 % vid 30 dagar). Ange kollektivavtalets procentsats, t.ex. 13,5. Lagens nivå gäller alltid som golv.
+                  {tf('form_vacation_pay_rate_hint')}
                 </p>
               </Field>
             )}
@@ -453,19 +455,19 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
         {/* Kostnadsställe / Projekt (standard) */}
         {dimensionsEnabled && (
           <section className="space-y-3 py-4">
-            <h3 className={SECTION_HEADER}>Kostnadsställe / Projekt</h3>
+            <h3 className={SECTION_HEADER}>{t('section_dimensions')}</h3>
             <LineDimensionFields dimensions={dimensions} onChange={setDimension} />
             <p className="text-xs text-muted-foreground">
-              Föreslås på lönekostnadsrader vid bokföring av lönekörningar.
+              {tf('form_dimensions_hint')}
             </p>
           </section>
         )}
 
         {/* Bankkonto */}
         <section className="space-y-3 py-4">
-          <h3 className={SECTION_HEADER}>Bankkonto</h3>
+          <h3 className={SECTION_HEADER}>{tf('form_bank_account')}</h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Clearingnummer" htmlFor="clearing_number">
+            <Field label={tf('form_clearing_number')} htmlFor="clearing_number">
               <Input
                 id="clearing_number"
                 name="clearing_number"
@@ -481,10 +483,10 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
               ) : bankName ? (
                 <p className="text-xs text-muted-foreground">{bankName}</p>
               ) : (
-                <p className="text-xs text-muted-foreground">Krävs innan lönekörning</p>
+                <p className="text-xs text-muted-foreground">{t('bank_required_hint')}</p>
               )}
             </Field>
-            <Field label="Kontonummer" htmlFor="bank_account_number">
+            <Field label={tf('form_account_number')} htmlFor="bank_account_number">
               <Input
                 id="bank_account_number"
                 name="bank_account_number"
@@ -524,11 +526,11 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
           </p>
         )}
         <Button type="button" variant="outline" className="ml-auto" onClick={onCancel}>
-          Avbryt
+          {tf('form_cancel')}
         </Button>
         <Button type="submit" disabled={saving}>
           <Save className="mr-2 h-4 w-4" />
-          {saving ? 'Sparar...' : 'Spara'}
+          {saving ? tf('form_saving') : tf('form_save')}
         </Button>
       </div>
     </form>

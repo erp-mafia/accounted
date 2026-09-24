@@ -8,6 +8,7 @@
 // one consumer.
 
 import { Fragment, createContext, useContext } from 'react'
+import { useTranslations } from 'next-intl'
 import { cn, formatCurrency } from '@/lib/utils'
 import { AttnLine } from '@/components/ui/attn-line'
 import { VTH_CLASS, VTD_CLASS } from '@/components/ui/dry-table'
@@ -34,12 +35,15 @@ export interface OperationPreviewInput {
  */
 export const AccountNamesContext = createContext<Record<string, string>>({})
 
+type Translator = ReturnType<typeof useTranslations>
+
 /** Render '-' instead of "NaN kr" when a preview payload omits an amount. */
 function money(v: unknown, currency: string): string {
   return typeof v === 'number' && Number.isFinite(v) ? formatCurrency(v, currency) : '-'
 }
 
 function CategorizePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const accountNames = useContext(AccountNamesContext)
   // The exact journal lines the approval will post (net cost line, VAT line,
   // gross bank line, SEK): staged by the server since the preview-lines fix.
@@ -59,14 +63,14 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
             not tell which year a categorization belonged to. */}
         {typeof data.date === 'string' && data.date && (
           <div className="flex justify-between gap-4 text-xs mb-1">
-            <span className="text-muted-foreground">Datum</span>
+            <span className="text-muted-foreground">{t('date')}</span>
             <span className="font-mono tabular-nums">{data.date}</span>
           </div>
         )}
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        <p className="text-xs text-muted-foreground mb-1">{t('voucher')}</p>
         {txCurrency !== 'SEK' && txAmount !== null && (
           <div className="flex justify-between gap-4 text-xs text-muted-foreground mb-1">
-            <span>Banktransaktion</span>
+            <span>{t('bank_transaction')}</span>
             <span className="tabular-nums shrink-0">{formatCurrency(txAmount, txCurrency)}</span>
           </div>
         )}
@@ -91,7 +95,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
                 ) : null}
               </span>
               <span className="tabular-nums shrink-0">
-                {debitAmt > 0 ? `D ${formatCurrency(debitAmt)}` : `K ${formatCurrency(creditAmt)}`}
+                {debitAmt > 0 ? t('debit_short', { amount: formatCurrency(debitAmt) }) : t('credit_short', { amount: formatCurrency(creditAmt) })}
               </span>
             </div>
           )
@@ -107,7 +111,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   if (isKonteringLines(data.preview_lines)) {
     return (
       <div className="space-y-1 text-sm">
-        <p className="text-xs text-muted-foreground mb-1">Verifikat</p>
+        <p className="text-xs text-muted-foreground mb-1">{t('voucher')}</p>
         <PreviewKonteringTable lines={data.preview_lines} />
       </div>
     )
@@ -121,11 +125,11 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Debetkonto</span>
+        <span className="text-muted-foreground">{t('debit_account')}</span>
         <span className="font-mono">{String(data.debit_account ?? '')}</span>
-        <span className="text-muted-foreground">Kreditkonto</span>
+        <span className="text-muted-foreground">{t('credit_account')}</span>
         <span className="font-mono">{String(data.credit_account ?? '')}</span>
-        <span className="text-muted-foreground">Belopp</span>
+        <span className="text-muted-foreground">{t('amount')}</span>
         <span className="font-mono tabular-nums">
           {/* A preview with no usable amount used to render "NaN kr": show the
               gap as a gap instead of a number that isn't one. */}
@@ -136,7 +140,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
       </div>
       {vatLines.length > 0 && (
         <div className="border-t pt-2">
-          <p className="text-xs text-muted-foreground mb-1">Momsrader</p>
+          <p className="text-xs text-muted-foreground mb-1">{t('vat_lines')}</p>
           {vatLines.map((line, i) => (
             <div key={i} className="flex justify-between font-mono text-xs">
               <span>
@@ -148,7 +152,7 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
                 ) : null}
               </span>
               <span className="tabular-nums">
-                {line.debit_amount > 0 ? `D ${formatCurrency(line.debit_amount)}` : `K ${formatCurrency(line.credit_amount)}`}
+                {line.debit_amount > 0 ? t('debit_short', { amount: formatCurrency(line.debit_amount) }) : t('credit_short', { amount: formatCurrency(line.credit_amount) })}
               </span>
             </div>
           ))}
@@ -159,33 +163,34 @@ function CategorizePreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function CustomerPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Namn</span>
+      <span className="text-muted-foreground">{t('name')}</span>
       <span>{String(data.name ?? '')}</span>
-      <span className="text-muted-foreground">Typ</span>
+      <span className="text-muted-foreground">{t('type')}</span>
       <span>{String(data.customer_type ?? '')}</span>
       {data.customer_number ? (
         <>
-          <span className="text-muted-foreground">Kundnr</span>
+          <span className="text-muted-foreground">{t('customer_number')}</span>
           <span className="font-mono">{String(data.customer_number)}</span>
         </>
       ) : null}
       {data.email ? (
         <>
-          <span className="text-muted-foreground">E-post</span>
+          <span className="text-muted-foreground">{t('email')}</span>
           <span>{String(data.email)}</span>
         </>
       ) : null}
       {data.org_number ? (
         <>
-          <span className="text-muted-foreground">Org.nr</span>
+          <span className="text-muted-foreground">{t('org_number')}</span>
           <span className="font-mono">{String(data.org_number)}</span>
         </>
       ) : null}
       {data.personal_number_masked ? (
         <>
-          <span className="text-muted-foreground">Personnr</span>
+          <span className="text-muted-foreground">{t('personal_number')}</span>
           <span className="font-mono">{String(data.personal_number_masked)}</span>
         </>
       ) : null}
@@ -222,6 +227,7 @@ function isPreviewInvoiceLines(value: unknown): value is PreviewInvoiceLine[] {
 }
 
 function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; currency: string }) {
+  const t = useTranslations('operation_preview')
   return (
     <div className="space-y-1">
       {items.map((item, i) => (
@@ -230,16 +236,16 @@ function InvoiceLineRows({ items, currency }: { items: PreviewInvoiceLine[]; cur
             {item.description}
             {item.line_type === 'text' ? null : ` (${item.quantity} ${item.unit})`}
             {typeof item.vat_rate === 'number' && item.line_type !== 'text' && (
-              <span className="text-muted-foreground"> · {item.vat_rate} % moms</span>
+              <span className="text-muted-foreground"> · {t('line_vat_rate', { rate: item.vat_rate })}</span>
             )}
             {item.revenue_account && (
               <span className="text-muted-foreground font-mono"> · {item.revenue_account}</span>
             )}
             {item.deduction_type && (
-              <span className="text-muted-foreground"> · {item.deduction_type === 'rot' ? 'ROT-avdrag' : 'RUT-avdrag'}</span>
+              <span className="text-muted-foreground"> · {item.deduction_type === 'rot' ? t('rot_deduction') : t('rut_deduction')}</span>
             )}
             {item.accrual_period_start && item.accrual_period_end && (
-              <span className="text-muted-foreground"> · periodiseras {item.accrual_period_start} till {item.accrual_period_end}</span>
+              <span className="text-muted-foreground"> · {t('line_accrual', { start: item.accrual_period_start, end: item.accrual_period_end })}</span>
             )}
           </span>
           <span className="font-mono tabular-nums whitespace-nowrap">
@@ -281,17 +287,18 @@ function VatWarningLines({ data }: { data: Record<string, unknown> }) {
 }
 
 function InvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const items = isPreviewInvoiceLines(data.items) ? data.items : []
 
   return (
     <div className="space-y-3 text-sm">
       <VatWarningLines data={data} />
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
+        <span className="text-muted-foreground">{t('customer')}</span>
         <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Datum</span>
+        <span className="text-muted-foreground">{t('date')}</span>
         <span>{String(data.invoice_date ?? '')}</span>
-        <span className="text-muted-foreground">Förfallodatum</span>
+        <span className="text-muted-foreground">{t('due_date')}</span>
         <span>{String(data.due_date ?? '')}</span>
       </div>
       {items.length > 0 && (
@@ -300,27 +307,31 @@ function InvoicePreview({ data }: { data: Record<string, unknown> }) {
         </div>
       )}
       <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Netto</span>
+        <span className="text-muted-foreground">{t('net')}</span>
         <span className="tabular-nums text-right">{money(data.subtotal, (data.currency as string) || 'SEK')}</span>
-        <span className="text-muted-foreground">Moms</span>
+        <span className="text-muted-foreground">{t('vat')}</span>
         <span className="tabular-nums text-right">{money(data.vat_amount, (data.currency as string) || 'SEK')}</span>
-        <span className="font-medium">Totalt</span>
+        <span className="font-medium">{t('total')}</span>
         <span className="tabular-nums font-medium text-right">{money(data.total, (data.currency as string) || 'SEK')}</span>
       </div>
     </div>
   )
 }
 
-const UPDATE_INVOICE_FIELD_LABELS: Record<string, string> = {
-  notes: 'Anteckningar',
-  invoice_date: 'Fakturadatum',
-  due_date: 'Förfallodatum',
-  delivery_date: 'Leveransdatum',
-  your_reference: 'Er referens',
-  our_reference: 'Vår referens',
+function updateInvoiceFieldLabel(key: string, t: Translator): string {
+  switch (key) {
+    case 'notes': return t('field_notes')
+    case 'invoice_date': return t('field_invoice_date')
+    case 'due_date': return t('due_date')
+    case 'delivery_date': return t('field_delivery_date')
+    case 'your_reference': return t('field_your_reference')
+    case 'our_reference': return t('field_our_reference')
+    default: return key.replace(/_/g, ' ')
+  }
 }
 
 function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const currency = (data.currency as string) || 'SEK'
   const changes = (data.changes && typeof data.changes === 'object' ? (data.changes as Record<string, unknown>) : {})
   const headerEntries = Object.entries(changes).filter(
@@ -335,24 +346,24 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
     <div className="space-y-3 text-sm">
       <VatWarningLines data={data} />
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Kund</span>
+        <span className="text-muted-foreground">{t('customer')}</span>
         <span>{String(data.customer_name ?? '')}</span>
-        <span className="text-muted-foreground">Faktura</span>
-        <span>{data.invoice_number ? String(data.invoice_number) : 'utkast'}</span>
+        <span className="text-muted-foreground">{t('invoice')}</span>
+        <span>{data.invoice_number ? String(data.invoice_number) : t('draft')}</span>
         {headerEntries.map(([key, value]) => (
           <Fragment key={key}>
-            <span className="text-muted-foreground">{UPDATE_INVOICE_FIELD_LABELS[key] ?? key.replace(/_/g, ' ')}</span>
+            <span className="text-muted-foreground">{updateInvoiceFieldLabel(key, t)}</span>
             {/* null is an explicit clear (delivery_date: null), not a missing value */}
-            <span>{value === null ? 'rensas' : renderPrimitive(value)}</span>
+            <span>{value === null ? t('cleared') : renderPrimitive(value, t)}</span>
           </Fragment>
         ))}
         {hasDimensionChange && (
           <>
-            <span className="text-muted-foreground">Dimensioner</span>
+            <span className="text-muted-foreground">{t('dimensions')}</span>
             <span className="font-mono text-xs">
               {dimensionBag && Object.keys(dimensionBag).length > 0
                 ? Object.entries(dimensionBag).map(([dim, code]) => `${dim}: ${code}`).join(', ')
-                : 'rensas'}
+                : t('cleared')}
             </span>
           </>
         )}
@@ -363,24 +374,24 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
       {currentItems && (
         <div className="border-t pt-2 space-y-1">
           <div className="text-xs text-muted-foreground">
-            {currentItems.length > 0 ? 'Nuvarande rader (ersätts)' : 'Nuvarande rader: inga'}
+            {currentItems.length > 0 ? t('current_lines_replaced') : t('current_lines_none')}
           </div>
           {currentItems.length > 0 && <InvoiceLineRows items={currentItems} currency={currency} />}
         </div>
       )}
       {newItems && (
         <div className="border-t pt-2 space-y-1">
-          <div className="text-xs text-muted-foreground">Nya rader</div>
+          <div className="text-xs text-muted-foreground">{t('new_lines')}</div>
           <InvoiceLineRows items={newItems} currency={currency} />
         </div>
       )}
       {newItems && typeof data.total === 'number' && (
         <div className="border-t pt-2 grid grid-cols-2 gap-x-4 gap-y-1">
-          <span className="text-muted-foreground">Netto</span>
+          <span className="text-muted-foreground">{t('net')}</span>
           <span className="tabular-nums text-right">{money(data.subtotal, currency)}</span>
-          <span className="text-muted-foreground">Moms</span>
+          <span className="text-muted-foreground">{t('vat')}</span>
           <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
-          <span className="font-medium">Totalt</span>
+          <span className="font-medium">{t('total')}</span>
           <span className="tabular-nums font-medium text-right">{money(data.total, currency)}</span>
         </div>
       )}
@@ -389,21 +400,22 @@ function UpdateInvoicePreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const currency = (data.currency as string) || 'SEK'
 
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
-      <span className="text-muted-foreground">Datum</span>
+      <span className="text-muted-foreground">{t('date')}</span>
       <span className="font-mono">{String(data.date ?? '')}</span>
-      <span className="text-muted-foreground">Beskrivning</span>
+      <span className="text-muted-foreground">{t('description')}</span>
       <span className="truncate">{String(data.description ?? '')}</span>
-      <span className="text-muted-foreground">Belopp</span>
+      <span className="text-muted-foreground">{t('amount')}</span>
       <span className="font-mono tabular-nums">
         {money(data.amount, currency)}
       </span>
       {data.external_id ? (
         <>
-          <span className="text-muted-foreground">Extern referens</span>
+          <span className="text-muted-foreground">{t('external_reference')}</span>
           <span className="font-mono text-xs truncate">{String(data.external_id)}</span>
         </>
       ) : null}
@@ -451,6 +463,7 @@ function VoucherLinesTable({ lines, currency }: { lines: VoucherLine[]; currency
 }
 
 function VoucherPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
@@ -468,25 +481,24 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
     <div className="space-y-3 text-sm">
       {missingUnderlag && (
         <AttnLine>
-          Underlag saknas: om verifikatet avser en mottagen handling ska handlingen användas som
-          verifikation (BFL 5 kap 6 §).
+          {t('missing_document_warning')}
         </AttnLine>
       )}
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
+        <span className="text-muted-foreground">{t('date')}</span>
         <span className="font-mono">{String(data.entry_date ?? '')}</span>
-        <span className="text-muted-foreground">Beskrivning</span>
+        <span className="text-muted-foreground">{t('description')}</span>
         <span className="truncate">{String(data.description ?? '')}</span>
-        <span className="text-muted-foreground">Serie</span>
+        <span className="text-muted-foreground">{t('series')}</span>
         <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
       </div>
       {lines.length > 0 && (
         <div>
           <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
+            <span>{t('col_account')}</span>
+            <span>{t('col_text')}</span>
+            <span className="text-right w-24">{t('col_debit')}</span>
+            <span className="text-right w-24">{t('col_credit')}</span>
           </div>
           <VoucherLinesTable lines={lines} />
         </div>
@@ -494,7 +506,7 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
       {totalDebit != null && totalCredit != null && (
         <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
           <span></span>
-          <span className="text-muted-foreground">Summa</span>
+          <span className="text-muted-foreground">{t('sum')}</span>
           <span className="font-mono tabular-nums text-right w-24 font-medium">
             {formatCurrency(totalDebit)}
           </span>
@@ -508,6 +520,7 @@ function VoucherPreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   // Samlingsverifikat over N bank rows. The staged kontering IS what the RPC
   // posts on approval, so it is the load-bearing part of this card; the
   // aggregates alone ("-720, 2 tx, expense") cannot tell a right booking from
@@ -524,18 +537,18 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-        <span className="text-muted-foreground">Datum</span>
+        <span className="text-muted-foreground">{t('date')}</span>
         <span className="font-mono">{String(data.tx_date ?? '')}</span>
-        <span className="text-muted-foreground">Transaktioner</span>
+        <span className="text-muted-foreground">{t('transactions')}</span>
         <span className="font-mono tabular-nums">
           {txCount ?? '-'}
           {txSum !== null ? ` · ${formatCurrency(txSum, currency)}` : ''}
         </span>
-        <span className="text-muted-foreground">Åtgärd</span>
-        <span>{linkExisting ? 'Länka till befintligt verifikat' : 'Ny samlingsverifikation'}</span>
+        <span className="text-muted-foreground">{t('action')}</span>
+        <span>{linkExisting ? t('action_link_existing') : t('action_new_collective')}</span>
         {data.entry_description ? (
           <>
-            <span className="text-muted-foreground">Beskrivning</span>
+            <span className="text-muted-foreground">{t('description')}</span>
             <span className="truncate">{String(data.entry_description)}</span>
           </>
         ) : null}
@@ -543,15 +556,15 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
       {lines.length > 0 && (
         <div>
           <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-[11px] uppercase tracking-wider text-muted-foreground pb-1">
-            <span>Konto</span>
-            <span>Text</span>
-            <span className="text-right w-24">Debet</span>
-            <span className="text-right w-24">Kredit</span>
+            <span>{t('col_account')}</span>
+            <span>{t('col_text')}</span>
+            <span className="text-right w-24">{t('col_debit')}</span>
+            <span className="text-right w-24">{t('col_credit')}</span>
           </div>
           <VoucherLinesTable lines={lines} />
           <div className="border-t pt-2 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs">
             <span></span>
-            <span className="text-muted-foreground">Summa</span>
+            <span className="text-muted-foreground">{t('sum')}</span>
             <span className="font-mono tabular-nums text-right w-24 font-medium">
               {formatCurrency(totalDebit)}
             </span>
@@ -563,7 +576,7 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
       )}
       {linkExisting && lines.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          Transaktionerna kopplas till ett redan bokfört verifikat; ingen ny kontering skapas.
+          {t('link_existing_note')}
         </p>
       )}
     </div>
@@ -571,6 +584,7 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   const original = (data.original as {
     voucher?: string
     entry_date?: string
@@ -588,7 +602,7 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
     <div className="space-y-4 text-sm">
       <div>
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Originalverifikation V{original.voucher ?? ''}, {original.entry_date ?? ''}
+          {t('original_voucher', { voucher: original.voucher ?? '', date: original.entry_date ?? '' })}
         </p>
         <p className="text-xs text-muted-foreground italic mb-2">{original.description ?? ''}</p>
         {original.lines && original.lines.length > 0 && (
@@ -597,7 +611,7 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
       </div>
       <div>
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1">
-          Korrigerad verifikation ({correction.line_count ?? correction.lines?.length ?? 0} rader)
+          {t('corrected_voucher', { count: correction.line_count ?? correction.lines?.length ?? 0 })}
         </p>
         {correction.lines && correction.lines.length > 0 && (
           <VoucherLinesTable lines={correction.lines} />
@@ -605,7 +619,7 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
         {correction.total_debit != null && (
           <div className="border-t pt-1 grid grid-cols-[auto_1fr_auto_auto] gap-x-3 text-xs mt-1">
             <span></span>
-            <span className="text-muted-foreground">Summa</span>
+            <span className="text-muted-foreground">{t('sum')}</span>
             <span className="font-mono tabular-nums text-right w-24 font-medium">
               {formatCurrency(correction.total_debit)}
             </span>
@@ -622,9 +636,9 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
 // Render a primitive (string/number/bool) or a short summary of an array/object.
 // Used by GenericPreview to avoid the "[object Object]" stringification that
 // occurs when an operation_type has no dedicated preview component.
-function renderPrimitive(value: unknown): string {
+function renderPrimitive(value: unknown, t: Translator): string {
   if (value == null) return ''
-  if (Array.isArray(value)) return `${value.length} rader`
+  if (Array.isArray(value)) return t('rows_count', { count: value.length })
   if (typeof value === 'object') return JSON.stringify(value)
   return String(value)
 }
@@ -658,17 +672,18 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
 }
 
 function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
+  const t = useTranslations('operation_preview')
   const accountNames = useContext(AccountNamesContext)
   const amount = (n: number | undefined) =>
     n && n > 0 ? n.toLocaleString('sv-SE', { minimumFractionDigits: 2 }) : ''
   return (
-    <table className="w-full border-collapse text-[12.5px]" aria-label="Föreslagen kontering">
+    <table className="w-full border-collapse text-[12.5px]" aria-label={t('proposed_posting')}>
       <thead>
         <tr>
-          <th className={cn(VTH_CLASS, 'w-[70px]')}>Konto</th>
-          <th className={VTH_CLASS}>Beskrivning</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Debet</th>
-          <th className={cn(VTH_CLASS, 'text-right')}>Kredit</th>
+          <th className={cn(VTH_CLASS, 'w-[70px]')}>{t('col_account')}</th>
+          <th className={VTH_CLASS}>{t('description')}</th>
+          <th className={cn(VTH_CLASS, 'text-right')}>{t('col_debit')}</th>
+          <th className={cn(VTH_CLASS, 'text-right')}>{t('col_credit')}</th>
         </tr>
       </thead>
       <tbody>
@@ -694,6 +709,7 @@ function PreviewKonteringTable({ lines }: { lines: PreviewKonteringLine[] }) {
 }
 
 function GenericPreview({ data }: { data: Record<string, unknown> }) {
+  const t = useTranslations('operation_preview')
   // Skip period_status here: it's surfaced in the dedicated banner, not the
   // generic key-value dump (otherwise the approver sees the same fact twice).
   const entries = Object.entries(data).filter(([k, v]) => v != null && v !== '' && k !== 'period_status')
@@ -710,7 +726,7 @@ function GenericPreview({ data }: { data: Record<string, unknown> }) {
             <Fragment key={key}>
               <span className="text-muted-foreground">{key.replace(/_/g, ' ')}</span>
               <span className={typeof value === 'number' ? 'font-mono tabular-nums' : ''}>
-                {renderPrimitive(value)}
+                {renderPrimitive(value, t)}
               </span>
             </Fragment>
           ))}

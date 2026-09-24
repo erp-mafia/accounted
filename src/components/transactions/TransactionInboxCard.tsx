@@ -267,7 +267,7 @@ export default function TransactionInboxCard({
     else if (proposal && onBookProposal) onBookProposal(transaction)
     else onOpenCategoryDialog(transaction, anchor)
   }
-  const primaryLabel = matchLabel ?? 'Bokför'
+  const primaryLabel = matchLabel ?? t('book_btn')
 
   // Manual invoice-match affordance. Hidden once an auto-detected match is
   // already shown as the primary button: having both makes the row noisy.
@@ -275,12 +275,12 @@ export default function TransactionInboxCard({
     isUnbooked && !hasInvoiceMatch && !hasSupplierInvoiceMatch && !hasRotRutPayoutMatch && !hasExpensePayoutMatch
 
   const invoiceMatchLabel = isIncome
-    ? 'Matcha mot kundfaktura'
-    : 'Matcha mot leverantörsfaktura'
+    ? t('match_customer_invoice_menu')
+    : t('match_supplier_invoice_menu')
 
   const splitMatchLabel = isIncome
-    ? 'Dela inbetalningen på flera fakturor'
-    : 'Dela utbetalningen på flera leverantörsfakturor'
+    ? t('split_income_menu')
+    : t('split_expense_menu')
 
   // Secondary row actions live twice, deliberately: in the drawer and in the
   // row's ⋯ overflow menu for one-click use.
@@ -390,7 +390,7 @@ export default function TransactionInboxCard({
                 shiftHeld.current = e.shiftKey
               }}
               onCheckedChange={() => onToggleSelect(transaction.id, shiftHeld.current)}
-              aria-label="Välj transaktion"
+              aria-label={t('select_transaction_aria')}
               className={cn(
                 'border-foreground duration-150',
                 'block',
@@ -426,7 +426,7 @@ export default function TransactionInboxCard({
             {skvCounterpartDate && (
               <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px] md:inline-flex">
                 <AlertCircle className="h-3 w-3" />
-                Möjlig 1930↔1630
+                {t('skv_possible_transfer_badge')}
               </Badge>
             )}
             {/* Quiet pre-migration marker (muted text, not a chip: it is

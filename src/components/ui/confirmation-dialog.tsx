@@ -1,6 +1,7 @@
 'use client'
 
 import { ReactNode, useRef } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -42,12 +43,13 @@ export function ConfirmationDialog({
   // in here, which put it into dialogs whose authors never asked for one.
   // Callers that commit a voucher directly pass their own warningText.
   warningText,
-  confirmLabel = 'Bekräfta & skapa',
+  confirmLabel,
   extraActions,
   children,
   autoFocusConfirm,
   confirmDisabled = false,
 }: ConfirmationDialogProps) {
+  const t = useTranslations('confirmation_dialog')
   const confirmRef = useRef<HTMLButtonElement>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -69,7 +71,7 @@ export function ConfirmationDialog({
                   data in session replays. The description is a static
                   sentence and stays readable. */}
               <DialogTitle data-ph-mask="" className="text-lg sm:text-xl">{title}</DialogTitle>
-              <DialogDescription>Granska uppgifterna innan du bekräftar</DialogDescription>
+              <DialogDescription>{t('description')}</DialogDescription>
             </div>
           </div>
         </DialogHeader>
@@ -88,7 +90,7 @@ export function ConfirmationDialog({
               onClick={() => onOpenChange(false)}
               disabled={isSubmitting}
             >
-              Tillbaka
+              {t('back')}
             </Button>
             {extraActions}
             <Button
@@ -97,7 +99,7 @@ export function ConfirmationDialog({
               disabled={confirmDisabled}
               loading={isSubmitting}
             >
-              {isSubmitting ? 'Skapar...' : confirmLabel}
+              {isSubmitting ? t('creating') : (confirmLabel ?? t('confirm_create'))}
             </Button>
           </DialogFooter>
         </div>

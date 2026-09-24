@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
@@ -20,6 +21,7 @@ export default function OpeningBalanceUploadStep({
   error,
   errorAction,
 }: OpeningBalanceUploadStepProps) {
+  const t = useTranslations('opening_balance_upload_step')
   const [isDragging, setIsDragging] = useState(false)
 
   const ACCEPTED_TYPES = '.xlsx,.xls,.csv,.ods'
@@ -51,10 +53,9 @@ export default function OpeningBalanceUploadStep({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Ladda upp fil med ingående balanser</CardTitle>
+        <CardTitle>{t('title')}</CardTitle>
         <CardDescription>
-          Ladda upp en Excel- eller CSV-fil med ditt företags ingående balanser.
-          Filen bör innehålla kontonummer och belopp (debet/kredit eller saldo).
+          {t('description')}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -74,16 +75,16 @@ export default function OpeningBalanceUploadStep({
           {isLoading ? (
             <div className="flex flex-col items-center gap-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Läser fil och identifierar kolumner...</p>
+              <p className="text-sm text-muted-foreground">{t('reading_file')}</p>
             </div>
           ) : (
             <>
               <Upload className="h-8 w-8 text-muted-foreground/50 mb-3" />
               <p className="text-sm font-medium">
-                Dra och släpp din fil här
+                {t('drop_here')}
               </p>
               <p className="text-sm text-muted-foreground mt-1">
-                eller
+                {t('or')}
               </p>
               <label>
                 <input
@@ -97,11 +98,11 @@ export default function OpeningBalanceUploadStep({
                   }}
                 />
                 <Button variant="outline" size="sm" className="mt-2" asChild>
-                  <span>Välj fil</span>
+                  <span>{t('choose_file')}</span>
                 </Button>
               </label>
               <p className="text-xs text-muted-foreground mt-3">
-                XLSX, XLS, CSV, ODS: max 10 MB
+                {t('accepted_formats')}
               </p>
             </>
           )}
@@ -126,12 +127,8 @@ export default function OpeningBalanceUploadStep({
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
           <FileSpreadsheet className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <div className="text-sm text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">Filformat</p>
-            <p>
-              Filen bör ha en rubrikrad med kolumner för kontonummer och belopp.
-              Vanliga format stöds automatiskt: t.ex. kolumner som heter &quot;Konto&quot;,
-              &quot;Debet&quot;, &quot;Kredit&quot; eller &quot;Saldo&quot;.
-            </p>
+            <p className="font-medium text-foreground">{t('file_format_title')}</p>
+            <p>{t('file_format_body')}</p>
           </div>
         </div>
       </CardContent>

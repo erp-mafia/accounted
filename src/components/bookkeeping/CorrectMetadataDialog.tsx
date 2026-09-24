@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -28,11 +29,12 @@ interface Props {
  * Metadata rättelse (BFL 5 kap 9 §): correct the verifikationstext and/or
  * the date (within the same fiscal period) of a posted verifikat without an
  * ändringsverifikation. Who/when is recorded in the immutable rättelse log
- * and shown in the verifikat's history. Stays Swedish (verifikat surface,
- * .claude/rules/i18n.md).
+ * and shown in the verifikat's history.
  */
 export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCorrected }: Props) {
   const { toast } = useToast()
+  const t = useTranslations('journal_detail')
+  const tc = useTranslations('common')
   const [description, setDescription] = useState('')
   const [entryDate, setEntryDate] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -69,15 +71,15 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
         throw error
       }
       toast({
-        title: 'Verifikationen rättad',
-        description: 'Ändringen har loggats i verifikatets rättelsehistorik.',
+        title: t('metadata_dialog_toast_corrected'),
+        description: t('metadata_dialog_toast_corrected_description'),
       })
       onOpenChange(false)
       onCorrected()
     } catch (err) {
       const anyErr = err as { body?: unknown; status?: number }
       toast({
-        title: 'Kunde inte rätta verifikationen',
+        title: t('metadata_dialog_toast_failed'),
         description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
         variant: 'destructive',
       })
@@ -93,31 +95,21 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
           <div className="flex items-center gap-2">
-            <DialogTitle>Ändra text eller datum</DialogTitle>
+            <DialogTitle>{t('correct_metadata')}</DialogTitle>
             <RattelseExplainer>
-              <p>
-                Verifikationstexten och datumet kan rättas här utan
-                ändringsverifikation.
-              </p>
-              <p>
-                Varje rättelse loggas med vem och när, och det ursprungliga
-                innehållet förblir synligt i verifikatets rättelsehistorik.
-              </p>
-              <p>
-                Om månaden redan är momsdeklarerad kan en datumflytt påverka
-                den inlämnade deklarationen.
-              </p>
+              <p>{t('metadata_dialog_explainer_1')}</p>
+              <p>{t('metadata_dialog_explainer_2')}</p>
+              <p>{t('metadata_dialog_explainer_3')}</p>
             </RattelseExplainer>
           </div>
           <DialogDescription>
-            Datumet kan bara flyttas inom samma bokföringsperiod: använd
-            &quot;Flytta till annat datum&quot; för att byta period.
+            {t('metadata_dialog_description')}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1">
-            <Label htmlFor="rattelse-description">Verifikationstext</Label>
+            <Label htmlFor="rattelse-description">{t('correction_dialog_description_label')}</Label>
             <Input
               id="rattelse-description"
               value={description}
@@ -126,7 +118,7 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
             />
           </div>
           <div className="space-y-1">
-            <Label htmlFor="rattelse-date">Datum</Label>
+            <Label htmlFor="rattelse-date">{t('metadata_dialog_date_label')}</Label>
             <Input
               id="rattelse-date"
               type="date"
@@ -136,7 +128,7 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
             />
             {['storno', 'opening_balance', 'year_end'].includes(entry.source_type) && (
               <p className="text-xs text-muted-foreground">
-                Datumet på den här verifikationstypen kan inte ändras.
+                {t('metadata_dialog_date_locked')}
               </p>
             )}
           </div>
@@ -144,10 +136,10 @@ export default function CorrectMetadataDialog({ entry, open, onOpenChange, onCor
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSubmit} disabled={!hasChange || isSubmitting}>
-            {isSubmitting ? 'Rättar...' : 'Spara rättelse'}
+            {isSubmitting ? t('metadata_dialog_saving') : t('metadata_dialog_save')}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 
 interface Props {
@@ -25,17 +26,18 @@ interface Props {
 // Design: a small filled dot, success color when the extraction succeeded.
 // Optional uppercase micro-label for forms where space allows.
 export default function AiFilledIndicator({ active, label, className, title }: Props) {
+  const t = useTranslations('ai_filled_indicator')
   if (!active) return null
   return (
     <span
-      title={title ?? 'Värdet är ifyllt av AI baserat på dokumentet'}
+      title={title ?? t('title')}
       className={cn(
         'inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-muted-foreground',
         className,
       )}
     >
       <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
-      {label ?? <span className="sr-only">AI-fyllt</span>}
+      {label ?? <span className="sr-only">{t('label')}</span>}
     </span>
   )
 }

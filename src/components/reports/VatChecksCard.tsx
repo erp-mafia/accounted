@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -39,36 +40,48 @@ interface GapClassification {
   supplyType: SupplyType
 }
 
-const SUPPLIER_LABELS: Record<SupplierType, string> = {
-  eu_business: 'EU-leverantör',
-  non_eu_business: 'Utanför EU',
-  swedish_business: 'Svensk omvänd skattskyldighet',
-}
-const SUPPLY_LABELS: Record<SupplyType, string> = {
-  service: 'tjänst',
-  goods: 'vara',
-}
-/** Chip labels (sentence case); SUPPLY_LABELS stays lowercase for dialog prose. */
-const SUPPLY_DISPLAY: Record<SupplyType, string> = {
-  service: 'Tjänst',
-  goods: 'Vara',
+type Translator = ReturnType<typeof useTranslations<'vat_checks_card'>>
+
+/** Chip label (sentence case). */
+function supplierLabel(t: Translator, supplierType: SupplierType): string {
+  switch (supplierType) {
+    case 'eu_business':
+      return t('supplier_eu_business')
+    case 'non_eu_business':
+      return t('supplier_non_eu_business')
+    case 'swedish_business':
+      return t('supplier_swedish_business')
+  }
 }
 
-const SUPPLIER_ITEMS = [
-  { id: 'eu_business', label: 'EU-leverantör' },
-  { id: 'non_eu_business', label: 'Utanför EU' },
-  { id: 'swedish_business', label: 'Svensk omvänd skattskyldighet' },
-]
+/** Lowercase form for the confirm-dialog prose. */
+function supplierProse(t: Translator, supplierType: SupplierType): string {
+  switch (supplierType) {
+    case 'eu_business':
+      return t('supplier_eu_business_prose')
+    case 'non_eu_business':
+      return t('supplier_non_eu_business_prose')
+    case 'swedish_business':
+      return t('supplier_swedish_business_prose')
+  }
+}
+
+/** Chip label (sentence case). */
+function supplyLabel(t: Translator, supplyType: SupplyType): string {
+  return supplyType === 'goods' ? t('supply_goods') : t('supply_service')
+}
+
+/** Lowercase form for the confirm-dialog prose. */
+function supplyProse(t: Translator, supplyType: SupplyType): string {
+  return supplyType === 'goods' ? t('supply_goods_prose') : t('supply_service_prose')
+}
+
+const SUPPLIER_TYPES: SupplierType[] = ['eu_business', 'non_eu_business', 'swedish_business']
 
 // Non-EU + goods is import VAT (ruta 50/60-62), not reverse charge: the
 // goods choice disappears entirely for non-EU suppliers.
-const supplyItemsFor = (supplierType: SupplierType) =>
-  supplierType === 'non_eu_business'
-    ? [{ id: 'service', label: 'Tjänst' }]
-    : [
-        { id: 'service', label: 'Tjänst' },
-        { id: 'goods', label: 'Vara' },
-      ]
+const supplyTypesFor = (supplierType: SupplierType): SupplyType[] =>
+  supplierType === 'non_eu_business' ? ['service'] : ['service', 'goods']
 
 /** How many gap rows render before the "Visa alla" toggle. */
 const GAP_PREVIEW_COUNT = 5
@@ -95,9 +108,13 @@ export function VatChecksCard({
   fiscalPeriodId?: string
   onCorrected: () => void
 }) {
+  const t = useTranslations('vat_checks_card')
   const router = useRouter()
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const supplierItems = SUPPLIER_TYPES.map((id) => ({ id, label: supplierLabel(t, id) }))
+  const supplyItemsFor = (supplierType: SupplierType) =>
+    supplyTypesFor(supplierType).map((id) => ({ id, label: supplyLabel(t, id) }))
   const { dialogProps, confirm } = useDestructiveConfirm()
 
   const hasRcBasisGaps = checks.some((c) => c.code === 'RC_BASIS_MISSING')
@@ -204,11 +221,11 @@ export function VatChecksCard({
       })
       const json = await res.json().catch(() => null)
       if (!res.ok || json?.error) {
-        return { ok: false, message: apiErrorMessage(json, 'Kunde inte korrigera verifikationen') }
+        return { ok: false, message: apiErrorMessage(json, t('fix_failed')) }
       }
       return { ok: true, correctedId: json?.data?.correctedId }
     } catch {
-      return { ok: false, message: 'Kunde inte korrigera verifikationen' }
+      return { ok: false, message: t('fix_failed') }
     }
   }
 
@@ -228,14 +245,14 @@ export function VatChecksCard({
     setRemovedIds((prev) => new Set(prev).add(gap.entryId))
     const correctedId = result.correctedId
     toast({
-      title: `Verifikation ${gap.voucherSeries}-${gap.voucherNumber} korrigerad`,
-      description: 'Storno + ny verifikation skapad.',
+      title: t('fixed_one_title', { voucher: `${gap.voucherSeries}-${gap.voucherNumber}` }),
+      description: t('fixed_one_description'),
       action: correctedId ? (
         <ToastAction
-          altText="Visa verifikat"
+          altText={t('view_voucher')}
           onClick={() => router.push(`/bookkeeping/${correctedId}`)}
         >
-          Visa verifikat
+          {t('view_voucher')}
         </ToastAction>
       ) : undefined,
     })
@@ -247,16 +264,19 @@ export function VatChecksCard({
     if (targets.length === 0) return
     const overriddenCount = targets.filter((g) => overrides[g.entryId]).length
     const ok = await confirm({
-      title: `Korrigera ${targets.length} verifikationer?`,
+      title: t('fix_all_confirm_title', { count: targets.length }),
       description:
-        `Detta skapar ${targets.length} stornon och ${targets.length} nya verifikationer ` +
-        `klassificerade som ${SUPPLIER_LABELS[sharedSel.supplierType].toLowerCase()}, ` +
-        `${SUPPLY_LABELS[sharedSel.supplyType]}.` +
+        t('fix_all_confirm_description', {
+          count: targets.length,
+          supplier: supplierProse(t, sharedSel.supplierType),
+          supply: supplyProse(t, sharedSel.supplyType),
+        }) +
+        ' ' +
         (overriddenCount > 0
-          ? ` ${overriddenCount} rader använder sina egna val i stället.`
-          : ' Rader du inte ändrat använder valen ovan.'),
+          ? t('fix_all_confirm_overrides', { count: overriddenCount })
+          : t('fix_all_confirm_shared')),
       variant: 'warning',
-      confirmLabel: 'Korrigera alla',
+      confirmLabel: t('fix_all_confirm_label'),
     })
     if (!ok) return
 
@@ -280,11 +300,11 @@ export function VatChecksCard({
     const failureCount = Object.keys(failures).length
     const fixedCount = targets.length - failureCount
     toast({
-      title: `${fixedCount} av ${targets.length} verifikationer korrigerade`,
+      title: t('fixed_all_title', { fixed: fixedCount, total: targets.length }),
       description:
         failureCount > 0
-          ? `${failureCount} kunde inte korrigeras och ligger kvar i listan.`
-          : 'Storno + nya verifikationer skapade.',
+          ? t('fixed_all_failures', { count: failureCount })
+          : t('fixed_all_description'),
     })
     // One refetch at the end: per-row refetches would remount the page once
     // per verifikat.
@@ -298,7 +318,7 @@ export function VatChecksCard({
         {checks.length === 0 && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 text-success" />
-            Inga fel hittades i underlaget för perioden.
+            {t('no_errors')}
           </div>
         )}
 
@@ -330,7 +350,7 @@ export function VatChecksCard({
                 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground"
                 aria-live="polite"
               >
-                Verifikationer som saknar basbelopp ({gaps.length})
+                {t('gaps_heading', { count: gaps.length })}
               </h3>
               <div className="h-px flex-1 bg-border/60" />
             </div>
@@ -338,21 +358,20 @@ export function VatChecksCard({
             {gapsLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Söker berörda verifikationer...
+                {t('gaps_loading')}
               </div>
             ) : gapsFailed ? (
               <div className="flex flex-wrap items-center gap-3">
                 <p role="alert" className="text-sm text-destructive">
-                  Kunde inte hämta verifikationslistan.
+                  {t('gaps_failed')}
                 </p>
                 <Button variant="outline" onClick={() => setGapsResult(null)}>
-                  Försök igen
+                  {t('retry')}
                 </Button>
               </div>
             ) : gaps.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Inga verifikationer hittades. Bristen kan ligga utanför perioden eller i
-                bokföring som inte är bokförd.
+                {t('gaps_empty')}
               </p>
             ) : (
               <>
@@ -361,7 +380,7 @@ export function VatChecksCard({
                     are self-describing, so no field labels. */}
                 <div className="flex flex-wrap items-center gap-2">
                   <ContextPicker
-                    items={SUPPLIER_ITEMS}
+                    items={supplierItems}
                     value={sharedSel.supplierType}
                     onChange={(value) => {
                       const supplierType = value as SupplierType
@@ -374,8 +393,8 @@ export function VatChecksCard({
                           supplierType === 'non_eu_business' ? 'service' : prev.supplyType,
                       }))
                     }}
-                    triggerLabel={SUPPLIER_LABELS[sharedSel.supplierType]}
-                    ariaLabel="Leverantörstyp"
+                    triggerLabel={supplierLabel(t, sharedSel.supplierType)}
+                    ariaLabel={t('supplier_type_aria')}
                     disabled={busy}
                   />
                   <ContextPicker
@@ -384,24 +403,26 @@ export function VatChecksCard({
                     onChange={(value) =>
                       setSharedSel((prev) => ({ ...prev, supplyType: value as SupplyType }))
                     }
-                    triggerLabel={SUPPLY_DISPLAY[sharedSel.supplyType]}
-                    ariaLabel="Typ av inköp"
+                    triggerLabel={supplyLabel(t, sharedSel.supplyType)}
+                    ariaLabel={t('supply_type_aria')}
                     disabled={busy}
                   />
                   <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
                     {bulkProgress === null && <CheckCircle2 className="h-4 w-4 mr-2" />}
-                    Korrigera alla ({gaps.length})
+                    {t('fix_all_button', { count: gaps.length })}
                   </Button>
                 </div>
 
                 {bulkProgress && (
                   <p role="status" className="text-sm text-muted-foreground">
-                    Korrigerar {Math.min(bulkProgress.done + 1, bulkProgress.total)} av{' '}
-                    {bulkProgress.total}...
+                    {t('fix_progress', {
+                      current: Math.min(bulkProgress.done + 1, bulkProgress.total),
+                      total: bulkProgress.total,
+                    })}
                   </p>
                 )}
                 {!canWrite && (
-                  <p className="text-xs text-muted-foreground">Kräver skrivbehörighet.</p>
+                  <p className="text-xs text-muted-foreground">{t('requires_write')}</p>
                 )}
 
                 <DataList className="rounded-none border-0 bg-transparent">
@@ -432,7 +453,7 @@ export function VatChecksCard({
                               {fixingId === gap.entryId && (
                                 <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                               )}
-                              Korrigera
+                              {t('fix_one')}
                             </button>
                             <Button
                               variant="ghost"
@@ -440,8 +461,8 @@ export function VatChecksCard({
                               aria-expanded={expanded}
                               aria-label={
                                 expanded
-                                  ? `Dölj detaljer för verifikation ${gap.voucherSeries}-${gap.voucherNumber}`
-                                  : `Visa detaljer för verifikation ${gap.voucherSeries}-${gap.voucherNumber}`
+                                  ? t('hide_details_aria', { voucher: `${gap.voucherSeries}-${gap.voucherNumber}` })
+                                  : t('show_details_aria', { voucher: `${gap.voucherSeries}-${gap.voucherNumber}` })
                               }
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -459,15 +480,17 @@ export function VatChecksCard({
                         expandedContent={
                           <div className="space-y-3 px-1">
                             <p className="text-sm tabular-nums">
-                              {gap.rcOutputAccount} har {formatAmount(gap.rcOutputAmount)} kr
-                              fiktiv moms: saknar basbelopp{' '}
-                              {formatAmount(gap.expectedBasisAmount)} kr
+                              {t('gap_detail', {
+                                account: gap.rcOutputAccount,
+                                vat: formatAmount(gap.rcOutputAmount),
+                                basis: formatAmount(gap.expectedBasisAmount),
+                              })}
                             </p>
                             {/* Same chips as the toolbar, scoped to this row:
                                 a changed value becomes a per-row override. */}
                             <div className="flex flex-wrap items-center gap-2">
                               <ContextPicker
-                                items={SUPPLIER_ITEMS}
+                                items={supplierItems}
                                 value={sel.supplierType}
                                 onChange={(value) => {
                                   const supplierType = value as SupplierType
@@ -482,8 +505,8 @@ export function VatChecksCard({
                                     },
                                   }))
                                 }}
-                                triggerLabel={SUPPLIER_LABELS[sel.supplierType]}
-                                ariaLabel="Leverantörstyp"
+                                triggerLabel={supplierLabel(t, sel.supplierType)}
+                                ariaLabel={t('supplier_type_aria')}
                                 disabled={busy}
                               />
                               <ContextPicker
@@ -498,8 +521,8 @@ export function VatChecksCard({
                                     },
                                   }))
                                 }
-                                triggerLabel={SUPPLY_DISPLAY[sel.supplyType]}
-                                ariaLabel="Typ av inköp"
+                                triggerLabel={supplyLabel(t, sel.supplyType)}
+                                ariaLabel={t('supply_type_aria')}
                                 disabled={busy}
                               />
                             </div>
@@ -527,7 +550,7 @@ export function VatChecksCard({
 
                 {gaps.length > GAP_PREVIEW_COUNT && (
                   <button type="button" onClick={() => setShowAll((v) => !v)} className={QUIET_LINK_CLASS}>
-                    {showAll ? 'Visa färre' : `Visa alla ${gaps.length} verifikationer`}
+                    {showAll ? t('show_fewer') : t('show_all', { count: gaps.length })}
                   </button>
                 )}
               </>

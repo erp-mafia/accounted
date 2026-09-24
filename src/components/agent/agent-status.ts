@@ -92,6 +92,9 @@ export function reduceAgentStatus(state: AgentStatus, event: AgentStatusEvent): 
   }
 }
 
+/** next-intl translator for the `agent_trigger` namespace. */
+export type AgentStatusTranslate = (key: string, values?: Record<string, string | number>) => string
+
 /**
  * The trigger's label for a session that is hidden but alive.
  *
@@ -99,13 +102,17 @@ export function reduceAgentStatus(state: AgentStatus, event: AgentStatusEvent): 
  * ordinary "Fråga X" / "Fortsätt med X" wording instead of this function
  * inventing a second copy of it.
  */
-export function collapsedStatusLabel(status: AgentStatus, name: string): string | null {
+export function collapsedStatusLabel(
+  status: AgentStatus,
+  name: string,
+  t: AgentStatusTranslate,
+): string | null {
   switch (status.activity) {
     case 'working':
     case 'detached':
-      return status.step ? stripEllipsis(status.step) : `${name} arbetar`
+      return status.step ? stripEllipsis(status.step) : t('status_working', { name })
     case 'done':
-      return `${name} är klar`
+      return t('status_done', { name })
     default:
       return null
   }

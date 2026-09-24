@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -30,7 +31,7 @@ interface AccountingFrameworkFormProps {
  * settings page. Renders nothing for non-AB entities: the parent gates this
  * component by entity_type.
  *
- * UX rules (regulatory area: kept in Swedish):
+ * UX rules (regulatory area):
  *   - Default is K2 (matches the column default and BFNAR 2016:10 baseline).
  *   - Switching in either direction fires a confirmation dialog. K2 → K3
  *     names what the system then does (K3-mallen for the årsredovisning,
@@ -51,6 +52,7 @@ interface AccountingFrameworkFormProps {
  *     company_settings.
  */
 export function AccountingFrameworkForm({ current, onSaved }: AccountingFrameworkFormProps) {
+  const t = useTranslations('accounting_framework_form')
   const { toast } = useToast()
   const [selected, setSelected] = useState<AccountingFramework>(current)
   const [pending, setPending] = useState<AccountingFramework | null>(null)
@@ -67,25 +69,25 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
       const body = await res.json()
       if (!res.ok) {
         toast({
-          title: 'Kunde inte spara',
-          description: body?.error ?? 'Försök igen.',
+          title: t('save_failed_title'),
+          description: body?.error ?? t('try_again'),
           variant: 'destructive',
         })
         setSelected(current)
         return
       }
       toast({
-        title: 'Sparat',
+        title: t('saved_title'),
         description:
           next === 'k3'
-            ? 'Bolaget redovisar nu enligt K3 (BFNAR 2012:1).'
-            : 'Bolaget redovisar nu enligt K2 (BFNAR 2016:10).',
+            ? t('saved_k3')
+            : t('saved_k2'),
       })
       onSaved?.(next)
     } catch {
       toast({
-        title: 'Kunde inte spara',
-        description: 'Försök igen.',
+        title: t('save_failed_title'),
+        description: t('try_again'),
         variant: 'destructive',
       })
       setSelected(current)
@@ -106,25 +108,9 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
   return (
     <>
       <SettingsRow
-        label="Regelverk"
+        label={t('label')}
         htmlFor="accounting_framework"
-        help={
-          <>
-            K2 är standard för mindre bolag och innebär förenklade regler. Större företag
-            ska tillämpa K3 och upprätta kassaflödesanalys: dit räknas bland annat bolag
-            som överskrider mer än ett av tre tröskelvärden (nettoomsättning &gt; 80 MSEK,
-            tillgångar &gt; 40 MSEK, fler än 50 anställda) under vart och ett av de två
-            senaste räkenskapsåren, och bolag med noterade värdepapper. För räkenskapsår
-            som börjar efter 2025-12-31 är K2 dessutom stängt för bolag med utländsk
-            filial, kryptotillgångar eller aktierelaterade ersättningar, och för bolag där
-            byggnader ger minst 75 % av nettoomsättningen. Med K3
-            valt bygger Accounted årsredovisningen enligt K3-mallen: kassaflödesanalys,
-            förändring av eget kapital som egen räkning och utökade noter.
-            Anläggningsregistret tar emot komponentuppdelning först med K3, som kräver
-            komponentavskrivning när komponenterna har väsentligt olika nyttjandeperioder.
-            Obeskattade reserver redovisas brutto i juridisk person enligt K3 punkt 29.37.
-          </>
-        }
+        help={<>{t('help')}</>}
       >
         <SettingsSelect
           id="accounting_framework"
@@ -137,10 +123,10 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
           onInput={(e) => e.stopPropagation()}
           disabled={saving}
         >
-          <option value="k2">K2 (BFNAR 2016:10): mindre företag</option>
-          <option value="k3">K3 (BFNAR 2012:1): större företag</option>
+          <option value="k2">{t('option_k2')}</option>
+          <option value="k3">{t('option_k3')}</option>
         </SettingsSelect>
-        {saving && <SettingsRowNote>Sparar…</SettingsRowNote>}
+        {saving && <SettingsRowNote>{t('saving')}</SettingsRowNote>}
       </SettingsRow>
 
       <Dialog
@@ -151,36 +137,18 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{pending === 'k2' ? 'Byta till K2?' : 'Byta till K3?'}</DialogTitle>
+            <DialogTitle>{pending === 'k2' ? t('confirm_title_k2') : t('confirm_title_k3')}</DialogTitle>
             <DialogDescription className="space-y-2 pt-2">
               {pending === 'k2' ? (
                 <>
-                  <span className="block">
-                    Bokförda saldon för uppskjuten skatt (konto 2240 / 8940) och gjorda
-                    komponentavskrivningar återförs inte automatiskt: de måste hanteras
-                    manuellt.
-                  </span>
-                  <span className="block">
-                    Årsredovisningens K3-innehåll (kassaflödesanalys, K3-noter och
-                    uppskjuten skatt) gäller inte längre. Fortsätt?
-                  </span>
+                  <span className="block">{t('to_k2_body_1')}</span>
+                  <span className="block">{t('to_k2_body_2')}</span>
                 </>
               ) : (
                 <>
-                  <span className="block">
-                    Årsredovisningen byggs då enligt K3-mallen: kassaflödesanalys,
-                    förändring av eget kapital som egen räkning och utökade noter.
-                    Kassaflödesanalys är i sig ett krav för större företag, inte en följd
-                    av regelverksvalet.
-                  </span>
-                  <span className="block">
-                    Komponentavskrivning blir obligatorisk för tillgångar vars komponenter
-                    har väsentligt olika nyttjandeperioder (K3 punkt 17.4).
-                    Anläggningsregistret tar emot komponentuppdelning först när K3 är valt.
-                  </span>
-                  <span className="block">
-                    Bytet är permanent enligt rekommendation. Fortsätt?
-                  </span>
+                  <span className="block">{t('to_k3_body_1')}</span>
+                  <span className="block">{t('to_k3_body_2')}</span>
+                  <span className="block">{t('to_k3_body_3')}</span>
                 </>
               )}
             </DialogDescription>
@@ -191,7 +159,7 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
               onClick={() => setPending(null)}
               disabled={saving}
             >
-              Avbryt
+              {t('cancel')}
             </Button>
             <Button
               onClick={() => {
@@ -202,11 +170,11 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
               loading={saving}
             >
               {saving ? (
-                'Sparar…'
+                t('saving')
               ) : pending === 'k2' ? (
-                'Byt till K2'
+                t('confirm_cta_k2')
               ) : (
-                'Byt till K3'
+                t('confirm_cta_k3')
               )}
             </Button>
           </DialogFooter>

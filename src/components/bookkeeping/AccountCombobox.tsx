@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
+import { useTranslations } from 'next-intl'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import {
@@ -70,7 +71,8 @@ interface AccountComboboxProps {
   flat?: boolean
 }
 
-export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel = 'Aktiveras vid bokföring', className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
+export default function AccountCombobox({ value, accounts, onChange, onCommit, onCreateAccount, catalog, notActivatedLabel, className, inputRef, disabled = false, selectedName, flat = false }: AccountComboboxProps) {
+  const t = useTranslations('account_combobox')
   const [search, setSearch] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
   const [highlightedIndex, setHighlightedIndex] = useState(0)
@@ -399,7 +401,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             <span className="flex-1 min-w-0 break-words">{item.account_name}</span>
             {!item.isActive && (
               <span className="shrink-0 self-center text-[11px] text-muted-foreground whitespace-nowrap">
-                {notActivatedLabel}
+                {notActivatedLabel ?? t('not_activated')}
               </span>
             )}
           </button>
@@ -411,15 +413,15 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
   const emptyPanelContent = (
     <>
       <p className="text-sm text-muted-foreground">
-        Hittade inget konto som matchar.
+        {t('no_match')}
       </p>
       {/^\d{4}$/.test(search.trim()) ? (
         <p className="text-xs text-muted-foreground mt-1">
-          Om det är ett giltigt BAS-konto aktiveras det när du bokför.
+          {t('no_match_bas_hint')}
         </p>
       ) : (
         <p className="text-xs text-muted-foreground mt-1">
-          Kontot kan behöva aktiveras i din kontoplan.
+          {t('no_match_activate_hint')}
         </p>
       )}
       {onCreateAccount && (
@@ -433,7 +435,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           }}
         >
           <Plus className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
+          <span className="truncate">{t('create_account', { query: search.trim() })}</span>
         </button>
       )}
     </>
@@ -446,7 +448,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
     onFocus: handleFocus,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
-    placeholder: 'Sök konto…',
+    placeholder: t('search_placeholder'),
     autoComplete: 'off',
     disabled,
     'aria-describedby': showSelectedName ? selectedNameId : undefined,

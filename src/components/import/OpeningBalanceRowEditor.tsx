@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
 import Fuse, { type IFuseOptions } from 'fuse.js'
@@ -122,6 +123,7 @@ export default function OpeningBalanceRowEditor({
   initialRows,
   onChange,
 }: OpeningBalanceRowEditorProps) {
+  const t = useTranslations('opening_balance_row_editor')
   const [rows, setRows] = useState<EditableRow[]>(() => dedupeRows(initialRows))
   const [activeAutocomplete, setActiveAutocomplete] = useState<string | null>(null)
   const [autocompleteQuery, setAutocompleteQuery] = useState('')
@@ -184,18 +186,18 @@ export default function OpeningBalanceRowEditor({
         // Re-validate
         const errors: string[] = []
         if (!/^\d{4}$/.test(updated.account_number)) {
-          errors.push('Ogiltigt kontonummer')
+          errors.push(t('invalid_account_number'))
         }
         const cls = parseInt(updated.account_number.charAt(0), 10)
         if (cls >= 3 && cls <= 8) {
-          errors.push(`Resultatkonto (klass ${cls})`)
+          errors.push(t('result_account', { cls }))
         }
         updated.validation_errors = errors
 
         return updated
       }),
     )
-  }, [])
+  }, [t])
 
   const deleteRow = useCallback((id: string) => {
     setRows((prev) => prev.filter((r) => r.id !== id))
@@ -210,11 +212,11 @@ export default function OpeningBalanceRowEditor({
         account_name: '',
         debit_amount: 0,
         credit_amount: 0,
-        validation_errors: ['Ogiltigt kontonummer'],
+        validation_errors: [t('invalid_account_number')],
         bas_match: null,
       },
     ])
-  }, [])
+  }, [t])
 
   const selectAutocompleteItem = useCallback(
     (rowId: string, account: BASReferenceAccount) => {
@@ -252,10 +254,10 @@ export default function OpeningBalanceRowEditor({
         <table className="w-full text-sm">
           <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
             <tr className="border-b">
-              <th className="px-3 py-2 text-left w-28">Konto</th>
-              <th className="px-3 py-2 text-left">Kontonamn</th>
-              <th className="px-3 py-2 text-right w-32">Debet</th>
-              <th className="px-3 py-2 text-right w-32">Kredit</th>
+              <th className="px-3 py-2 text-left w-28">{t('col_account')}</th>
+              <th className="px-3 py-2 text-left">{t('col_account_name')}</th>
+              <th className="px-3 py-2 text-right w-32">{t('col_debit')}</th>
+              <th className="px-3 py-2 text-right w-32">{t('col_credit')}</th>
               <th className="px-3 py-2 w-10" />
             </tr>
           </thead>
@@ -365,6 +367,7 @@ export default function OpeningBalanceRowEditor({
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => deleteRow(row.id)}
+                    aria-label={t('delete_row')}
                   >
                     <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
                   </Button>
@@ -375,7 +378,7 @@ export default function OpeningBalanceRowEditor({
           <tfoot>
             <tr className="border-t-2 font-medium">
               <td className="px-3 py-2" colSpan={2}>
-                Summa
+                {t('total')}
               </td>
               <td className="px-3 py-2 text-right tabular-nums">
                 {totals.debit.toLocaleString('sv-SE', {
@@ -394,7 +397,7 @@ export default function OpeningBalanceRowEditor({
             {!totals.isBalanced && (
               <tr className="text-destructive">
                 <td className="px-3 py-1 text-sm" colSpan={2}>
-                  Differens
+                  {t('difference')}
                 </td>
                 <td className="px-3 py-1 text-right tabular-nums text-sm" colSpan={2}>
                   {totals.diff.toLocaleString('sv-SE', {
@@ -414,13 +417,14 @@ export default function OpeningBalanceRowEditor({
       <div className="flex items-center gap-2">
         <Button variant="outline" size="sm" onClick={addRow}>
           <Plus className="h-3.5 w-3.5 mr-1.5" />
-          Lägg till rad
+          {t('add_row')}
         </Button>
         {!totals.isBalanced && Math.abs(totals.diff) <= 1 && Math.abs(totals.diff) >= 0.01 && (
           <Button variant="outline" size="sm" onClick={handleAutoBalance}>
             <Scale className="h-3.5 w-3.5 mr-1.5" />
-            Avrunda ({totals.diff > 0 ? '+' : ''}
-            {totals.diff.toFixed(2)} till 2099)
+            {t('round_to_2099', {
+              diff: `${totals.diff > 0 ? '+' : ''}${totals.diff.toFixed(2)}`,
+            })}
           </Button>
         )}
       </div>

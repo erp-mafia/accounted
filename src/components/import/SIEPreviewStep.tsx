@@ -82,19 +82,19 @@ export default function SIEPreviewStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Briefcase className="h-5 w-5" />
-            Företagsinformation
+            {t('sie_preview_company_info_title')}
           </CardTitle>
-          <CardDescription>Information från SIE-filen</CardDescription>
+          <CardDescription>{t('sie_preview_company_info_description')}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <p className="text-sm text-muted-foreground">Företagsnamn</p>
-              <p className="font-medium">{preview.companyName || 'Ej angivet'}</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_company_name')}</p>
+              <p className="font-medium">{preview.companyName || t('sie_preview_not_specified')}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Organisationsnummer</p>
-              <p className="font-medium">{preview.orgNumber || 'Ej angivet'}</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_org_number')}</p>
+              <p className="font-medium">{preview.orgNumber || t('sie_preview_not_specified')}</p>
             </div>
           </div>
         </CardContent>
@@ -105,22 +105,22 @@ export default function SIEPreviewStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Calendar className="h-5 w-5" />
-            Räkenskapsår
+            {t('sie_preview_fiscal_year_title')}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex items-center gap-4">
             <div>
-              <p className="text-sm text-muted-foreground">Start</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_start')}</p>
               <p className="font-medium">
-                {preview.fiscalYearStart ?? 'Okänt'}
+                {preview.fiscalYearStart ?? t('sie_preview_unknown')}
               </p>
             </div>
             <ArrowRight className="h-4 w-4 text-muted-foreground" />
             <div>
-              <p className="text-sm text-muted-foreground">Slut</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_end')}</p>
               <p className="font-medium">
-                {preview.fiscalYearEnd ?? 'Okänt'}
+                {preview.fiscalYearEnd ?? t('sie_preview_unknown')}
               </p>
             </div>
             {fiscalYear && (fiscalYear.verdict === 'match' || fiscalYear.verdict === 'create') && (
@@ -146,16 +146,16 @@ export default function SIEPreviewStep({
           clarification sits behind the label's "?". */}
       <ImportStatRow
         stats={[
-          { key: 'accounts', label: 'Konton', value: preview.accountCount },
-          { key: 'vouchers', label: 'Verifikationer', value: preview.voucherCount },
-          { key: 'lines', label: 'Transaktionsrader', value: preview.transactionLineCount },
+          { key: 'accounts', label: t('sie_preview_stat_accounts'), value: preview.accountCount },
+          { key: 'vouchers', label: t('sie_preview_stat_vouchers'), value: preview.voucherCount },
+          { key: 'lines', label: t('sie_preview_stat_lines'), value: preview.transactionLineCount },
           {
             key: 'ib',
             label: (
               <>
-                IB, summa debet
+                {t('sie_preview_stat_ib_debit')}
                 <HelpPopover className="shrink-0">
-                  Summan av alla debetsaldon i ingående balans, inte ett enskilt kontosaldo.
+                  {t('sie_preview_stat_ib_debit_help')}
                 </HelpPopover>
               </>
             ),
@@ -173,26 +173,26 @@ export default function SIEPreviewStep({
             ) : (
               <AlertCircle className="h-5 w-5 text-warning" />
             )}
-            Balansräkning (IB)
+            {t('sie_preview_trial_balance_title')}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="grid gap-4 md:grid-cols-3">
             <div>
-              <p className="text-sm text-muted-foreground">Total debet</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_total_debit')}</p>
               <p className="font-medium">{formatCurrency(preview.trialBalance.totalDebit)}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Total kredit</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_total_credit')}</p>
               <p className="font-medium">{formatCurrency(preview.trialBalance.totalCredit)}</p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Status</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_status')}</p>
               {preview.trialBalance.isBalanced ? (
-                <span className="text-xs text-muted-foreground">Balanserar</span>
+                <span className="text-xs text-muted-foreground">{t('sie_preview_balanced')}</span>
               ) : (
                 <Badge variant="secondary">
-                  Diff: {formatCurrency(ibDiff)}
+                  {t('sie_preview_diff', { amount: formatCurrency(ibDiff) })}
                 </Badge>
               )}
             </div>
@@ -205,21 +205,13 @@ export default function SIEPreviewStep({
                 <AlertCircle className="h-4 w-4 text-warning mt-0.5 flex-shrink-0" />
                 <div className="space-y-1">
                   <p className="font-medium text-warning">
-                    Ingående balanser balanserar inte ({formatCurrency(Math.abs(ibDiff))})
+                    {t('sie_preview_imbalance_title', { amount: formatCurrency(Math.abs(ibDiff)) })}
                   </p>
                   <p className="text-muted-foreground">
-                    Vanligaste orsaken är att föregående års resultat aldrig fördes över till
-                    eget kapital i det gamla programmet. SpeedLedger parkerar det till exempel på
-                    egna 9xxx-konton (9030/9031 Obokat resultat), och då summerar inte filens
-                    ingående balanser till noll: differensen är det oförda resultatet. En annan
-                    orsak är en ofullständig export, till exempel att skulder saknas.
+                    {t('sie_preview_imbalance_cause')}
                   </p>
                   <p className="text-muted-foreground">
-                    Rätta i källsystemet och ladda upp filen på nytt, eller lägg in de ingående
-                    balanserna för hand i guiden Ingående balanser, där du kan rätta raderna
-                    själv innan de bokförs (den här filen importeras då inte). Fortsätter du ändå
-                    bokförs differensen på konto 2099 (Årets resultat), vilket nästan alltid blir
-                    fel.
+                    {t('sie_preview_imbalance_fix')}
                   </p>
                   {onOpenManualOpeningBalances && (
                     <Button
@@ -229,7 +221,7 @@ export default function SIEPreviewStep({
                       className="mt-1"
                       onClick={onOpenManualOpeningBalances}
                     >
-                      Lägg in ingående balanser för hand
+                      {t('sie_preview_manual_opening_balances')}
                       <ArrowRight className="ml-2 h-4 w-4" />
                     </Button>
                   )}
@@ -242,7 +234,7 @@ export default function SIEPreviewStep({
                   className="mt-0.5"
                 />
                 <span className="text-muted-foreground">
-                  Jag förstår att differensen bokförs på 2099 och vill fortsätta ändå.
+                  {t('sie_preview_imbalance_ack')}
                 </span>
               </label>
             </div>
@@ -274,7 +266,7 @@ export default function SIEPreviewStep({
           <CardDescription>
             {chart
               ? t('chart_summary', { toCreate: chart.toCreate, existing: chart.existing })
-              : 'Hur väl kunde kontona i filen matchas mot din kontoplan'}
+              : t('sie_preview_mapping_description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -293,23 +285,23 @@ export default function SIEPreviewStep({
             ) : (
               <>
                 <div>
-                  <p className="text-sm text-muted-foreground">Totalt</p>
+                  <p className="text-sm text-muted-foreground">{t('sie_preview_mapping_total')}</p>
                   <p className="font-medium">{preview.mappingStatus.total}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Mappade</p>
+                  <p className="text-sm text-muted-foreground">{t('sie_preview_mapping_mapped')}</p>
                   <p className="font-medium text-success">{preview.mappingStatus.mapped}</p>
                 </div>
               </>
             )}
             <div>
-              <p className="text-sm text-muted-foreground">Ej mappade</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_mapping_unmapped')}</p>
               <p className={`font-medium tabular-nums ${preview.mappingStatus.unmapped > 0 ? 'text-destructive' : ''}`}>
                 {preview.mappingStatus.unmapped}
               </p>
             </div>
             <div>
-              <p className="text-sm text-muted-foreground">Osäkra</p>
+              <p className="text-sm text-muted-foreground">{t('sie_preview_mapping_low_confidence')}</p>
               <p className={`font-medium tabular-nums ${preview.mappingStatus.lowConfidence > 0 ? 'text-warning' : ''}`}>
                 {preview.mappingStatus.lowConfidence}
               </p>
@@ -338,7 +330,7 @@ export default function SIEPreviewStep({
         <div className="flex items-start gap-2 rounded-lg border bg-muted/50 px-4 py-3 text-sm text-muted-foreground">
           <Info className="h-4 w-4 mt-0.5 flex-shrink-0" />
           <span>
-            {preview.excludedSystemAccounts.length} internt systemkonto från källsystemet exkluderades ({preview.excludedSystemAccounts.map((a) => a.number).join(', ')}), inte bokföringskonton
+            {t('sie_preview_excluded_system_accounts', { count: preview.excludedSystemAccounts.length, accounts: preview.excludedSystemAccounts.map((a) => a.number).join(', ') })}
           </span>
         </div>
       )}
@@ -355,11 +347,10 @@ export default function SIEPreviewStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5 text-primary" />
-              Skapa saknade konton
+              {t('sie_preview_missing_accounts_title')}
             </CardTitle>
             <CardDescription>
-              {missingAccounts.length} konton från SIE-filen finns inte i din kontoplan ännu.
-              Klicka nedan för att skapa dem: de kopplas sedan automatiskt i nästa steg.
+              {t('sie_preview_missing_accounts_description', { count: missingAccounts.length })}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -373,7 +364,7 @@ export default function SIEPreviewStep({
                 ))}
                 {missingAccounts.length > 10 && (
                   <div className="text-muted-foreground">
-                    ... och {missingAccounts.length - 10} till
+                    {t('sie_preview_and_more', { count: missingAccounts.length - 10 })}
                   </div>
                 )}
               </div>
@@ -383,9 +374,9 @@ export default function SIEPreviewStep({
                 className="w-full"
               >
                 {isCreatingAccounts ? (
-                  <>Skapar konton...</>
+                  <>{t('sie_preview_creating_accounts')}</>
                 ) : (
-                  <>Skapa {missingAccounts.length} konton</>
+                  <>{t('sie_preview_create_accounts', { count: missingAccounts.length })}</>
                 )}
               </Button>
             </div>
@@ -404,10 +395,10 @@ export default function SIEPreviewStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <XCircle className="h-5 w-5 text-destructive" />
-              Tolkningsfel ({errors.length})
+              {t('sie_preview_errors_title', { count: errors.length })}
             </CardTitle>
             <CardDescription>
-              Dessa fel hittades under tolkningen av SIE-filen och kan påverka importresultatet.
+              {t('sie_preview_errors_description')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -416,7 +407,7 @@ export default function SIEPreviewStep({
                 <div key={`error-${i}`} className="text-sm flex gap-2 text-destructive">
                   <XCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <span>
-                    <span className="font-mono text-xs opacity-70">Rad {issue.line}</span>{' '}
+                    <span className="font-mono text-xs opacity-70">{t('sie_preview_line', { line: issue.line })}</span>{' '}
                     {issue.message}
                   </span>
                 </div>
@@ -432,10 +423,10 @@ export default function SIEPreviewStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-warning" />
-              Varningar ({warnings.length})
+              {t('sie_preview_warnings_title', { count: warnings.length })}
             </CardTitle>
             <CardDescription>
-              Dessa varningar blockerar inte importen men bör granskas.
+              {t('sie_preview_warnings_description')}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -444,7 +435,7 @@ export default function SIEPreviewStep({
                 <div key={`warning-${i}`} className="text-sm flex gap-2 text-warning">
                   <AlertCircle className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <span>
-                    <span className="font-mono text-xs opacity-70">Rad {issue.line}</span>{' '}
+                    <span className="font-mono text-xs opacity-70">{t('sie_preview_line', { line: issue.line })}</span>{' '}
                     {issue.message}
                   </span>
                 </div>
@@ -457,12 +448,12 @@ export default function SIEPreviewStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {t('sie_preview_back')}
         </Button>
         <Button onClick={onContinue} disabled={blockContinue}>
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
-            ? 'Granska mappningar'
-            : 'Fortsätt'}
+            ? t('sie_preview_review_mappings')
+            : t('sie_preview_continue')}
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

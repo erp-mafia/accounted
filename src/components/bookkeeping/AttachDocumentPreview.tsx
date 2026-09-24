@@ -1,6 +1,7 @@
 'use client'
 
 import { ArrowDown, AlertTriangle } from 'lucide-react'
+import { useTranslations } from 'next-intl'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { DocumentViewButton } from './DocumentViewButton'
 
@@ -15,6 +16,7 @@ interface AttachDocumentPreviewProps {
  * the pairing without cross-referencing IDs.
  */
 export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewProps) {
+  const t = useTranslations('attach_document_preview')
   const txDescription = (data.transaction_description as string) || '-'
   const txAmount = data.transaction_amount as number | undefined
   const txCurrency = (data.transaction_currency as string) || 'SEK'
@@ -40,22 +42,22 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
   return (
     <div className="space-y-3 text-sm">
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <PreviewCard label="Transaktion">
-          <Row label="Datum" value={txDate ? formatDate(txDate) : '-'} tabular />
-          <Row label="Beskrivning" value={txDescription} />
+        <PreviewCard label={t('transaction')}>
+          <Row label={t('date')} value={txDate ? formatDate(txDate) : '-'} tabular />
+          <Row label={t('description')} value={txDescription} />
           <Row
-            label="Belopp"
+            label={t('amount')}
             value={typeof txAmount === 'number' ? formatCurrency(txAmount, txCurrency) : '-'}
             tabular
           />
         </PreviewCard>
 
-        <PreviewCard label="Dokument">
-          <Row label="Fil" value={docFileName} />
-          {docVendor && <Row label="Leverantör" value={docVendor} />}
-          {docInvoiceDate && <Row label="Fakturadatum" value={formatDate(docInvoiceDate)} tabular />}
+        <PreviewCard label={t('document')}>
+          <Row label={t('file')} value={docFileName} />
+          {docVendor && <Row label={t('supplier')} value={docVendor} />}
+          {docInvoiceDate && <Row label={t('invoice_date')} value={formatDate(docInvoiceDate)} tabular />}
           {typeof docAmount === 'number' && (
-            <Row label="Belopp" value={formatCurrency(docAmount, docCurrency)} tabular />
+            <Row label={t('amount')} value={formatCurrency(docAmount, docCurrency)} tabular />
           )}
           {documentId && (
             <div className="pt-1">
@@ -67,26 +69,27 @@ export function AttachDocumentPreview({ data, params }: AttachDocumentPreviewPro
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
         <ArrowDown className="h-3.5 w-3.5 mr-1" />
-        kopplas till transaktionen
+        {t('linked_to_transaction')}
       </div>
 
       {willOverwrite && existingIsAccounting && (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="font-medium">Ersätter räkenskapsinformation</p>
+            <p className="font-medium">{t('replaces_accounting_title')}</p>
             <p className="mt-1 text-xs">
-              Befintligt dokument{existingDocName ? ` (${existingDocName})` : ''} är markerat som
-              räkenskapsinformation enligt BFL 7 kap. Att ersätta det här gör det tidigare
-              verifikationsunderlaget otillgängligt: bekräfta att du har originalet sparat innan
-              du godkänner.
+              {existingDocName
+                ? t('replaces_accounting_body_named', { name: existingDocName })
+                : t('replaces_accounting_body')}
             </p>
           </div>
         </div>
       )}
       {willOverwrite && !existingIsAccounting && (
         <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
-          Ersätter befintligt dokument{existingDocName ? `: ${existingDocName}` : ''}.
+          {existingDocName
+            ? t('replaces_existing_named', { name: existingDocName })
+            : t('replaces_existing')}
         </div>
       )}
     </div>

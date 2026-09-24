@@ -1,12 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
 import { Loader2, X } from 'lucide-react'
 import AgentAvatar from './AgentAvatar'
 import { collapsedStatusLabel } from './agent-status'
-import { routeToIntent } from '@/lib/agent/intents/route-mapping'
+import { routeToIntent, type RouteLabelTopic } from '@/lib/agent/intents/route-mapping'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 
@@ -44,6 +45,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 const UPSELL_DISMISSED_KEY = 'agent-upsell-dismissed'
 
 export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
+  const t = useTranslations('agent_trigger')
   const { openAgentSheet, expandAgentSheet, isOpen, collapsed, status, identity } = useAgentSheet()
   const pathname = usePathname()
   const router = useRouter()
@@ -147,7 +149,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // agent is already in use, so this only gates fresh opens in practice.)
   if (!identity.isVerified) return null
 
-  const name = identity.displayName?.trim() || 'min assistent'
+  const name = identity.displayName?.trim() || t('default_name')
   // Without the tool-loop runtime (OpenAI-compatible or unconfigured AI, #2204)
   // every route dispatches to general.help: the single-call console runs on
   // any provider, so the pill stays but never opens a chat that would 503.
@@ -158,19 +160,17 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
   // A minimized session used to be silent: the agent could be three tool calls
   // into a booking, or finished ten minutes ago, and the pill said "Fortsätt
   // med Anna" either way. While hidden, the status channel does the talking.
-  const statusText = collapsed ? collapsedStatusLabel(status, name) : null
+  const statusText = collapsed ? collapsedStatusLabel(status, name, t) : null
   const working = status.activity === 'working' || status.activity === 'detached'
   const finished = collapsed && status.activity === 'done'
 
   const labelText =
     statusText ??
     (collapsed
-      ? `Fortsätt med ${name}`
+      ? t('continue_with', { name })
       : !hasAi
-        ? `Uppgradera för att använda ${name}`
-        : dispatch.labelSuffix
-          ? `Fråga ${name} ${dispatch.labelSuffix}`
-          : `Fråga ${name}`)
+        ? t('upgrade_to_use', { name })
+        : askLabel(dispatch.labelSuffix, name, t))
 
   const handleClick = () => {
     // Collapsed → bring the existing session back, don't start a new one.
@@ -265,7 +265,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       {dismissible && (
         <button
           onClick={dismissUpsellForSession}
-          aria-label="Dölj tills nästa besök"
+          aria-label={t('hide_until_next_visit')}
           className="flex items-center rounded-r-full pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
           <X className="h-4 w-4" />
@@ -273,4 +273,24 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       )}
     </div>
   )
+}
+
+/** The fresh-open wording, naming what the current page is about. */
+function askLabel(
+  topic: RouteLabelTopic | null,
+  name: string,
+  t: ReturnType<typeof useTranslations>,
+): string {
+  switch (topic) {
+    case 'invoice':
+      return t('ask_name_about_invoice', { name })
+    case 'supplier_invoice':
+      return t('ask_name_about_supplier_invoice', { name })
+    case 'year_end':
+      return t('ask_name_about_year_end', { name })
+    case 'kpi':
+      return t('ask_name_about_kpi', { name })
+    default:
+      return t('ask_name', { name })
+  }
 }

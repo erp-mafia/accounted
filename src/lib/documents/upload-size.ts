@@ -70,12 +70,15 @@ export function formatMegabytes(bytes: number): string {
  * (ReconciliationUnderlag, support attachments). The document inbox no
  * longer refuses at this ceiling: see inboxTooLargeMessage.
  */
-export function tooLargeMessage(size: number): string {
-  return (
-    `Filen är ${formatMegabytes(size)} och gränsen är ${formatMegabytes(HOSTED_MAX_UPLOAD_BYTES)}. ` +
-    'Fotografera om kvittot, eller komprimera PDF:en, och försök igen.'
-  )
+export function tooLargeMessage(size: number, t: UploadSizeTranslate): string {
+  return t('too_large', {
+    size: formatMegabytes(size),
+    limit: formatMegabytes(HOSTED_MAX_UPLOAD_BYTES),
+  })
 }
+
+/** next-intl translator for the `upload_size` namespace. */
+export type UploadSizeTranslate = (key: string, values?: Record<string, string | number>) => string
 
 /**
  * The document inbox's own ceiling: MAX_FILE_SIZE in the invoice-inbox
@@ -99,9 +102,9 @@ export function exceedsInboxUploadLimit(size: number): boolean {
  * tooLargeMessage (actual size, then the limit), but the limit it names is
  * the one that actually applies on that surface now.
  */
-export function inboxTooLargeMessage(size: number): string {
-  return (
-    `Filen är ${formatMegabytes(size)} och gränsen för dokumentinkorgen är ${formatMegabytes(INBOX_MAX_UPLOAD_BYTES)}. ` +
-    'Komprimera PDF:en, eller dela upp den, och försök igen.'
-  )
+export function inboxTooLargeMessage(size: number, t: UploadSizeTranslate): string {
+  return t('inbox_too_large', {
+    size: formatMegabytes(size),
+    limit: formatMegabytes(INBOX_MAX_UPLOAD_BYTES),
+  })
 }

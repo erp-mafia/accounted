@@ -30,16 +30,22 @@ const VIEW_ROUTE: Record<View, string> = {
   skills: '/skills',
 }
 
-const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
-  { value: 'knowledge', label: 'Kunskap' },
-  { value: 'memory', label: 'Minne' },
-  { value: 'skills', label: 'Kompetens' },
-]
+const VIEW_ORDER: View[] = ['knowledge', 'memory', 'skills']
 
 /** `agentsEnabled`: the Kompetens view links to the Agenter page, hidden in production while it is finished. */
 export function AssistantSettingsContent({ agentsEnabled = true }: { agentsEnabled?: boolean }) {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const t = useTranslations('settings_assistant')
+  const viewLabels: Record<View, string> = {
+    knowledge: t('view_knowledge'),
+    memory: t('view_memory'),
+    skills: t('view_skills'),
+  }
+  const viewOptions = VIEW_ORDER.filter((v) => agentsEnabled || v !== 'skills').map((value) => ({
+    value,
+    label: viewLabels[value],
+  }))
   const searchParams = useSearchParams()
   const router = useRouter()
   const raw = searchParams.get('view')
@@ -56,7 +62,7 @@ export function AssistantSettingsContent({ agentsEnabled = true }: { agentsEnabl
       <SettingsSectionHeader title={tNav('assistant')} intro={tIntro('assistant')} />
 
       <div className="mt-6">
-        <SettingsSeg value={view} onChange={setView} options={agentsEnabled ? VIEW_OPTIONS : VIEW_OPTIONS.filter((o) => o.value !== 'skills')} aria-label="Välj vy" />
+        <SettingsSeg value={view} onChange={setView} options={viewOptions} aria-label={t('view_select_aria')} />
       </div>
 
       {/* Only the active view mounts, so each panel's data is fetched lazily

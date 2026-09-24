@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import {
   Dialog,
@@ -18,7 +19,7 @@ import {
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { buildSplitSelection, proposeSplitSelection } from '@/lib/reconciliation/split-selection'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
 import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -52,6 +53,9 @@ export function MatchVoucherDialog({
   transaction,
   onLinked,
 }: MatchVoucherDialogProps) {
+  const t = useTranslations('match_voucher_dialog')
+  const tc = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [glLines, setGlLines] = useState<UnlinkedGLLine[]>([])
   // Picked verifikat, in pick order. One = the plain link (1:1, or N:1 behind
@@ -207,8 +211,12 @@ export function MatchVoucherDialog({
       const result = await res.json()
       if (!res.ok || result.error) {
         toast({
-          title: 'Kunde inte matcha',
-          description: getErrorMessage(result, { context: 'transaction', statusCode: res.status }),
+          title: t('match_failed'),
+          description: getErrorMessage(result, {
+            context: 'transaction',
+            statusCode: res.status,
+            locale: errorLocale,
+          }),
           variant: 'destructive',
         })
         return
@@ -217,8 +225,8 @@ export function MatchVoucherDialog({
       onLinked(transaction.id, selected[0], label)
     } catch {
       toast({
-        title: 'Kunde inte koppla',
-        description: 'Ett fel uppstod. Försök igen.',
+        title: t('link_failed'),
+        description: t('generic_error'),
         variant: 'destructive',
       })
     } finally {
@@ -233,24 +241,11 @@ export function MatchVoucherDialog({
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
           <div className="flex items-center gap-2">
-            <DialogTitle>Matcha mot befintlig verifikation</DialogTitle>
+            <DialogTitle>{t('title')}</DialogTitle>
             <HelpPopover>
-              <p>
-                Kopplar bankhändelsen till en verifikation som redan är bokförd,
-                t.ex. en lön eller en post importerad från Fortnox. Ingen ny
-                bokföring skapas.
-              </p>
-              <p className="mt-2">
-                Täcker bankhändelsen flera verifikationer, t.ex. en bankgirorad
-                som klumpar ihop dagens inbetalningar? Välj alla som ingår.
-                Beloppen måste tillsammans bli bankhändelsens belopp; raden
-                delas inte, den kopplas till flera.
-              </p>
-              <p className="mt-2">
-                Med &quot;Visa även matchade&quot; kan flera bankhändelser kopplas
-                till samma verifikation, t.ex. en lön utbetald i flera
-                överföringar.
-              </p>
+              <p>{t('help_intro')}</p>
+              <p className="mt-2">{t('help_split')}</p>
+              <p className="mt-2">{t('help_include_matched')}</p>
             </HelpPopover>
           </div>
         </DialogHeader>
@@ -275,8 +270,7 @@ export function MatchVoucherDialog({
 
         {accountFallback && (
           <p className="text-xs text-muted-foreground">
-            Avstämning mot 1930. Hör transaktionen till ett annat bankkonto? Stäm av
-            det under Rapporter → Bankavstämning.
+            {t('account_fallback')}
           </p>
         )}
 
@@ -285,14 +279,14 @@ export function MatchVoucherDialog({
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" />
-              Söker verifikationer…
+              {t('searching')}
             </div>
           ) : glLines.length === 0 ? (
             <div className="rounded-lg border border-border px-3 py-6 text-center text-sm text-muted-foreground">
               <p>
                 {includeMatched
-                  ? `Inga verifikationer på ${accountNumber} i perioden.`
-                  : `Inga omatchade verifikationer på ${accountNumber} i perioden.`}
+                  ? t('empty_all', { account: accountNumber })
+                  : t('empty_unmatched', { account: accountNumber })}
               </p>
             </div>
           ) : (
@@ -305,25 +299,21 @@ export function MatchVoucherDialog({
               />
               {(selectedLine?.linked_transaction_count ?? 0) > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Redan matchad mot {selectedLine?.linked_transaction_count}{' '}
-                  transaktion{(selectedLine?.linked_transaction_count ?? 0) === 1 ? '' : 'er'};
-                  den här läggs till.
+                  {t('already_matched', { count: selectedLine?.linked_transaction_count ?? 0 })}
                 </p>
               )}
               {singleDiffers && (
                 <p className="text-xs text-muted-foreground">
-                  Verifikatet skiljer sig{' '}
-                  {formatCurrency(Math.abs(split.difference), transaction.currency)} från
-                  bankhändelsen. Täcker raden flera verifikationer, t.ex. dagens
-                  bankgiroinbetalningar? Välj dem också i listan.
+                  {t('single_differs', {
+                    amount: formatCurrency(Math.abs(split.difference), transaction.currency),
+                  })}
                 </p>
               )}
               {/* The arithmetic of a split, the same footer the worksheet
                   shows: what the picks sum to and what is left unexplained. */}
               {showingProposal && (
                 <p className="text-xs text-muted-foreground">
-                  Förslag: de här {selected.length} verifikationerna summerar exakt till
-                  bankhändelsen. Kontrollera och klicka Matcha.
+                  {t('proposal', { count: selected.length })}
                 </p>
               )}
               {isSplit && (
@@ -332,18 +322,21 @@ export function MatchVoucherDialog({
                   data-ph-mask
                 >
                   <span>
-                    {selected.length} verifikationer valda:{' '}
-                    {formatCurrency(split.sum, transaction.currency)}
+                    {t('split_selected', {
+                      count: selected.length,
+                      amount: formatCurrency(split.sum, transaction.currency),
+                    })}
                   </span>
                   <span className={cn(split.balanced ? 'text-muted-foreground' : 'text-warning')}>
-                    Differens {formatCurrency(split.difference, transaction.currency)}
+                    {t('split_difference', {
+                      amount: formatCurrency(split.difference, transaction.currency),
+                    })}
                   </span>
                 </div>
               )}
               {isSplit && !split.balanced && (
                 <p className="text-xs text-muted-foreground">
-                  Verifikationerna måste tillsammans motsvara bankhändelsens belopp.
-                  Lägg till eller ta bort tills differensen är 0.
+                  {t('split_unbalanced')}
                 </p>
               )}
             </>
@@ -359,7 +352,7 @@ export function MatchVoucherDialog({
               className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
               onClick={() => setIncludeMatched((v) => !v)}
             >
-              {includeMatched ? 'Dölj matchade' : 'Visa även matchade'}
+              {includeMatched ? t('hide_matched') : t('show_matched')}
             </button>
             {!wideRange && (
               <button
@@ -367,7 +360,7 @@ export function MatchVoucherDialog({
                 className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
                 onClick={() => setWideRange(true)}
               >
-                Visa alla datum
+                {t('show_all_dates')}
               </button>
             )}
           </div>
@@ -375,15 +368,15 @@ export function MatchVoucherDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleConfirm} disabled={!canSubmit} loading={submitting}>
             {submitting ? (
-              'Matchar…'
+              t('matching')
             ) : isSplit ? (
-              `Matcha ${selected.length} verifikationer`
+              t('match_count', { count: selected.length })
             ) : (
-              'Matcha'
+              t('match')
             )}
           </Button>
         </DialogFooter>

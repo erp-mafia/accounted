@@ -185,7 +185,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       if (Date.now() - pollStartedAtRef.current > POLL_DEADLINE_MS) {
         cleanup()
         setStatus('failed')
-        setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
+        setErrorMessage(t('bankid_session_expired'))
         return
       }
 
@@ -228,7 +228,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             // This tab watched its own order die. Say so: silently reverting to
             // the start button reads as "it just did nothing".
             setStatus('failed')
-            setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
+            setErrorMessage(t('bankid_session_expired'))
           }
           setSession(null)
           setActiveFlowId(null)
@@ -243,7 +243,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           if (pollFailureCount.current >= MAX_POLL_FAILURES) {
             cleanup()
             setStatus('service_unavailable')
-            setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
+            setErrorMessage(t('bankid_service_unavailable'))
             onCompleteRef.current({ error: 'service_unavailable' })
           }
           return
@@ -302,7 +302,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
                   : completeJson.error
                 if (errorCode === 'service_unavailable') {
                   setStatus('service_unavailable')
-                  setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
+                  setErrorMessage(t('bankid_service_unavailable'))
                 }
                 onCompleteRef.current({
                   error: errorCode,
@@ -364,7 +364,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           completedRef.current = true
           cleanup()
           setStatus('failed')
-          setErrorMessage(pollData.message || 'BankID-identifieringen misslyckades')
+          setErrorMessage(pollData.message || t('bankid_identification_failed'))
         }
       } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') return
@@ -372,14 +372,14 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         if (pollFailureCount.current >= MAX_POLL_FAILURES) {
           cleanup()
           setStatus('service_unavailable')
-          setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
+          setErrorMessage(t('bankid_service_unavailable'))
           onCompleteRef.current({ error: 'service_unavailable' })
         }
       } finally {
         pollInFlightRef.current = false
       }
     }, 2000)
-  }, [cleanup, mode])
+  }, [cleanup, mode, t])
 
   const startSession = useCallback(async () => {
     // Collapse double-clicks: one billable TIC session per intent.
@@ -392,7 +392,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
     setActiveFlowId(null)
     setLaunchedApp(false)
     setStatus('scanning')
-    setHintMessage('Starta BankID-appen')
+    setHintMessage(t('bankid_start_app'))
     setErrorMessage('')
 
     try {
@@ -421,20 +421,20 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         if (err.error === 'service_unavailable' || err.error === 'not_configured' || res.status === 502 || res.status === 503) {
           cleanup()
           setStatus('service_unavailable')
-          setErrorMessage('BankID-tjänsten är inte tillgänglig just nu')
+          setErrorMessage(t('bankid_service_unavailable'))
           onCompleteRef.current({ error: 'service_unavailable' })
           return
         }
         if (res.status === 429 || err.error === 'rate_limit') {
           setStatus('failed')
-          setErrorMessage('För många försök. Vänta en stund och försök igen.')
+          setErrorMessage(t('bankid_too_many_attempts'))
           return
         }
         // Unknown error: server messages are not user-facing copy; keep the
         // detail in the console and show Swedish.
         console.error('[bankid] start failed', res.status, err)
         setStatus('failed')
-        setErrorMessage('Ett oväntat fel uppstod. Försök igen.')
+        setErrorMessage(t('bankid_unexpected_error'))
         return
       }
 
@@ -457,11 +457,11 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       if (gen !== startGenRef.current) return
       console.error('[bankid] start failed', error)
       setStatus('failed')
-      setErrorMessage('Ett oväntat fel uppstod. Försök igen.')
+      setErrorMessage(t('bankid_unexpected_error'))
     } finally {
       startingRef.current = false
     }
-  }, [cleanup, mode, beginPolling])
+  }, [cleanup, mode, beginPolling, t])
 
   /**
    * Start (or continue) polling the flow this browser holds. Called from the
@@ -614,10 +614,10 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
   if (status === 'idle') {
     const label = mode === 'login'
-      ? 'Logga in med BankID'
+      ? t('bankid_login_button')
       : mode === 'link'
-        ? 'Koppla BankID'
-        : 'Skapa konto med BankID'
+        ? t('bankid_link_button')
+        : t('bankid_signup_button')
 
     return (
       <Button
@@ -641,14 +641,14 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="space-y-1.5">
             <p className="text-sm font-medium">
-              BankID är inte tillgängligt just nu
+              {t('bankid_unavailable_now')}
             </p>
             <p className="text-sm text-muted-foreground">
               {mode === 'login'
-                ? 'Logga in med e-post och lösenord nedan, eller använd "Glömt lösenord?" för en inloggningslänk via e-post.'
+                ? t('bankid_unavailable_login_hint')
                 : mode === 'signup'
-                  ? 'Skapa konto med e-post och lösenord nedan istället.'
-                  : 'Försök igen senare.'}
+                  ? t('bankid_unavailable_signup_hint')
+                  : t('bankid_try_again_later')}
             </p>
             <Button
               onClick={startSession}
@@ -656,7 +656,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               size="sm"
               className="mt-1 h-auto px-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
-              Försök med BankID igen
+              {t('bankid_retry_with_bankid')}
             </Button>
           </div>
         </div>
@@ -670,7 +670,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         <p className="text-sm text-destructive">{errorMessage}</p>
         <Button onClick={startSession} variant="outline" className="gap-2">
           <BankIdIcon />
-          Försök igen
+          {t('bankid_retry')}
         </Button>
       </div>
     )
@@ -704,7 +704,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               className="gap-1.5 text-muted-foreground"
             >
               <Monitor className="h-3.5 w-3.5" />
-              BankID på den här enheten
+              {t('bankid_on_this_device')}
             </Button>
           )}
         </>
@@ -717,7 +717,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               BankID app" would be a lie followed by silence. */}
           <p className="text-sm text-muted-foreground">
             {launchedApp
-              ? 'Öppnar BankID-appen...'
+              ? t('bankid_opening_app')
               : t('bankid_finish_in_app')}
           </p>
         </div>
@@ -732,7 +732,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         size="sm"
         className="text-muted-foreground"
       >
-        Avbryt
+        {t('bankid_cancel')}
       </Button>
     </div>
   )

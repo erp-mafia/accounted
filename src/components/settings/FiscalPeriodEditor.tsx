@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/destructive-confirm-dialog'
 import { Loader2, Lock } from 'lucide-react'
 import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
-import { validateFirstPeriod } from '@/components/bookkeeping/FiscalPeriodDateFields'
+import { useValidateFirstPeriod } from '@/components/bookkeeping/FiscalPeriodDateFields'
 import {
   SettingsGroup,
   SettingsInput,
@@ -43,6 +43,7 @@ export function FiscalPeriodEditor() {
   const { company, role } = useCompany()
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
+  const validateFirstPeriod = useValidateFirstPeriod()
 
   const [period, setPeriod] = useState<FiscalPeriod | null>(null)
   const [postedCount, setPostedCount] = useState<number | null>(null)

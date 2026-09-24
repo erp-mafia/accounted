@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -92,6 +93,8 @@ export default function CorrectOpeningBalanceDialog({
   onOpenChange,
   onCorrected,
 }: Props) {
+  const t = useTranslations('correct_opening_balance_dialog')
+  const tc = useTranslations('common')
   const { toast } = useToast()
   const basReady = useBasReference()
   // basReady is a re-seed trigger: names fill in once the chart chunk lands.
@@ -205,7 +208,7 @@ export default function CorrectOpeningBalanceDialog({
       }
 
       if (strike_line_ids.length === 0 && new_lines.length === 0) {
-        toast({ title: 'Inga ändringar att spara' })
+        toast({ title: t('no_changes') })
         setIsSubmitting(false)
         return
       }
@@ -238,7 +241,7 @@ export default function CorrectOpeningBalanceDialog({
       }
 
       const cascadeSummary = (result?.data?.cascade ?? null) as CascadeSummary | null
-      let description = 'Beloppen uppdaterades direkt i verifikationen. Ingen ny verifikation skapades.'
+      let description = t('success_description')
       if (cascadeSummary) {
         const done = cascadeSummary.corrected.length
         // Blocked (locked/closed/bokslut) and failed skips are different
@@ -251,23 +254,26 @@ export default function CorrectOpeningBalanceDialog({
           (s) => s.reason === 'correction_failed' || s.reason === 'validation_failed',
         )
         if (done > 0) {
-          description += ` ${done} senare räkenskapsår uppdaterades också.`
+          description += t('cascade_done', { count: done })
         }
         if (blocked.length > 0) {
           const names = blocked.map((s) => s.period_name).filter(Boolean).join(', ')
-          description += ` ${blocked.length} år hoppades över (låsta, stängda eller med bokslut)${names ? `: ${names}` : ''}.`
+          description += names
+            ? t('cascade_blocked_named', { count: blocked.length, names })
+            : t('cascade_blocked', { count: blocked.length })
         }
         if (failed.length > 0) {
           const names = failed.map((s) => s.period_name).filter(Boolean).join(', ')
-          description += ` ${failed.length} år kunde inte uppdateras och behöver kontrolleras${names ? `: ${names}` : ''}.`
+          description += names
+            ? t('cascade_failed_named', { count: failed.length, names })
+            : t('cascade_failed', { count: failed.length })
         }
         if (cascadeSummary.failed) {
-          description +=
-            ' Uppdateringen av senare räkenskapsår kunde inte genomföras: kontrollera deras ingående balanser.'
+          description += t('cascade_run_failed')
         }
       }
 
-      toast({ title: 'Ingående balanser korrigerade', description })
+      toast({ title: t('success_title'), description })
       // The correction relinks fiscal_periods.opening_balance_entry_id (for
       // every cascaded year too): refresh the shared reference cache.
       await invalidateReferenceData('ref:fiscal-periods')
@@ -280,7 +286,7 @@ export default function CorrectOpeningBalanceDialog({
         setShowBlockedGuidance(true)
       }
       toast({
-        title: 'Kunde inte korrigera ingående balanser',
+        title: t('error_title'),
         description: getErrorMessage(anyErr.body ?? err, {
           context: 'journal_entry',
           statusCode: anyErr.status,
@@ -290,25 +296,25 @@ export default function CorrectOpeningBalanceDialog({
     } finally {
       setIsSubmitting(false)
     }
-  }, [state, isSubmitting, entry.fiscal_period_id, entry.lines, cascade, toast, onOpenChange, onCorrected])
+  }, [state, isSubmitting, entry.fiscal_period_id, entry.lines, cascade, toast, onOpenChange, onCorrected, t])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-3xl max-h-[95dvh] sm:max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Korrigera ingående balanser</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Ändra beloppen nedan och spara. Verifikationen (
-            <span data-ph-mask="">{formatVoucher(entry)}</span>) uppdateras direkt: ingen ny
-            verifikation skapas.
+            {t.rich('description', {
+              voucher: formatVoucher(entry),
+              mask: (c) => <span data-ph-mask="">{c}</span>,
+            })}
           </DialogDescription>
         </DialogHeader>
 
         {/* Inline rättelse (BFL 5 kap 5 §): edited in place, original logged */}
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
           <p className="text-sm text-muted-foreground">
-            Ändringen sparas som en spårbar rättelse i samma verifikation (Bokföringslagen 5 kap
-            5 §): de ursprungliga raderna bevaras i rättelseloggen.
+            {t('rattelse_note')}
           </p>
         </div>
 
@@ -318,26 +324,25 @@ export default function CorrectOpeningBalanceDialog({
         {(currentPeriodBlocked || showBlockedGuidance) && (
           <div className="rounded-lg border border-border bg-muted/30 px-4 py-3 space-y-1">
             <p className="text-sm">
-              Det här räkenskapsåret är låst, stängt eller har ett bokslut, så dess ingående
-              balanser kan inte korrigeras här.
+              {t('blocked_intro')}
             </p>
             {guidancePeriod ? (
               <p className="text-sm">
-                Korrigera i stället ingående balansen för{' '}
-                <Link
-                  href={`/bookkeeping/${guidancePeriod.opening_balance_entry_id}`}
-                  className="underline underline-offset-2"
-                >
-                  {guidancePeriod.name || guidancePeriod.period_start.slice(0, 4)}
-                </Link>
-                , det tidigaste öppna året. Då blir saldona rätt framåt. Tidigare, låsta år är
-                normalt redan deklarerade sedan tidigare; behöver ett sådant år ändå rättas
-                måste det först låsas upp.
+                {t.rich('blocked_guidance', {
+                  year: guidancePeriod.name || guidancePeriod.period_start.slice(0, 4),
+                  link: (c) => (
+                    <Link
+                      href={`/bookkeeping/${guidancePeriod.opening_balance_entry_id}`}
+                      className="underline underline-offset-2"
+                    >
+                      {c}
+                    </Link>
+                  ),
+                })}
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                För att korrigera behöver året först låsas upp (eller bokslutet återföras) under
-                Bokföring → Räkenskapsår.
+                {t('blocked_unlock_hint')}
               </p>
             )}
           </div>
@@ -356,13 +361,10 @@ export default function CorrectOpeningBalanceDialog({
             />
             <span className="space-y-1">
               <span className="block text-sm">
-                Uppdatera även senare räkenskapsår ({laterPeriodsWithIB.length})
+                {t('cascade_label', { count: laterPeriodsWithIB.length })}
               </span>
               <span className="block text-sm text-muted-foreground">
-                Samma ändring förs in i senare års ingående balanser så att saldona stämmer
-                framåt, utan nya verifikat. År som är låsta eller har bokslut hoppas över.
-                Avser rättelsen ett tidigare års resultat (t.ex. konto 2099) kan en omföring
-                till balanserat resultat fortfarande behöva bokföras som vanligt.
+                {t('cascade_help')}
               </span>
             </span>
           </label>
@@ -370,10 +372,10 @@ export default function CorrectOpeningBalanceDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSubmit} disabled={!state?.canSubmit || isSubmitting}>
-            {isSubmitting ? 'Sparar...' : 'Korrigera ingående balanser'}
+            {isSubmitting ? tc('saving') : t('submit')}
           </Button>
         </DialogFooter>
       </DialogContent>

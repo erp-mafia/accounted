@@ -242,10 +242,9 @@ export default function AccountMappingStep({
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Kontomappning</CardTitle>
+          <CardTitle>{t('mapping_title')}</CardTitle>
           <CardDescription>
-            Varje konto i SIE-filen kopplas till ett konto i din kontoplan.
-            De flesta matchas automatiskt: granska de osäkra nedan.{' '}
+            {t('mapping_description')}{' '}
             {t('mapping_new_accounts_note')}
           </CardDescription>
         </CardHeader>
@@ -266,7 +265,7 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('unmapped')}
             >
               <XCircle className="h-3 w-3 mr-1" />
-              {stats.unmapped} ej mappade
+              {t('mapping_stat_unmapped', { count: stats.unmapped })}
             </Badge>
             <Badge
               variant={filter === 'new_account' ? 'default' : stats.newAccounts > 0 ? 'secondary' : 'outline'}
@@ -282,7 +281,7 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('low_confidence')}
             >
               <AlertCircle className="h-3 w-3 mr-1" />
-              {stats.lowConfidence} osäkra
+              {t('mapping_stat_low_confidence', { count: stats.lowConfidence })}
             </Badge>
             <Badge
               variant={filter === 'manual' ? 'default' : 'outline'}
@@ -290,14 +289,14 @@ export default function AccountMappingStep({
               onClick={() => handleFilterChange('manual')}
             >
               <CheckCircle className="h-3 w-3 mr-1" />
-              {stats.manual} manuellt satta
+              {t('mapping_stat_manual', { count: stats.manual })}
             </Badge>
             <Badge
               variant={filter === 'all' ? 'default' : 'outline'}
               className="cursor-pointer"
               onClick={() => handleFilterChange('all')}
             >
-              Visa alla ({mappings.length})
+              {t('mapping_stat_all', { count: mappings.length })}
             </Badge>
           </div>
 
@@ -396,7 +395,7 @@ export default function AccountMappingStep({
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
-                placeholder="Sök konto..."
+                placeholder={t('mapping_search_placeholder')}
                 value={searchTerm}
                 onChange={(e) => handleSearchChange(e.target.value)}
                 className="pl-9"
@@ -408,12 +407,12 @@ export default function AccountMappingStep({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Visa alla</SelectItem>
-                <SelectItem value="unmapped">Ej mappade</SelectItem>
+                <SelectItem value="all">{t('mapping_filter_all')}</SelectItem>
+                <SelectItem value="unmapped">{t('mapping_filter_unmapped')}</SelectItem>
                 <SelectItem value="new_account">{t('new_account_filter', { count: stats.newAccounts })}</SelectItem>
                 <SelectItem value="vat_review">{t('vat_review_filter', { count: stats.vatReview })}</SelectItem>
-                <SelectItem value="low_confidence">Osäkra</SelectItem>
-                <SelectItem value="manual">Manuellt satta</SelectItem>
+                <SelectItem value="low_confidence">{t('mapping_filter_low_confidence')}</SelectItem>
+                <SelectItem value="manual">{t('mapping_filter_manual')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -429,12 +428,12 @@ export default function AccountMappingStep({
             <Table className="table-fixed text-[13px] [&_td]:px-3 [&_th]:px-3">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-20">Källkonto</TableHead>
-                  <TableHead className="w-40">Källnamn</TableHead>
+                  <TableHead className="w-20">{t('mapping_col_source_account')}</TableHead>
+                  <TableHead className="w-40">{t('mapping_col_source_name')}</TableHead>
                   <TableHead className="w-8 !px-0" aria-hidden="true"></TableHead>
-                  <TableHead className="w-56">Målkonto</TableHead>
+                  <TableHead className="w-56">{t('mapping_col_target_account')}</TableHead>
                   <TableHead className="w-72">{t('vat_treatment_column')}</TableHead>
-                  <TableHead className="w-24">Konfidens</TableHead>
+                  <TableHead className="w-24">{t('mapping_col_confidence')}</TableHead>
                   <TableHead className="sticky right-0 z-20 w-28 min-w-28 border-l border-border bg-background text-right">
                     <span className="inline-flex items-center gap-1">
                       {t('vat_treatment_confirm')}
@@ -478,11 +477,11 @@ export default function AccountMappingStep({
                         }}
                       >
                         <SelectTrigger className={!mapping.targetAccount ? 'border-destructive' : ''}>
-                          <SelectValue placeholder="Välj konto..." />
+                          <SelectValue placeholder={t('mapping_select_account_placeholder')} />
                         </SelectTrigger>
                         <SelectContent className="max-h-80">
-                          <SelectItem value="none">-- Välj konto --</SelectItem>
-                          {createdOptionsFor(mapping, knownTargets).map((option) => (
+                          <SelectItem value="none">{t('mapping_select_account_none')}</SelectItem>
+                          {createdOptionsFor(mapping, knownTargets, t).map((option) => (
                             <SelectItem key={option.value} value={option.value}>
                               <span className="font-mono mr-2">{option.value}</span>
                               {option.name}
@@ -667,7 +666,7 @@ export default function AccountMappingStep({
                 {paginatedMappings.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                      Inga konton matchar filtret
+                      {t('mapping_no_match')}
                     </TableCell>
                   </TableRow>
                 )}
@@ -679,7 +678,11 @@ export default function AccountMappingStep({
           {totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Visar {((currentPage - 1) * PAGE_SIZE) + 1}-{Math.min(currentPage * PAGE_SIZE, filteredMappings.length)} av {filteredMappings.length}
+                {t('mapping_showing', {
+                  from: ((currentPage - 1) * PAGE_SIZE) + 1,
+                  to: Math.min(currentPage * PAGE_SIZE, filteredMappings.length),
+                  total: filteredMappings.length,
+                })}
               </p>
               <div className="flex gap-2">
                 <Button
@@ -688,10 +691,10 @@ export default function AccountMappingStep({
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={currentPage === 1}
                 >
-                  Föregående
+                  {t('mapping_previous')}
                 </Button>
                 <div className="flex items-center gap-1 px-2">
-                  <span className="text-sm">Sida {currentPage} av {totalPages}</span>
+                  <span className="text-sm">{t('mapping_page', { page: currentPage, total: totalPages })}</span>
                 </div>
                 <Button
                   variant="outline"
@@ -699,7 +702,7 @@ export default function AccountMappingStep({
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                   disabled={currentPage === totalPages}
                 >
-                  Nästa
+                  {t('mapping_next')}
                 </Button>
               </div>
             </div>
@@ -710,7 +713,7 @@ export default function AccountMappingStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {t('mapping_back')}
         </Button>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {stats.vatReview > 0 && stats.unmapped === 0 && (
@@ -724,10 +727,10 @@ export default function AccountMappingStep({
           )}
           <Button onClick={onContinue} disabled={!canContinue}>
             {canContinue
-              ? 'Fortsätt till granskning'
+              ? t('mapping_continue')
               : stats.unmapped > 0
-                ? `${stats.unmapped} konton saknar mappning`
-                : `${stats.vatReview} momskoder återstår att bekräfta`}
+                ? t('mapping_unmapped_remaining', { count: stats.unmapped })
+                : t('mapping_vat_codes_remaining', { count: stats.vatReview })}
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </div>
@@ -746,12 +749,13 @@ export default function AccountMappingStep({
 function createdOptionsFor(
   mapping: AccountMapping,
   knownTargets: ReadonlySet<string>,
+  t: ReturnType<typeof useTranslations<'chart_of_accounts'>>,
 ): Array<{ value: string; name: string }> {
   const options: Array<{ value: string; name: string }> = []
   if (!knownTargets.has(mapping.sourceAccount) && isValidBASRange(mapping.sourceAccount)) {
     options.push({
       value: mapping.sourceAccount,
-      name: mapping.sourceName || `Konto ${mapping.sourceAccount}`,
+      name: mapping.sourceName || t('mapping_account_fallback', { number: mapping.sourceAccount }),
     })
   }
   if (
@@ -761,7 +765,7 @@ function createdOptionsFor(
   ) {
     options.push({
       value: mapping.targetAccount,
-      name: mapping.targetName || `Konto ${mapping.targetAccount}`,
+      name: mapping.targetName || t('mapping_account_fallback', { number: mapping.targetAccount }),
     })
   }
   return options
@@ -801,18 +805,19 @@ function ConfidenceBadge({
   matchType: string  // Keep for potential future use
   isOverride: boolean
 }) {
+  const t = useTranslations('chart_of_accounts')
   if (isOverride) {
-    return <Badge variant="default">Manuell</Badge>
+    return <Badge variant="default">{t('mapping_confidence_manual')}</Badge>
   }
 
   if (confidence >= 0.9) {
-    return <span className="text-xs text-muted-foreground">Exakt</span>
+    return <span className="text-xs text-muted-foreground">{t('mapping_confidence_exact')}</span>
   }
 
   if (confidence >= 0.7) {
-    return <Badge variant="secondary">Trolig</Badge>
+    return <Badge variant="secondary">{t('mapping_confidence_likely')}</Badge>
   }
 
-  return <Badge variant="outline">Osäker</Badge>
+  return <Badge variant="outline">{t('mapping_confidence_uncertain')}</Badge>
 }
 

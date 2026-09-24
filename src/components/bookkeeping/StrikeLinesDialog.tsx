@@ -45,12 +45,12 @@ interface Props {
  * Inline line rättelse (BFL 5 kap 5 §): strike lines in a posted verifikat
  * and add replacement lines in the SAME verifikat, without an
  * ändringsverifikation. The struck originals stay visible (strikethrough)
- * in the verifikat via the immutable rättelse log. Stays Swedish
- * (verifikat surface, .claude/rules/i18n.md).
+ * in the verifikat via the immutable rättelse log.
  */
 export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrected }: Props) {
   const { toast } = useToast()
   const t = useTranslations('journal_detail')
+  const tc = useTranslations('common')
   // The full chart (deactivated rows included) comes from the session cache
   // (lib/reference-data); only the static BAS catalogue is loaded per open,
   // and it is module-cached after the first time.
@@ -204,15 +204,15 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
         throw error
       }
       toast({
-        title: 'Verifikationen rättad',
-        description: 'De strukna raderna visas överstrukna i verifikatet.',
+        title: t('strike_dialog_success_title'),
+        description: t('strike_dialog_success_description'),
       })
       onOpenChange(false)
       onCorrected()
     } catch (err) {
       const anyErr = err as { body?: unknown; status?: number }
       toast({
-        title: 'Kunde inte rätta verifikationen',
+        title: t('strike_dialog_failed_title'),
         description: getErrorMessage(anyErr.body ?? err, { context: 'journal_entry', statusCode: anyErr.status }),
         variant: 'destructive',
       })
@@ -228,31 +228,21 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           {/* Convention 7: the how-it-works copy lives behind the "?", not in
               the dialog flow. */}
           <div className="flex items-center gap-2">
-            <DialogTitle>Stryk rader i verifikatet</DialogTitle>
+            <DialogTitle>{t('strike_lines')}</DialogTitle>
             <RattelseExplainer>
-              <p>
-                Här stryks felaktiga rader och ersätts direkt i samma verifikat,
-                utan ändringsverifikation. Det fungerar bara i öppna, olåsta
-                perioder.
-              </p>
-              <p>
-                Varje rättelse loggas med vem och när, och de ursprungliga
-                raderna förblir synliga i verifikatets rättelsehistorik.
-              </p>
-              <p>
-                Om månaden redan är momsdeklarerad kan en ändring av momskonton
-                påverka den inlämnade deklarationen.
-              </p>
+              <p>{t('strike_dialog_help_how')}</p>
+              <p>{t('strike_dialog_help_logged')}</p>
+              <p>{t('strike_dialog_help_vat')}</p>
             </RattelseExplainer>
           </div>
           <DialogDescription>
-            De strukna raderna förblir synliga (överstrukna) i verifikatet.
+            {t('strike_dialog_description')}
           </DialogDescription>
         </DialogHeader>
 
         {/* Original lines with strike checkboxes */}
         <div className="space-y-1">
-          <p className="text-sm font-medium">Markera rader som ska strykas</p>
+          <p className="text-sm font-medium">{t('strike_dialog_select_lines')}</p>
           <div className="rounded-lg border divide-y">
             {originalLines.map((line) => {
               const struck = strikeIds.has(line.id)
@@ -263,7 +253,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                 <label
                   key={line.id}
                   className={`flex items-center gap-3 px-3 py-2 text-sm transition-colors ${isForeign ? 'opacity-60' : 'cursor-pointer hover:bg-secondary/60'}`}
-                  title={isForeign ? 'Rader i utländsk valuta rättas med ändringsverifikat' : undefined}
+                  title={isForeign ? t('strike_dialog_foreign_hint') : undefined}
                 >
                   <Checkbox
                     checked={struck}
@@ -278,8 +268,8 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                   </span>
                   <span className={`tabular-nums shrink-0 ${struck ? 'line-through text-muted-foreground' : ''}`}>
                     {Number(line.debit_amount) > 0
-                      ? `${Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} D`
-                      : `${Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} K`}
+                      ? `${Number(line.debit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${t('strike_dialog_debit_abbr')}`
+                      : `${Number(line.credit_amount).toLocaleString('sv-SE', { minimumFractionDigits: 2 })} ${t('strike_dialog_credit_abbr')}`}
                   </span>
                 </label>
               )
@@ -290,9 +280,9 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
         {/* Replacement lines */}
         <div className="space-y-2">
           <div className="space-y-1">
-            <p className="text-sm font-medium">Ersättningsrader</p>
+            <p className="text-sm font-medium">{t('strike_dialog_replacement_title')}</p>
             <p className="text-xs text-muted-foreground">
-              Lägg till de rader som ska gälla i stället. Verifikationen måste balansera efter rättelsen.
+              {t('strike_dialog_replacement_hint')}
             </p>
           </div>
 
@@ -343,7 +333,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                 <Input
                   value={line.line_description}
                   onChange={(e) => updateNewLine(index, 'line_description', e.target.value)}
-                  placeholder="Beskrivning"
+                  placeholder={t('col_description')}
                   className="h-8"
                 />
                 <div className="grid grid-cols-2 gap-2 sm:contents">
@@ -351,7 +341,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                     type="number"
                     value={line.debit_amount}
                     onChange={(e) => updateNewLine(index, 'debit_amount', e.target.value)}
-                    placeholder="Debet"
+                    placeholder={t('col_debit')}
                     className="h-8 text-right"
                     min={0}
                     step="0.01"
@@ -360,7 +350,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                     type="number"
                     value={line.credit_amount}
                     onChange={(e) => updateNewLine(index, 'credit_amount', e.target.value)}
-                    placeholder="Kredit"
+                    placeholder={t('col_credit')}
                     className="h-8 text-right"
                     min={0}
                     step="0.01"
@@ -372,20 +362,20 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
           <Button variant="outline" size="sm" onClick={addNewLine}>
             <Plus className="h-4 w-4 mr-1" />
-            Lägg till rad
+            {t('strike_dialog_add_line')}
           </Button>
         </div>
 
         {/* Effective balance after the rättelse */}
         <div className="flex justify-end gap-6 text-sm pt-2 border-t">
           <div>
-            <span className="text-muted-foreground mr-2">Debet efter rättelse:</span>
+            <span className="text-muted-foreground mr-2">{t('strike_dialog_debit_after')}</span>
             <span className={!isBalanced ? 'text-destructive font-medium' : 'font-medium'}>
               {totalDebit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
             </span>
           </div>
           <div>
-            <span className="text-muted-foreground mr-2">Kredit efter rättelse:</span>
+            <span className="text-muted-foreground mr-2">{t('strike_dialog_credit_after')}</span>
             <span className={!isBalanced ? 'text-destructive font-medium' : 'font-medium'}>
               {totalCredit.toLocaleString('sv-SE', { minimumFractionDigits: 2 })}
             </span>
@@ -394,22 +384,21 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
 
         {hasChange && !isBalanced && (
           <p className="text-sm text-destructive">
-            Debet och kredit måste vara lika och större än 0 efter rättelsen.
+            {t('strike_dialog_unbalanced')}
           </p>
         )}
         {hasChange && isBalanced && effectiveCount < 2 && (
           <p className="text-sm text-destructive">
-            Verifikationen måste ha minst två rader efter rättelsen. Använd Återför (storno) för att
-            makulera hela verifikatet.
+            {t('strike_dialog_min_two_lines')}
           </p>
         )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            Avbryt
+            {tc('cancel')}
           </Button>
           <Button onClick={handleSubmit} disabled={!canSubmit || isSubmitting}>
-            {isSubmitting ? 'Rättar...' : 'Rätta verifikatet'}
+            {isSubmitting ? t('strike_dialog_submitting') : t('strike_dialog_submit')}
           </Button>
         </DialogFooter>
       </DialogContent>

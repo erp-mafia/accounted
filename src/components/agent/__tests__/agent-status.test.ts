@@ -17,6 +17,10 @@ function run(events: AgentStatusEvent[], from: AgentStatus = INITIAL_AGENT_STATU
   return events.reduce(reduceAgentStatus, from)
 }
 
+// Echoes the key and the name so the tests pin which message is chosen.
+const tTrigger = (key: string, values?: Record<string, string | number>) =>
+  values?.name ? `${key}:${values.name}` : key
+
 describe('reduceAgentStatus', () => {
   it('reports a finished turn only when it finished out of sight', () => {
     const onScreen = run([{ type: 'turn_start' }, { type: 'turn_end' }])
@@ -91,22 +95,22 @@ describe('reduceAgentStatus', () => {
       label: 'Kör momsavstämning',
     })
     expect(detached.activity).toBe('detached')
-    expect(collapsedStatusLabel(detached, 'Anna')).toBe('Kör momsavstämning')
+    expect(collapsedStatusLabel(detached, 'Anna', tTrigger)).toBe('Kör momsavstämning')
   })
 })
 
 describe('collapsedStatusLabel', () => {
   it('says nothing when there is nothing to say', () => {
-    expect(collapsedStatusLabel(INITIAL_AGENT_STATUS, 'Anna')).toBeNull()
+    expect(collapsedStatusLabel(INITIAL_AGENT_STATUS, 'Anna', tTrigger)).toBeNull()
   })
 
   it('drops the narration ellipsis so the pill does not read as two spinners', () => {
     const working = run([{ type: 'turn_start' }, { type: 'step', label: 'Bokar avskrivningar…' }])
-    expect(collapsedStatusLabel(working, 'Anna')).toBe('Bokar avskrivningar')
+    expect(collapsedStatusLabel(working, 'Anna', tTrigger)).toBe('Bokar avskrivningar')
   })
 
   it('falls back to the agent name while working without a named step', () => {
-    expect(collapsedStatusLabel(run([{ type: 'turn_start' }]), 'Anna')).toBe('Anna arbetar')
+    expect(collapsedStatusLabel(run([{ type: 'turn_start' }]), 'Anna', tTrigger)).toBe('status_working:Anna')
   })
 
   it('announces a finished turn by name', () => {
@@ -115,6 +119,6 @@ describe('collapsedStatusLabel', () => {
       { type: 'turn_start' },
       { type: 'turn_end' },
     ])
-    expect(collapsedStatusLabel(done, 'Anna')).toBe('Anna är klar')
+    expect(collapsedStatusLabel(done, 'Anna', tTrigger)).toBe('status_done:Anna')
   })
 })

@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useMemo, useRef, useState } from 'react'
+import { useLocale, useTranslations } from 'next-intl'
 import {
   AlertTriangle,
   ChevronDown,
@@ -32,7 +33,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
@@ -126,9 +127,11 @@ function voucherTagState(v: TaggingVoucher): {
  *
  * Merge mode (default) layers picked values onto each line's existing map;
  * "Ersätt tagg" replaces the whole map: used to consolidate typo/phantom
- * codes. Strings hardcoded Swedish per the dimensions-surface convention.
+ * codes.
  */
 export default function BulkTagWorkbench() {
+  const t = useTranslations('bulk_tag_workbench')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -158,13 +161,13 @@ export default function BulkTagWorkbench() {
 
   const loadVouchers = useCallback(async () => {
     for (const [label, value] of [
-      ['Konto från', accountFrom],
-      ['Konto till', accountTo],
+      [t('account_from'), accountFrom],
+      [t('account_to'), accountTo],
     ] as const) {
       if (value && !ACCOUNT_RE.test(value)) {
         toast({
-          title: 'Ogiltigt kontonummer',
-          description: `${label} måste vara exakt 4 siffror.`,
+          title: t('invalid_account_title'),
+          description: t('invalid_account_description', { label }),
           variant: 'destructive',
         })
         return
@@ -194,14 +197,14 @@ export default function BulkTagWorkbench() {
       anchorIndexRef.current = null
     } catch (err) {
       toast({
-        title: 'Kunde inte hämta verifikat',
-        description: getErrorMessage(err, { locale: 'sv' }),
+        title: t('load_failed'),
+        description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
     } finally {
       setIsLoading(false)
     }
-  }, [accountFrom, accountTo, dateFrom, dateTo, text, onlyUntagged, showAnnulled, toast])
+  }, [accountFrom, accountTo, dateFrom, dateTo, text, onlyUntagged, showAnnulled, toast, t, errorLocale])
 
   /** Selection state of one voucher: 'none' | 'some' | 'all'. */
   const voucherSelection = useCallback(
@@ -347,9 +350,9 @@ export default function BulkTagWorkbench() {
     // excludes pairs entirely.
     if (missingPairLineIds.length > 0) {
       const ok = await confirm({
-        title: 'Motverifikat är inte valda',
-        description: `Du taggar verifikat utan deras motverifikat (${missingPairVouchers.join(', ')}). Projektresultatet blir skevt tills båda sidorna bär samma dimensioner. Vill du tagga ändå?`,
-        confirmLabel: 'Tagga ändå',
+        title: t('pair_confirm_title'),
+        description: t('pair_confirm_description', { vouchers: missingPairVouchers.join(', ') }),
+        confirmLabel: t('pair_confirm_label'),
       })
       if (!ok) return
     }
@@ -390,7 +393,7 @@ export default function BulkTagWorkbench() {
           })
           const json = await res.json().catch(() => null)
           if (!res.ok) {
-            const message = getErrorMessage(json, { locale: 'sv' })
+            const message = getErrorMessage(json, { locale: errorLocale })
             for (const id of chunk) failed.push({ line_id: id, error: message })
             continue
           }
@@ -440,10 +443,11 @@ export default function BulkTagWorkbench() {
     }
 
     toast({
-      title: failed.length > 0 ? 'Omtaggningen slutfördes delvis' : 'Verifikat omtaggade',
-      description: `${retagged} rader ändrade, ${unchanged} oförändrade${
-        failed.length > 0 ? `, ${failed.length} misslyckades` : ''
-      }.`,
+      title: failed.length > 0 ? t('apply_partial_title') : t('apply_success_title'),
+      description:
+        failed.length > 0
+          ? t('apply_result_with_failures', { retagged, unchanged, failed: failed.length })
+          : t('apply_result', { retagged, unchanged }),
       variant: failed.length > 0 ? 'destructive' : undefined,
     })
 
@@ -451,7 +455,7 @@ export default function BulkTagWorkbench() {
       setPicked({})
       setReason('')
     }
-  }, [vouchers, canApply, selected, replaceMode, picked, reason, toast, missingPairLineIds, missingPairVouchers, confirm])
+  }, [vouchers, canApply, selected, replaceMode, picked, reason, toast, missingPairLineIds, missingPairVouchers, confirm, t, errorLocale])
 
   const headerChecked: boolean | 'indeterminate' = allSelected
     ? true
@@ -467,7 +471,7 @@ export default function BulkTagWorkbench() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <Label htmlFor="tag-date-from" className="text-xs text-muted-foreground">
-                Från datum
+                {t('date_from')}
               </Label>
               <Input
                 id="tag-date-from"
@@ -479,7 +483,7 @@ export default function BulkTagWorkbench() {
             </div>
             <div>
               <Label htmlFor="tag-date-to" className="text-xs text-muted-foreground">
-                Till datum
+                {t('date_to')}
               </Label>
               <Input
                 id="tag-date-to"
@@ -491,7 +495,7 @@ export default function BulkTagWorkbench() {
             </div>
             <div>
               <Label htmlFor="tag-account-from" className="text-xs text-muted-foreground">
-                Konto från
+                {t('account_from')}
               </Label>
               <Input
                 id="tag-account-from"
@@ -505,7 +509,7 @@ export default function BulkTagWorkbench() {
             </div>
             <div>
               <Label htmlFor="tag-account-to" className="text-xs text-muted-foreground">
-                Konto till
+                {t('account_to')}
               </Label>
               <Input
                 id="tag-account-to"
@@ -522,7 +526,7 @@ export default function BulkTagWorkbench() {
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                placeholder="Sök i beskrivning…"
+                placeholder={t('search_placeholder')}
                 className="pl-10"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
@@ -538,7 +542,7 @@ export default function BulkTagWorkbench() {
                 onCheckedChange={(checked) => setOnlyUntagged(checked === true)}
               />
               <Label htmlFor="tag-only-untagged" className="text-sm font-normal">
-                Endast otaggade
+                {t('only_untagged')}
               </Label>
             </div>
             <div className="flex items-center gap-2">
@@ -548,12 +552,12 @@ export default function BulkTagWorkbench() {
                 onCheckedChange={(checked) => setShowAnnulled(checked === true)}
               />
               <Label htmlFor="tag-show-annulled" className="text-sm font-normal">
-                Visa annullerade
+                {t('show_annulled')}
               </Label>
             </div>
             <Button onClick={() => void loadVouchers()} loading={isLoading}>
               {!isLoading && <Search className="mr-2 h-4 w-4" />}
-              Hämta verifikat
+              {t('fetch_vouchers')}
             </Button>
           </div>
         </CardContent>
@@ -565,8 +569,8 @@ export default function BulkTagWorkbench() {
           <CardContent className="p-0">
             <DataListEmpty
               icon={<Tags className="h-6 w-6" />}
-              title="Hämta verifikat att tagga"
-              description="Välj filter ovan och klicka på Hämta verifikat för att bläddra bland bokförda verifikat."
+              title={t('initial_empty_title')}
+              description={t('initial_empty_description')}
             />
           </CardContent>
         </Card>
@@ -579,16 +583,15 @@ export default function BulkTagWorkbench() {
                 e.preventDefault()
                 toggleAll()
               }}
-              aria-label="Markera alla verifikat"
+              aria-label={t('select_all_vouchers')}
               disabled={!vouchers || vouchers.length === 0}
             />
             <span className="text-xs text-muted-foreground">
-              {vouchers ? `${vouchers.length} verifikat` : ''}
+              {vouchers ? t('voucher_count', { count: vouchers.length }) : ''}
             </span>
             {totalCapped && (
               <span className="ml-auto text-xs text-muted-foreground">
-                Visar de första {vouchers?.length ?? 0} verifikaten: förfina filtren för
-                att se fler.
+                {t('capped_notice', { count: vouchers?.length ?? 0 })}
               </span>
             )}
           </DataListHeader>
@@ -597,8 +600,8 @@ export default function BulkTagWorkbench() {
           ) : vouchers && vouchers.length === 0 ? (
             <DataListEmpty
               icon={<Search className="h-6 w-6" />}
-              title="Inga verifikat matchade filtren"
-              description="Justera datum, kontointervall eller söktext och försök igen."
+              title={t('no_match_title')}
+              description={t('no_match_description')}
             />
           ) : (
             (vouchers ?? []).map((voucher, index) => {
@@ -622,7 +625,7 @@ export default function BulkTagWorkbench() {
                             e.stopPropagation()
                             toggleVoucher(index, e.shiftKey)
                           }}
-                          aria-label={`Markera verifikat ${voucherLabel(voucher)}`}
+                          aria-label={t('select_voucher', { voucher: voucherLabel(voucher) })}
                         />
                         <Button
                           variant="ghost"
@@ -633,8 +636,8 @@ export default function BulkTagWorkbench() {
                           }}
                           aria-label={
                             isExpanded
-                              ? `Dölj rader för ${voucherLabel(voucher)}`
-                              : `Visa rader för ${voucherLabel(voucher)}`
+                              ? t('hide_lines', { voucher: voucherLabel(voucher) })
+                              : t('show_lines', { voucher: voucherLabel(voucher) })
                           }
                           aria-expanded={isExpanded}
                         >
@@ -657,21 +660,21 @@ export default function BulkTagWorkbench() {
                       <span className="truncate">{voucher.description}</span>
                       {voucher.annulled && (
                         <span
-                          title="Verifikatet ingår i ett storno-par"
+                          title={t('storno_pair_title')}
                           className="inline-flex shrink-0"
                         >
                           <Undo2
                             className="h-3.5 w-3.5 text-muted-foreground"
                             aria-hidden="true"
                           />
-                          <span className="sr-only">Ingår i ett storno-par</span>
+                          <span className="sr-only">{t('storno_pair_sr')}</span>
                         </span>
                       )}
                     </DataListPrimary>
                     <DataListMeta>
                       <span className="tabular-nums">{formatDate(voucher.entry_date)}</span>
                       <DataListMetaSeparator />
-                      <span>{voucher.lines.length} rader</span>
+                      <span>{t('line_count', { count: voucher.lines.length })}</span>
                       {(bags.length > 0 || partial) && <DataListMetaSeparator />}
                       {/* data-ph-mask: dimension codes are user data */}
                       {bags.map((bag) => (
@@ -692,13 +695,13 @@ export default function BulkTagWorkbench() {
                           variant="secondary"
                           className="px-1.5 py-0 text-[11px] font-normal"
                         >
-                          Delvis taggad
+                          {t('partially_tagged')}
                         </Badge>
                       )}
                     </DataListMeta>
                     {hasError && !isExpanded && (
                       <p className="mt-1 text-xs text-destructive">
-                        Vissa rader kunde inte taggas: visa raderna för detaljer.
+                        {t('some_lines_failed')}
                       </p>
                     )}
                   </DataListRow>
@@ -723,7 +726,7 @@ export default function BulkTagWorkbench() {
                                   e.stopPropagation()
                                   toggleLine(line.id)
                                 }}
-                                aria-label={`Markera rad ${line.account_number} på ${voucherLabel(voucher)}`}
+                                aria-label={t('select_line', { account: line.account_number, voucher: voucherLabel(voucher) })}
                               />
                             </div>
                           }
@@ -736,7 +739,7 @@ export default function BulkTagWorkbench() {
                           </DataListPrimary>
                           <DataListMeta>
                             {dimEntries.length === 0 ? (
-                              <span className="text-muted-foreground">Otaggad</span>
+                              <span className="text-muted-foreground">{t('untagged')}</span>
                             ) : (
                               dimEntries.map(([dimNo, code]) => (
                                 <Badge
@@ -780,19 +783,18 @@ export default function BulkTagWorkbench() {
                   aria-hidden="true"
                 />
                 <p className="text-sm">
-                  Du taggar ett verifikat men inte dess motverifikat:
-                  projektresultatet kan bli skevt.
+                  {t('pair_warning')}
                 </p>
               </div>
               <Button variant="outline" size="sm" onClick={includeCounterVouchers}>
-                Inkludera motverifikat
+                {t('include_counter_vouchers')}
               </Button>
             </div>
           )}
 
           <div className="flex flex-wrap items-center gap-3">
             <Badge variant="secondary">
-              {selectedVoucherCount} verifikat · {selected.size} rader
+              {t('selection_summary', { vouchers: selectedVoucherCount, lines: selected.size })}
             </Badge>
             <Button
               variant="ghost"
@@ -803,7 +805,7 @@ export default function BulkTagWorkbench() {
               }}
             >
               <X className="mr-1 h-3 w-3" />
-              Avmarkera
+              {t('deselect')}
             </Button>
             <div className="ml-auto flex items-center gap-2">
               <Switch
@@ -813,7 +815,7 @@ export default function BulkTagWorkbench() {
                 disabled={isApplying}
               />
               <Label htmlFor="tag-replace-mode" className="text-sm font-normal">
-                Ersätt tagg
+                {t('replace_mode')}
               </Label>
             </div>
           </div>
@@ -827,28 +829,26 @@ export default function BulkTagWorkbench() {
             />
             <div>
               <Label htmlFor="tag-reason" className="text-xs text-muted-foreground">
-                Anledning
+                {t('reason_label')}
               </Label>
               <div className="mt-1 flex flex-col gap-3 sm:flex-row">
                 <Input
                   id="tag-reason"
                   value={reason}
                   onChange={(e) => setReason(e.target.value)}
-                  placeholder="T.ex. rättelse av projektkod (minst 3 tecken)"
+                  placeholder={t('reason_placeholder')}
                   disabled={isApplying}
                   className="flex-1"
                 />
                 <Button onClick={() => void handleApply()} disabled={!canApply} loading={isApplying}>
                   {!isApplying && <Tags className="mr-2 h-4 w-4" />}
-                  Tagga {selectedVoucherCount} verifikat
+                  {t('apply_button', { count: selectedVoucherCount })}
                 </Button>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              {replaceMode
-                ? 'Ersätter hela taggningen på raderna med exakt de valda värdena. '
-                : ''}
-              Påverkar endast internredovisningen, inte verifikatet.
+              {replaceMode ? `${t('replace_mode_hint')} ` : ''}
+              {t('scope_hint')}
             </p>
           </div>
         </div>

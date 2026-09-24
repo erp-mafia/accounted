@@ -1245,7 +1245,7 @@ export default function SupplierInvoiceDetailPage() {
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="payment-account">Betalkonto</Label>
+                  <Label htmlFor="payment-account">{t('pay_account_label')}</Label>
                   {areAccountsLoading ? (
                     <Skeleton className="h-10 w-full" />
                   ) : (
@@ -1256,7 +1256,7 @@ export default function SupplierInvoiceDetailPage() {
                     />
                   )}
                   <p className="text-xs text-muted-foreground">
-                    T.ex. 1930 bankkonto, 1940 övrigt bankkonto, 2018 egna uttag (EF), 2893 ägarlån (AB).
+                    {t('pay_account_hint')}
                   </p>
                 </div>
 
@@ -1266,12 +1266,12 @@ export default function SupplierInvoiceDetailPage() {
                 {(markPaidPreview || markPaidPreviewFailed) && (
                   <div className="rounded-lg border p-4 space-y-3">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium">Bokföring</p>
+                      <p className="text-sm font-medium">{t('pay_booking_title')}</p>
                       {markPaidPreview && (
                         <div className="flex gap-2">
                           {isEditingLines && (
                             <Button variant="ghost" size="sm" onClick={resetEditLines} disabled={isProcessing}>
-                              Återställ
+                              {t('pay_reset')}
                             </Button>
                           )}
                           <Button
@@ -1280,10 +1280,10 @@ export default function SupplierInvoiceDetailPage() {
                             onClick={() => setIsEditingLines((v) => !v)}
                             disabled={isProcessing}
                           >
-                            {isEditingLines ? 'Klart' : (
+                            {isEditingLines ? t('pay_done') : (
                               <>
                                 <Pencil className="h-3 w-3 mr-1" />
-                                Redigera
+                                {tCommon('edit')}
                               </>
                             )}
                           </Button>
@@ -1293,16 +1293,16 @@ export default function SupplierInvoiceDetailPage() {
 
                     {markPaidPreviewFailed && !markPaidPreview && (
                       <p className="text-sm text-muted-foreground">
-                        Kunde inte förhandsgranska bokföringen. Fortsätt eller avbryt.
+                        {t('pay_preview_failed')}
                       </p>
                     )}
 
                     {markPaidPreview && !isEditingLines && (
                       <div className="grid grid-cols-[auto_1fr_auto_auto] gap-x-3 gap-y-1 text-sm tabular-nums">
-                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Konto</div>
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{t('col_account')}</div>
                         <div />
-                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Debet</div>
-                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">Kredit</div>
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">{t('pay_debit')}</div>
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground text-right">{t('pay_credit')}</div>
                         {markPaidPreview.lines.map((line, i) => (
                           <div key={i} className="contents">
                             <div className="font-medium">{line.account_number}</div>
@@ -1333,7 +1333,7 @@ export default function SupplierInvoiceDetailPage() {
                             <Input
                               value={line.description}
                               onChange={(e) => updateEditLine(i, { description: e.target.value })}
-                              placeholder="Beskrivning"
+                              placeholder={t('col_description')}
                             />
                             <div className="inline-flex rounded-lg border bg-background overflow-hidden h-9">
                               <button
@@ -1345,7 +1345,7 @@ export default function SupplierInvoiceDetailPage() {
                                 )}
                                 aria-pressed={line.side === 'debit'}
                               >
-                                Debet
+                                {t('pay_debit')}
                               </button>
                               <button
                                 type="button"
@@ -1356,7 +1356,7 @@ export default function SupplierInvoiceDetailPage() {
                                 )}
                                 aria-pressed={line.side === 'credit'}
                               >
-                                Kredit
+                                {t('pay_credit')}
                               </button>
                             </div>
                             <Input
@@ -1371,7 +1371,7 @@ export default function SupplierInvoiceDetailPage() {
                               size="icon-sm"
                               onClick={() => removeEditLine(i)}
                               disabled={editLines.length <= 2}
-                              aria-label="Ta bort rad"
+                              aria-label={t('pay_remove_line')}
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -1381,23 +1381,23 @@ export default function SupplierInvoiceDetailPage() {
                         <div className="flex items-center justify-between pt-1">
                           <Button variant="ghost" size="sm" onClick={addEditLine}>
                             <Plus className="h-3 w-3 mr-1" />
-                            Lägg till rad
+                            {t('pay_add_line')}
                           </Button>
                           <div className="text-xs tabular-nums text-muted-foreground">
-                            Debet {formatCurrency(editValidation.totalDebit, invoice.currency)}
-                            {' / '}
-                            Kredit {formatCurrency(editValidation.totalCredit, invoice.currency)}
+                            {t('pay_totals', {
+                              debit: formatCurrency(editValidation.totalDebit, invoice.currency),
+                              credit: formatCurrency(editValidation.totalCredit, invoice.currency),
+                            })}
                           </div>
                         </div>
 
                         {!editValidation.isBalanced && (
                           <p className="text-xs text-destructive">
-                            Debet och kredit måste vara lika och större än noll. Differens:{' '}
-                            {formatCurrency(Math.abs(editValidation.diff), invoice.currency)}
+                            {t('pay_unbalanced', { diff: formatCurrency(Math.abs(editValidation.diff), invoice.currency) })}
                           </p>
                         )}
                         {editValidation.accountInvalid && (
-                          <p className="text-xs text-destructive">Kontonummer måste vara 4 siffror.</p>
+                          <p className="text-xs text-destructive">{t('pay_account_invalid')}</p>
                         )}
                       </div>
                     )}

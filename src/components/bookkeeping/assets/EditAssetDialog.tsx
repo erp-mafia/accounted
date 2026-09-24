@@ -43,15 +43,15 @@ interface EditAssetDialogProps {
 }
 
 // Same category labels as CreateAssetDialog.
-const CATEGORY_OPTIONS: { value: AssetCategory; label: string }[] = [
-  { value: 'computer', label: 'Dator / IT-utrustning' },
-  { value: 'equipment', label: 'Inventarier' },
-  { value: 'machinery', label: 'Maskiner' },
-  { value: 'vehicle', label: 'Fordon' },
-  { value: 'building', label: 'Byggnad' },
-  { value: 'land_improvement', label: 'Markanläggning' },
-  { value: 'immaterial', label: 'Immateriell tillgång' },
-  { value: 'other_tangible', label: 'Övrig materiell tillgång' },
+const CATEGORY_OPTIONS: AssetCategory[] = [
+  'computer',
+  'equipment',
+  'machinery',
+  'vehicle',
+  'building',
+  'land_improvement',
+  'immaterial',
+  'other_tangible',
 ]
 
 export function EditAssetDialog({
@@ -62,7 +62,18 @@ export function EditAssetDialog({
   onDelete,
 }: EditAssetDialogProps) {
   const t = useTranslations('assets')
+  const tc = useTranslations('common')
   const { toast } = useToast()
+  const categoryLabels: Record<AssetCategory, string> = {
+    computer: t('dialog.category_computer'),
+    equipment: t('dialog.category_equipment'),
+    machinery: t('dialog.category_machinery'),
+    vehicle: t('dialog.category_vehicle'),
+    building: t('dialog.category_building'),
+    land_improvement: t('dialog.category_land_improvement'),
+    immaterial: t('dialog.category_immaterial'),
+    other_tangible: t('dialog.category_other_tangible'),
+  }
   const { canWrite } = useCanWrite()
   // Once depreciation has been booked, acquisition date/cost/category are
   // locked: a real change has to go through storno. The server enforces the
@@ -96,7 +107,7 @@ export function EditAssetDialog({
     setError(null)
     const trimmedName = name.trim()
     if (!trimmedName) {
-      setError('Namnet får inte vara tomt.')
+      setError(t('dialog.error_name_empty'))
       return
     }
 
@@ -112,7 +123,7 @@ export function EditAssetDialog({
       if (acquisitionDate !== asset.acquisition_date) patch.acquisition_date = acquisitionDate
       const cost = parseFloat(acquisitionCost)
       if (!Number.isFinite(cost) || cost <= 0) {
-        setError('Anskaffningsvärdet måste vara större än 0.')
+        setError(t('dialog.error_cost_positive'))
         return
       }
       if (cost !== Number(asset.acquisition_cost)) patch.acquisition_cost = cost
@@ -146,14 +157,14 @@ export function EditAssetDialog({
 
     const years = parseInt(usefulLifeYears, 10)
     if (!Number.isFinite(years) || years <= 0) {
-      setError('Ange en avskrivningstid (minst 1 år).')
+      setError(t('dialog.error_useful_life'))
       return
     }
     const months = years * 12
     if (months !== asset.useful_life_months) patch.useful_life_months = months
 
     if (Object.keys(patch).length === 0) {
-      toast({ title: 'Inga ändringar', description: 'Inget att spara.' })
+      toast({ title: t('dialog.no_changes_title'), description: t('dialog.no_changes_description') })
       onOpenChange(false)
       return
     }
@@ -167,10 +178,10 @@ export function EditAssetDialog({
       })
       const body = await res.json()
       if (!res.ok) {
-        setError(getErrorMessage(body?.error ?? body) || 'Kunde inte spara ändringen.')
+        setError(getErrorMessage(body?.error ?? body) || t('dialog.update_failed'))
         return
       }
-      toast({ title: 'Tillgång uppdaterad', description: trimmedName })
+      toast({ title: t('dialog.updated_toast'), description: trimmedName })
       onSaved()
     } catch (err) {
       setError(getErrorMessage(err))
@@ -183,11 +194,11 @@ export function EditAssetDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Ändra anläggningstillgång</DialogTitle>
+          <DialogTitle>{t('dialog.edit_title')}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="edit-asset-name">Namn</Label>
+            <Label htmlFor="edit-asset-name">{t('th_name')}</Label>
             <Input
               id="edit-asset-name"
               value={name}
@@ -197,7 +208,7 @@ export function EditAssetDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="edit-asset-category">Kategori</Label>
+            <Label htmlFor="edit-asset-category">{t('th_category')}</Label>
             <Select
               value={category}
               onValueChange={(v) => setCategory(v as AssetCategory)}
@@ -207,9 +218,9 @@ export function EditAssetDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CATEGORY_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value}>
-                    {o.label}
+                {CATEGORY_OPTIONS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {categoryLabels[value]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -218,7 +229,7 @@ export function EditAssetDialog({
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="edit-asset-date">Anskaffat</Label>
+              <Label htmlFor="edit-asset-date">{t('th_acquired')}</Label>
               <Input
                 id="edit-asset-date"
                 type="date"
@@ -229,7 +240,7 @@ export function EditAssetDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="edit-asset-cost">Anskaffningsvärde (kr)</Label>
+              <Label htmlFor="edit-asset-cost">{t('dialog.acquisition_cost_label')}</Label>
               <Input
                 id="edit-asset-cost"
                 type="number"
@@ -247,9 +258,7 @@ export function EditAssetDialog({
             <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
               <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
-                Anskaffningsdatum, anskaffningsvärde och kategori är låsta eftersom avskrivningar
-                redan har bokförts. Återför avskrivningen (storno) eller använd avyttring för att
-                ändra grunduppgifterna. Namn och avskrivningstid kan fortfarande justeras.
+                {t('dialog.basis_locked')}
               </span>
             </div>
           )}
@@ -294,7 +303,7 @@ export function EditAssetDialog({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="edit-asset-life">Avskrivningstid (år)</Label>
+            <Label htmlFor="edit-asset-life">{t('dialog.useful_life_label')}</Label>
             <Input
               id="edit-asset-life"
               type="number"
@@ -332,21 +341,21 @@ export function EditAssetDialog({
           )}
           <div className="flex flex-col-reverse gap-2 sm:flex-row">
             <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
-              Avbryt
+              {tc('cancel')}
             </Button>
             <Button
               onClick={handleSubmit}
               disabled={!canWrite}
               loading={submitting}
               title={
-                !canWrite ? 'Endast användare med skrivrättigheter kan ändra tillgångar.' : undefined
+                !canWrite ? t('dialog.write_required') : undefined
               }
             >
               {!canWrite && <Lock className="mr-1 h-4 w-4" />}
               {submitting ? (
-                'Sparar…'
+                t('dialog.saving')
               ) : (
-                'Spara'
+                tc('save')
               )}
             </Button>
           </div>

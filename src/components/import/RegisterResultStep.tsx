@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { CheckCircle2, XCircle, ArrowRight, AlertTriangle } from 'lucide-react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { resolveNotices, type ImportNotice } from '@/lib/import/notices'
 
@@ -26,25 +27,10 @@ interface RegisterResultStepProps {
   onNewImport: () => void
 }
 
-const ENTITY_COPY = {
-  customers: {
-    successTitle: 'Kunder importerade',
-    failTitle: 'Importen misslyckades',
-    listLabel: 'Visa alla kunder',
-    listHref: '/customers',
-  },
-  suppliers: {
-    successTitle: 'Leverantörer importerade',
-    failTitle: 'Importen misslyckades',
-    listLabel: 'Visa alla leverantörer',
-    listHref: '/suppliers',
-  },
-  articles: {
-    successTitle: 'Artiklar importerade',
-    failTitle: 'Importen misslyckades',
-    listLabel: 'Visa alla artiklar',
-    listHref: '/articles',
-  },
+const LIST_HREF = {
+  customers: '/customers',
+  suppliers: '/suppliers',
+  articles: '/articles',
 } as const
 
 export default function RegisterResultStep({
@@ -52,7 +38,23 @@ export default function RegisterResultStep({
   result,
   onNewImport,
 }: RegisterResultStepProps) {
-  const copy = ENTITY_COPY[entity]
+  const t = useTranslations('register_result_step')
+  const copy = {
+    successTitle:
+      entity === 'customers'
+        ? t('customers_success')
+        : entity === 'suppliers'
+          ? t('suppliers_success')
+          : t('articles_success'),
+    failTitle: t('fail_title'),
+    listLabel:
+      entity === 'customers'
+        ? t('customers_list')
+        : entity === 'suppliers'
+          ? t('suppliers_list')
+          : t('articles_list'),
+    listHref: LIST_HREF[entity],
+  }
   const totalProcessed = result.created + result.updated + result.skipped + result.failed
   const isPartial = result.failed > 0 && result.created + result.updated > 0
 
@@ -71,7 +73,7 @@ export default function RegisterResultStep({
             {result.success
               ? copy.successTitle
               : isPartial
-                ? 'Import slutförd med fel'
+                ? t('partial_title')
                 : copy.failTitle}
           </CardTitle>
         </div>
@@ -79,25 +81,25 @@ export default function RegisterResultStep({
       <CardContent className="space-y-6">
         {/* Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <Stat label="Skapade" value={result.created} accent="success" />
-          <Stat label="Uppdaterade" value={result.updated} accent="warning" />
-          <Stat label="Hoppades över" value={result.skipped} />
-          <Stat label="Misslyckades" value={result.failed} accent={result.failed > 0 ? 'destructive' : 'muted'} />
+          <Stat label={t('stat_created')} value={result.created} accent="success" />
+          <Stat label={t('stat_updated')} value={result.updated} accent="warning" />
+          <Stat label={t('stat_skipped')} value={result.skipped} />
+          <Stat label={t('stat_failed')} value={result.failed} accent={result.failed > 0 ? 'destructive' : 'muted'} />
         </div>
 
         {totalProcessed === 0 && (
-          <p className="text-sm text-muted-foreground">Inga rader bearbetades.</p>
+          <p className="text-sm text-muted-foreground">{t('no_rows')}</p>
         )}
 
         {/* Errors */}
         {result.errors.length > 0 && (
           <div className="space-y-2">
-            <h4 className="text-sm font-medium">Rader som inte kunde importeras</h4>
+            <h4 className="text-sm font-medium">{t('failed_rows')}</h4>
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 max-h-60 overflow-y-auto">
               <ul className="divide-y divide-destructive/20">
                 {result.errors.map((e, i) => (
                   <li key={i} className="px-3 py-2 text-sm">
-                    <span className="font-medium">Rad {e.row_index}: {e.name}</span>
+                    <span className="font-medium">{t('row_label', { row: e.row_index, name: e.name })}</span>
                     <span className="text-muted-foreground">: {e.reason}</span>
                   </li>
                 ))}
@@ -117,7 +119,7 @@ export default function RegisterResultStep({
               <ArrowRight className="h-4 w-4 ml-2" />
             </Link>
           </Button>
-          <Button variant="ghost" onClick={onNewImport}>Ny import</Button>
+          <Button variant="ghost" onClick={onNewImport}>{t('new_import')}</Button>
         </div>
       </CardContent>
     </Card>

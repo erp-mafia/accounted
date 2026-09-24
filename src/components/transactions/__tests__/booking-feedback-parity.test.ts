@@ -36,7 +36,7 @@ describe('transactions page booking feedback', () => {
   it('defines exactly one success tail', () => {
     expect(PAGE_SRC).toContain('function finishBooking(')
     // One undo implementation, and one place that calls the storno endpoint.
-    expect(PAGE_SRC.match(/altText="Ångra kategorisering"/g) ?? []).toHaveLength(1)
+    expect(PAGE_SRC.match(/altText=\{t\('undo_categorize_alt'\)\}/g) ?? []).toHaveLength(1)
     expect(PAGE_SRC.match(/uncategorize`, \{ method: 'POST' \}/g) ?? []).toHaveLength(1)
   })
 

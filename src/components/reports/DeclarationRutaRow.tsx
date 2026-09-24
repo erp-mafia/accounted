@@ -1,6 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { AccountNumber } from '@/components/ui/account-number'
 
@@ -46,6 +47,7 @@ export function DeclarationRutaRow({
   hideWhenZero?: boolean
   formatAmount?: (n: number) => string
 }) {
+  const t = useTranslations('declaration_ruta_row')
   const [expanded, setExpanded] = useState(false)
   const panelId = useId()
 
@@ -65,7 +67,7 @@ export function DeclarationRutaRow({
               type="button"
               aria-expanded={expanded}
               aria-controls={panelId}
-              aria-label={expanded ? `Dölj konton för ${code}` : `Visa konton för ${code}`}
+              aria-label={expanded ? t('hide_accounts', { code }) : t('show_accounts', { code })}
               className="mr-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               onClick={(e) => {
                 e.stopPropagation()
@@ -83,7 +85,7 @@ export function DeclarationRutaRow({
           {label}
           {hasAccounts && (
             <span className="text-xs text-muted-foreground ml-2">
-              ({accounts.length} konton)
+              {t('account_count', { count: accounts.length })}
             </span>
           )}
         </td>

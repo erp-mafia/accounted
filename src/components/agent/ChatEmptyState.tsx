@@ -3,6 +3,7 @@
 import { ArrowUpRight, Sparkles } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useAgentSheet } from './AgentSheetProvider'
 import AgentAvatar from './AgentAvatar'
@@ -18,28 +19,19 @@ import { createClient } from '@/lib/supabase/client'
 // in. They navigate to /chat/new?intent=…&prompt=… which mounts AgentChat
 // inline and swaps to /chat/[id] once the conversation is created: so the
 // flow stays full-screen instead of opening a slide-in sheet.
-const SUGGESTIONS: { label: string; prompt: string }[] = [
-  {
-    label: 'Vad är min största utgiftspost den här månaden?',
-    prompt: 'Vad är min största utgiftspost den här månaden? Visa de fem största kategorierna.',
-  },
-  {
-    label: 'Hur ser min momsrapport ut för senaste perioden?',
-    prompt: 'Hur ser min momsrapport ut för den senaste perioden? Vad blir moms att betala eller få tillbaka, och ser något ovanligt ut?',
-  },
-  {
-    label: 'När är min nästa skatte- eller momsdeadline?',
-    prompt: 'När är min nästa skatte- eller momsdeadline, och vad behöver jag göra inför den?',
-  },
-]
-
 export default function ChatEmptyState() {
+  const t = useTranslations('chat_empty_state')
   const { identity } = useAgentSheet()
   const companyCtx = useCompanyOptional()
   const router = useRouter()
   const isSandbox = companyCtx?.isSandbox ?? false
   const hasAi = useCapability(CAPABILITY.ai)
-  const name = identity.displayName?.trim() || 'din assistent'
+  const name = identity.displayName?.trim() || t('default_name')
+  const suggestions: { label: string; prompt: string }[] = [
+    { label: t('suggestion_expenses_label'), prompt: t('suggestion_expenses_prompt') },
+    { label: t('suggestion_vat_label'), prompt: t('suggestion_vat_prompt') },
+    { label: t('suggestion_deadline_label'), prompt: t('suggestion_deadline_prompt') },
+  ]
 
   if (isSandbox) {
     const handleCreateAccount = async () => {
@@ -56,21 +48,18 @@ export default function ChatEmptyState() {
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <AgentAvatar avatarId={identity.avatarId} size="lg" alt={name} className="mb-5" />
-        <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
+        <h1 className="font-display text-2xl tracking-tight mb-2">{t('ask_name', { name })}</h1>
         <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Sparkles className="h-4 w-4" />
-            Avstängd i sandlådan
+            {t('sandbox_disabled_title')}
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-            AI-assistenten använder en betald molntjänst och är därför
-            inaktiverad här. I den fullständiga produkten kan {name} kategorisera
-            transaktioner, granska leverantörsfakturor och svara på frågor om
-            din bokföring.
+            {t('sandbox_disabled_body', { name })}
           </p>
         </div>
         <Button size="lg" onClick={handleCreateAccount}>
-          Skapa konto för att använda {name}
+          {t('create_account_to_use', { name })}
         </Button>
       </div>
     )
@@ -80,20 +69,18 @@ export default function ChatEmptyState() {
     return (
       <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
         <AgentAvatar avatarId={identity.avatarId} size="lg" alt={name} className="mb-5" />
-        <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
+        <h1 className="font-display text-2xl tracking-tight mb-2">{t('ask_name', { name })}</h1>
         <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
           <div className="flex items-center gap-2 text-sm font-medium">
             <Sparkles className="h-4 w-4" />
-            Ingår i abonnemanget
+            {t('included_in_plan_title')}
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-            AI-assistenten använder en betald molntjänst. Uppgradera för att låta
-            {' '}{name} kategorisera transaktioner, granska leverantörsfakturor
-            och svara på frågor om din bokföring.
+            {t('included_in_plan_body', { name })}
           </p>
         </div>
         <Button size="lg" asChild>
-          <Link href="/settings/billing">Uppgradera för att använda {name}</Link>
+          <Link href="/settings/billing">{t('upgrade_to_use', { name })}</Link>
         </Button>
       </div>
     )
@@ -104,13 +91,13 @@ export default function ChatEmptyState() {
   return (
     <div className="hidden md:flex flex-1 flex-col items-center justify-center px-6 py-12 text-center">
       <AgentAvatar avatarId={identity.avatarId} size="lg" alt={name} className="mb-5" />
-      <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
+      <h1 className="font-display text-2xl tracking-tight mb-2">{t('ask_name', { name })}</h1>
       <p className="text-muted-foreground max-w-md mb-6">
-        Välj en konversation till vänster, eller starta en ny om något har dykt upp.
+        {t('pick_conversation')}
       </p>
 
       <div className="flex flex-col gap-2 w-full max-w-md mb-6">
-        {SUGGESTIONS.map((s) => (
+        {suggestions.map((s) => (
           <Link
             key={s.label}
             href={`/chat/new?intent=general.help&prompt=${encodeURIComponent(s.prompt)}`}
@@ -125,7 +112,7 @@ export default function ChatEmptyState() {
       </div>
 
       <Button size="lg" variant="outline" asChild>
-        <Link href="/chat/new?intent=general.help">Eller skriv din egen fråga</Link>
+        <Link href="/chat/new?intent=general.help">{t('write_own_question')}</Link>
       </Button>
     </div>
   )

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Pencil, X, ArrowLeft, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -73,6 +74,7 @@ export default function ReviewCard({
   profile,
   onVerified,
 }: Props) {
+  const t = useTranslations('onboarding_review_card')
   // Field-edit state. The pencil affordances let the user override anything
   // the composer inferred. Each override is sent to PATCH /api/agent/profile,
   // which stamps an overridden_at timestamp.
@@ -101,7 +103,7 @@ export default function ReviewCard({
   const totalPositions = 2
   const currentPosition = step - 1
 
-  const agentName = displayName.trim() || 'din assistent'
+  const agentName = displayName.trim() || t('agent_name_fallback')
 
   async function handleVerify() {
     setVerifying(true)
@@ -184,17 +186,17 @@ export default function ReviewCard({
 
       onVerified()
     } catch (err) {
-      setVerifyError(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte verifiera.')
+      setVerifyError(err instanceof Error ? getUserErrorMessage(err) : t('verify_failed'))
     } finally {
       setVerifying(false)
     }
   }
 
-  const stepTitle = step === 1 ? 'Träffa din assistent' : 'Stäm av detaljerna'
+  const stepTitle = step === 1 ? t('step1_title') : t('step2_title')
   const stepSubtitle =
     step === 1
-      ? 'Ge din assistent ett namn och välj en avatar.'
-      : 'Bekräfta att uppgifterna stämmer, eller ändra det som blivit fel. Sen lär din assistent känna dig i en kort intervju.'
+      ? t('step1_subtitle')
+      : t('step2_subtitle')
 
   return (
     <div className="w-full">
@@ -228,35 +230,38 @@ export default function ReviewCard({
                 <AgentAvatar avatarId={avatarId} size="lg" className="h-20 w-20" />
                 <div>
                   <p className="font-display text-xl tracking-tight">
-                    {displayName.trim() || 'Din assistent'}
+                    {displayName.trim() || t('agent_name_placeholder')}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Visas som <span className="font-medium">Fråga {displayName.trim() || 'min assistent'}</span> i appen.
+                    {t.rich('shown_as', {
+                      name: displayName.trim() || t('agent_name_fallback_mine'),
+                      b: (chunks) => <span className="font-medium">{chunks}</span>,
+                    })}
                   </p>
                 </div>
               </div>
               <div>
                 <label htmlFor="agent-display-name" className="block text-sm font-medium mb-2">
-                  Vad ska den heta?
+                  {t('name_label')}
                 </label>
                 <Input
                   id="agent-display-name"
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="t.ex. Anna, Lars, Karin. Eller hoppa över."
+                  placeholder={t('name_placeholder')}
                   maxLength={60}
                   autoFocus
                 />
               </div>
               <div>
-                <p className="block text-sm font-medium mb-2">Välj en avatar</p>
+                <p className="block text-sm font-medium mb-2">{t('avatar_label')}</p>
                 <div className="grid grid-cols-4 gap-3 sm:grid-cols-8">
                   {AVATAR_OPTIONS.map((opt) => (
                     <button
                       key={opt.id}
                       type="button"
                       onClick={() => setAvatarId(opt.id)}
-                      aria-label={`Välj avatar ${opt.label}`}
+                      aria-label={t('avatar_choose_aria', { label: opt.label })}
                       className={cn(
                         'aspect-square rounded-full overflow-hidden transition-[opacity,box-shadow] duration-150',
                         avatarId === opt.id
@@ -280,13 +285,13 @@ export default function ReviewCard({
               <section>
                 <div className="flex items-center justify-between mb-3">
                   <h2 className="text-sm uppercase tracking-wider text-muted-foreground">
-                    Så här har jag förstått dig
+                    {t('summary_heading')}
                   </h2>
                   {!editingSummary && summary && (
                     <button
                       onClick={() => setEditingSummary(true)}
                       className="text-muted-foreground hover:text-foreground transition-colors"
-                      aria-label="Redigera profil"
+                      aria-label={t('edit_profile_aria')}
                     >
                       <Pencil className="h-4 w-4" />
                     </button>
@@ -303,7 +308,7 @@ export default function ReviewCard({
                   />
                 ) : (
                   <p className="text-sm leading-6 italic text-muted-foreground">
-                    {summary || 'Ingen sammanfattning ännu.'}
+                    {summary || t('summary_empty')}
                   </p>
                 )}
               </section>
@@ -314,14 +319,14 @@ export default function ReviewCard({
               {(horizontal.length > 0 || vertical.length > 0 || modifier.length > 0) && (
                 <section>
                   <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
-                    Vad jag kan hjälpa dig med
+                    {t('skills_heading')}
                   </h2>
                   <p className="text-xs text-muted-foreground mb-3">
-                    Kunskapsområden jag läst in för din verksamhet. Ta bort det som inte passar, så slipper du förslag som inte är relevanta.
+                    {t('skills_body')}
                   </p>
                   <ChipGroup
-                    primaryLabel="Bransch"
-                    secondaryLabel="Övrigt"
+                    primaryLabel={t('chips_industry')}
+                    secondaryLabel={t('chips_other')}
                     primary={vertical.map((id) => ({ id, label: atomLabel(id, atomTitles) }))}
                     secondary={[
                       ...modifier.map((id) => ({ id, label: atomLabel(id, atomTitles), group: 'modifier' as const })),
@@ -339,11 +344,11 @@ export default function ReviewCard({
               {/* Inferred facts to confirm */}
               <section>
                 <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-4">
-                  Uppgifter
+                  {t('facts_heading')}
                 </h2>
                 <dl className="divide-y divide-border">
                   <FieldRow
-                    label="Form"
+                    label={t('field_entity_type')}
                     value={fields.entity_type_label}
                     editing={editing === 'entity_type_label'}
                     onEdit={() => setEditing('entity_type_label')}
@@ -352,7 +357,7 @@ export default function ReviewCard({
                   />
                   <SniRow sniCodes={fields.sni_codes} />
                   <FieldRow
-                    label="Säte"
+                    label={t('field_city')}
                     value={fields.city ?? ''}
                     placeholder="-"
                     editing={editing === 'city'}
@@ -361,34 +366,34 @@ export default function ReviewCard({
                     onCommit={() => setEditing(null)}
                   />
                   <FieldRow
-                    label="Räkenskapsår"
+                    label={t('field_fiscal_period')}
                     value={fields.fiscal_period ?? ''}
-                    placeholder="januari-december"
+                    placeholder={t('field_fiscal_period_placeholder')}
                     editing={editing === 'fiscal_period'}
                     onEdit={() => setEditing('fiscal_period')}
                     onChange={(v) => setFields((f) => ({ ...f, fiscal_period: v }))}
                     onCommit={() => setEditing(null)}
                   />
                   <FieldRow
-                    label="Moms"
+                    label={t('field_vat')}
                     value={fields.vat_period ?? ''}
-                    placeholder="Kvartal / månad / år"
+                    placeholder={t('field_vat_placeholder')}
                     editing={editing === 'vat_period'}
                     onEdit={() => setEditing('vat_period')}
                     onChange={(v) => setFields((f) => ({ ...f, vat_period: v }))}
                     onCommit={() => setEditing(null)}
                   />
                   <FieldRow
-                    label="F-skatt"
+                    label={t('field_f_skatt')}
                     value={fields.f_skatt ?? ''}
-                    placeholder="Aktivt / saknas"
+                    placeholder={t('field_f_skatt_placeholder')}
                     editing={editing === 'f_skatt'}
                     onEdit={() => setEditing('f_skatt')}
                     onChange={(v) => setFields((f) => ({ ...f, f_skatt: v }))}
                     onCommit={() => setEditing(null)}
                   />
                   <FieldRow
-                    label="Anställda"
+                    label={t('field_employees')}
                     value={fields.employees ?? ''}
                     placeholder="0"
                     editing={editing === 'employees'}
@@ -404,7 +409,7 @@ export default function ReviewCard({
               {fields.purpose && (
                 <section>
                   <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-3">
-                    Verksamhet
+                    {t('purpose_heading')}
                   </h2>
                   <p className="text-sm leading-6 text-muted-foreground italic">
                     {fields.purpose}
@@ -417,17 +422,17 @@ export default function ReviewCard({
                   out conversationally. */}
               <section>
                 <h2 className="text-sm uppercase tracking-wider text-muted-foreground mb-1">
-                  Bra att veta
+                  {t('seed_heading')}
                 </h2>
                 <p className="text-xs text-muted-foreground mb-3">
-                  Valfritt: du kan också berätta i chatten strax. T.ex. återkommande kunder, en hyresfaktura som kommer den 25:e, eller att kunderna mest finns i Tyskland.
+                  {t('seed_body')}
                 </p>
                 <textarea
                   id="seed-memory"
                   value={seedMemory}
                   onChange={(e) => setSeedMemory(e.target.value)}
                   rows={3}
-                  placeholder="Skriv något, eller lämna tomt"
+                  placeholder={t('seed_placeholder')}
                   className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm leading-6 resize-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </section>
@@ -447,12 +452,12 @@ export default function ReviewCard({
               disabled={step === 1}
             >
               <ArrowLeft className="h-4 w-4 mr-2" />
-              Tillbaka
+              {t('back')}
             </Button>
 
             {step === 1 && (
               <Button onClick={() => setStep(2)}>
-                Nästa
+                {t('next')}
                 <ArrowRight className="h-4 w-4 ml-2" />
               </Button>
             )}
@@ -460,11 +465,11 @@ export default function ReviewCard({
               <Button size="lg" onClick={handleVerify} loading={verifying}>
                 {verifying ? (
                   <>
-                    Sparar…
+                    {t('saving')}
                   </>
                 ) : (
                   <>
-                    Möt {agentName}
+                    {t('meet', { name: agentName })}
                     <ArrowRight className="h-4 w-4 ml-2" />
                   </>
                 )}
@@ -485,6 +490,7 @@ export default function ReviewCard({
 // secondary on the company record). Dedupe by code so the same line doesn't
 // render twice in a row.
 function SniRow({ sniCodes }: { sniCodes: { code: string; name: string }[] }) {
+  const t = useTranslations('onboarding_review_card')
   const seen = new Set<string>()
   const uniqueCodes = sniCodes.filter((s) => {
     if (seen.has(s.code)) return false
@@ -497,7 +503,7 @@ function SniRow({ sniCodes }: { sniCodes: { code: string; name: string }[] }) {
       <dt className="w-32 text-sm text-muted-foreground shrink-0">SNI</dt>
       <dd className="flex-1 min-w-0">
         {uniqueCodes.length === 0 ? (
-          <span className="text-sm italic text-muted-foreground/60">Saknas</span>
+          <span className="text-sm italic text-muted-foreground/60">{t('sni_missing')}</span>
         ) : (
           <ul className="space-y-1">
             {uniqueCodes.map((s) => (
@@ -530,6 +536,7 @@ function FieldRow({
   onChange: (v: string) => void
   onCommit: () => void
 }) {
+  const t = useTranslations('onboarding_review_card')
   return (
     <div className="flex items-center gap-4 py-3">
       <dt className="w-32 text-sm text-muted-foreground shrink-0">{label}</dt>
@@ -563,7 +570,7 @@ function FieldRow({
         <button
           onClick={onEdit}
           className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
-          aria-label={`Redigera ${label}`}
+          aria-label={t('edit_field_aria', { label })}
         >
           <Pencil className="h-4 w-4" />
         </button>
@@ -625,6 +632,7 @@ function Chip({
   onRemove: () => void
   muted?: boolean
 }) {
+  const t = useTranslations('onboarding_review_card')
   return (
     <Badge
       variant={muted ? 'outline' : 'secondary'}
@@ -634,7 +642,7 @@ function Chip({
       <button
         onClick={onRemove}
         className="ml-1 rounded-full hover:bg-secondary/60 p-0.5 transition-colors"
-        aria-label={`Ta bort ${label}`}
+        aria-label={t('remove_chip_aria', { label })}
       >
         <X className="h-3 w-3" />
       </button>

@@ -33,19 +33,19 @@ export default function BankFileResultStep({
             {isSuccess ? (
               <>
                 <CheckCircle className="h-6 w-6 text-success" />
-                Import genomförd
+                {t('import_result_success_title')}
               </>
             ) : (
               <>
                 <XCircle className="h-6 w-6 text-destructive" />
-                Import misslyckades
+                {t('import_result_failed_title')}
               </>
             )}
           </CardTitle>
           <CardDescription>
             {isSuccess
-              ? `${result.imported} transaktioner importerades framgångsrikt.`
-              : `${result.errors} fel uppstod under importen.`}
+              ? t('import_result_success_description', { count: result.imported })
+              : t('import_result_failed_description', { count: result.errors })}
           </CardDescription>
           {/* Close the silent-dedup loop: without this line, skipped rows just
               look like they vanished (fewer imported than parsed, no
@@ -59,7 +59,7 @@ export default function BankFileResultStep({
         {!isSuccess && result.first_error && (
           <CardContent>
             <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm">
-              <p className="font-medium text-destructive">Databasfel</p>
+              <p className="font-medium text-destructive">{t('import_result_database_error')}</p>
               <p className="mt-1 font-mono text-xs text-muted-foreground break-all">
                 {result.first_error.message}
                 {result.first_error.details ? `: ${result.first_error.details}` : ''}
@@ -74,7 +74,7 @@ export default function BankFileResultStep({
       {isSuccess && (
         <Card className="bg-muted/50">
           <CardHeader>
-            <CardTitle className="text-base">Nästa steg</CardTitle>
+            <CardTitle className="text-base">{t('import_result_next_steps')}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-start gap-3">
@@ -82,11 +82,11 @@ export default function BankFileResultStep({
                 1
               </div>
               <div>
-                <p className="font-medium">Granska obokförda transaktioner</p>
+                <p className="font-medium">{t('import_result_step_review_title')}</p>
                 <p className="text-sm text-muted-foreground">
                   {result.imported - result.auto_categorized > 0
-                    ? `${result.imported - result.auto_categorized} transaktioner behöver bokföras manuellt.`
-                    : 'Alla transaktioner bokfördes automatiskt.'}
+                    ? t('import_result_step_review_manual', { count: result.imported - result.auto_categorized })
+                    : t('import_result_step_review_all_auto')}
                 </p>
               </div>
             </div>
@@ -95,11 +95,11 @@ export default function BankFileResultStep({
                 2
               </div>
               <div>
-                <p className="font-medium">Bekräfta fakturamatchningar</p>
+                <p className="font-medium">{t('import_result_step_matches_title')}</p>
                 <p className="text-sm text-muted-foreground">
                   {result.auto_matched_invoices > 0
-                    ? `${result.auto_matched_invoices} transaktioner matchades mot fakturor. Bekräfta dessa på transaktionssidan.`
-                    : 'Inga automatiska fakturamatchningar hittades.'}
+                    ? t('import_result_step_matches_found', { count: result.auto_matched_invoices })
+                    : t('import_result_step_matches_none')}
                 </p>
               </div>
             </div>
@@ -108,9 +108,9 @@ export default function BankFileResultStep({
                 3
               </div>
               <div>
-                <p className="font-medium">Importera fler kontoutdrag</p>
+                <p className="font-medium">{t('import_result_step_more_title')}</p>
                 <p className="text-sm text-muted-foreground">
-                  Importera löpande kontoutdrag för att hålla bokföringen uppdaterad.
+                  {t('import_result_step_more_body')}
                 </p>
               </div>
             </div>
@@ -122,12 +122,12 @@ export default function BankFileResultStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onNewImport}>
           <RotateCcw className="mr-2 h-4 w-4" />
-          Ny import
+          {t('import_result_new_import')}
         </Button>
         {isSuccess && (
           <Button asChild>
             <Link href="/transactions">
-              Visa transaktioner
+              {t('import_result_view_transactions')}
               <ArrowRight className="ml-2 h-4 w-4" />
             </Link>
           </Button>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -104,6 +105,7 @@ export default function TransactionMatchPicker({
   extractedData,
   onMatched,
 }: Props) {
+  const t = useTranslations('transaction_match_picker')
   const supabase = useMemo(() => createClient(), [])
   const { company } = useCompany()
   const { toast } = useToast()
@@ -177,8 +179,8 @@ export default function TransactionMatchPicker({
 
   // ── Debounce the search term feeding the server query ────────
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300)
-    return () => clearTimeout(t)
+    const timer = setTimeout(() => setDebouncedSearch(search), 300)
+    return () => clearTimeout(timer)
   }, [search])
 
   // ── Fetch the underlag's FX rate (foreign currency only) ─────
@@ -246,7 +248,7 @@ export default function TransactionMatchPicker({
       if (cancelled) return
       if (error) {
         toast({
-          title: 'Kunde inte hämta transaktioner',
+          title: t('load_failed'),
           description: getUserErrorMessage(error),
           variant: 'destructive',
         })
@@ -260,7 +262,7 @@ export default function TransactionMatchPicker({
     return () => {
       cancelled = true
     }
-  }, [open, supabase, company, debouncedSearch, toast])
+  }, [open, supabase, company, debouncedSearch, toast, t])
 
   // ── Score + sort (currency-aware) ────────────────────────────
   const candidates = useMemo<CandidateTransaction[]>(() => {
@@ -357,7 +359,7 @@ export default function TransactionMatchPicker({
       const json = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok) {
         toast({
-          title: 'Kunde inte matcha',
+          title: t('match_failed'),
           description: json.error ?? `HTTP ${res.status}`,
           variant: 'destructive',
         })
@@ -374,9 +376,9 @@ export default function TransactionMatchPicker({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Matcha mot transaktion</DialogTitle>
+          <DialogTitle>{t('title')}</DialogTitle>
           <DialogDescription>
-            Välj banktransaktionen som hör till underlaget.
+            {t('description')}
           </DialogDescription>
         </DialogHeader>
 
@@ -412,8 +414,7 @@ export default function TransactionMatchPicker({
 
         {amountMatchUnavailable && (
           <p className="text-[11px] text-muted-foreground -mt-1">
-            Växelkurs saknas för {receiptCurrency}: kandidaterna rankas på datum
-            och leverantör, inte belopp.
+            {t('fx_missing', { currency: receiptCurrency })}
           </p>
         )}
 
@@ -422,14 +423,14 @@ export default function TransactionMatchPicker({
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Sök i alla transaktioner…"
+            placeholder={t('search_placeholder')}
             className="pl-9"
           />
         </div>
 
         <div className="flex items-center justify-between px-1 text-[11px] text-muted-foreground">
-          <span>{hasSearchText ? 'Sökresultat' : 'Föreslagna matchningar'}</span>
-          {!loading && <span className="tabular-nums">{filtered.length} st</span>}
+          <span>{hasSearchText ? t('search_results') : t('suggested_matches')}</span>
+          {!loading && <span className="tabular-nums">{t('count', { count: filtered.length })}</span>}
         </div>
 
         <div className="max-h-[55vh] overflow-y-auto -mx-6 px-6 divide-y">
@@ -442,8 +443,8 @@ export default function TransactionMatchPicker({
           ) : filtered.length === 0 ? (
             <p className="py-6 text-sm text-muted-foreground text-center">
               {hasSearchText
-                ? `Inga okategoriserade transaktioner matchar "${search.trim()}".`
-                : 'Inga okategoriserade transaktioner att matcha mot.'}
+                ? t('empty_search', { query: search.trim() })
+                : t('empty')}
             </p>
           ) : (
             filtered.map((c) => {
@@ -453,10 +454,10 @@ export default function TransactionMatchPicker({
                 c.confidence >= 0.8 ? null : c.confidence >= 0.5 ? 'warning' : 'outline'
               const tierLabel =
                 c.confidence >= 0.8
-                  ? 'Stark match'
+                  ? t('tier_strong')
                   : c.confidence >= 0.5
-                    ? 'Möjlig match'
-                    : 'Svag match'
+                    ? t('tier_possible')
+                    : t('tier_weak')
               const isMatching = matchingId === c.id
               return (
                 <button
@@ -472,7 +473,7 @@ export default function TransactionMatchPicker({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-sm font-medium truncate">
-                        {c.merchant_name ?? c.description ?? 'Okänd transaktion'}
+                        {c.merchant_name ?? c.description ?? t('unknown_transaction')}
                       </span>
                       {tier ? (
                         <Badge variant={tier} className="shrink-0 text-[11px]">

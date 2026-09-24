@@ -21,12 +21,25 @@ export interface ConversationRow {
 // Mail and iMessage.
 export type DateBucket = 'pinned' | 'today' | 'yesterday' | 'thisWeek' | 'older'
 
-export const BUCKET_LABELS: Record<DateBucket, string> = {
-  pinned: 'Fästade',
-  today: 'Idag',
-  yesterday: 'Igår',
-  thisWeek: 'Denna vecka',
-  older: 'Äldre',
+/** next-intl translator for the `agent_conversation_display` namespace. */
+export type ConversationDisplayTranslate = (
+  key: string,
+  values?: Record<string, string | number>,
+) => string
+
+export function bucketLabel(bucket: DateBucket, t: ConversationDisplayTranslate): string {
+  switch (bucket) {
+    case 'pinned':
+      return t('bucket_pinned')
+    case 'today':
+      return t('bucket_today')
+    case 'yesterday':
+      return t('bucket_yesterday')
+    case 'thisWeek':
+      return t('bucket_this_week')
+    case 'older':
+      return t('bucket_older')
+  }
 }
 
 export const BUCKET_ORDER: DateBucket[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'older']
@@ -46,56 +59,68 @@ export function bucketFor(c: ConversationRow): DateBucket {
   return 'older'
 }
 
-// Compact relative-time label shown to the right of each row. Locale-tuned
-// to feel native in Swedish without going full date-fns.
-export function relativeTime(iso: string | null | undefined): string {
+// Compact relative-time label shown to the right of each row, in the
+// viewer's locale without going full date-fns.
+export function relativeTime(
+  iso: string | null | undefined,
+  t: ConversationDisplayTranslate,
+  locale = 'sv-SE',
+): string {
   if (!iso) return ''
-  const t = new Date(iso).getTime()
+  const then = new Date(iso).getTime()
   const now = Date.now()
-  const diffMin = Math.round((now - t) / 60000)
-  if (diffMin < 1) return 'nu'
-  if (diffMin < 60) return `${diffMin} min`
+  const diffMin = Math.round((now - then) / 60000)
+  if (diffMin < 1) return t('relative_now')
+  if (diffMin < 60) return t('relative_minutes', { count: diffMin })
   const diffHr = Math.round(diffMin / 60)
-  if (diffHr < 24) return `${diffHr} h`
+  if (diffHr < 24) return t('relative_hours', { count: diffHr })
   const diffDay = Math.round(diffHr / 24)
-  if (diffDay < 7) return `${diffDay} d`
-  return new Date(iso).toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' })
+  if (diffDay < 7) return t('relative_days', { count: diffDay })
+  return new Date(iso).toLocaleDateString(locale, { month: 'short', day: 'numeric' })
 }
 
 /**
  * One label per intent, for every surface that names a conversation.
  *
- * There were two of these: this map and an intentToTitle in AgentSheet. They
+ * There were two of these: a map here and an intentToTitle in AgentSheet. They
  * had already drifted, so the panel opened on the bokslut wizard titled
  * "Fråga Anna" while the same thread in the history list read "Hjälp med
  * bokslut", and this one's fallback returned the raw intent id, putting
  * "bokslut.step" in front of the user as the name of their own conversation.
- */
-// Null-prototype: a plain literal inherits from Object.prototype, so
-// intentLabel('toString') would resolve to a FUNCTION, pass the truthiness
-// check, and be handed to React as a title. intent_id comes from the database.
-const INTENT_LABELS: Record<string, string> = Object.assign(Object.create(null), {
-  'transaction.categorization': 'Hjälp med transaktion',
-  'invoice.draft': 'Hjälp med faktura',
-  'supplier_invoice.review': 'Granska leverantörsfaktura',
-  'vat.review': 'Granska moms\u00addeklaration',
-  'bokslut.step': 'Hjälp med bokslut',
-  'verifikation.draft': 'Hjälp med verifikation',
-  'kpi.explain': 'Förklara nyckeltal',
-  'settings.help': 'Hjälp med inställningar',
-  'inbox.bulk-book': 'Bokför från inkorgen',
-})
-
-/**
+ *
  * `agentName` personalises the general-help and unknown cases ("Fråga Anna").
  * Omit it where the agent's name is not to hand: the wording stays correct,
- * just less personal. An unknown intent NEVER falls through to its id.
+ * just less personal. An unknown intent NEVER falls through to its id. A
+ * switch rather than a lookup object: intent_id comes from the database, and
+ * an object literal would resolve inherited keys such as 'toString'.
  */
-export function intentLabel(intentId: string, agentName?: string | null): string {
-  const known = INTENT_LABELS[intentId]
-  if (known) return known
+export function intentLabel(
+  intentId: string,
+  t: ConversationDisplayTranslate,
+  agentName?: string | null,
+): string {
+  switch (intentId) {
+    case 'transaction.categorization':
+      return t('intent_transaction_categorization')
+    case 'invoice.draft':
+      return t('intent_invoice_draft')
+    case 'supplier_invoice.review':
+      return t('intent_supplier_invoice_review')
+    case 'vat.review':
+      return t('intent_vat_review')
+    case 'bokslut.step':
+      return t('intent_bokslut_step')
+    case 'verifikation.draft':
+      return t('intent_verifikation_draft')
+    case 'kpi.explain':
+      return t('intent_kpi_explain')
+    case 'settings.help':
+      return t('intent_settings_help')
+    case 'inbox.bulk-book':
+      return t('intent_inbox_bulk_book')
+  }
   const name = agentName?.trim()
-  return name ? `Fråga ${name}` : 'Fråga din assistent'
+  return name ? t('ask_named', { name }) : t('ask_assistant')
 }
 
 // Group a flat (already server-sorted: pinned first, then last_message_at desc)

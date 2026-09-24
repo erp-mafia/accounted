@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { CheckCircle2 } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -19,6 +20,7 @@ export function VatAlreadyBookedBanner({
   /** Calendar deadline marked klar — not the same as SKV kvittens. */
   deadlineCompleted?: boolean
 }) {
+  const t = useTranslations('vat_already_booked_banner')
   const voucher = formatVoucher(entry)
 
   return (
@@ -29,22 +31,25 @@ export function VatAlreadyBookedBanner({
       <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" aria-hidden="true" />
       <div className="space-y-1">
         <p>
-          Momsen för perioden är redan bokförd:{' '}
-          <Link
-            href={`/bookkeeping/${entry.id}`}
-            className="underline underline-offset-2 hover:text-foreground"
-          >
-            verifikat {voucher}
-          </Link>
-          {entry.entry_date ? ` (${formatDate(entry.entry_date)})` : ''}.
+          {t.rich('already_booked', {
+            voucher,
+            date: entry.entry_date ? ` (${formatDate(entry.entry_date)})` : '',
+            link: (chunks) => (
+              <Link
+                href={`/bookkeeping/${entry.id}`}
+                className="underline underline-offset-2 hover:text-foreground"
+              >
+                {chunks}
+              </Link>
+            ),
+          })}
         </p>
         <p className="text-muted-foreground">
-          Att öppna sidan räknar bara om rutorna. Du behöver inte skapa ett nytt
-          verifikat.
+          {t('recalc_only')}
         </p>
         {deadlineCompleted && (
           <p className="text-muted-foreground">
-            Deadline för perioden är markerad som klar i kalendern.
+            {t('deadline_done')}
           </p>
         )}
       </div>

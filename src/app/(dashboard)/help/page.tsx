@@ -21,182 +21,164 @@ interface GlossaryTerm {
   relatedTerms?: string[]
 }
 
-const glossaryTerms: GlossaryTerm[] = [
+// Term names and related terms stay Swedish: they are the statutory Swedish
+// words being explained. The everyday name and definition are translated.
+function buildGlossaryTerms(t: ReturnType<typeof useTranslations>): GlossaryTerm[] {
+  return [
   // Skatt
   {
     term: 'F-skatt',
-    simpleTerm: 'Månatlig skatteinbetalning',
-    definition:
-      'F-skatt (företagsskatt) innebär att du som företagare själv ansvarar för att betala in preliminärskatt och egenavgifter. Du betalar in en fast summa varje månad baserat på din beräknade årsinkomst. Om du betalat för lite under året kan du få restskatt.',
+    simpleTerm: t('term_fskatt_simple'),
+    definition: t('term_fskatt_definition'),
     category: 'skatt',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/foretagarguiden/foretagsformer/enskildnaringsverksamhet/fskatt.4.361dc8c15312eff6fd1f8a3.html',
     relatedTerms: ['Preliminärskatt', 'Restskatt', 'Egenavgifter'],
   },
   {
     term: 'Preliminärskatt',
-    definition:
-      'Skatt som betalas in i förskott under inkomståret, baserat på uppskattad årsinkomst. Din F-skatteinbetalning är en form av preliminärskatt.',
+    definition: t('term_preliminarskatt_definition'),
     category: 'skatt',
     relatedTerms: ['F-skatt', 'Restskatt'],
   },
   {
     term: 'Egenavgifter',
-    simpleTerm: 'Sociala avgifter',
-    definition:
-      'Som enskild näringsidkare betalar du egenavgifter (ca 28,97%) istället för arbetsgivaravgifter. Avgifterna finansierar socialförsäkringar som pension, sjukpenning och föräldrapenning - saker som anställda får via sin arbetsgivare.',
+    simpleTerm: t('term_egenavgifter_simple'),
+    definition: t('term_egenavgifter_definition'),
     category: 'skatt',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/foretagarguiden/avgifterochegenavgifter/egenavgifter.4.361dc8c15312eff6fd1e5e7.html',
     relatedTerms: ['Enskild firma'],
   },
   {
     term: 'Restskatt',
-    definition:
-      'Om du betalat in för lite preliminärskatt under året får du restskatt att betala. Det betyder att din faktiska skatt var högre än vad du betalade in via F-skatten.',
+    definition: t('term_restskatt_definition'),
     category: 'skatt',
     relatedTerms: ['F-skatt', 'Preliminärskatt'],
   },
   {
     term: 'Schablonavdrag',
-    simpleTerm: 'Enkla avdrag',
-    definition:
-      'Förenklade avdrag där du använder fasta belopp istället för att spara kvitton. Exempel: hemmakontor (2 000 kr/år) eller milersättning (25 kr/mil för bil). Perfekt om du inte vill krångla med att spara alla kvitton.',
+    simpleTerm: t('term_schablonavdrag_simple'),
+    definition: t('term_schablonavdrag_definition'),
     category: 'skatt',
     skatteverketUrl: 'https://www.skatteverket.se/privat/skatter/arbeteochinkomst/avdrag.4.6efe6285127ab4f1d25800023187.html',
     relatedTerms: ['Avdrag', 'Hemmakontor'],
   },
   {
     term: 'NE-bilaga',
-    definition:
-      'En bilaga till din inkomstdeklaration där du redovisar resultatet från din enskilda näringsverksamhet. Appen hjälper dig samla underlaget - du behöver inte förstå alla detaljer.',
+    definition: t('term_ne_bilaga_definition'),
     category: 'skatt',
     skatteverketUrl: 'https://www.skatteverket.se/privat/deklaration/blanketter/inkomstochfastighetsdeklaration/blankett21.4.6efe6285127ab4f1d25800023142.html',
     relatedTerms: ['Enskild firma', 'Inkomstdeklaration'],
   },
   {
     term: 'Disponibelt',
-    simpleTerm: 'Ditt att spendera',
-    definition:
-      'Det belopp du kan använda fritt efter att vi räknat bort uppskattad skatt och moms från ditt saldo. Resten bör du "låsa" för framtida skatteinbetalningar.',
+    simpleTerm: t('term_disponibelt_simple'),
+    definition: t('term_disponibelt_definition'),
     category: 'skatt',
   },
   // Moms
   {
     term: 'Moms',
-    simpleTerm: 'Mervärdesskatt',
-    definition:
-      'Mervärdesskatt som läggs på varor och tjänster. Som momsregistrerad lägger du på moms på dina fakturor och drar av moms på dina inköp. Skillnaden betalar eller får du tillbaka från Skatteverket.',
+    simpleTerm: t('term_moms_simple'),
+    definition: t('term_moms_definition'),
     category: 'moms',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/moms.4.65fc817e1077c25b8328000206.html',
     relatedTerms: ['Momsperiod', 'Ingående moms', 'Utgående moms'],
   },
   {
     term: 'Momsperiod',
-    simpleTerm: 'Hur ofta du rapporterar moms',
-    definition:
-      'Hur ofta du redovisar och betalar moms till Skatteverket. Vanligast är kvartal (4 gånger/år). Osäker? Börja med kvartal - du kan ändra senare. Omsättning under 1 miljon = år möjlig, över 40 miljoner = månad krävs.',
+    simpleTerm: t('term_momsperiod_simple'),
+    definition: t('term_momsperiod_definition'),
     category: 'moms',
     relatedTerms: ['Moms', 'Momsdeklaration'],
   },
   {
     term: 'Omvänd skattskyldighet',
-    simpleTerm: 'Kunden betalar momsen',
-    definition:
-      'När du säljer till företag i andra EU-länder betalar köparen momsen i sitt eget land. Du fakturerar 0% moms och skriver "Omvänd skattskyldighet" eller "Reverse charge" på fakturan.',
+    simpleTerm: t('term_omvand_skattskyldighet_simple'),
+    definition: t('term_omvand_skattskyldighet_definition'),
     category: 'moms',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/moms/saljavarortjanster/omvandskattskyldighetvidsaljandeinomeu.4.7be5268414bea0646940d0e.html',
     relatedTerms: ['EU-försäljning', 'Momsfri export'],
   },
   {
     term: 'Ingående moms',
-    definition:
-      'Moms du betalar på dina inköp (utgifter). Denna moms får du dra av från din momsredovisning.',
+    definition: t('term_ingaende_moms_definition'),
     category: 'moms',
     relatedTerms: ['Utgående moms', 'Moms'],
   },
   {
     term: 'Utgående moms',
-    definition:
-      'Moms du tar ut av dina kunder (lägger på fakturan). Denna moms ska du redovisa till Skatteverket.',
+    definition: t('term_utgaende_moms_definition'),
     category: 'moms',
     relatedTerms: ['Ingående moms', 'Moms'],
   },
   // Faktura
   {
     term: 'Förfallodag',
-    definition:
-      'Sista dag kunden ska betala fakturan. Vanligast är 30 dagar efter fakturadatum. Efter förfallodagen kan du skicka påminnelse och ta ut dröjsmålsränta.',
+    definition: t('term_forfallodag_definition'),
     category: 'faktura',
     relatedTerms: ['Dröjsmålsränta', 'Påminnelse'],
   },
   {
     term: 'OCR-nummer',
-    definition:
-      'Ett referensnummer som gör det enkelt att matcha inbetalningar med rätt faktura. Genereras automatiskt och bör alltid anges på fakturan.',
+    definition: t('term_ocr_nummer_definition'),
     category: 'faktura',
   },
   {
     term: 'Kreditfaktura',
-    definition:
-      'En "minusfaktura" som du skapar om du behöver korrigera eller makulera en redan skickad faktura. Beloppet blir negativt och kvittar ut originalfakturan.',
+    definition: t('term_kreditfaktura_definition'),
     category: 'faktura',
     relatedTerms: ['Faktura'],
   },
   // Bank
   {
     term: 'Clearingnummer',
-    definition:
-      'De första 4-5 siffrorna i ditt bankkonto som identifierar vilken bank och vilket kontor det tillhör. Exempel: 5331 = Avanza, 3300 = Nordea. Ofta separerat från kontonumret med bindestreck.',
+    definition: t('term_clearingnummer_definition'),
     category: 'bank',
     relatedTerms: ['IBAN', 'BIC/SWIFT'],
   },
   {
     term: 'IBAN',
-    definition:
-      'Internationellt bankkontonummer som används för utlandsbetalningar. Svenska IBAN börjar med SE följt av 22 siffror. Din bank kan ge dig ditt IBAN.',
+    definition: t('term_iban_definition'),
     category: 'bank',
     relatedTerms: ['BIC/SWIFT', 'Clearingnummer'],
   },
   {
     term: 'BIC/SWIFT',
-    definition:
-      'Bankens internationella identifieringskod, används tillsammans med IBAN för utlandsbetalningar. Exempel: SWEDSESS (Swedbank), NDEASESS (Nordea).',
+    definition: t('term_bic_swift_definition'),
     category: 'bank',
     relatedTerms: ['IBAN'],
   },
   // Företag
   {
     term: 'Enskild firma',
-    simpleTerm: 'Enskild näringsverksamhet',
-    definition:
-      'Den enklaste företagsformen där du och företaget är samma juridiska person. Du äger allt personligen och ansvarar personligen för skulder. Lättast att starta men du betalar skatt via din privata deklaration.',
+    simpleTerm: t('term_enskild_firma_simple'),
+    definition: t('term_enskild_firma_definition'),
     category: 'företag',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/foretagarguiden/foretagsformer/enskildnaringsverksamhet.4.361dc8c15312eff6fd1e5dc.html',
     relatedTerms: ['Aktiebolag', 'Egenavgifter', 'NE-bilaga'],
   },
   {
     term: 'Aktiebolag',
-    simpleTerm: 'AB',
-    definition:
-      'Företagsform där företaget är en egen juridisk person, skild från dig. Kräver 25 000 kr i aktiekapital och mer administration, men ger begränsat personligt ansvar och andra skattemöjligheter.',
+    simpleTerm: t('term_aktiebolag_simple'),
+    definition: t('term_aktiebolag_definition'),
     category: 'företag',
     skatteverketUrl: 'https://www.skatteverket.se/foretag/foretagarguiden/foretagsformer/aktiebolag.4.361dc8c15312eff6fd18a05.html',
     relatedTerms: ['Enskild firma', 'Bolagsskatt'],
   },
   {
     term: 'Organisationsnummer',
-    definition:
-      'Ditt företags unika identitetsnummer. För enskild firma är det ditt personnummer + 100 på århundradesiffran (199001011234 blir 199101011234).',
+    definition: t('term_organisationsnummer_definition'),
     category: 'företag',
   },
   {
     term: 'Eget utlägg',
-    simpleTerm: 'Betalat privat för bolagets räkning',
-    definition:
-      'När du som ägare lägger ut pengar privat för en kostnad som bolaget ska stå för. Registrera under Leverantörsfakturor → Ny, kryssa i "Jag har betalat detta privat". Verifikatet bokförs då direkt mot skuld till ägare (2893 för AB, 2018 för EF) istället för via leverantörsskuld. När bolaget senare ersätter dig kategoriserar du den utgående banktransaktionen mot samma konto.',
+    simpleTerm: t('term_eget_utlagg_simple'),
+    definition: t('term_eget_utlagg_definition'),
     category: 'bokföring',
     relatedTerms: ['Aktiebolag', 'Enskild firma'],
   },
-]
+  ]
+}
 
 const categoryConfig = {
   skatt: { labelKey: 'category_skatt' },
@@ -268,6 +250,7 @@ const LINK_ROW_CLASS =
 
 export default function HelpPage() {
   const t = useTranslations('help')
+  const glossaryTerms = useMemo(() => buildGlossaryTerms(t), [t])
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null)
   const [expandedTerms, setExpandedTerms] = useState<Set<string>>(new Set())
@@ -292,7 +275,7 @@ export default function HelpPage() {
 
       return true
     })
-  }, [searchQuery, selectedCategory])
+  }, [glossaryTerms, searchQuery, selectedCategory])
 
   const toggleTerm = (termName: string) => {
     setExpandedTerms((prev) => {
@@ -370,16 +353,16 @@ export default function HelpPage() {
         </h2>
         <a href="/docs/arkivplan-mall.md" download className={LINK_ROW_CLASS}>
           <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
-          <span className="shrink-0 font-medium">Arkivplan</span>
+          <span className="shrink-0 font-medium">{t('template_arkivplan_title')}</span>
           <span className="truncate text-xs text-muted-foreground">
-            Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
+            {t('template_arkivplan_description')}
           </span>
         </a>
         <a href="/docs/systemdokumentation-mall.md" download className={LINK_ROW_CLASS}>
           <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
-          <span className="shrink-0 font-medium">Systemdokumentation</span>
+          <span className="shrink-0 font-medium">{t('template_systemdokumentation_title')}</span>
           <span className="truncate text-xs text-muted-foreground">
-            Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
+            {t('template_systemdokumentation_description')}
           </span>
         </a>
       </section>
@@ -394,13 +377,13 @@ export default function HelpPage() {
           className={LINK_ROW_CLASS}
         >
           <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
-          <span className="shrink-0 font-medium">Skatteverkets företagarguide</span>
-          <span className="truncate text-xs text-muted-foreground">Omfattande guide för nya företagare</span>
+          <span className="shrink-0 font-medium">{t('resource_skv_guide_title')}</span>
+          <span className="truncate text-xs text-muted-foreground">{t('resource_skv_guide_description')}</span>
         </HelpLink>
         <HelpLink href="https://www.verksamt.se/" className={LINK_ROW_CLASS}>
           <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Verksamt.se</span>
-          <span className="truncate text-xs text-muted-foreground">Starta och driva företag i Sverige</span>
+          <span className="truncate text-xs text-muted-foreground">{t('resource_verksamt_description')}</span>
         </HelpLink>
       </section>
 

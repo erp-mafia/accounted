@@ -36,6 +36,17 @@ export interface TheaterOptions {
   settled?: boolean
   groupLabels?: Partial<Record<TheaterGroup, string>>
   reviewLabel?: string
+  /** Translated canvas copy; each missing entry falls back to the Swedish original. */
+  text?: TheaterText
+}
+
+export interface TheaterText {
+  /** Name of the clump that gathers a group's small accounts, e.g. "Övriga tillgångar". */
+  others?: (group: TheaterGroup) => string
+  /** Hover line for a voucher count, e.g. "12 verifikat". */
+  vouchers?: (count: number) => string
+  /** Role shown for a counterparty that has none, e.g. "motpart". */
+  counterparty?: string
 }
 
 export interface RegisterStageConfig {
@@ -236,6 +247,9 @@ export function createTheater(opts: TheaterOptions): TheaterApi {
   const FONT = canvasFont(canvas)
   const groupLabel = (g: TheaterGroup) => opts.groupLabels?.[g] ?? GROUPS[g].label
   const reviewLabel = opts.reviewLabel ?? 'att granska'
+  const othersName = (g: TheaterGroup) => opts.text?.others?.(g) ?? `Övriga ${GROUPS[g].name}`
+  const vouchersText = (n: number | undefined) => opts.text?.vouchers?.(n ?? 0) ?? `${n} verifikat`
+  const counterpartyRole = opts.text?.counterparty ?? 'motpart'
   const clumpBelow = 20
   const maxAccounts = 7
   const maxCpsPerGroup = 4
@@ -269,7 +283,7 @@ export function createTheater(opts: TheaterOptions): TheaterApi {
     if (small.length) {
       let sum = 0
       small.forEach((a) => { sum += a.weight })
-      items.push({ nr: null, name: `Övriga ${G.name}`, count: sum, label: `Övriga ${G.name} (${small.length})`, members: small })
+      items.push({ nr: null, name: othersName(g), count: sum, label: `${othersName(g)} (${small.length})`, members: small })
     }
     // A group with nothing at all still gets a quiet anchor: the tree keeps its four arms.
     const th0 = Math.atan2(G.row, G.side)
@@ -296,7 +310,7 @@ export function createTheater(opts: TheaterOptions): TheaterApi {
     const kth = (twigs[c.account] = (twigs[c.account] ?? 0) + 1)
     const th = (p.th ?? 0) + (kth - 1.5) * 0.22 + (rand(`${c.name}a`) - 0.5) * 0.2
     const rad = Math.hypot(p.x, p.y) + 42 + kth * 10 + rand(`${c.name}r`) * 18
-    return { kind: 'outer', name: c.name, role: c.role ?? 'motpart', count: c.weight, group: g, x: Math.cos(th) * rad, y: Math.sin(th) * rad, th, r: 1.0 + Math.min(1, c.weight / 62) * 1.6, w: 0.2, side: G.side, row: G.row, born: null, parent: p, ph: rand(`${c.name}p`) * 6.28, label: trunc(c.name, 18), bend: (rand(`${c.name}b`) - 0.5) * 20 }
+    return { kind: 'outer', name: c.name, role: c.role ?? counterpartyRole, count: c.weight, group: g, x: Math.cos(th) * rad, y: Math.sin(th) * rad, th, r: 1.0 + Math.min(1, c.weight / 62) * 1.6, w: 0.2, side: G.side, row: G.row, born: null, parent: p, ph: rand(`${c.name}p`) * 6.28, label: trunc(c.name, 18), bend: (rand(`${c.name}b`) - 0.5) * 20 }
   }
   opts.counterparties.slice().sort((a, b) => b.weight - a.weight).slice(0, maxCps).forEach((c) => {
     const p = byNr[c.account]
@@ -841,8 +855,8 @@ export function createTheater(opts: TheaterOptions): TheaterApi {
         const q = world(bn)
         const line1 = bn.kind === 'account' ? (bn.nr ? `${bn.nr} ${bn.name}` : bn.name ?? '') : bn.name ?? ''
         const line2 = bn.kind === 'account'
-          ? (bn.members ? `${bn.members.map((m) => m.number).join(', ')} · ${bn.count} verifikat` : `${bn.count} verifikat`)
-          : `${bn.role} · ${bn.count} verifikat`
+          ? (bn.members ? `${bn.members.map((m) => m.number).join(', ')} · ${vouchersText(bn.count)}` : vouchersText(bn.count))
+          : `${bn.role} · ${vouchersText(bn.count)}`
         ctx.font = `500 11px ${FONT}`
         const w1 = ctx.measureText(line1).width
         ctx.font = `10.5px ${FONT}`

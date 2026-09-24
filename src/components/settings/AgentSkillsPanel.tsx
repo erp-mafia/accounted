@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { useLocale } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -26,20 +26,6 @@ interface AtomMeta {
 
 const TIER_ORDER: Tier[] = ['horizontal', 'vertical', 'modifier']
 
-const TIER_SECTION: Record<Tier, { title: string; blurb: string }> = {
-  horizontal: {
-    title: 'Kärnkompetens',
-    blurb: 'Svenska bokförings- och skatteregler som assistenten alltid har med sig.',
-  },
-  vertical: {
-    title: 'Anpassat för din bransch',
-    blurb: 'Branschkunskap som valts utifrån vad ditt företag gör. Vilande områden finns men används inte för dig.',
-  },
-  modifier: {
-    title: 'Din bolagssituation',
-    blurb: 'Särskilda regler för hur just ditt bolag är uppbyggt.',
-  },
-}
 
 // Mirror of the chat surface's markdown styling (components/agent/AgentChat.tsx),
 // trimmed for a wider settings column.
@@ -57,7 +43,22 @@ const PROSE =
   '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
 export function AgentSkillsPanel() {
+  const t = useTranslations('agent_skills_panel')
   const { toast } = useToast()
+  const tierSection: Record<Tier, { title: string; blurb: string }> = {
+    horizontal: {
+      title: t('tier_horizontal_title'),
+      blurb: t('tier_horizontal_blurb'),
+    },
+    vertical: {
+      title: t('tier_vertical_title'),
+      blurb: t('tier_vertical_blurb'),
+    },
+    modifier: {
+      title: t('tier_modifier_title'),
+      blurb: t('tier_modifier_blurb'),
+    },
+  }
   const errorLocale = useLocale() as ErrorLocale
 
   // null = the atom list is not known: still loading, or the read failed
@@ -149,7 +150,7 @@ export function AgentSkillsPanel() {
         // getErrorMessage falls back to the status map.
         const json = await res.json().catch(() => null)
         toast({
-          title: 'Kunde inte läsa kunskapen',
+          title: t('read_failed'),
           description: getErrorMessage(json, { statusCode: res.status, locale: errorLocale }),
           variant: 'destructive',
         })
@@ -164,7 +165,7 @@ export function AgentSkillsPanel() {
       // TOAST_LIMIT is 1 (components/ui/use-toast.tsx) and a second would
       // evict the first.
       toast({
-        title: 'Kunde inte läsa kunskapen',
+        title: t('read_failed'),
         description: getErrorMessage(err, { locale: errorLocale }),
         variant: 'destructive',
       })
@@ -178,12 +179,10 @@ export function AgentSkillsPanel() {
       {atoms && (
         <div className="flex items-center gap-2">
           <p className="text-[12.5px] tabular-nums text-muted-foreground">
-            {counts.total} kunskapsområden · {counts.active} aktiva för ditt företag
+            {t('counts', { total: counts.total, active: counts.active })}
           </p>
           <HelpPopover className="shrink-0">
-            Utöver vad den minns om ditt företag bygger assistenten på en uppsättning kunskapsområden om
-            svensk bokföring och skatt. Kärnkompetensen gäller alla; bransch- och bolagsanpassningen väljs
-            utifrån ditt företag. Klicka på ett område för att läsa hela kunskapen.
+            {t('help')}
           </HelpPopover>
         </div>
       )}
@@ -193,11 +192,11 @@ export function AgentSkillsPanel() {
       <div role="status" aria-live="polite" className="min-w-0">
         {loadError && (
           <AttnLine
-            action={loadError.detail ? undefined : { label: 'Försök igen', onClick: () => setReloadKey((k) => k + 1) }}
+            action={loadError.detail ? undefined : { label: t('retry'), onClick: () => setReloadKey((k) => k + 1) }}
           >
             {loadError.detail
-              ? `Kunskapsområdena kunde inte läsas in just nu. ${loadError.detail}`
-              : 'Kunskapsområdena kunde inte läsas in just nu.'}
+              ? `${t('load_failed')} ${loadError.detail}`
+              : t('load_failed')}
           </AttnLine>
         )}
       </div>
@@ -217,8 +216,8 @@ export function AgentSkillsPanel() {
       {atoms && atoms.length === 0 && (
         <EmptyState
           icon={GraduationCap}
-          title="Inga kunskapsområden ännu"
-          description="När din assistent har komponerats dyker dess kunskapsområden upp här."
+          title={t('empty_title')}
+          description={t('empty_description')}
         />
       )}
 
@@ -231,9 +230,9 @@ export function AgentSkillsPanel() {
         TIER_ORDER.filter((tier) => grouped[tier].length > 0).map((tier) => (
           <section key={tier}>
             <p className="flex items-center gap-2 pb-1 text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground">
-              <span>{TIER_SECTION[tier].title}</span>
+              <span>{tierSection[tier].title}</span>
               <span className="font-normal tabular-nums text-muted-foreground/70">{grouped[tier].length}</span>
-              <HelpPopover className="shrink-0">{TIER_SECTION[tier].blurb}</HelpPopover>
+              <HelpPopover className="shrink-0">{tierSection[tier].blurb}</HelpPopover>
             </p>
             <div>
               {grouped[tier].map((atom) => {
@@ -254,7 +253,7 @@ export function AgentSkillsPanel() {
                       </span>
                       {tier !== 'horizontal' && (
                         <span className={cn('shrink-0 text-[11px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
-                          {dormant ? 'Vilande' : 'Aktiv'}
+                          {dormant ? t('dormant') : t('active')}
                         </span>
                       )}
                       <ChevronDown
@@ -267,7 +266,7 @@ export function AgentSkillsPanel() {
                         {isLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
                             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            Läser in…
+                            {t('loading')}
                           </div>
                         )}
                         {!isLoading && body !== undefined && body.length > 0 && (
@@ -276,7 +275,7 @@ export function AgentSkillsPanel() {
                           </div>
                         )}
                         {!isLoading && body !== undefined && body.length === 0 && (
-                          <p className="text-xs text-muted-foreground">Innehållet kunde inte läsas in.</p>
+                          <p className="text-xs text-muted-foreground">{t('body_failed')}</p>
                         )}
                       </div>
                     )}

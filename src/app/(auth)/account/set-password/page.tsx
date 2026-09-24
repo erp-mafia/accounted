@@ -2,6 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,6 +21,7 @@ export default function SetPasswordPage() {
 }
 
 function SetPasswordContent() {
+  const t = useTranslations('set_password_page')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -65,9 +67,8 @@ function SetPasswordContent() {
 
     if (!strong) {
       toast({
-        title: 'Lösenordet är för svagt',
-        description:
-          'Lösenordet måste vara minst 8 tecken och innehålla versaler, gemener, siffror och specialtecken.',
+        title: t('weak_title'),
+        description: t('weak_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -76,8 +77,8 @@ function SetPasswordContent() {
 
     if (password !== confirmPassword) {
       toast({
-        title: 'Lösenorden matchar inte',
-        description: 'Kontrollera att du skrev samma lösenord i båda fälten.',
+        title: t('mismatch_title'),
+        description: t('mismatch_description'),
         variant: 'destructive',
       })
       setIsLoading(false)
@@ -94,24 +95,24 @@ function SetPasswordContent() {
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast({
-          title: 'Kunde inte spara lösenord',
-          description: body.error || 'Försök igen senare.',
+          title: t('save_failed_title'),
+          description: body.error || t('try_again_later'),
           variant: 'destructive',
         })
         return
       }
 
       toast({
-        title: 'Lösenord sparat',
-        description: 'Du kan nu aktivera tvåfaktorsautentisering.',
+        title: t('saved_title'),
+        description: t('saved_description'),
       })
 
       router.push(returnTo)
       router.refresh()
     } catch {
       toast({
-        title: 'Något gick fel',
-        description: 'Försök igen senare.',
+        title: t('generic_error_title'),
+        description: t('try_again_later'),
         variant: 'destructive',
       })
     } finally {
@@ -129,23 +130,22 @@ function SetPasswordContent() {
             </div>
           </div>
           <h1 className="font-display text-3xl tracking-tight">
-            Sätt ett lösenord
+            {t('title')}
           </h1>
           <p className="text-muted-foreground text-sm mt-2">
-            Du loggade in med BankID. För att aktivera tvåfaktorsautentisering
-            eller logga in med e-post behöver du först sätta ett lösenord.
+            {t('subtitle')}
           </p>
         </div>
 
         <div className="rounded-lg border border-border bg-card p-6">
           <form onSubmit={handleSetPassword} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="password">Lösenord</Label>
+              <Label htmlFor="password">{t('password_label')}</Label>
               <Input
                 id="password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Minst 8 tecken, Aa1!"
+                placeholder={t('password_placeholder')}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -155,12 +155,12 @@ function SetPasswordContent() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirm_password">Bekräfta lösenord</Label>
+              <Label htmlFor="confirm_password">{t('confirm_password_label')}</Label>
               <Input
                 id="confirm_password"
                 type="password"
                 autoComplete="new-password"
-                placeholder="Upprepa lösenordet"
+                placeholder={t('confirm_password_placeholder')}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
@@ -170,7 +170,7 @@ function SetPasswordContent() {
               />
             </div>
             <Button type="submit" size="lg" className="w-full" loading={isLoading}>
-              {isLoading ? 'Sparar...' : 'Spara lösenord'}
+              {isLoading ? t('submitting') : t('submit')}
             </Button>
           </form>
         </div>

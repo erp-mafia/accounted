@@ -43,7 +43,10 @@ describe('upload size limits', () => {
   })
 
   it('names both the actual size and the ceiling', () => {
-    const message = tooLargeMessage(6 * 1024 * 1024)
+    const t = (key: string, values?: Record<string, string | number>) =>
+      `${key} ${values?.size} ${values?.limit}`
+    const message = tooLargeMessage(6 * 1024 * 1024, t)
+    expect(message).toContain('too_large')
     expect(message).toContain('6,0 MB')
     expect(message).toContain(formatMegabytes(HOSTED_MAX_UPLOAD_BYTES))
   })
@@ -65,7 +68,10 @@ describe('inbox upload ceiling', () => {
   })
 
   it('names the actual size and the inbox ceiling, not the hosted one', () => {
-    const message = inboxTooLargeMessage(12 * 1024 * 1024)
+    const t = (key: string, values?: Record<string, string | number>) =>
+      `${key} ${values?.size} ${values?.limit}`
+    const message = inboxTooLargeMessage(12 * 1024 * 1024, t)
+    expect(message).toContain('inbox_too_large')
     expect(message).toContain('12,0 MB')
     expect(message).toContain(formatMegabytes(INBOX_MAX_UPLOAD_BYTES))
     expect(message).not.toContain(formatMegabytes(HOSTED_MAX_UPLOAD_BYTES))

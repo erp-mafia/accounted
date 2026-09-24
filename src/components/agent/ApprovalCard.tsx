@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import { Check, X, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -13,7 +14,11 @@ import { cn } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { OperationPreview, AccountNamesContext } from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
-import { REJECTION_CATEGORY_LABELS } from '@/components/pending-operations/vocabulary'
+import {
+  REJECTION_CATEGORIES,
+  REJECTION_CATEGORY_LABELS,
+  rejectionCategoryLabel,
+} from '@/components/pending-operations/vocabulary'
 import { operationTypeFromToolName } from '@/lib/pending-operations/tool-name'
 
 // Inline approval card for an agent-staged pending_operation.
@@ -97,6 +102,8 @@ export default function ApprovalCard({
   // operation is manual ledger work and stays enabled without the AI add-on.
   // What's paid is feeding a rejection back so the agent generates a *new*
   // proposal (an LLM call): that's suppressed when the company lacks `ai`.
+  const t = useTranslations('approval_card')
+  const tRejection = useTranslations('rejection_category')
   const hasAi = useCapability(CAPABILITY.ai)
   // Chart names for the preview lines (same source as /pending).
   const accountNames = useAccountNamesSource()
@@ -120,7 +127,7 @@ export default function ApprovalCard({
 
   const requiresTextConfirm = riskLevel === 'high'
   const canCommit =
-    !requiresTextConfirm || confirmText.trim().toLowerCase() === 'godkänn'
+    !requiresTextConfirm || confirmText.trim().toLowerCase() === t('confirm_word').toLowerCase()
 
   // Render key for the shared preview. Hydrated cards pass operation_type
   // straight from the pending_operations row; live streamed cards carry the
@@ -165,7 +172,7 @@ export default function ApprovalCard({
       setState('committed')
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte godkänna.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : t('approve_failed'))
     }
   }
 
@@ -192,7 +199,7 @@ export default function ApprovalCard({
       await handleCommit()
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte aktivera kontona.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : t('activate_failed'))
     }
   }
 
@@ -235,7 +242,7 @@ export default function ApprovalCard({
       }
     } catch (err) {
       setState('error')
-      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : 'Kunde inte avslå.')
+      setErrorMessage(err instanceof Error ? getUserErrorMessage(err) : t('reject_failed'))
     }
   }
 
@@ -247,22 +254,22 @@ export default function ApprovalCard({
     if (commitResult?.journal_entry_id) {
       deepLink = {
         href: `/bookkeeping/${commitResult.journal_entry_id}`,
-        label: 'Öppna verifikation',
+        label: t('open_voucher'),
       }
     } else if (commitResult?.invoice_id) {
       deepLink = {
         href: `/invoices/${commitResult.invoice_id}`,
-        label: 'Öppna faktura',
+        label: t('open_invoice'),
       }
     } else if (commitResult?.supplier_invoice_id) {
       deepLink = {
         href: `/supplier-invoices/${commitResult.supplier_invoice_id}`,
-        label: 'Öppna leverantörsfaktura',
+        label: t('open_supplier_invoice'),
       }
     } else if (commitResult?.customer_id) {
       deepLink = {
         href: `/customers/${commitResult.customer_id}`,
-        label: 'Öppna kund',
+        label: t('open_customer'),
       }
     }
     // Bulk operations (bulk_book_inbox_items) book N underlag at once and return
@@ -278,8 +285,8 @@ export default function ApprovalCard({
       const soleEntryId =
         bulkSummary.booked === 1 ? commitResult?.booked?.[0]?.journal_entry_id : null
       deepLink = soleEntryId
-        ? { href: `/bookkeeping/${soleEntryId}`, label: 'Öppna verifikation' }
-        : { href: '/bookkeeping', label: 'Öppna bokföringen' }
+        ? { href: `/bookkeeping/${soleEntryId}`, label: t('open_voucher') }
+        : { href: '/bookkeeping', label: t('open_bookkeeping') }
     }
     // The server's `message` field (e.g. "Operation staged for review …
     // Open the Accounted web app to approve or reject it.") was written for
@@ -293,12 +300,12 @@ export default function ApprovalCard({
         aria-description={message}
       >
         <p className="flex items-center gap-2 font-medium">
-          <Check className="h-4 w-4" /> Godkänt
+          <Check className="h-4 w-4" /> {t('approved')}
         </p>
         {bulkSummary && (
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
-            {bulkSummary.booked} {bulkSummary.booked === 1 ? 'underlag bokfört' : 'underlag bokförda'}
-            {bulkSummary.skipped > 0 ? ` · ${bulkSummary.skipped} överhoppade` : ''}
+            {t('bulk_booked', { count: bulkSummary.booked })}
+            {bulkSummary.skipped > 0 ? ` · ${t('bulk_skipped', { count: bulkSummary.skipped })}` : ''}
           </p>
         )}
         {deepLink && (
@@ -321,9 +328,9 @@ export default function ApprovalCard({
         aria-description={message}
       >
         <p className="flex items-center gap-2">
-          <X className="h-4 w-4" /> Avslaget
+          <X className="h-4 w-4" /> {t('rejected')}
           {rejectCategory && (
-            <span className="text-xs text-muted-foreground/80">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
+            <span className="text-xs text-muted-foreground/80">· {rejectionCategoryLabel(rejectCategory, tRejection)}</span>
           )}
         </p>
       </div>
@@ -349,7 +356,7 @@ export default function ApprovalCard({
     >
       <div className="flex items-center justify-between gap-2 flex-wrap">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">
-          Förslag · risk {translateRisk(riskLevel)}
+          {t('proposal_risk', { risk: translateRisk(riskLevel, t) })}
         </p>
         {periodStatus && <PeriodBadge status={periodStatus} />}
       </div>
@@ -372,7 +379,10 @@ export default function ApprovalCard({
         <div className="space-y-1">
           <p className="flex items-center gap-2 text-xs text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
-            Hög risk: skriv <strong className="font-semibold">godkänn</strong> för att bekräfta.
+            {t.rich('high_risk_confirm', {
+              word: t('confirm_word'),
+              strong: (c) => <strong className="font-semibold">{c}</strong>,
+            })}
           </p>
           <input
             type="text"
@@ -381,7 +391,7 @@ export default function ApprovalCard({
             disabled={isBusy}
             className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             autoComplete="off"
-            aria-label="Bekräfta med ordet godkänn"
+            aria-label={t('confirm_aria')}
           />
         </div>
       )}
@@ -390,45 +400,46 @@ export default function ApprovalCard({
 
       {showRejectForm ? (
         <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
-          <p className="text-xs font-medium">Vad är fel?</p>
+          <p className="text-xs font-medium">{t('what_is_wrong')}</p>
           <Select
             value={rejectCategory}
             onValueChange={(v) => setRejectCategory(v as PendingOperationRejectionCategory)}
           >
-            <SelectTrigger className="h-8 text-xs" aria-label="Anledning">
-              <SelectValue placeholder="Anledning (valfritt)" />
+            <SelectTrigger className="h-8 text-xs" aria-label={t('reason')}>
+              <SelectValue placeholder={t('reason_optional')} />
             </SelectTrigger>
             {/* The agent sheet panel is z-[60]; SelectContent defaults to z-50
                 and portals to <body>, so without this it opens BEHIND the
                 sheet. z-[70] sits above the sheet, below toasts (z-[100]). */}
             <SelectContent className="z-[70]">
-              {(Object.keys(REJECTION_CATEGORY_LABELS) as PendingOperationRejectionCategory[]).map((cat) => (
-                <SelectItem key={cat} value={cat}>{REJECTION_CATEGORY_LABELS[cat]}</SelectItem>
+              {REJECTION_CATEGORIES.map((cat) => (
+                <SelectItem key={cat} value={cat}>{rejectionCategoryLabel(cat, tRejection)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Textarea
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
-            placeholder="T.ex. ska vara IT-tjänster, inte telefoni…"
+            placeholder={t('note_placeholder')}
             rows={2}
             maxLength={2000}
             disabled={isBusy}
             className="text-xs"
-            aria-label="Notering"
+            aria-label={t('note')}
           />
           {hasAi ? (
             <p className="text-[11px] text-muted-foreground">
-              Med en anledning eller notering föreslår assistenten en korrigerad bokning direkt.
+              {t('reason_hint_ai')}
             </p>
           ) : (
             <p className="text-[11px] text-muted-foreground">
-              Din anledning sparas på förslaget. Vill du att assistenten automatiskt
-              föreslår en korrigerad bokning?{' '}
-              <Link href="/settings/billing" className="font-medium text-foreground hover:underline">
-                Uppgradera
-              </Link>
-              .
+              {t.rich('reason_hint_upgrade', {
+                link: (c) => (
+                  <Link href="/settings/billing" className="font-medium text-foreground hover:underline">
+                    {c}
+                  </Link>
+                ),
+              })}
             </p>
           )}
           <div className="flex gap-2">
@@ -440,7 +451,7 @@ export default function ApprovalCard({
               loading={state === 'rejecting'}
               className="flex-1"
             >
-              Avvisa
+              {t('reject_confirm')}
             </Button>
             <Button
               variant="outline"
@@ -449,15 +460,17 @@ export default function ApprovalCard({
               disabled={isBusy}
               className="flex-1"
             >
-              Avbryt
+              {t('cancel')}
             </Button>
           </div>
         </div>
       ) : accountsToActivate ? (
         <div className="space-y-2 rounded-lg border border-border bg-muted/30 px-3 py-2">
           <p className="text-xs leading-5">
-            Bokningen använder konton som inte är aktiva i din kontoplan:{' '}
-            <strong className="tabular-nums">{accountsToActivate.join(', ')}</strong>. Aktivera dem för att godkänna bokningen.
+            {t.rich('inactive_accounts', {
+              accounts: accountsToActivate.join(', '),
+              strong: (c) => <strong className="tabular-nums">{c}</strong>,
+            })}
           </p>
           <div className="flex gap-2">
             <Button
@@ -467,7 +480,7 @@ export default function ApprovalCard({
               loading={state === 'committing'}
               className="flex-1"
             >
-              Aktivera och godkänn
+              {t('activate_and_approve')}
             </Button>
             <Button
               variant="outline"
@@ -476,7 +489,7 @@ export default function ApprovalCard({
               disabled={isBusy}
               className="flex-1"
             >
-              Avbryt
+              {t('cancel')}
             </Button>
           </div>
         </div>
@@ -490,7 +503,7 @@ export default function ApprovalCard({
               loading={state === 'committing'}
               className="flex-1"
             >
-              Godkänn
+              {t('approve')}
             </Button>
             <Button
               variant="outline"
@@ -499,13 +512,13 @@ export default function ApprovalCard({
               disabled={isBusy}
               className="flex-1"
             >
-              Avslå
+              {t('reject')}
             </Button>
           </div>
           {/* Keep in sync with EXPIRY_DAYS in
               app/api/pending-operations/expire/cron/route.ts. */}
           <p className="text-[11px] text-muted-foreground">
-            Om du inte gör något utgår förslaget automatiskt efter 30 dagar, inget bokförs.
+            {t('expiry_note')}
           </p>
         </>
       )}
@@ -514,30 +527,34 @@ export default function ApprovalCard({
 }
 
 function PeriodBadge({ status }: { status: PeriodStatus }) {
+  const t = useTranslations('approval_card')
   if (status.status === 'open') {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-success">
-        <ShieldCheck className="h-3 w-3" /> Period öppen
+        <ShieldCheck className="h-3 w-3" /> {t('period_open')}
       </span>
     )
   }
   if (status.status === 'locked') {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-warning">
-        <Lock className="h-3 w-3" /> Period låst
+        <Lock className="h-3 w-3" /> {t('period_locked')}
         {status.lock_date ? <span className="tabular-nums">· {status.lock_date}</span> : null}
       </span>
     )
   }
   return (
     <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-destructive">
-      <Lock className="h-3 w-3" /> Period stängd
+      <Lock className="h-3 w-3" /> {t('period_closed')}
     </span>
   )
 }
 
-function translateRisk(risk: 'low' | 'medium' | 'high'): string {
-  if (risk === 'low') return 'låg'
-  if (risk === 'medium') return 'medel'
-  return 'hög'
+function translateRisk(
+  risk: 'low' | 'medium' | 'high',
+  t: ReturnType<typeof useTranslations>,
+): string {
+  if (risk === 'low') return t('risk_low')
+  if (risk === 'medium') return t('risk_medium')
+  return t('risk_high')
 }

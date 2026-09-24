@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
@@ -15,38 +16,20 @@ interface RegisterUploadStepProps {
   error: string | null
 }
 
-const COPY: Record<RegisterEntity, { title: string; description: string; hint: string }> = {
-  customers: {
-    title: 'Ladda upp fil med kunder',
-    description:
-      'Ladda upp en Excel- eller CSV-fil med ditt kundregister. Filen bör innehålla minst en kolumn med kundnamn.',
-    hint:
-      'Vanliga kolumner identifieras automatiskt: t.ex. "Namn", "Orgnr", "E-post", "Telefon", "Adress", "Postort".',
-  },
-  suppliers: {
-    title: 'Ladda upp fil med leverantörer',
-    description:
-      'Ladda upp en Excel- eller CSV-fil med ditt leverantörsregister. Filen bör innehålla minst en kolumn med leverantörsnamn.',
-    hint:
-      'Vanliga kolumner identifieras automatiskt: t.ex. "Namn", "Orgnr", "Bankgiro", "Plusgiro", "IBAN", "E-post".',
-  },
-  articles: {
-    title: 'Ladda upp fil med artiklar',
-    description:
-      'Ladda upp en Excel- eller CSV-fil med ditt artikelregister. Filen bör innehålla minst en kolumn med benämning. Filer exporterade från Fortnox, Visma och Bokio känns igen automatiskt.',
-    hint:
-      'Vanliga kolumner identifieras automatiskt: t.ex. "Benämning", "Artikelnummer", "Pris", "Moms", "Enhet", "Försäljningskonto".',
-  },
-}
-
 export default function RegisterUploadStep({
   entity,
   onFileSelect,
   isLoading,
   error,
 }: RegisterUploadStepProps) {
+  const t = useTranslations('register_upload_step')
   const [isDragging, setIsDragging] = useState(false)
-  const copy = COPY[entity]
+  const copy =
+    entity === 'customers'
+      ? { title: t('customers_title'), description: t('customers_description'), hint: t('customers_hint') }
+      : entity === 'suppliers'
+        ? { title: t('suppliers_title'), description: t('suppliers_description'), hint: t('suppliers_hint') }
+        : { title: t('articles_title'), description: t('articles_description'), hint: t('articles_hint') }
 
   const handleFile = useCallback((file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase()
@@ -83,13 +66,13 @@ export default function RegisterUploadStep({
           {isLoading ? (
             <div className="flex flex-col items-center gap-3">
               <Loader2 className="h-8 w-8 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">Läser fil och identifierar kolumner...</p>
+              <p className="text-sm text-muted-foreground">{t('reading_file')}</p>
             </div>
           ) : (
             <>
               <Upload className="h-8 w-8 text-muted-foreground/50 mb-3" />
-              <p className="text-sm font-medium">Dra och släpp din fil här</p>
-              <p className="text-sm text-muted-foreground mt-1">eller</p>
+              <p className="text-sm font-medium">{t('drop_here')}</p>
+              <p className="text-sm text-muted-foreground mt-1">{t('or')}</p>
               <label>
                 <input
                   type="file"
@@ -102,7 +85,7 @@ export default function RegisterUploadStep({
                   }}
                 />
                 <Button variant="outline" size="sm" className="mt-2" asChild>
-                  <span>Välj fil</span>
+                  <span>{t('choose_file')}</span>
                 </Button>
               </label>
               <p className="text-xs text-muted-foreground mt-3">XLSX, XLS, CSV, ODS: max 10 MB</p>
@@ -120,7 +103,7 @@ export default function RegisterUploadStep({
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
           <FileSpreadsheet className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <div className="text-sm text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">Filformat</p>
+            <p className="font-medium text-foreground">{t('file_format')}</p>
             <p>{copy.hint}</p>
           </div>
         </div>

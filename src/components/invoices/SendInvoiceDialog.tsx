@@ -554,18 +554,18 @@ export default function SendInvoiceDialog({
           <div className="space-y-4">
             {isSandbox && mode === 'email' && (
               <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground">
-                E-postutskick är avstängt i sandlådan. Använd istället
-                &laquo;Markera som skickad&raquo; för att testa det resterande
-                flödet.
+                {t('sandbox_email_disabled_notice')}
               </div>
             )}
             {!isSandbox && !canEmail && mode === 'email' && (
               <div className="rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-sm text-muted-foreground">
-                E-postutskick kräver ett abonnemang.{' '}
-                <a href="/settings/billing" className="underline underline-offset-2">
-                  Uppgradera
-                </a>{' '}
-                eller använd &laquo;Markera som skickad&raquo;.
+                {t.rich('email_requires_subscription_notice', {
+                  link: (c) => (
+                    <a href="/settings/billing" className="underline underline-offset-2">
+                      {c}
+                    </a>
+                  ),
+                })}
               </div>
             )}
             {mode === 'email' && (
@@ -872,9 +872,9 @@ export default function SendInvoiceDialog({
             }
             title={
               mode === 'email' && isSandbox
-                ? 'E-postutskick är avstängt i sandlådan'
+                ? t('sandbox_email_disabled')
                 : mode === 'email' && !canEmail
-                  ? 'E-postutskick kräver ett abonnemang'
+                  ? t('email_requires_subscription')
                   : undefined
             }
           >

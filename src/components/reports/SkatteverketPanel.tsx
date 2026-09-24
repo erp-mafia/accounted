@@ -3,6 +3,7 @@
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import React, { useState, useEffect, useCallback } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -108,30 +109,8 @@ interface Notice {
   text: string
 }
 
-const ORG_NUMBER_MISSING_NOTICE: Notice = {
-  kind: 'error',
-  text: 'Organisationsnummer saknas. Ange det under Inställningar innan du använder Skatteverket-kopplingen.',
-}
-
 function isOrgNumberMissing(err: unknown): boolean {
   return err instanceof Error && err.message === 'Organisationsnummer saknas'
-}
-
-/**
- * In-flight labels for actions with no visible button while running (the
- * overflow-menu actions close the menu on select): rendered as a status row
- * so a slow SKV round-trip is never silent.
- */
-const ACTION_IN_FLIGHT_LABELS: Record<string, string> = {
-  validate: 'Validerar deklarationen...',
-  draft: 'Sparar utkast...',
-  lock: 'Låser utkastet...',
-  fetchDraft: 'Hämtar utkast...',
-  check: 'Kontrollerar inlämning...',
-  fetchDecided: 'Hämtar beslut...',
-  unlock: 'Låser upp...',
-  delete: 'Raderar utkast...',
-  disconnect: 'Kopplar bort Skatteverket...',
 }
 
 const SKV_ENABLED = ENABLED_EXTENSION_IDS.has('skatteverket')
@@ -154,6 +133,27 @@ function SkatteverketPanelInner({
   // so the `year` prop is stale (stuck at the current year). Every SKV call
   // must target the FY-end year instead.
   const effectiveYear = periodType === 'yearly' && fiscalYearEnd ? fiscalYearEnd.year : year
+  const t = useTranslations('skatteverket_panel')
+  const ORG_NUMBER_MISSING_NOTICE: Notice = { kind: 'error', text: t('org_number_missing') }
+  /**
+   * In-flight labels for actions with no visible button while running (the
+   * overflow-menu actions close the menu on select): rendered as a status row
+   * so a slow SKV round-trip is never silent.
+   */
+  const actionInFlightLabel = (action: string): string | null => {
+    switch (action) {
+      case 'validate': return t('in_flight_validate')
+      case 'draft': return t('in_flight_draft')
+      case 'lock': return t('in_flight_lock')
+      case 'fetchDraft': return t('in_flight_fetch_draft')
+      case 'check': return t('in_flight_check')
+      case 'fetchDecided': return t('in_flight_fetch_decided')
+      case 'unlock': return t('in_flight_unlock')
+      case 'delete': return t('in_flight_delete')
+      case 'disconnect': return t('in_flight_disconnect')
+      default: return null
+    }
+  }
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
@@ -219,7 +219,7 @@ function SkatteverketPanelInner({
     // Check URL params for OAuth callback results
     const params = new URLSearchParams(window.location.search)
     if (params.get('skv_connected') === 'true') {
-      setNotice({ kind: 'success', text: 'Ansluten till Skatteverket' })
+      setNotice({ kind: 'success', text: t('connected_notice') })
       fetchStatus()
       // Clean URL
       const url = new URL(window.location.href)
@@ -233,7 +233,7 @@ function SkatteverketPanelInner({
       url.searchParams.delete('skv_error')
       window.history.replaceState({}, '', url.toString())
     }
-  }, [fetchStatus])
+  }, [fetchStatus, t])
 
   const handleConnect = () => {
     // return_to brings the user back to the momsdeklaration after the BankID
@@ -260,11 +260,11 @@ function SkatteverketPanelInner({
       } else {
         const result = await res.json().catch(() => ({}))
         if (!applyApiError(result)) {
-          setNotice({ kind: 'error', text: `Kunde inte koppla bort (${res.status})` })
+          setNotice({ kind: 'error', text: t('disconnect_failed_status', { status: res.status }) })
         }
       }
     } catch {
-      setNotice({ kind: 'error', text: 'Kunde inte koppla bort' })
+      setNotice({ kind: 'error', text: t('disconnect_failed') })
     } finally {
       setActionLoading(null)
     }
@@ -272,12 +272,7 @@ function SkatteverketPanelInner({
 
   const handleValidate = async () => {
     if (localBlocked) {
-      setNotice({
-        kind: 'error',
-        text:
-          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
-          'du skickar till Skatteverket.',
-      })
+      setNotice({ kind: 'error', text: t('blocked_before_send') })
       return
     }
     setActionLoading('validate')
@@ -301,24 +296,22 @@ function SkatteverketPanelInner({
           // user doesn't read this as a green light for actual filing.
           setNotice({
             kind: 'success',
-            text:
-              'Skatteverket har inga tekniska invändningar mot deklarationen. ' +
-              'Kontrollera siffrorna i förhandsgranskningen innan du skickar in.',
+            text: t('validate_ok'),
           })
         } else {
           const errors = controls.filter(k => k.status === 'ERROR')
           if (errors.length > 0) {
-            setNotice({ kind: 'error', text: `${errors.length} valideringsfel hittades` })
+            setNotice({ kind: 'error', text: t('validation_errors_found', { count: errors.length }) })
           } else {
             setNotice({
               kind: 'success',
-              text: 'Skatteverket har inga tekniska invändningar (med varningar)',
+              text: t('validate_ok_with_warnings'),
             })
           }
         }
       }
     } catch {
-      setNotice({ kind: 'error', text: 'Kunde inte validera deklarationen' })
+      setNotice({ kind: 'error', text: t('validate_failed') })
     } finally {
       setActionLoading(null)
     }
@@ -326,12 +319,7 @@ function SkatteverketPanelInner({
 
   const handleSaveDraft = async () => {
     if (localBlocked) {
-      setNotice({
-        kind: 'error',
-        text:
-          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
-          'du sparar utkastet hos Skatteverket.',
-      })
+      setNotice({ kind: 'error', text: t('blocked_before_draft') })
       return
     }
     setActionLoading('draft')
@@ -350,16 +338,16 @@ function SkatteverketPanelInner({
         setKontroller(controls)
         const errors = controls.filter(k => k.status === 'ERROR')
         if (errors.length === 0) {
-          setNotice({ kind: 'success', text: 'Utkast sparat i Eget utrymme hos Skatteverket' })
+          setNotice({ kind: 'success', text: t('draft_saved') })
         } else {
           setNotice({
             kind: 'error',
-            text: `Utkastet sparades men har ${errors.length} valideringsfel`,
+            text: t('draft_saved_with_errors', { count: errors.length }),
           })
         }
       }
     } catch {
-      setNotice({ kind: 'error', text: 'Kunde inte spara utkast' })
+      setNotice({ kind: 'error', text: t('draft_save_failed') })
     } finally {
       setActionLoading(null)
     }
@@ -396,14 +384,14 @@ function SkatteverketPanelInner({
         setSigneringslank(result.data.signeringsLank)
         setNotice({
           kind: 'success',
-          text: 'Utkastet är låst. Öppna signeringslänken för att signera med BankID.',
+          text: t('lock_ok'),
         })
       }
     } catch (err) {
       setNotice(
         isOrgNumberMissing(err)
           ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte låsa utkastet' },
+          : { kind: 'error', text: t('lock_failed') },
       )
     } finally {
       setActionLoading(null)
@@ -419,12 +407,7 @@ function SkatteverketPanelInner({
    */
   const handleSubmit = async () => {
     if (localBlocked) {
-      setNotice({
-        kind: 'error',
-        text:
-          'Åtgärda felen under Kontroll av underlaget högst upp på sidan innan ' +
-          'du skickar till Skatteverket.',
-      })
+      setNotice({ kind: 'error', text: t('blocked_before_send') })
       return
     }
     setActionLoading('submit')
@@ -444,9 +427,7 @@ function SkatteverketPanelInner({
         setSigneringslank(result.data.signeringsLank)
         setNotice({
           kind: 'success',
-          text:
-            'Deklarationen är kontrollerad, sparad och låst. Öppna signeringslänken ' +
-            'för att signera med BankID.',
+          text: t('submit_ok'),
         })
         return
       }
@@ -457,19 +438,17 @@ function SkatteverketPanelInner({
         if (result.stage === 'validation') {
           setNotice({
             kind: 'error',
-            text: result.error || 'Skatteverket hittade valideringsfel i deklarationen.',
+            text: result.error || t('submit_validation_failed'),
           })
         } else if (result.stage === 'lock' && result.draft_saved) {
           setNotice({
             kind: 'error',
-            text:
-              'Utkastet är sparat hos Skatteverket men kunde inte låsas för signering. ' +
-              'Försök igen med "Lås och signera" under Fler åtgärder.',
+            text: t('submit_lock_failed'),
           })
         } else {
           setNotice({
             kind: 'error',
-            text: result.error || 'Kunde inte skicka deklarationen till Skatteverket',
+            text: result.error || t('submit_failed'),
           })
         }
         return
@@ -478,11 +457,11 @@ function SkatteverketPanelInner({
       if (!applyApiError(result)) {
         setNotice({
           kind: 'error',
-          text: 'Kunde inte skicka deklarationen till Skatteverket',
+          text: t('submit_failed'),
         })
       }
     } catch {
-      setNotice({ kind: 'error', text: 'Kunde inte skicka deklarationen till Skatteverket' })
+      setNotice({ kind: 'error', text: t('submit_failed') })
     } finally {
       setActionLoading(null)
     }
@@ -503,13 +482,13 @@ function SkatteverketPanelInner({
         // surfaced + status updated; nothing more to do
       } else {
         setSigneringslank(null)
-        setNotice({ kind: 'success', text: 'Utkastet har låsts upp' })
+        setNotice({ kind: 'success', text: t('unlock_ok') })
       }
     } catch (err) {
       setNotice(
         isOrgNumberMissing(err)
           ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte låsa upp utkastet' },
+          : { kind: 'error', text: t('unlock_failed') },
       )
     } finally {
       setActionLoading(null)
@@ -537,20 +516,20 @@ function SkatteverketPanelInner({
         // surfaced + status updated; nothing more to do
       } else if (result.data) {
         setSubmitted(result.data)
-        setNotice({ kind: 'success', text: 'Deklarationen har lämnats in' })
+        setNotice({ kind: 'success', text: t('submitted_ok') })
       } else if (!silent) {
-        setNotice({ kind: 'info', text: 'Ingen inlämnad deklaration hittades för denna period' })
+        setNotice({ kind: 'info', text: t('submitted_none') })
       }
     } catch (err) {
       if (isOrgNumberMissing(err)) {
-        setNotice(ORG_NUMBER_MISSING_NOTICE)
+        setNotice({ kind: 'error', text: t('org_number_missing') })
       } else if (!silent) {
-        setNotice({ kind: 'error', text: 'Kunde inte kontrollera inlämningsstatus' })
+        setNotice({ kind: 'error', text: t('submitted_check_failed') })
       }
     } finally {
       setActionLoading(null)
     }
-  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, effectiveYear, period])
+  }, [applyApiError, getRedovisare, getRedovisningsperiod, periodType, effectiveYear, period, t])
 
   // While a signing link is outstanding, re-check submission status when the
   // user returns to this tab: signing happens on Skatteverket's site, so the
@@ -579,18 +558,18 @@ function SkatteverketPanelInner({
       if (res.status === 204 || res.ok) {
         setKontroller([])
         setSigneringslank(null)
-        setNotice({ kind: 'success', text: 'Utkastet har raderats från Eget utrymme' })
+        setNotice({ kind: 'success', text: t('delete_ok') })
       } else {
         const result = await res.json().catch(() => ({}))
         if (!applyApiError(result)) {
-          setNotice({ kind: 'error', text: `Kunde inte radera utkast (${res.status})` })
+          setNotice({ kind: 'error', text: t('delete_failed_status', { status: res.status }) })
         }
       }
     } catch (err) {
       setNotice(
         isOrgNumberMissing(err)
           ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte radera utkast' },
+          : { kind: 'error', text: t('delete_failed') },
       )
     } finally {
       setActionLoading(null)
@@ -610,18 +589,18 @@ function SkatteverketPanelInner({
       if (applyApiError(result)) {
         // surfaced + status updated; nothing more to do
       } else if (!result.data) {
-        setNotice({ kind: 'info', text: 'Inget sparat utkast hittades för perioden' })
+        setNotice({ kind: 'info', text: t('fetch_draft_none') })
       } else {
-        const locked = result.data?.locked ? ' (låst)' : ''
+        const locked = result.data?.locked ? t('fetch_draft_locked_suffix') : ''
         const summa = result.data?.momsuppgift?.summaMoms
         const summaLabel = summa !== undefined ? `, summaMoms = ${formatAmount(summa)}` : ''
-        setNotice({ kind: 'success', text: `Sparat utkast hittades${locked}${summaLabel}` })
+        setNotice({ kind: 'success', text: t('fetch_draft_found', { locked, summa: summaLabel }) })
       }
     } catch (err) {
       setNotice(
         isOrgNumberMissing(err)
           ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte hämta utkast' },
+          : { kind: 'error', text: t('fetch_draft_failed') },
       )
     } finally {
       setActionLoading(null)
@@ -641,17 +620,21 @@ function SkatteverketPanelInner({
       if (applyApiError(result)) {
         // surfaced + status updated; nothing more to do
       } else if (!result.data) {
-        setNotice({ kind: 'info', text: 'Inget beslut hittades för perioden' })
+        setNotice({ kind: 'info', text: t('fetch_decided_none') })
       } else {
         const tid = result.data?.beslutadTidpunkt
-        const tidLabel = tid ? ` (beslutad ${new Date(tid).toLocaleDateString('sv-SE')})` : ''
-        setNotice({ kind: 'success', text: `Beslut hittades${tidLabel}` })
+        setNotice({
+          kind: 'success',
+          text: tid
+            ? t('fetch_decided_found_on', { date: new Date(tid).toLocaleDateString('sv-SE') })
+            : t('fetch_decided_found'),
+        })
       }
     } catch (err) {
       setNotice(
         isOrgNumberMissing(err)
           ? ORG_NUMBER_MISSING_NOTICE
-          : { kind: 'error', text: 'Kunde inte hämta beslutade uppgifter' },
+          : { kind: 'error', text: t('fetch_decided_failed') },
       )
     } finally {
       setActionLoading(null)
@@ -660,10 +643,9 @@ function SkatteverketPanelInner({
 
   const handleDeleteDraftConfirmed = async () => {
     const ok = await confirm({
-      title: 'Radera utkastet hos Skatteverket?',
-      description:
-        'Utkastet tas bort från Eget utrymme hos Skatteverket. Detta går inte att ångra.',
-      confirmLabel: 'Radera utkast',
+      title: t('delete_confirm_title'),
+      description: t('delete_confirm_description'),
+      confirmLabel: t('delete_confirm_label'),
     })
     if (!ok) return
     await handleDeleteDraft()
@@ -671,10 +653,9 @@ function SkatteverketPanelInner({
 
   const handleDisconnectConfirmed = async () => {
     const ok = await confirm({
-      title: 'Koppla bort Skatteverket?',
-      description:
-        'Anslutningen tas bort och du behöver ansluta med BankID igen för att kunna skicka direkt.',
-      confirmLabel: 'Koppla bort',
+      title: t('disconnect_confirm_title'),
+      description: t('disconnect_confirm_description'),
+      confirmLabel: t('disconnect_confirm_label'),
     })
     if (!ok) return
     await handleDisconnect()
@@ -708,16 +689,15 @@ function SkatteverketPanelInner({
         <div className="mb-3">
           <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket (valfritt)
+            {t('send_direct_optional')}
           </h3>
         </div>
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Med ett abonnemang kan du ansluta med BankID och skicka deklarationen
-            direkt härifrån, samt validera, spara utkast och signera.
+            {t('upgrade_body')}
           </p>
           <UpgradeNote>
-            Direktinlämning till Skatteverket kräver ett abonnemang.
+            {t('upgrade_note')}
           </UpgradeNote>
         </div>
       </section>
@@ -734,7 +714,7 @@ function SkatteverketPanelInner({
         <div className="mb-3">
           <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket (valfritt)
+            {t('send_direct_optional')}
           </h3>
         </div>
         <div className="space-y-4">
@@ -748,13 +728,11 @@ function SkatteverketPanelInner({
             </div>
           )}
           <p className="text-sm text-muted-foreground">
-            Vill du slippa skriva in siffrorna själv kan du ansluta med BankID och
-            skicka deklarationen direkt härifrån, samt validera, spara utkast och
-            signera.
+            {t('connect_body')}
           </p>
           <Button onClick={handleConnect} className="gap-2">
             <Link2 className="h-4 w-4" />
-            Anslut med BankID
+            {t('connect_button')}
           </Button>
         </div>
       </section>
@@ -770,7 +748,7 @@ function SkatteverketPanelInner({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="flex items-center gap-2 font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             <FileCheck className="h-4 w-4" />
-            Skicka direkt till Skatteverket
+            {t('send_direct')}
           </h3>
           <div className="flex flex-wrap items-center gap-2">
             {/* Connected is the normal state here (the not-connected branch is
@@ -778,14 +756,14 @@ function SkatteverketPanelInner({
                 session is the one exception and gets the attn sentence below
                 instead of a badge-and-button cluster. */}
             {!status.expired && (
-              <span className="text-xs text-muted-foreground">Ansluten</span>
+              <span className="text-xs text-muted-foreground">{t('connected')}</span>
             )}
             {/* Read-only lookups and recovery actions live in the overflow
                 menu: the visible surface stays the forward path (validera,
                 spara utkast, lås och signera). */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Fler åtgärder">
+                <Button variant="ghost" size="icon" aria-label={t('more_actions')}>
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -794,15 +772,15 @@ function SkatteverketPanelInner({
                     the one-click "Skicka till Skatteverket" button; these
                     remain for partial retries (e.g. lock-only after a lock
                     failure) and for users who want to inspect each step. */}
-                <DropdownMenuLabel>Steg för steg</DropdownMenuLabel>
+                <DropdownMenuLabel>{t('menu_step_by_step')}</DropdownMenuLabel>
                 <DropdownMenuItem
                   disabled={!hasData || localBlocked || actionLoading !== null}
                   onSelect={() => handleValidate()}
                 >
                   <div>
-                    <p>Validera</p>
+                    <p>{t('menu_validate')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Kontrollera deklarationen hos Skatteverket utan att spara
+                      {t('menu_validate_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -811,9 +789,9 @@ function SkatteverketPanelInner({
                   onSelect={() => handleSaveDraft()}
                 >
                   <div>
-                    <p>Spara utkast</p>
+                    <p>{t('menu_save_draft')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Spara deklarationen som utkast i Eget utrymme
+                      {t('menu_save_draft_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -822,22 +800,22 @@ function SkatteverketPanelInner({
                   onSelect={() => handleLock()}
                 >
                   <div>
-                    <p>Lås och signera</p>
+                    <p>{t('menu_lock')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Lås det sparade utkastet och hämta signeringslänken
+                      {t('menu_lock_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel>Status hos Skatteverket</DropdownMenuLabel>
+                <DropdownMenuLabel>{t('menu_status')}</DropdownMenuLabel>
                 <DropdownMenuItem
                   disabled={actionLoading !== null}
                   onSelect={() => handleFetchDraft()}
                 >
                   <div>
-                    <p>Hämta utkast</p>
+                    <p>{t('menu_fetch_draft')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Hämta sparat utkast från Eget utrymme
+                      {t('menu_fetch_draft_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -846,9 +824,9 @@ function SkatteverketPanelInner({
                   onSelect={() => handleCheckSubmitted()}
                 >
                   <div>
-                    <p>Kontrollera inlämning</p>
+                    <p>{t('check_submission')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Kontrollera om en signerad deklaration har lämnats in
+                      {t('menu_check_submission_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -857,22 +835,22 @@ function SkatteverketPanelInner({
                   onSelect={() => handleFetchDecided()}
                 >
                   <div>
-                    <p>Hämta beslut</p>
+                    <p>{t('menu_fetch_decided')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Hämta Skatteverkets beslut för perioden
+                      {t('menu_fetch_decided_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuLabel>Återställning</DropdownMenuLabel>
+                <DropdownMenuLabel>{t('menu_recovery')}</DropdownMenuLabel>
                 <DropdownMenuItem
                   disabled={actionLoading !== null}
                   onSelect={() => handleUnlock()}
                 >
                   <div>
-                    <p>Lås upp</p>
+                    <p>{t('menu_unlock')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Lås upp en låst period så att utkastet kan ändras
+                      {t('menu_unlock_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -881,9 +859,9 @@ function SkatteverketPanelInner({
                   onSelect={() => handleDeleteDraftConfirmed()}
                 >
                   <div>
-                    <p>Radera utkast...</p>
+                    <p>{t('menu_delete_draft')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Radera sparat utkast från Eget utrymme
+                      {t('menu_delete_draft_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -894,9 +872,9 @@ function SkatteverketPanelInner({
                   className="text-destructive focus:text-destructive"
                 >
                   <div>
-                    <p>Koppla bort Skatteverket...</p>
+                    <p>{t('menu_disconnect')}</p>
                     <p className="text-xs text-muted-foreground">
-                      Kräver ny BankID-anslutning för direktinlämning
+                      {t('menu_disconnect_hint')}
                     </p>
                   </div>
                 </DropdownMenuItem>
@@ -906,13 +884,13 @@ function SkatteverketPanelInner({
         </div>
         {status.expired && (
           <p className="mt-2 text-[12.5px] leading-5 text-attn">
-            Sessionen mot Skatteverket har gått ut.{' '}
+            {t('session_expired')}{' '}
             <button
               type="button"
               onClick={handleConnect}
               className="underline underline-offset-2 hover:opacity-80"
             >
-              Förnya med BankID
+              {t('renew_with_bankid')}
             </button>
           </p>
         )}
@@ -920,14 +898,14 @@ function SkatteverketPanelInner({
       <div className="space-y-4">
         {/* In-flight status for overflow-menu actions: their menu closes on
             select, so this row is the only visible sign of work. */}
-        {actionLoading && ACTION_IN_FLIGHT_LABELS[actionLoading] && (
+        {actionLoading && actionInFlightLabel(actionLoading) && (
           <div
             role="status"
             aria-live="polite"
             className="flex items-center gap-2 text-sm text-muted-foreground"
           >
             <Loader2 className="h-4 w-4 animate-spin" />
-            {ACTION_IN_FLIGHT_LABELS[actionLoading]}
+            {actionInFlightLabel(actionLoading)}
           </div>
         )}
 
@@ -962,7 +940,7 @@ function SkatteverketPanelInner({
         {kontroller.length > 0 && (
           <div className="space-y-2">
             <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              Skatteverkets valideringsresultat
+              {t('validation_results_heading')}
             </h3>
             {kontroller.map((k, i) => (
               <div
@@ -992,16 +970,16 @@ function SkatteverketPanelInner({
           <div className="rounded-lg border border-border p-3 space-y-1">
             <p className="text-sm font-medium flex items-center gap-2">
               <CheckCircle2 className="h-4 w-4 text-success" />
-              Inlämnad
+              {t('submitted_label')}
             </p>
             {submitted.kvittensnummer && (
               <p className="text-xs text-muted-foreground">
-                Kvittensnummer: <span className="font-mono">{submitted.kvittensnummer}</span>
+                {t('receipt_number_label')} <span className="font-mono">{submitted.kvittensnummer}</span>
               </p>
             )}
             {submitted.tidpunkt && (
               <p className="text-xs text-muted-foreground">
-                Tidpunkt: {new Date(submitted.tidpunkt).toLocaleString('sv-SE')}
+                {t('submitted_at', { time: new Date(submitted.tidpunkt).toLocaleString('sv-SE') })}
               </p>
             )}
           </div>
@@ -1010,16 +988,15 @@ function SkatteverketPanelInner({
         {/* Signing link */}
         {signeringslank && (
           <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-            <p className="text-sm font-medium">Utkastet är låst och redo att signeras</p>
+            <p className="text-sm font-medium">{t('signing_ready_title')}</p>
             <p className="text-xs text-muted-foreground">
-              Öppna länken nedan och signera med BankID på Skatteverkets sida. När du
-              kommer tillbaka hit kontrolleras inlämningen automatiskt.
+              {t('signing_ready_body')}
             </p>
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" asChild className="gap-2">
                 <a href={signeringslank} target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4" />
-                  Öppna signeringssidan
+                  {t('open_signing_page')}
                 </a>
               </Button>
               <Button
@@ -1029,7 +1006,7 @@ function SkatteverketPanelInner({
                 loading={actionLoading === 'check'}
               >
                 {actionLoading !== 'check' && <CheckCircle2 className="mr-2 h-4 w-4" />}
-                Kontrollera inlämning
+                {t('check_submission')}
               </Button>
             </div>
           </div>
@@ -1044,33 +1021,30 @@ function SkatteverketPanelInner({
             loading={actionLoading === 'submit'}
           >
             {actionLoading !== 'submit' && <Send className="mr-2 h-4 w-4" />}
-            Skicka till Skatteverket
+            {t('submit_button')}
           </Button>
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Deklarationen kontrolleras, sparas som utkast i{' '}
-          <InfoTooltip
-            variant="help"
-            content="Ditt företags privata yta hos Skatteverket. Utkast som sparas där räknas inte som inlämnade förrän de har signerats med BankID."
-          >
-            <span>Eget utrymme</span>
-          </InfoTooltip>{' '}
-          och låses för signering med BankID hos Skatteverket. Inget lämnas in
-          förrän du har signerat.
+          {t.rich('flow_explainer', {
+            tip: (chunks) => (
+              <InfoTooltip variant="help" content={t('eget_utrymme_tooltip')}>
+                <span>{chunks}</span>
+              </InfoTooltip>
+            ),
+          })}
         </p>
 
         {/* Visible disabled-state explanations: title attributes never show
             on disabled buttons. */}
         {localBlocked && (
           <p className="text-sm text-destructive">
-            Åtgärda felen under Kontroll av underlaget högst upp på sidan innan du
-            skickar in.
+            {t('blocked_before_submit')}
           </p>
         )}
         {hasErrors && !localBlocked && (
           <p className="text-sm text-muted-foreground">
-            Valideringsfelen ovan måste åtgärdas innan deklarationen kan lämnas in.
+            {t('validation_errors_block')}
           </p>
         )}
       </div>

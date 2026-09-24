@@ -321,7 +321,7 @@ function SkatteverketPersonalConnectionCard() {
         </SettingsRow>
         {!hasSkatteverket && (
           <div className="px-1 py-3">
-            <UpgradeNote>Anslutning till Skatteverket kräver ett abonnemang.</UpgradeNote>
+            <UpgradeNote>{t('connect_requires_subscription_note')}</UpgradeNote>
           </div>
         )}
       </SettingsGroup>

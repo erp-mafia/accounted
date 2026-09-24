@@ -2,7 +2,8 @@
 
 import Link from 'next/link'
 import { ArrowUpRight } from 'lucide-react'
-import { contextRefToTarget } from '@/lib/agent/intents/route-mapping'
+import { useTranslations } from 'next-intl'
+import { contextRefToTarget, type ContextRefKind } from '@/lib/agent/intents/route-mapping'
 import { cn } from '@/lib/utils'
 
 /**
@@ -26,8 +27,10 @@ export default function ContextChip({
   contextRef: string | null | undefined
   className?: string
 }) {
+  const t = useTranslations('context_chip')
   const target = contextRefToTarget(contextRef)
   if (!target) return null
+  const label = kindLabel(target.kind, t)
 
   const shape =
     'inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs text-muted-foreground'
@@ -38,7 +41,7 @@ export default function ContextChip({
   if (!target.href) {
     return (
       <span className={cn(shape, className)}>
-        <span className="truncate">{target.label}</span>
+        <span className="truncate">{label}</span>
       </span>
     )
   }
@@ -52,8 +55,27 @@ export default function ContextChip({
         className,
       )}
     >
-      <span className="truncate">{target.label}</span>
+      <span className="truncate">{label}</span>
       <ArrowUpRight className="h-3 w-3 shrink-0" />
     </Link>
   )
+}
+
+function kindLabel(kind: ContextRefKind, t: ReturnType<typeof useTranslations>): string {
+  switch (kind) {
+    case 'invoice':
+      return t('invoice')
+    case 'supplier_invoice':
+      return t('supplier_invoice')
+    case 'transaction':
+      return t('transaction')
+    case 'verifikation':
+      return t('verifikation')
+    case 'bokslut':
+      return t('bokslut')
+    case 'kpi':
+      return t('kpi')
+    case 'inbox':
+      return t('inbox')
+  }
 }

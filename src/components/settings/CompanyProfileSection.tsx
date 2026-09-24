@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import { CompanyProfileView } from '@/components/settings/CompanyProfileView'
@@ -17,13 +18,6 @@ import { formatDateLong } from '@/lib/utils'
 
 type Snapshot = Parameters<typeof CompanyProfileView>[0]['snapshot']
 
-const ERROR_MESSAGES: Record<string, string> = {
-  org_number_invalid: 'Ogiltigt organisations- eller personnummer.',
-  not_found: 'Inga bolagsuppgifter hittades för det numret.',
-  unauthorized: 'Du har inte behörighet att hämta uppgifter.',
-  persist_failed: 'Något gick fel. Försök igen.',
-}
-
 // Företagsprofil: the cached TIC company snapshot (Bolagsuppgifter), rendered
 // as a read-only section on the Företag tab. Fetched client-side (low-traffic
 // settings) so it sits alongside the client-rendered company form. RLS scopes
@@ -31,6 +25,7 @@ const ERROR_MESSAGES: Record<string, string> = {
 // (re)fetch live when the snapshot is missing or wrong: the recovery path for
 // an enskild firma whose personnummer previously resolved to the wrong entity.
 export function CompanyProfileSection() {
+  const t = useTranslations('company_profile_section')
   const { company } = useCompany()
   const [snapshot, setSnapshot] = useState<Snapshot>(null)
   const [fetchedAt, setFetchedAt] = useState<string | null>(null)
@@ -71,7 +66,19 @@ export function CompanyProfileSection() {
       setSnapshot((result.snapshot as Snapshot) ?? null)
       setFetchedAt(result.fetchedAt ?? null)
     } else {
-      setError(ERROR_MESSAGES[result.error ?? ''] ?? ERROR_MESSAGES.persist_failed)
+      switch (result.error) {
+        case 'org_number_invalid':
+          setError(t('error_org_number_invalid'))
+          break
+        case 'not_found':
+          setError(t('error_not_found'))
+          break
+        case 'unauthorized':
+          setError(t('error_unauthorized'))
+          break
+        default:
+          setError(t('error_persist_failed'))
+      }
     }
     setSubmitting(false)
   }
@@ -79,12 +86,12 @@ export function CompanyProfileSection() {
   if (loading) return <Skeleton className="h-48 w-full rounded-lg" />
 
   return (
-    <SettingsGroup label="Bolagsuppgifter">
+    <SettingsGroup label={t('group_label')}>
       <CompanyProfileView snapshot={snapshot} />
 
       <SettingsRow
-        label={snapshot ? 'Uppdatera bolagsuppgifter' : 'Hämta bolagsuppgifter'}
-        help="Uppgifterna hämtas från Bolagsverket. För enskild firma anges personnumret."
+        label={snapshot ? t('update_label') : t('fetch_label')}
+        help={t('help')}
         borderless
       >
         <form
@@ -93,7 +100,7 @@ export function CompanyProfileSection() {
         >
           <SettingsInput
             id="tic_org_number"
-            aria-label="Organisationsnummer eller personnummer"
+            aria-label={t('org_number_aria')}
             value={orgInput}
             onChange={(e) => setOrgInput(e.target.value)}
             placeholder="XXXXXX-XXXX"
@@ -102,10 +109,10 @@ export function CompanyProfileSection() {
             className="max-w-xs tabular-nums"
           />
           <Button type="submit" size="sm" disabled={!orgInput.trim()} loading={submitting}>
-            {submitting ? 'Hämtar…' : 'Hämta'}
+            {submitting ? t('fetching') : t('fetch')}
           </Button>
           {fetchedAt && (
-            <SettingsRowNote>Uppdaterad {formatDateLong(fetchedAt)}</SettingsRowNote>
+            <SettingsRowNote>{t('updated_at', { date: formatDateLong(fetchedAt) })}</SettingsRowNote>
           )}
           {error && <span className="basis-full text-xs text-destructive">{error}</span>}
         </form>

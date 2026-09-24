@@ -251,23 +251,23 @@ export default function ImportReviewStep({
               <div className="space-y-6">
                 <ImportTheater model={theaterModel} preview={preview} elapsed={elapsed} />
                 <p className="text-center text-sm text-muted-foreground">
-                  Stäng inte sidan. Importen kan ta upp till några minuter beroende på antalet verifikationer.
+                  {t('review_do_not_close')}
                 </p>
               </div>
             ) : (
               <div className="flex flex-col items-center text-center space-y-6">
                 <Loader2 className="h-10 w-10 text-primary animate-spin" />
                 <div className="space-y-1">
-                  <p className="font-medium text-lg">Importerar bokföring...</p>
+                  <p className="font-medium text-lg">{t('review_importing')}</p>
                   <p className="text-sm text-muted-foreground">
-                    {preview.voucherCount} verifikationer bearbetas
+                    {t('review_vouchers_processing', { count: preview.voucherCount })}
                   </p>
                 </div>
                 <div className="text-2xl font-display tabular-nums text-muted-foreground">
                   {elapsed}s
                 </div>
                 <p className="text-sm text-muted-foreground max-w-sm">
-                  Stäng inte sidan. Importen kan ta upp till några minuter beroende på antalet verifikationer.
+                  {t('review_do_not_close')}
                 </p>
               </div>
             )}
@@ -284,19 +284,19 @@ export default function ImportReviewStep({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CheckCircle className="h-5 w-5 text-success" />
-            Redo att importera
+            {t('review_ready_title')}
             {/* What the import does lives behind the "?" (convention 7)
                 instead of a trailing card of numbered steps. */}
             <HelpPopover className="shrink-0">
               <div className="space-y-2">
-                <p className="font-medium">Vad händer när du importerar?</p>
-                <p>1. Räkenskapsåret skapas om det inte finns</p>
+                <p className="font-medium">{t('review_what_happens')}</p>
+                <p>1. {t('review_step_fiscal_year')}</p>
                 <p>2. {t('review_step_chart')}</p>
-                <p>3. En verifikation för ingående balanser skapas</p>
-                <p>4. Alla verifikationer importeras med nya verifikationsnummer</p>
-                <p>5. Kontomappningarna sparas för framtida importer</p>
+                <p>3. {t('review_step_opening_balance')}</p>
+                <p>4. {t('review_step_vouchers')}</p>
+                <p>5. {t('review_step_mappings')}</p>
                 <p className="pt-2">
-                  En genomförd import kan ångras i efterhand via importhistoriken.
+                  {t('review_undo_hint')}
                 </p>
               </div>
             </HelpPopover>
@@ -307,14 +307,14 @@ export default function ImportReviewStep({
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
               <FileText className="h-8 w-8 text-muted-foreground" />
               <div>
-                <p className="font-medium">{preview.companyName || 'Okänt företag'}</p>
-                <p className="text-sm text-muted-foreground">{preview.orgNumber || 'Inget orgnr'}</p>
+                <p className="font-medium">{preview.companyName || t('review_unknown_company')}</p>
+                <p className="text-sm text-muted-foreground">{preview.orgNumber || t('review_no_org_number')}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
               <Calendar className="h-8 w-8 text-muted-foreground" />
               <div>
-                <p className="font-medium">Räkenskapsår</p>
+                <p className="font-medium">{t('review_fiscal_year')}</p>
                 <p className="text-sm text-muted-foreground">
                   {preview.fiscalYearStart
                     ? formatDate(preview.fiscalYearStart)
@@ -329,9 +329,9 @@ export default function ImportReviewStep({
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
               <Database className="h-8 w-8 text-muted-foreground" />
               <div>
-                <p className="font-medium">{mappedCount} konton mappade</p>
+                <p className="font-medium">{t('review_accounts_mapped', { count: mappedCount })}</p>
                 <p className="text-sm text-muted-foreground">
-                  {preview.voucherCount} verifikationer
+                  {t('review_voucher_count', { count: preview.voucherCount })}
                 </p>
               </div>
             </div>
@@ -342,18 +342,18 @@ export default function ImportReviewStep({
       {/* Import options */}
       <Card>
         <CardHeader>
-          <CardTitle>Importinställningar</CardTitle>
-          <CardDescription>Välj vad som ska importeras</CardDescription>
+          <CardTitle>{t('review_settings_title')}</CardTitle>
+          <CardDescription>{t('review_settings_description')}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Fiscal period */}
           <div className="flex items-start justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="create-fiscal-period" className="font-medium">
-                Skapa räkenskapsår
+                {t('review_create_fiscal_year')}
               </Label>
               <p className="text-sm text-muted-foreground">
-                Skapar automatiskt räkenskapsåret om det inte redan finns
+                {t('review_create_fiscal_year_hint')}
               </p>
             </div>
             <Switch
@@ -367,12 +367,12 @@ export default function ImportReviewStep({
           <div className="flex items-start justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="import-opening-balances" className="font-medium">
-                Importera ingående balanser
+                {t('review_import_opening_balances')}
               </Label>
               <p className="text-sm text-muted-foreground">
                 {hasOpeningBalances
-                  ? `Skapar IB-verifikation, summa debet ${formatCurrency(preview.openingBalanceTotal)}`
-                  : 'Inga ingående balanser i filen'}
+                  ? t('review_opening_balances_hint', { amount: formatCurrency(preview.openingBalanceTotal) })
+                  : t('review_no_opening_balances')}
               </p>
               {existingIbCount > 0 && (
                 <p className="text-sm text-muted-foreground">{t('ib_exists_hint')}</p>
@@ -411,14 +411,14 @@ export default function ImportReviewStep({
                     const suffix = isInFile
                       ? `, ${t('ib_series_in_file')}`
                       : isDefault
-                        ? ', standard'
+                        ? `, ${t('review_series_default')}`
                         : isExisting
-                          ? ', används redan'
+                          ? `, ${t('review_series_in_use')}`
                           : ''
                     const name = voucherSeriesLabel(letter, seriesLabels)
                     return (
                       <SelectItem key={letter} value={letter}>
-                        {`Serie ${letter}${name ? ` ${name}` : ''}${suffix}`}
+                        {`${t('review_series_option', { letter })}${name ? ` ${name}` : ''}${suffix}`}
                       </SelectItem>
                     )
                   })}
@@ -436,12 +436,12 @@ export default function ImportReviewStep({
           <div className="flex items-start justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="import-transactions" className="font-medium">
-                Importera verifikationer
+                {t('review_import_vouchers')}
               </Label>
               <p className="text-sm text-muted-foreground">
                 {hasTransactions
-                  ? `Importerar ${preview.voucherCount} verifikationer med ${preview.transactionLineCount} rader`
-                  : 'Inga verifikationer i filen (SIE1-format?)'}
+                  ? t('review_import_vouchers_hint', { vouchers: preview.voucherCount, lines: preview.transactionLineCount })
+                  : t('review_no_vouchers')}
               </p>
             </div>
             <Switch
@@ -456,12 +456,12 @@ export default function ImportReviewStep({
           <div className="flex items-start justify-between">
             <div className="space-y-0.5">
               <Label htmlFor="update-account-names" className="font-medium">
-                Använd kontonamn från filen
+                {t('review_use_account_names')}
               </Label>
               <p className="text-sm text-muted-foreground">
                 {customNameCount > 0
-                  ? `${customNameCount} ${customNameCount === 1 ? 'konto' : 'konton'} har egna namn i filen som skiljer sig från BAS-standard`
-                  : 'Kontonamnen i filen följer BAS-standard'}
+                  ? t('review_custom_names', { count: customNameCount })
+                  : t('review_names_follow_bas')}
               </p>
             </div>
             <Switch
@@ -475,7 +475,7 @@ export default function ImportReviewStep({
           {options.importTransactions && hasTransactions && (
             <div className="space-y-2">
               <Label htmlFor="voucher-series" className="font-medium">
-                Verifikationsserie för importerade transaktioner
+                {t('review_voucher_series_label')}
               </Label>
               <Select
                 value={options.voucherSeries}
@@ -490,21 +490,21 @@ export default function ImportReviewStep({
                     const isDefault = defaultSeries === letter
                     const isExisting = existingSeries.has(letter)
                     const suffix = isDefault
-                      ? ', standard'
+                      ? `, ${t('review_series_default')}`
                       : isExisting
-                        ? ', används redan'
+                        ? `, ${t('review_series_in_use')}`
                         : ''
                     const name = voucherSeriesLabel(letter, seriesLabels)
                     return (
                       <SelectItem key={letter} value={letter}>
-                        {`Serie ${letter}${name ? ` ${name}` : ''}${suffix}`}
+                        {`${t('review_series_option', { letter })}${name ? ` ${name}` : ''}${suffix}`}
                       </SelectItem>
                     )
                   })}
                 </SelectContent>
               </Select>
               <p className="text-sm text-muted-foreground">
-                Använd en separat serie för att enkelt kunna skilja importerade från manuella verifikationer
+                {t('review_voucher_series_hint')}
               </p>
             </div>
           )}
@@ -514,18 +514,15 @@ export default function ImportReviewStep({
           <div className="flex items-start justify-between border-t pt-6">
             <div className="space-y-0.5 pr-4">
               <Label htmlFor="mark-no-doc-required" className="font-medium flex items-center gap-2">
-                Markera som &quot;Inget underlag krävs&quot;
+                {t('review_mark_no_doc')}
                 {isHistoricalImport && (
                   <span className="text-xs font-normal text-muted-foreground">
-                    · Rekommenderas vid migrering
+                    · {t('review_recommended_migration')}
                   </span>
                 )}
               </Label>
               <p className="text-sm text-muted-foreground">
-                Märker alla importerade verifikationer som att de inte behöver något
-                separat underlag: underlagen finns kvar i ditt tidigare system. Annars
-                hamnar de under &quot;Att hantera: saknade underlag&quot;. Kan ändras per
-                verifikation efteråt.
+                {t('review_mark_no_doc_hint')}
               </p>
             </div>
             <Switch
@@ -544,13 +541,12 @@ export default function ImportReviewStep({
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
               <AlertCircle className="h-5 w-5" />
-              Observera
+              {t('review_notice_title')}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
-              De ingående balanserna i filen balanserar inte helt. En justeringspost kommer
-              att skapas automatiskt mot konto 2099 (Årets resultat).
+              {t('review_unbalanced_notice')}
             </p>
           </CardContent>
         </Card>
@@ -569,15 +565,15 @@ export default function ImportReviewStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          Tillbaka
+          {t('review_back')}
         </Button>
         <Button
           onClick={handleExecute}
           disabled={!canWrite || isLoading}
-          title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
+          title={!canWrite ? t('review_read_only') : undefined}
         >
           {!canWrite && <Lock className="mr-2 h-4 w-4" />}
-          Starta import
+          {t('review_start_import')}
           {canWrite && <ArrowRight className="ml-2 h-4 w-4" />}
         </Button>
       </div>
