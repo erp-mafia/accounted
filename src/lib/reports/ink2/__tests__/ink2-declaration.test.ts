@@ -469,6 +469,32 @@ describe('generateINK2Declaration: result moved into equity outside our year-end
     // Not fully closed, so the declared-versus-2099 check does not apply.
     expect(result.warnings.some((w) => w.includes('konto 2099'))).toBe(false)
   })
+
+  it('warns when a closed year still has part of the result on the result accounts', async () => {
+    // The same partial transfer, but the year is closed (klarmarkerad after
+    // an import whose resultatavslut moved only part of the result).
+    const closed = PRE_CLOSING_ROWS.map((r) => {
+      if (r.account_number === '3001') return row('3001', 'Försäljning', -699_000)
+      if (r.account_number === '2099') return row('2099', 'Årets resultat', -1_000)
+      return r
+    })
+    stubTrialBalances(closed, PRE_CLOSING_ROWS)
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ closingEntryId: null, isClosed: true })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.totals.totalEquityLiabilities).toBe(612_000)
+    expect(result.warnings.some((w) => w.includes('441000 kr av årets resultat finns kvar'))).toBe(true)
+  })
+
+  it('does not warn about a remainder once the result is fully in equity', async () => {
+    const result = await generateINK2Declaration(anySupabase(makeSupabase()), COMPANY_ID, PERIOD_ID)
+
+    expect(result.warnings.some((w) => w.includes('finns kvar på resultatkontona'))).toBe(false)
+  })
 })
 
 describe('generateINK2Declaration: guards', () => {

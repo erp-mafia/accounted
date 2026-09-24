@@ -478,6 +478,13 @@ export async function generateINK2Declaration(
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+  } else if (resultTransferred && Math.abs(unclosedResult) > ROUNDING_TOLERANCE_KR) {
+    // A closed year whose resultatavslut (typically one imported from the
+    // previous system) moved only part of the result into equity. The
+    // add-back above keeps the balance sheet tied, so say it out loud.
+    warnings.push(
+      `Räkenskapsåret är stängt men ${truncateToWholeKronor(unclosedResult)} kr av årets resultat finns kvar på resultatkontona och har inte förts över till eget kapital. Kontrollera bokslutsverifikationen innan deklarationen lämnas in.`,
+    )
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {
