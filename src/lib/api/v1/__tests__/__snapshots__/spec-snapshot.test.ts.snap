@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `173`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `177`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -19,6 +19,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/salary-runs/:id",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "DELETE /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
+  "DELETE /api/v1/companies/:companyId/salary/premium-rules/:id",
   "DELETE /api/v1/companies/:companyId/suppliers/:id",
   "DELETE /api/v1/companies/:companyId/transactions/:id/ignore",
   "DELETE /api/v1/companies/:companyId/webhooks/:id",
@@ -76,6 +77,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "GET /api/v1/companies/:companyId/salary-runs/:id/payment-files",
   "GET /api/v1/companies/:companyId/salary-runs/:id/payslips/:employeeId/pdf",
+  "GET /api/v1/companies/:companyId/salary/premium-rules",
   "GET /api/v1/companies/:companyId/salary/settings",
   "GET /api/v1/companies/:companyId/skatteverket/vat-declarations",
   "GET /api/v1/companies/:companyId/supplier-invoices",
@@ -99,6 +101,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/salary-runs/:id",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId",
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
+  "PATCH /api/v1/companies/:companyId/salary/premium-rules/:id",
   "PATCH /api/v1/companies/:companyId/salary/settings",
   "PATCH /api/v1/companies/:companyId/settings",
   "PATCH /api/v1/companies/:companyId/supplier-invoices/:id",
@@ -154,6 +157,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/salary-runs/:id/generate-agi",
   "POST /api/v1/companies/:companyId/salary-runs/:id/mark-paid",
   "POST /api/v1/companies/:companyId/salary-runs/:id/payment-file",
+  "POST /api/v1/companies/:companyId/salary/premium-rules",
   "POST /api/v1/companies/:companyId/salary/vacation-year-close",
   "POST /api/v1/companies/:companyId/supplier-invoices",
   "POST /api/v1/companies/:companyId/supplier-invoices/:id/approve",

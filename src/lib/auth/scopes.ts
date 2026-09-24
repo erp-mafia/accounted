@@ -296,6 +296,11 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // The archived payment files of a run (issue #2724): every generated
   // pain.001 / LB file is räkenskapsinformation and kept 7 years.
   'GET /api/v1/companies/:companyId/salary-runs/:id/payment-files': 'payroll:read',
+  // OB / overtime premium rules (shift_premium_rules), configurable since 2026-09.
+  'GET /api/v1/companies/:companyId/salary/premium-rules': 'payroll:read',
+  'POST /api/v1/companies/:companyId/salary/premium-rules': 'payroll:write',
+  'PATCH /api/v1/companies/:companyId/salary/premium-rules/:id': 'payroll:write',
+  'DELETE /api/v1/companies/:companyId/salary/premium-rules/:id': 'payroll:write',
 
   // Dimensions (kostnadsställe/projekt): dimensions PR2. Reads ride
   // reports:read (registry data feeds report filters/pickers); value creation
