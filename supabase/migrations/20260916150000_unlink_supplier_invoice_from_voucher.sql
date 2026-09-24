@@ -198,6 +198,25 @@ BEGIN
     );
   END IF;
 
+  -- Settlement evidence, not a link. attach_supplier_invoice_settlement_voucher
+  -- (20260921084700) records that an existing voucher already covers part of a
+  -- payable, on a voucher whose source_type is ordinary ('import' and the like)
+  -- and without stamping payment_journal_entry_id, so neither signal above sees
+  -- it. Removing such a row would reopen a payable that a posted verifikat
+  -- genuinely settles, and invite a second payment for money already paid.
+  --
+  -- Matched on the notes prefix because that is the marker the function itself
+  -- declares as its handle ("the fixed prefix marks every row this function
+  -- wrote"). A column would be a better discriminator than free text, and this
+  -- is now the third shape enumerated here: see the PR body.
+  IF v_payment.notes LIKE 'settlement-evidence%' THEN
+    RETURN jsonb_build_object(
+      'ok', false,
+      'code', 'UNLINK_SI_PAYMENT_SETTLEMENT_EVIDENCE',
+      'details', jsonb_build_object('journal_entry_id', v_payment.journal_entry_id)
+    );
+  END IF;
+
   -- The one case where linking DID write bookkeeping. 20260830140000 taught
   -- link_supplier_invoice_to_voucher to settle a SEK payment voucher against a
   -- foreign-currency invoice by committing its OWN two-line residual verifikat

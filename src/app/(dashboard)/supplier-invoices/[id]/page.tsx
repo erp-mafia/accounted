@@ -214,6 +214,11 @@ function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string 
   // UNLINK_SI_PAYMENT_FX_SETTLED. Offering the action would promise an undo
   // that cannot happen.
   if (payment.payment_exchange_rate != null) return false
+  // Settlement evidence recorded by attach_supplier_invoice_settlement_voucher:
+  // an ordinary voucher already covers this payable, and the row says so rather
+  // than linking anything. Removing it would reopen a settled payable, so the
+  // RPC refuses it and the control must not offer it.
+  if (payment.notes?.startsWith('settlement-evidence')) return false
   if (!payment.journal_entry) return false
   return !isPaymentSourceType(payment.journal_entry.source_type)
 }

@@ -392,6 +392,34 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     expect(Number(after.remaining_amount)).toBe(3499.6)
   })
 
+  it('refuses a settlement-evidence row', async () => {
+    // attach_supplier_invoice_settlement_voucher (20260921084700) records that
+    // an ordinary voucher already covers a payable. It neither uses a booked
+    // payment source_type nor stamps payment_journal_entry_id, so the two
+    // guards above do not see it; removing the row would reopen a payable that
+    // a posted verifikat genuinely settles and invite a second payment.
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const invoiceId = await seedSupplierInvoice({ userId, companyId, total: 1000 })
+    const entryId = await seedApVoucher({ userId, companyId, fiscalPeriodId, amount: 1000 })
+    const linked = await link(invoiceId, entryId, userId, companyId)
+
+    await getPool().query(
+      `UPDATE public.supplier_invoice_payments SET notes = 'settlement-evidence: Bokio source invoice reference' WHERE id = $1`,
+      [linked.payment_id],
+    )
+
+    const result = await unlink(linked.payment_id!, invoiceId, companyId, userId)
+    expect(result.ok).toBe(false)
+    expect(result.code).toBe('UNLINK_SI_PAYMENT_SETTLEMENT_EVIDENCE')
+
+    const { rows } = await getPool().query(
+      `SELECT count(*)::int AS n FROM public.supplier_invoice_payments WHERE id = $1`,
+      [linked.payment_id],
+    )
+    expect(rows[0].n).toBe(1)
+    expect((await invoiceRow(invoiceId)).status).toBe('paid')
+  })
+
   it('refuses a payment whose link booked an exchange-rate difference', async () => {
     // link_supplier_invoice_to_voucher books its own residual verifikat when it
     // settles across currencies (20260830140000), and stamps the effective rate

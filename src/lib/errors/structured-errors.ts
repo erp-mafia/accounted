@@ -4214,6 +4214,14 @@ const LINK_SI_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_en: 'The invoice is neither paid nor partially paid, so there is no link to remove.',
     retryable: false,
   },
+  UNLINK_SI_PAYMENT_SETTLEMENT_EVIDENCE: {
+    httpStatus: 409,
+    message_sv:
+      'Betalningen är ett underlag för att verifikatet redan täcker fakturan, inte en koppling som kan tas bort. Rätta den genom att storna eller rätta verifikatet.',
+    message_en:
+      'The payment records that the voucher already covers this invoice; it is not a link that can be removed. Correct it by reversing or amending the voucher.',
+    retryable: false,
+  },
   UNLINK_SI_PAYMENT_FX_SETTLED: {
     httpStatus: 409,
     message_sv:
