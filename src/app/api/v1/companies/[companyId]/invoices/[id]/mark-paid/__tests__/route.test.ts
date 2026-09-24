@@ -625,6 +625,67 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
   })
 
+  it('accepts a further payment on a partially_paid invoice (v1 parity with dashboard #1717)', async () => {
+    const partial = {
+      ...SENT_INVOICE,
+      status: 'partially_paid',
+      paid_amount: 5000,
+      remaining_amount: 7500,
+    }
+    const after = {
+      ...partial,
+      status: 'partially_paid',
+      paid_amount: 7500,
+      remaining_amount: 5000,
+      paid_at: '2026-05-12T12:00:00Z',
+    }
+    const calls: RecordedCall[] = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: [
+            { data: partial, error: null },
+            { data: after, error: null },
+          ],
+          company_settings: {
+            data: { accounting_method: 'accrual', entity_type: 'enskild_firma' },
+            error: null,
+          },
+          invoice_payments: { data: { id: 'ip-2' }, error: null },
+        },
+        calls,
+      ),
+    )
+
+    const res = await markPaid(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
+        {
+          payment_date: '2026-05-12',
+          lines: [
+            { account_number: '1930', debit_amount: 2500, credit_amount: 0 },
+            { account_number: '1510', debit_amount: 0, credit_amount: 2500 },
+          ],
+        },
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.status).toBe('partially_paid')
+    expect(body.data.paid_amount).toBe(7500)
+    expect(body.data.remaining_amount).toBe(5000)
+    const update = calls.find((c) => c.table === 'invoices' && c.method === 'update')
+    expect(update?.args[0]).toMatchObject({
+      status: 'partially_paid',
+      paid_amount: 7500,
+      remaining_amount: 5000,
+    })
+    expect(mockClearSuggestions).not.toHaveBeenCalled()
+  })
+
   it('rejects credit notes', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

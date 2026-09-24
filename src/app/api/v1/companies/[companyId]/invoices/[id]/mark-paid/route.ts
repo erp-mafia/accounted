@@ -81,7 +81,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
+    'Marks a sent / overdue / partially_paid invoice as paid (or further partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
@@ -224,7 +224,15 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (typed.status !== 'sent' && typed.status !== 'overdue') {
+    // partially_paid is payable (dashboard #1717): ordinary further installments
+    // and öresavrundning completions must work on the public API too. The CAS
+    // update below already allows sent/overdue/partially_paid; only this
+    // pre-flight gate was still excluding it.
+    if (
+      typed.status !== 'sent' &&
+      typed.status !== 'overdue' &&
+      typed.status !== 'partially_paid'
+    ) {
       return v1ErrorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', ctx.log, {
         requestId: ctx.requestId,
         details: { current_status: typed.status },
