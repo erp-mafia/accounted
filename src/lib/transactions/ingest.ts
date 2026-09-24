@@ -94,6 +94,12 @@ export interface ExistingTransactionMaps {
    * consume an incoming import.
    */
   unbookedImported: DescBucket
+  /**
+   * The content bucket each stored `external_id` sits in, so a Layer-1 id match
+   * consumes its stored row even when the incoming row's date or amount drifted
+   * into a different bucket (see consumeByExternalId).
+   */
+  bucketKeyByExternalId: Map<string, string>
 }
 
 /** Push a row into its (date, öre) bucket, normalizing the description. */
@@ -108,7 +114,7 @@ function addToBucket(
   isImportFeed: boolean,
   currency: string | null,
   externalId: string | null,
-): void {
+): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
     id,
@@ -122,6 +128,7 @@ function addToBucket(
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
   else bucket.set(key, [entry])
+  return key
 }
 
 /**
@@ -129,7 +136,9 @@ function addToBucket(
  * Layer-1 id match has claimed it. Exported so the dedup preview applies the
  * same rule.
  */
-export function consumeByExternalId(maps: ExistingTransactionMaps, bucketKey: string, externalId: string): void {
+export function consumeByExternalId(maps: ExistingTransactionMaps, externalId: string): void {
+  const bucketKey = maps.bucketKeyByExternalId.get(externalId)
+  if (bucketKey === undefined) return
   for (const bucket of [maps.booked, maps.unbookedImported]) {
     const entries = bucket.get(bucketKey)
     const idx = entries?.findIndex((entry) => entry.externalId === externalId) ?? -1
@@ -180,7 +189,8 @@ export async function buildExistingTransactionMaps(
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
-  if (rawTransactions.length === 0) return { booked, unbookedImported }
+  const bucketKeyByExternalId = new Map<string, string>()
+  if (rawTransactions.length === 0) return { booked, unbookedImported, bucketKeyByExternalId }
 
   const dates = rawTransactions.map((t) => t.date).sort()
   const dateFrom = dates[0]
@@ -204,7 +214,7 @@ export async function buildExistingTransactionMaps(
       // description: a title edit must never make the dedup bridge miss a
       // genuine re-import. Falls back to description for rows predating the
       // original_description column.
-      addToBucket(
+      const key = addToBucket(
         booked,
         tx.id ?? null,
         tx.date,
@@ -216,6 +226,7 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: content-based dedup will be skipped
@@ -245,7 +256,7 @@ export async function buildExistingTransactionMaps(
     for (const tx of unbookedRows) {
       // See booked-map note: dedup on the immutable bank original so a
       // user title edit cannot reopen the duplicate-import window.
-      addToBucket(
+      const key = addToBucket(
         unbookedImported,
         tx.id ?? null,
         tx.date,
@@ -257,12 +268,13 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: reconnect dedup will be skipped
   }
 
-  return { booked, unbookedImported }
+  return { booked, unbookedImported, bucketKeyByExternalId }
 }
 
 /**
@@ -703,7 +715,7 @@ export async function ingestTransactions(
       // The stored row this id names is now accounted for: take it out of the
       // content buckets so it cannot also absorb a second, genuinely new
       // incoming row (counting semantics hold across both layers).
-      consumeByExternalId(existingMaps, contentBucketKey(raw.date, raw.amount), raw.external_id)
+      consumeByExternalId(existingMaps, raw.external_id)
       continue
     }
 

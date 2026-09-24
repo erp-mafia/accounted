@@ -1534,6 +1534,29 @@ describe('ingestTransactions', () => {
     expect(inserted.original_description).toBe('12305999102641')
   })
 
+  it('consumes an id-matched stored row even when the incoming date drifted to another bucket', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const rows = [
+      makeRaw({ date: '2026-04-08', amount: -100, description: 'ICA', external_id: 'camt053_REF1', import_source: 'camt053' }),
+      makeRaw({ date: '2026-04-07', amount: -100, description: 'ICA', external_id: 'camt053_REF2', import_source: 'camt053' }),
+    ]
+
+    enqueue({
+      data: [{ id: 'tx-ref1', date: '2026-04-07', amount: -100, original_description: 'ICA', import_source: 'camt053', external_id: 'camt053_REF1' }],
+      error: null,
+    }) // booked map: REF1 stored on its original date
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [{ external_id: 'camt053_REF1' }], error: null }) // external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-ref2', amount: -100 }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(1)
+  })
+
   it('imports a late identical-description twin that an id match already accounted for', async () => {
     const { supabase, enqueue } = createQueueMockSupabase()
     const id = (n: number) => `eb_SE47_2026-09-21_-5000_${n}`
