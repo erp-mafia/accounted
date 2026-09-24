@@ -88,11 +88,14 @@ const CLOSED_ROWS: TrialBalanceRow[] = PRE_CLOSING_ROWS.map((r) => {
 
 interface SupabaseStub {
   from: (table: string) => unknown
+  rpc: (fn: string) => Promise<{ data: unknown; error: null }>
 }
 
 function makeSupabase(options?: {
   closingEntryId?: string | null
   closingEntryStatus?: string
+  /** A resultatavslut booked in the previous system and SIE-imported (no link). */
+  importedClosingIds?: string[]
   isClosed?: boolean
 }): SupabaseStub {
   const closingEntryId =
@@ -141,23 +144,15 @@ function makeSupabase(options?: {
           }),
         }
       }
-      if (table === 'journal_entries') {
-        return {
-          select: () => ({
-            eq: () => ({
-              eq: () => ({
-                maybeSingle: async () => ({
-                  data: closingEntryId
-                    ? { status: options?.closingEntryStatus ?? 'posted' }
-                    : null,
-                  error: null,
-                }),
-              }),
-            }),
-          }),
-        }
-      }
       throw new Error(`unexpected table ${table}`)
+    },
+    // result_closing_entry_ids: the posted linked closing plus any imported
+    // resultatavslut, as the SQL function resolves it.
+    rpc: async (fn: string) => {
+      if (fn !== 'result_closing_entry_ids') throw new Error(`unexpected rpc ${fn}`)
+      const linkedPosted =
+        closingEntryId && (options?.closingEntryStatus ?? 'posted') === 'posted' ? [closingEntryId] : []
+      return { data: [...linkedPosted, ...(options?.importedClosingIds ?? [])], error: null }
     },
   }
 }
@@ -423,6 +418,28 @@ describe('generateINK2Declaration: open fiscal year', () => {
   })
 })
 
+describe('generateINK2Declaration: year closed by an imported resultatavslut', () => {
+  // A migrated year: the previous system's resultatavslut arrived as an
+  // imported verifikat, so there is no closing_entry_id, yet 2099 already
+  // carries årets resultat. The pre-closing view drops it by shape.
+  it('reads the result and does not add it to equity a second time', async () => {
+    const result = await generateINK2Declaration(
+      anySupabase(
+        makeSupabase({ closingEntryId: null, importedClosingIds: ['imported-closing-1'], isClosed: true }),
+      ),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2r['7410']).toBe(700_000)
+    expect(result.ink2r['7450']).toBe(442_000)
+    expect(result.ink2r['7302']).toBe(442_000)
+    expect(result.totals.totalEquityLiabilities).toBe(612_000)
+    expect(result.totals.totalAssets).toBe(612_000)
+    expect(result.warnings.some((w) => w.includes('inte i balans'))).toBe(false)
+  })
+})
+
 describe('generateINK2Declaration: guards', () => {
   it('rejects a non-aktiebolag', async () => {
     const supabase = {
@@ -441,6 +458,7 @@ describe('generateINK2Declaration: guards', () => {
         }
         return makeSupabase().from(table)
       },
+      rpc: makeSupabase().rpc,
     }
 
     await expect(

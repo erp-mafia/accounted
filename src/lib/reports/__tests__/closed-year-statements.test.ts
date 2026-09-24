@@ -79,10 +79,12 @@ function makeSupabase(entityType: 'aktiebolag' | 'enskild_firma') {
       if (table === 'fiscal_periods') return chain({ data: period, error: null })
       if (table === 'company_settings') return chain({ data: settings, error: null })
       if (table === 'companies') return chain({ data: { entity_type: entityType }, error: null })
-      // The closing entry's status: posted, so årets resultat is already in 2099.
       if (table === 'journal_entries') return chain({ data: { status: 'posted' }, error: null })
       return chain({ data: [], error: null })
     },
+    // result_closing_entry_ids: the posted resultatavslut, so årets resultat
+    // is already in 2099.
+    rpc: async () => ({ data: ['closing-1'], error: null }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }

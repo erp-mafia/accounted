@@ -194,9 +194,10 @@ export async function generateNEDeclaration(
   // R1-R11 are an income statement, so read the PRE-CLOSING books. The
   // resultatavslut zeroes every P&L account against 2019/2099 at year-end, and
   // NE-bilaga is always filed after bokslut, so including it would report an
-  // empty näringsverksamhet. 'exclude-final' drops only
-  // fiscal_periods.closing_entry_id: avskrivningar and other bokslut entries
-  // also carry source_type 'year_end' and belong on the form.
+  // empty näringsverksamhet. 'exclude-final' drops only the result transfer
+  // into equity (ours, or one booked in the previous system or by hand):
+  // avskrivningar and other bokslut entries also carry source_type 'year_end'
+  // and belong on the form.
   const trialBalance = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
     closingEntry: 'exclude-final',
   })

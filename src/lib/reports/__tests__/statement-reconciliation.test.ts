@@ -61,6 +61,8 @@ function makeSupabase(isClosed = true) {
       }
       return chain({ data: [], error: null })
     },
+    // result_closing_entry_ids: the posted resultatavslut of a closed year.
+    rpc: async () => ({ data: isClosed ? ['closing-1'] : [], error: null }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }
@@ -226,6 +228,7 @@ describe('reconcileStatements: entity-type resolution must not fail silently', (
         if (table === 'company_settings') return chain({ data: null, error: { message: 'no rows' } })
         return base.from(table)
       },
+      rpc: base.rpc,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any
 

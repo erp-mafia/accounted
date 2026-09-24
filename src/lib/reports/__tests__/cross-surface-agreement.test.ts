@@ -89,6 +89,8 @@ function makeSupabase() {
       if (table === 'journal_entries') return chain({ data: { status: 'posted' }, error: null })
       return chain({ data: [], error: null })
     },
+    // result_closing_entry_ids: the posted resultatavslut.
+    rpc: async () => ({ data: ['closing-1'], error: null }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }

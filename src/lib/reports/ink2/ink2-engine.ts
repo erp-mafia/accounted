@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { dbError } from '@/lib/errors/db-error'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
   SIGN_RECLASSIFICATION_RULES,
@@ -52,9 +53,11 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  *     INK2S 7650/7651 and the taxable result. INK2 is always filed after
  *     bokslut, so that is the normal state, not an edge case.
  *
- * excludeFinalClosingEntry drops only fiscal_periods.closing_entry_id: tax,
- * depreciation and bokslutsdispositioner also carry source_type 'year_end' and
- * must stay on the form (7525, 7528).
+ * excludeFinalClosingEntry drops only the result transfer into equity
+ * (result_closing_entry_ids: the linked closing entry, or a resultatavslut
+ * booked in the previous system or by hand): tax, depreciation and
+ * bokslutsdispositioner also carry source_type 'year_end' and must stay on
+ * the form (7525, 7528).
  */
 
 /** One mapping per SRU code: pinned by a test in __tests__/ink2-engine.test.ts. */
@@ -193,25 +196,25 @@ function applySignReclassifications(
 }
 
 /**
- * Whether the resultatavslut has already moved årets resultat into 2099.
+ * Whether a resultatavslut has already moved årets resultat into 2099.
  *
- * Mirrors the predicate generateTrialBalance uses to drop the closing entry: a
- * reversed closing entry nets to zero against its storno and has therefore not
- * moved anything.
+ * Reads the same set generateTrialBalance's 'exclude-final' drops
+ * (result_closing_entry_ids), so the income statement and this flag cannot
+ * disagree: a resultatavslut imported from the previous system counts like
+ * our own, and a reversed one nets to zero against its storno and is not in
+ * the set.
  */
 async function isResultClosedIntoEquity(
   supabase: SupabaseClient,
   companyId: string,
-  closingEntryId: string | null | undefined,
+  fiscalPeriodId: string,
 ): Promise<boolean> {
-  if (!closingEntryId) return false
-  const { data } = await supabase
-    .from('journal_entries')
-    .select('status')
-    .eq('id', closingEntryId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  return (data as { status?: string } | null)?.status === 'posted'
+  const { data, error } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (error) throw dbError(error, 'result_closing_entry_ids failed')
+  return Array.isArray(data) && data.length > 0
 }
 
 /**
@@ -267,7 +270,7 @@ export async function generateINK2Declaration(
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
-      isResultClosedIntoEquity(supabase, companyId, period.closing_entry_id as string | null),
+      isResultClosedIntoEquity(supabase, companyId, fiscalPeriodId),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)

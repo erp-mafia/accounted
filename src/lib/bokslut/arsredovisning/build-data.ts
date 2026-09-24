@@ -169,8 +169,9 @@ export async function buildArsredovisningData(
   // Every prior period needed by the comparatives and/or the flerårsöversikt
   // gets its TB pair fetched exactly once. Comparative RR figures need the
   // same statutory view as the current year: keep booked depreciation,
-  // appropriations, and tax, excluding only the linked final result-closing
-  // entry. A failed pair downgrades to null so a broken prior year (e.g. a
+  // appropriations, and tax, excluding only the result-closing entry (also
+  // when the previous system booked it and it arrived by SIE import). A
+  // failed pair downgrades to null so a broken prior year (e.g. a
   // partial SIE import without IB continuity) never blocks the document.
   const tbTargets = new Map<string, PeriodRow>()
   if (prevPeriodRow) tbTargets.set(prevPeriodRow.id, prevPeriodRow)
