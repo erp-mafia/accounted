@@ -54,6 +54,7 @@ import {
 } from '@/lib/invoices/payment-accounts'
 import { snapshotInvoicePayee } from '@/lib/invoices/invoice-payee'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { hasRequiredMomsRuta } from '@/lib/invoices/moms-ruta-gate'
 import { eventBus } from '@/lib/events'
 import type { CompanySettings, EntityType, Invoice } from '@/types'
 
@@ -196,26 +197,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Defense in depth: moms_ruta drives which output-VAT account the
-    // journal-entry generator posts to (2611 / 2614 / etc.). A null value
-    // would silently default: wrong for reverse-charge / EU-service /
-    // zero-rated invoices. moms_ruta is populated by the POST handler
-    // from getVatRules(); a null here means the row was created via a
-    // path that bypassed v1 (legacy import, manual SQL).
-    if (!typed.moms_ruta) {
-      ctx.log.warn('invoices.mark-sent: missing moms_ruta', {
-        invoiceId,
-        companyId: ctx.companyId,
-      })
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'moms_ruta',
-          message: 'Invoice has no moms_ruta set. The customer\'s VAT rule must be applied (re-create the draft via POST /invoices).',
-        },
-      })
-    }
-
     // Fetch company settings before number allocation. Besides the accounting
     // decision, payable invoices need a currency-matching account.
     const { data: settings, error: settingsError } = await ctx.supabase
@@ -235,6 +216,25 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const companySettings = settings as CompanySettings
+
+    // Defense in depth: moms_ruta records which momsdeklaration box the sale
+    // belongs in. A null is only legitimate for a seller that is not
+    // VAT-registered issuing an exempt invoice (no momsdeklaration, so no
+    // ruta); any other null means the row bypassed the create paths (legacy
+    // import, manual SQL) and its VAT rule was never applied.
+    if (!hasRequiredMomsRuta(companySettings, typed)) {
+      ctx.log.warn('invoices.mark-sent: missing moms_ruta', {
+        invoiceId,
+        companyId: ctx.companyId,
+      })
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set. The customer\'s VAT rule must be applied (re-create the draft via POST /invoices).',
+        },
+      })
+    }
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
     if (!payeeSnapshot.ok) {

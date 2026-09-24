@@ -377,6 +377,63 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/send', () => {
     expect(mockSendEmail).not.toHaveBeenCalled()
   })
 
+  it('rejects a null moms_ruta when the seller is VAT-registered, even for an exempt invoice', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: { data: { ...DRAFT_INVOICE, moms_ruta: null, vat_treatment: 'exempt' }, error: null },
+        company_settings: {
+          data: { ...COMPANY_SETTINGS, vat_registered: true, vat_number: 'SE556677889901' },
+          error: null,
+        },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send`),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.field).toBe('moms_ruta')
+    expect(mockEnsureInvoiceNumber).not.toHaveBeenCalled()
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
+  it('accepts a null moms_ruta for an exempt invoice from a non-VAT-registered seller', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        invoices: {
+          data: {
+            ...DRAFT_INVOICE,
+            moms_ruta: null,
+            vat_treatment: 'exempt',
+            vat_amount: 0,
+            total: 10000,
+            items: [{ ...DRAFT_INVOICE.items[0], vat_rate: 0, vat_amount: 0 }],
+          },
+          error: null,
+        },
+        company_settings: { data: { ...COMPANY_SETTINGS, vat_registered: false }, error: null },
+      }),
+    )
+
+    const res = await sendInvoice(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/send?dry_run=true`,
+      ),
+      detailParams(COMPANY_ID, INVOICE_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.dry_run).toBe(true)
+    expect(body.data.preview.status).toBe('sent')
+  })
+
   it('returns VALIDATION_ERROR for malformed JSON', async () => {
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

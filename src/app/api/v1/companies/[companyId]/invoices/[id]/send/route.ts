@@ -82,6 +82,7 @@ import {
   invoiceRequiresPaymentAccount,
 } from '@/lib/invoices/payment-accounts'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
+import { hasRequiredMomsRuta } from '@/lib/invoices/moms-ruta-gate'
 import { eventBus } from '@/lib/events'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -306,16 +307,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    if (!typed.moms_ruta) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'moms_ruta',
-          message: 'Invoice has no moms_ruta set; re-create the draft via POST /invoices.',
-        },
-      })
-    }
-
     // Step 2: customer email.
     const customer = typed.customer
     if (!customer?.email?.trim() || !EMAIL_PATTERN.test(customer.email.trim())) {
@@ -343,6 +334,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
     const settings = company as CompanySettings & { accounting_method?: string }
+    // A null moms_ruta is only legitimate for a seller that is not
+    // VAT-registered issuing an exempt invoice (see hasRequiredMomsRuta).
+    if (!hasRequiredMomsRuta(settings, typed)) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          field: 'moms_ruta',
+          message: 'Invoice has no moms_ruta set; re-create the draft via POST /invoices.',
+        },
+      })
+    }
     const paymentAccountRequired = invoiceRequiresPaymentAccount(typed)
     // Freeze the chosen bank account's payee at issue (no-op without a choice).
     const payeeSnapshot = await snapshotInvoicePayee(ctx.supabase, ctx.companyId!, typed, { persist: !ctx.dryRun })
