@@ -14,7 +14,7 @@ import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matc
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds, shiftIsoDate } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
@@ -122,6 +122,22 @@ function addToBucket(
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
   else bucket.set(key, [entry])
+}
+
+/**
+ * Remove the stored entry carrying `externalId` from its content bucket once a
+ * Layer-1 id match has claimed it. Exported so the dedup preview applies the
+ * same rule.
+ */
+export function consumeByExternalId(maps: ExistingTransactionMaps, bucketKey: string, externalId: string): void {
+  for (const bucket of [maps.booked, maps.unbookedImported]) {
+    const entries = bucket.get(bucketKey)
+    const idx = entries?.findIndex((entry) => entry.externalId === externalId) ?? -1
+    if (idx !== -1) {
+      entries!.splice(idx, 1)
+      return
+    }
+  }
 }
 
 /**
@@ -321,6 +337,17 @@ export async function ingestTransactions(
   // re-imports the same period via CSV, or the reverse, a CSV import that
   // predates the first PSD2 sync of the same account.
   const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
+
+  // Stable (date, öre, index) ids name a transaction only while its bucket's
+  // set of rows never changes; a late-booked sibling would otherwise take a
+  // stored row's index and be skipped as a duplicate. Re-key them against the
+  // stored rows before any dedup layer runs (see reconcileStableExternalIds).
+  const reconciledIds = reconcileStableExternalIds(
+    rawTransactions.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
+    [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
+  )
+  rawTransactions = rawTransactions.map((raw, i) =>
+    reconciledIds[i] === raw.external_id ? raw : { ...raw, external_id: reconciledIds[i] })
 
   // Every row in one ingest call shares an import_source (EB sync passes
   // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
@@ -673,6 +700,10 @@ export async function ingestTransactions(
     // 1. Check for duplicates via external_id (batch pre-fetched)
     if (existingExternalIds.has(raw.external_id)) {
       result.duplicates++
+      // The stored row this id names is now accounted for: take it out of the
+      // content buckets so it cannot also absorb a second, genuinely new
+      // incoming row (counting semantics hold across both layers).
+      consumeByExternalId(existingMaps, contentBucketKey(raw.date, raw.amount), raw.external_id)
       continue
     }
 

@@ -1503,6 +1503,59 @@ describe('ingestTransactions', () => {
     expect(result.transaction_ids).toEqual(['tx-ica-surplus'])
   })
 
+  // A payment the bank books late onto a (date, amount) that an earlier sync
+  // already stored must be imported, not taken for one of the stored rows.
+  it('imports a late-booked same-day same-amount payment instead of dropping it', async () => {
+    const { supabase, enqueue, inserts } = createQueueMockSupabase()
+    const id = (n: number) => `eb_SE47_2026-09-21_20000_${n}`
+    const raw = (n: number, description: string) =>
+      makeRaw({ date: '2026-09-21', amount: 200, description, external_id: id(n), import_source: 'enable_banking' })
+    const rows = [raw(0, '12305999102631'), raw(1, '12305999102641'), raw(2, '12305999102621')]
+
+    enqueue({
+      data: [
+        { id: 'tx-631', date: '2026-09-21', amount: '200.00', original_description: '12305999102631', import_source: 'enable_banking', external_id: id(0) },
+        { id: 'tx-621', date: '2026-09-21', amount: '200.00', original_description: '12305999102621', import_source: 'enable_banking', external_id: id(1) },
+      ],
+      error: null,
+    }) // booked map: the two payments the first sync stored
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [{ external_id: id(0) }, { external_id: id(1) }], error: null }) // external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-641', amount: 200 }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
+
+    expect(result.duplicates).toBe(2)
+    expect(result.imported).toBe(1)
+    const inserted = inserts['transactions']?.[0] as { external_id: string; original_description: string }
+    expect(inserted.external_id).toBe(id(2))
+    expect(inserted.original_description).toBe('12305999102641')
+  })
+
+  it('imports a late identical-description twin that an id match already accounted for', async () => {
+    const { supabase, enqueue } = createQueueMockSupabase()
+    const id = (n: number) => `eb_SE47_2026-09-21_-5000_${n}`
+    const rows = [0, 1].map((n) =>
+      makeRaw({ date: '2026-09-21', amount: -50, description: 'Swish', external_id: id(n), import_source: 'enable_banking' }))
+
+    enqueue({
+      data: [{ id: 'tx-a', date: '2026-09-21', amount: -50, original_description: 'Swish', import_source: 'enable_banking', external_id: id(0) }],
+      error: null,
+    }) // booked map: one Swish stored
+    enqueue({ data: [], error: null }) // unbooked map
+    enqueue({ data: [], error: null }) // supplier invoices
+    enqueue({ data: [{ external_id: id(0) }], error: null }) // external_id dedup
+    enqueue({ data: makeTransaction({ id: 'tx-b', amount: -50 }), error: null }) // insert
+    mockEvaluateMappingRules.mockResolvedValue(makeMappingResult({ confidence: 0.5 }))
+
+    const result = await ingestTransactions(supabase as never, COMPANY_ID, USER_ID, rows)
+
+    expect(result.duplicates).toBe(1)
+    expect(result.imported).toBe(1)
+  })
+
   // -----------------------------------------------------------------------
   // 2g. Cross-account guard: a transaction on one bank account must NOT
   //     deduplicate a genuinely-different one on ANOTHER account of the same
