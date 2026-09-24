@@ -499,6 +499,13 @@ export async function ingestTransactions(
       .in('external_id', chunk)
     data?.forEach(r => existingExternalIds.add(r.external_id))
   }
+  // A stored row an incoming id names is accounted for by Layer 1: take it out
+  // of the content buckets BEFORE the loop, so no other incoming row (earlier
+  // in the batch or later) can also be deduped against it. Counting semantics
+  // then hold across both layers, independent of batch order.
+  for (const raw of rawTransactions) {
+    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
+  }
 
   // Resolve the cash account this batch settled on, once. Every row in one
   // ingest call shares a settlement account: enable-banking calls this per
@@ -712,10 +719,6 @@ export async function ingestTransactions(
     // 1. Check for duplicates via external_id (batch pre-fetched)
     if (existingExternalIds.has(raw.external_id)) {
       result.duplicates++
-      // The stored row this id names is now accounted for: take it out of the
-      // content buckets so it cannot also absorb a second, genuinely new
-      // incoming row (counting semantics hold across both layers).
-      consumeByExternalId(existingMaps, raw.external_id)
       continue
     }
 
