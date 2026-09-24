@@ -1229,6 +1229,20 @@ function guardBypassedEvent(
 }
 
 /**
+ * The payable statuses unlink_supplier_invoice_from_voucher can restore, in the
+ * words the invoice itself shows. behandlingshistorik is a Swedish statutory
+ * report, so the database value would read as "Fakturan återställd till
+ * approved". The four keys are the RPC's whole range; anything else falls
+ * through to the raw value rather than being hidden.
+ */
+const SUPPLIER_INVOICE_STATUS_LABELS: Record<string, string> = {
+  registered: 'Registrerad',
+  approved: 'Attesterad',
+  partially_paid: 'Delbetald',
+  overdue: 'Förfallen',
+}
+
+/**
  * A link between a payable and an existing verifikat that someone undid
  * (audit_log SUBLEDGER_LINK_REMOVED, migration 20260916150000). Nothing in the
  * ledger changed, which is precisely why it needs saying: the reskontra moved
@@ -1256,7 +1270,7 @@ function subledgerLinkRemovedEvent(
   const newRemaining = num(after.remaining_amount)
   if (newStatus) {
     details.push(
-      `Fakturan återställd till ${newStatus}` +
+      `Fakturan återställd till ${SUPPLIER_INVOICE_STATUS_LABELS[newStatus] ?? newStatus}` +
         (newRemaining !== null ? `, kvar att betala ${fmtAmount(newRemaining)}` : ''),
     )
   }

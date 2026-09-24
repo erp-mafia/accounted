@@ -397,7 +397,7 @@ describe('auditRowToEvent: an undone voucher link (#2673)', () => {
     })
     expect(ev.details).toEqual([
       'Borttagen betalningspost: 859,00 SEK, 2026-05-12',
-      'Fakturan återställd till approved, kvar att betala 3\u00a0500,00',
+      'Fakturan återställd till Attesterad, kvar att betala 3\u00a0500,00',
       'Ingen bokföring ändrades: verifikatet är kvar bokfört.',
     ])
   })

@@ -283,7 +283,7 @@ describe('unlink_supplier_invoice_from_voucher', () => {
     expect(event).not.toBeNull()
     expect(event!.code).toBe('supplier_invoice.voucher_link_removed')
     expect(event!.details[0]).toContain('859,00 SEK')
-    expect(event!.details[1]).toContain('approved')
+    expect(event!.details[1]).toContain('Attesterad')
     expect(event!.details[1]).toContain('3')
     expect(event!.details[2]).toContain('Ingen bokföring ändrades')
   })
