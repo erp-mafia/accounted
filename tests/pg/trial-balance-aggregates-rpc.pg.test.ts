@@ -13,7 +13,7 @@
  *     p_exclude_entry_id (the opening-balance entry);
  *   - 'include' keeps the year-end chain;
  *   - 'exclude-final' drops ONLY the result transfers into equity
- *     (result_closing_entry_ids, migration 20260924123813): the linked
+ *     (result_closing_entry_ids, migration 20260924202408): the linked
  *     fiscal_periods.closing_entry_id plus a resultatavslut booked in the
  *     previous system or by hand, and only while posted (a reversed closing
  *     stays with its storno); keeps tax/appropriation year_end entries, and

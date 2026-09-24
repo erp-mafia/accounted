@@ -37,7 +37,7 @@
 -- explicit company_id predicates are defence in depth for service-role
 -- callers. Returns uuid[] rather than a row set (no PostgREST max-rows cap).
 
-CREATE FUNCTION public.result_closing_entry_ids(
+CREATE OR REPLACE FUNCTION public.result_closing_entry_ids(
   p_company_id uuid,
   p_fiscal_period_id uuid
 )
