@@ -23,8 +23,16 @@ function balansrapport(overrides: Partial<BalansrapportReport> = {}): Balansrapp
         class: 1,
         class_label: '1 Tillgångar',
         rows: [
-          { account_number: '1930', account_name: 'Företagskonto', ib: 50000, ub: 75000, period_change: 25000 },
+          {
+            account_number: '1930',
+            account_name: 'Företagskonto',
+            year_ib: 40000,
+            ib: 50000,
+            ub: 75000,
+            period_change: 25000,
+          },
         ],
+        subtotal_year_ib: 40000,
         subtotal_ib: 50000,
         subtotal_ub: 75000,
       },
@@ -33,7 +41,8 @@ function balansrapport(overrides: Partial<BalansrapportReport> = {}): Balansrapp
     total_equity_liabilities_ub: -75000,
     beraknat_resultat: 0,
     is_balanced: true,
-    period: { start: '2026-01-01', end: '2026-12-31' },
+    period: { start: '2026-04-01', end: '2026-12-31' },
+    fiscal_year: { start: '2026-01-01', end: '2026-12-31' },
     ...overrides,
   }
 }
@@ -45,15 +54,26 @@ function resultatrapport(overrides: Partial<ResultatrapportReport> = {}): Result
         class: 3,
         class_label: '3 Rörelsens inkomster/intäkter',
         rows: [
-          { account_number: '3001', account_name: 'Försäljning 25%', current_period: 100000, prior_period: 80000 },
+          {
+            account_number: '3001',
+            account_name: 'Försäljning 25%',
+            ytd_opening: 25000,
+            current_period: 100000,
+            ytd_closing: 125000,
+            prior_period: 80000,
+          },
         ],
+        subtotal_ytd_opening: 25000,
         subtotal_current: 100000,
+        subtotal_ytd_closing: 125000,
         subtotal_prior: 80000,
       },
     ],
     net_result_current: 100000,
+    net_result_ytd: 125000,
     net_result_prior: 80000,
-    period: { start: '2026-01-01', end: '2026-12-31' },
+    period: { start: '2026-04-01', end: '2026-12-31' },
+    fiscal_year: { start: '2026-01-01', end: '2026-12-31' },
     prior_period: { start: '2025-01-01', end: '2025-12-31' },
     ...overrides,
   }
@@ -89,6 +109,63 @@ describe('operational report PDFs', () => {
       const buffer = await renderToBuffer(
         BalansrapportPDF({
           report: balansrapport(),
+          company: fakeCompany(),
+          generatedAt: '2026-07-28T10:00:00.000Z',
+        })
+      )
+
+      expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
+    },
+    RENDER_TIMEOUT
+  )
+
+  it(
+    'renders the balansrapport when a wide amount fills every one of the four columns',
+    async () => {
+      // The amount columns are sized for "-123 456 789,00" and cannot wrap
+      // (sv-SE groups with U+00A0). Render the widest realistic figure in all
+      // four so a future width change that overflows shows up here.
+      const wide = -123456789
+      const buffer = await renderToBuffer(
+        BalansrapportPDF({
+          report: balansrapport({
+            groups: [
+              {
+                class: 2,
+                class_label: '2 Eget kapital, obeskattade reserver, avsättningar och skulder',
+                rows: [
+                  {
+                    account_number: '2440',
+                    account_name: 'Leverantörsskulder',
+                    year_ib: wide,
+                    ib: wide,
+                    ub: wide,
+                    period_change: wide,
+                  },
+                ],
+                subtotal_year_ib: wide,
+                subtotal_ib: wide,
+                subtotal_ub: wide,
+              },
+            ],
+          }),
+          company: fakeCompany(),
+          generatedAt: '2026-07-28T10:00:00.000Z',
+        })
+      )
+
+      expect(buffer.slice(0, 5).toString()).toBe('%PDF-')
+      expect(buffer.length).toBeGreaterThan(1000)
+    },
+    RENDER_TIMEOUT
+  )
+
+  it(
+    'renders the resultatrapport without the prior-year column',
+    async () => {
+      const buffer = await renderToBuffer(
+        ResultatrapportPDF({
+          report: resultatrapport({ prior_period: null }),
           company: fakeCompany(),
           generatedAt: '2026-07-28T10:00:00.000Z',
         })

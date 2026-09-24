@@ -66,6 +66,8 @@ function row(
     account_class: Number(accountNumber[0]),
     opening_debit: 0,
     opening_credit: 0,
+    year_opening_debit: 0,
+    year_opening_credit: 0,
     period_debit: 0,
     period_credit: 0,
     closing_debit: 0,

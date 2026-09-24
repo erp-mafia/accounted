@@ -64,11 +64,15 @@ export const GET = withRouteContext('report.balance_sheet.pdf', async (request, 
       )
     }
 
+    const balanceSheetModel = buildBalanceSheetPdfModel(report)
+
     const pdfBuffer = await renderToBuffer(
       FinancialStatementPDF({
         title: 'Balansräkning',
-        groups: buildBalanceSheetPdfModel(report).groups,
+        columns: balanceSheetModel.columns,
+        groups: balanceSheetModel.groups,
         period: report.period,
+        fiscalYear: report.fiscal_year,
         company: companyRow as CompanySettings,
         generatedAt: new Date().toISOString(),
       })

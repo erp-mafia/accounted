@@ -11,19 +11,22 @@ import {
 import type { IncomeStatementSection } from '@/types'
 import { parseDimensionFilterParams, dimensionFilterDisclosure, dimensionFilterFileSuffix } from '@/lib/reports/dimension-filter'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { roundOre } from '@/lib/money'
 
 interface FlatRow {
   section: string
   account_number: string
   account_name: string
+  ytd_opening: number
   amount: number
+  ytd_closing: number
 }
 
 function flatten(
   sections: IncomeStatementSection[],
   groupLabel: string,
   groupTotalLabel: string,
-  groupTotal: number,
+  groupTotals: { ytd_opening: number; amount: number; ytd_closing: number },
 ): FlatRow[] {
   const rows: FlatRow[] = []
   for (const s of sections) {
@@ -32,21 +35,25 @@ function flatten(
         section: s.title,
         account_number: r.account_number,
         account_name: r.account_name,
+        ytd_opening: r.ytd_opening,
         amount: r.amount,
+        ytd_closing: r.ytd_closing,
       })
     }
     rows.push({
       section: s.title,
       account_number: '',
       account_name: `Summa ${s.title}`,
+      ytd_opening: s.subtotal_ytd_opening,
       amount: s.subtotal,
+      ytd_closing: s.subtotal_ytd_closing,
     })
   }
   rows.push({
     section: groupLabel,
     account_number: '',
     account_name: groupTotalLabel,
-    amount: groupTotal,
+    ...groupTotals,
   })
   return rows
 }
@@ -99,19 +106,31 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       report.revenue_sections,
       'Rörelseintäkter',
       'Summa rörelseintäkter',
-      report.total_revenue,
+      {
+        ytd_opening: report.total_revenue_ytd_opening,
+        amount: report.total_revenue,
+        ytd_closing: report.total_revenue_ytd_closing,
+      },
     )
     const expenseRows = flatten(
       report.expense_sections,
       'Rörelsekostnader',
       'Summa rörelsekostnader',
-      report.total_expenses,
+      {
+        ytd_opening: report.total_expenses_ytd_opening,
+        amount: report.total_expenses,
+        ytd_closing: report.total_expenses_ytd_closing,
+      },
     )
     const financialRows = flatten(
       report.financial_sections,
       'Finansiella poster',
       'Summa finansiella poster',
-      report.total_financial,
+      {
+        ytd_opening: report.total_financial_ytd_opening,
+        amount: report.total_financial,
+        ytd_closing: report.total_financial_ytd_closing,
+      },
     )
 
     const summaryRows: FlatRow[] = [
@@ -119,13 +138,21 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
         section: 'Sammanfattning',
         account_number: '',
         account_name: 'Rörelseresultat',
-        amount: Math.round((report.total_revenue - report.total_expenses) * 100) / 100,
+        ytd_opening: roundOre(
+          report.total_revenue_ytd_opening - report.total_expenses_ytd_opening,
+        ),
+        amount: roundOre(report.total_revenue - report.total_expenses),
+        ytd_closing: roundOre(
+          report.total_revenue_ytd_closing - report.total_expenses_ytd_closing,
+        ),
       },
       {
         section: 'Sammanfattning',
         account_number: '',
         account_name: 'Årets resultat',
+        ytd_opening: report.net_result_ytd_opening,
         amount: report.net_result,
+        ytd_closing: report.net_result_ytd_closing,
       },
     ]
 
@@ -133,9 +160,18 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
       textColumn('Sektion'),
       textColumn('Konto'),
       textColumn('Kontonamn'),
-      currencyColumn('Belopp'),
+      currencyColumn('Ingående saldo'),
+      currencyColumn('Period'),
+      currencyColumn('Ackumulerat'),
     ]
-    const mapRow = (r: FlatRow) => [r.section, r.account_number, r.account_name, r.amount]
+    const mapRow = (r: FlatRow) => [
+      r.section,
+      r.account_number,
+      r.account_name,
+      r.ytd_opening,
+      r.amount,
+      r.ytd_closing,
+    ]
 
     // Partial-view disclosure on every sheet: any tab opened alone must
     // still identify the export as filtered (BFNAR 2013:2).
@@ -145,7 +181,9 @@ export const GET = withRouteContext('report.income_statement.xlsx', async (reque
         section: disclosure,
         account_number: '',
         account_name: '',
+        ytd_opening: null as unknown as number,
         amount: null as unknown as number,
+        ytd_closing: null as unknown as number,
       }
       for (const sheetRows of [revenueRows, expenseRows, financialRows, summaryRows]) {
         sheetRows.unshift(note)

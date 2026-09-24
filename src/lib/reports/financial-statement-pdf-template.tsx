@@ -93,11 +93,40 @@ const styles = StyleSheet.create({
     color: '#1a1a1a',
     paddingRight: 12,
   },
+  // Four amount columns (Balansräkning: Ingående balans / Ingående saldo /
+  // Period / Utgående balans, Resultaträkning: Ingående saldo / Period /
+  // Ackumulerat) have to fit A4 portrait next to the account number and name,
+  // which 110pt at fontSize 10 cannot do. Courier at 9pt is 5.4pt per
+  // character, so 82pt holds the 15 of "-123 456 789,00". Wrapping is not a
+  // fallback: sv-SE groups with U+00A0, so an amount that does not fit
+  // overflows into the neighbouring column instead of breaking.
   colAmount: {
-    width: 110,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     color: '#1a1a1a',
+  },
+  colAmountMuted: {
+    width: 82,
+    textAlign: 'right',
+    fontFamily: 'Courier',
+    fontSize: 9,
+    color: '#666',
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    paddingVertical: 4,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#1a1a1a',
+    marginBottom: 4,
+  },
+  tableHeaderText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#444',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   sectionSubtotalRow: {
     flexDirection: 'row',
@@ -113,9 +142,10 @@ const styles = StyleSheet.create({
     paddingLeft: 48,
   },
   sectionSubtotalAmount: {
-    width: 110,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
     fontStyle: 'italic',
     color: '#444',
   },
@@ -131,12 +161,14 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     fontSize: 11,
   },
+  // 82pt at 9pt like the table cells: at 11pt Courier the widest sv-SE amount
+  // is 99pt and overflows into the neighbouring column.
   groupTotalAmount: {
-    width: 110,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
     fontWeight: 'bold',
-    fontSize: 11,
+    fontSize: 9,
   },
   summaryBlock: {
     marginTop: 20,
@@ -152,10 +184,20 @@ const styles = StyleSheet.create({
     flex: 1,
     color: '#1a1a1a',
   },
+  // Same 82pt cell as the table columns, so the same 9pt: at the page's 10pt
+  // the widest sv-SE amount is 90pt and overflows the cell.
   summaryAmount: {
-    width: 110,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
+    fontSize: 9,
+  },
+  summaryAmountMuted: {
+    width: 82,
+    textAlign: 'right',
+    fontFamily: 'Courier',
+    fontSize: 9,
+    color: '#666',
   },
   summaryEmphasisLabel: {
     flex: 1,
@@ -163,11 +205,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   summaryEmphasisAmount: {
-    width: 110,
+    width: 82,
     textAlign: 'right',
     fontFamily: 'Courier',
     fontWeight: 'bold',
-    fontSize: 12,
+    fontSize: 9,
   },
   disclaimer: {
     position: 'absolute',
@@ -210,40 +252,63 @@ const styles = StyleSheet.create({
   },
 })
 
+/**
+ * One amount column of the statement. `muted` greys the column so the
+ * emphasised one (Utgående balans / Period) reads first.
+ */
+export interface FinancialStatementColumn {
+  label: string
+  muted?: boolean
+}
+
+/**
+ * Every row, subtotal, group total and summary row carries one figure per
+ * declared column, in the same order as `columns`. A shorter list renders
+ * blank cells rather than throwing: a PDF is a read-only artefact and a
+ * missing figure must not take the document down.
+ */
 export interface FinancialStatementSection {
   title: string
-  rows: { account_number: string; account_name: string; amount: number }[]
-  subtotal: number
+  rows: { account_number: string; account_name: string; amounts: number[] }[]
+  subtotals: number[]
 }
 
 export interface FinancialStatementGroup {
   heading: string
   sections: FinancialStatementSection[]
   totalLabel: string
-  total: number
+  totals: number[]
   negate?: boolean
 }
 
 export interface FinancialStatementSummaryRow {
   label: string
-  amount: number
+  amounts: number[]
   emphasis?: boolean
 }
 
 interface FinancialStatementPDFProps {
   title: string
+  columns: FinancialStatementColumn[]
   groups: FinancialStatementGroup[]
   summary?: FinancialStatementSummaryRow[]
   period: { start: string; end: string }
+  /**
+   * The fiscal period's own bounds. Printed next to Period so a narrowed
+   * window discloses which räkenskapsår the Ingående columns refer to.
+   */
+  fiscalYear?: { start: string; end: string }
   company: CompanySettings
   generatedAt: string
 }
 
 export function FinancialStatementPDF({
   title,
+  columns,
   groups,
   summary,
   period,
+  fiscalYear,
   company,
   generatedAt,
 }: FinancialStatementPDFProps) {
@@ -251,6 +316,37 @@ export function FinancialStatementPDF({
   const periodLabel = period.start && period.end
     ? `${formatDateSv(period.start)}: ${formatDateSv(period.end)}`
     : ''
+  const fiscalYearLabel = fiscalYear?.start && fiscalYear?.end
+    ? `${formatDateSv(fiscalYear.start)} till ${formatDateSv(fiscalYear.end)}`
+    : ''
+
+  // One cell per declared column, in order. `negate` flips the sign of an
+  // expense group so the PDF prints costs as positive figures under a
+  // "Rörelsekostnader" heading, exactly as before.
+  const amountCells = (
+    values: number[],
+    style: 'row' | 'subtotal' | 'total' | 'summary' | 'summaryEmphasis',
+    negate?: boolean,
+  ) =>
+    columns.map((column, ci) => {
+      const value = values[ci]
+      const text = value === undefined ? '' : pdfAmount(negate ? -value : value)
+      const cellStyle =
+        style === 'subtotal'
+          ? styles.sectionSubtotalAmount
+          : style === 'total'
+            ? styles.groupTotalAmount
+            : style === 'summaryEmphasis'
+              ? styles.summaryEmphasisAmount
+              : style === 'summary'
+                ? (column.muted ? styles.summaryAmountMuted : styles.summaryAmount)
+                : (column.muted ? styles.colAmountMuted : styles.colAmount)
+      return (
+        <Text key={ci} style={cellStyle}>
+          {text}
+        </Text>
+      )
+    })
 
   return (
     <Document>
@@ -263,6 +359,9 @@ export function FinancialStatementPDF({
             )}
             {periodLabel && (
               <Text style={styles.period}>Period: {periodLabel}</Text>
+            )}
+            {fiscalYearLabel && (
+              <Text style={styles.period}>Räkenskapsår: {fiscalYearLabel}</Text>
             )}
           </View>
           <View style={styles.companyInfo}>
@@ -280,6 +379,22 @@ export function FinancialStatementPDF({
           </View>
         </View>
 
+        <View style={styles.tableHeader}>
+          <Text style={[styles.tableHeaderText, styles.colAccount]}>Konto</Text>
+          <Text style={[styles.tableHeaderText, styles.colName]}>Kontonamn</Text>
+          {columns.map((column, ci) => (
+            <Text
+              key={ci}
+              style={[
+                styles.tableHeaderText,
+                column.muted ? styles.colAmountMuted : styles.colAmount,
+              ]}
+            >
+              {column.label}
+            </Text>
+          ))}
+        </View>
+
         {groups.map((group, gi) => (
           <View key={gi} style={styles.group} wrap>
             <Text style={styles.groupHeading}>{group.heading}</Text>
@@ -292,22 +407,17 @@ export function FinancialStatementPDF({
               group.sections.map((section, si) => (
                 <View key={si} style={styles.section} wrap={false}>
                   <Text style={styles.sectionTitle}>{section.title}</Text>
-                  {section.rows.map((row, ri) => {
-                    const displayAmount = group.negate ? -row.amount : row.amount
-                    return (
-                      <View key={ri} style={styles.row}>
-                        <Text style={styles.colAccount}>{row.account_number}</Text>
-                        <Text style={styles.colName}>{row.account_name}</Text>
-                        <Text style={styles.colAmount}>{pdfAmount(displayAmount)}</Text>
-                      </View>
-                    )
-                  })}
+                  {section.rows.map((row, ri) => (
+                    <View key={ri} style={styles.row}>
+                      <Text style={styles.colAccount}>{row.account_number}</Text>
+                      <Text style={styles.colName}>{row.account_name}</Text>
+                      {amountCells(row.amounts, 'row', group.negate)}
+                    </View>
+                  ))}
                   {section.rows.length > 1 && (
                     <View style={styles.sectionSubtotalRow}>
                       <Text style={styles.sectionSubtotalLabel}>Summa {section.title.toLowerCase()}</Text>
-                      <Text style={styles.sectionSubtotalAmount}>
-                        {pdfAmount(group.negate ? -section.subtotal : section.subtotal)}
-                      </Text>
+                      {amountCells(section.subtotals, 'subtotal', group.negate)}
                     </View>
                   )}
                 </View>
@@ -316,9 +426,7 @@ export function FinancialStatementPDF({
 
             <View style={styles.groupTotalRow}>
               <Text style={styles.groupTotalLabel}>{group.totalLabel}</Text>
-              <Text style={styles.groupTotalAmount}>
-                {pdfAmount(group.negate ? -group.total : group.total)}
-              </Text>
+              {amountCells(group.totals, 'total', group.negate)}
             </View>
           </View>
         ))}
@@ -330,9 +438,7 @@ export function FinancialStatementPDF({
                 <Text style={row.emphasis ? styles.summaryEmphasisLabel : styles.summaryLabel}>
                   {row.label}
                 </Text>
-                <Text style={row.emphasis ? styles.summaryEmphasisAmount : styles.summaryAmount}>
-                  {pdfAmount(row.amount)}
-                </Text>
+                {amountCells(row.amounts, row.emphasis ? 'summaryEmphasis' : 'summary')}
               </View>
             ))}
           </View>
