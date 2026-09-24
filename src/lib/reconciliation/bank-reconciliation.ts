@@ -1762,12 +1762,19 @@ export async function autoReconcileTransactionForLinkedVoucher(
       invoice_id: string | null
       supplier_invoice_id: string | null
     }
+    // One bank movement settles one document: money in against a customer
+    // invoice, money out against a supplier one. A row that already names
+    // EITHER must not be given the other, or it ends up claiming both at once,
+    // which no reconciliation can be right about. Guarding only the column
+    // being written left that door open.
+    if (existing.invoice_id || existing.supplier_invoice_id) return null
+
     const retag: Record<string, unknown> = {}
-    if (options.invoiceId && !existing.invoice_id) {
+    if (options.invoiceId) {
       retag.invoice_id = options.invoiceId
       retag.potential_invoice_id = null
     }
-    if (options.supplierInvoiceId && !existing.supplier_invoice_id) {
+    if (options.supplierInvoiceId) {
       retag.supplier_invoice_id = options.supplierInvoiceId
       retag.potential_supplier_invoice_id = null
     }
@@ -1778,14 +1785,14 @@ export async function autoReconcileTransactionForLinkedVoucher(
     // pointer and both write, the later silently winning while both report
     // success. Re-asserting NULL in the predicate makes the loser write nothing,
     // and requiring a returned row makes it say so instead of claiming the tag.
-    let retagQuery = supabase
+    const { data: retagged, error: retagError } = await supabase
       .from('transactions')
       .update(retag)
       .eq('id', existing.id)
       .eq('company_id', companyId)
-    if ('invoice_id' in retag) retagQuery = retagQuery.is('invoice_id', null)
-    if ('supplier_invoice_id' in retag) retagQuery = retagQuery.is('supplier_invoice_id', null)
-    const { data: retagged, error: retagError } = await retagQuery.select('id')
+      .is('invoice_id', null)
+      .is('supplier_invoice_id', null)
+      .select('id')
     if (retagError || !retagged || retagged.length === 0) return null
     return { linkedTransactionId: existing.id }
   }

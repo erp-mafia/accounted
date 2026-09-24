@@ -119,6 +119,23 @@ describe('autoReconcileTransactionForLinkedVoucher', () => {
     expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
+  it('never gives a row that already names a customer invoice a supplier one too', async () => {
+    // One bank movement settles one document: money in against a customer
+    // invoice, money out against a supplier one. Claiming both on one row is a
+    // contradiction no reconciliation can be right about, and guarding only the
+    // column being written left that door open.
+    const { supabase, enqueue } = createQueueMockSupabase()
+    enqueue({ data: [{ id: 'tx-existing', invoice_id: 'inv-other', supplier_invoice_id: null }] })
+
+    const result = await autoReconcileTransactionForLinkedVoucher(
+      supabase as never, 'company-1', 'user-1', 'je-1', { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toBeNull()
+    // The read, and nothing else: no write was attempted.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
   it('reports no tag when a concurrent link already claimed the pointer', async () => {
     // The link RPCs lock the invoice row, not this transaction, so two calls can
     // read the same null pointer. The compare-and-set makes the loser write
