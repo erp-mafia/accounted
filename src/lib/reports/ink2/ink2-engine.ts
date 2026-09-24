@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { loadTaxAdjustmentSnapshot } from '@/lib/bokslut/tax-provision/tax-adjustment-service'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
-import { dbError } from '@/lib/errors/db-error'
 import { truncateToWholeKronor } from '@/lib/money'
 import {
   SIGN_RECLASSIFICATION_RULES,
@@ -196,25 +195,19 @@ function applySignReclassifications(
 }
 
 /**
- * Whether a resultatavslut has already moved årets resultat into 2099.
- *
- * Reads the same set generateTrialBalance's 'exclude-final' drops
- * (result_closing_entry_ids), so the income statement and this flag cannot
- * disagree: a resultatavslut imported from the previous system counts like
- * our own, and a reversed one nets to zero against its storno and is not in
- * the set.
+ * The result still sitting on the result accounts (BAS class 3-8, 899x
+ * included), credit-positive: profit is positive. In the closed books this
+ * is the part of årets resultat that no resultatavslut has moved into
+ * equity yet.
  */
-async function isResultClosedIntoEquity(
-  supabase: SupabaseClient,
-  companyId: string,
-  fiscalPeriodId: string,
-): Promise<boolean> {
-  const { data, error } = await supabase.rpc('result_closing_entry_ids', {
-    p_company_id: companyId,
-    p_fiscal_period_id: fiscalPeriodId,
-  })
-  if (error) throw dbError(error, 'result_closing_entry_ids failed')
-  return Array.isArray(data) && data.length > 0
+function resultOnResultAccounts(rows: TrialBalanceRow[]): number {
+  let net = 0
+  for (const row of rows) {
+    if (row.account_number >= '3' && row.account_number < '9') {
+      net += (Number(row.closing_credit) || 0) - (Number(row.closing_debit) || 0)
+    }
+  }
+  return Math.round(net * 100) / 100
 }
 
 /**
@@ -263,18 +256,35 @@ export async function generateINK2Declaration(
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance] =
     await Promise.all([
       loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
-      isResultClosedIntoEquity(supabase, companyId, fiscalPeriodId),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
   const incomeBalances = toSignedBalances(preClosingTrialBalance.rows)
+
+  // How much of årets resultat the books have already moved into equity. The
+  // two views differ by exactly the result transfers (ours, or one booked in
+  // the previous system or by hand), so what is still on the result accounts
+  // in the closed view is the part not yet in 2099. Read as an amount, not a
+  // closed/open flag: a partial transfer (an öresutjämning against 2099 in an
+  // open year) then moves exactly its own amount instead of switching the
+  // whole add-back off.
+  const unclosedResult = resultOnResultAccounts(closedTrialBalance.rows)
+  const resultTransferred =
+    Math.abs(resultOnResultAccounts(preClosingTrialBalance.rows) - unclosedResult) >= 0.01
+  // Fully closed: nothing left on the result accounts, and either a transfer
+  // was found or our own year-end run linked one. The link keeps the
+  // declared-versus-2099 alarm below alive when the pre-closing view fails to
+  // strip our closing (the two views are then identical).
+  const resultClosedIntoEquity =
+    Math.abs(unclosedResult) <= ROUNDING_TOLERANCE_KR
+    && (resultTransferred || Boolean(period.closing_entry_id))
 
   const accountNameMap = new Map<string, string>()
   for (const row of [...closedTrialBalance.rows, ...preClosingTrialBalance.rows]) {
@@ -415,10 +425,11 @@ export async function generateINK2Declaration(
 
   // During an open fiscal year 2099 has no balance yet: the result exists only
   // as the net of the income statement accounts, so add it to make the balance
-  // sheet tie out. Once the resultatavslut is posted, 7302 already carries it
-  // via 2099 and adding it again would double-count årets resultat.
-  const adjustedEquityLiabilities = resultClosedIntoEquity
-    ? totalEquityLiabilities
+  // sheet tie out. Once a resultatavslut is posted, 7302 already carries what
+  // it moved via 2099; only the remainder still on the result accounts (zero
+  // after a full closing) is added, so årets resultat is never counted twice.
+  const adjustedEquityLiabilities = resultTransferred
+    ? totalEquityLiabilities + truncateToWholeKronor(unclosedResult)
     : totalEquityLiabilities + aretsResultat
 
   // Fiscal year dates as YYYYMMDD

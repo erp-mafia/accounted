@@ -88,14 +88,11 @@ const CLOSED_ROWS: TrialBalanceRow[] = PRE_CLOSING_ROWS.map((r) => {
 
 interface SupabaseStub {
   from: (table: string) => unknown
-  rpc: (fn: string) => Promise<{ data: unknown; error: null }>
 }
 
 function makeSupabase(options?: {
   closingEntryId?: string | null
   closingEntryStatus?: string
-  /** A resultatavslut booked in the previous system and SIE-imported (no link). */
-  importedClosingIds?: string[]
   isClosed?: boolean
 }): SupabaseStub {
   const closingEntryId =
@@ -144,15 +141,23 @@ function makeSupabase(options?: {
           }),
         }
       }
+      if (table === 'journal_entries') {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: async () => ({
+                  data: closingEntryId
+                    ? { status: options?.closingEntryStatus ?? 'posted' }
+                    : null,
+                  error: null,
+                }),
+              }),
+            }),
+          }),
+        }
+      }
       throw new Error(`unexpected table ${table}`)
-    },
-    // result_closing_entry_ids: the posted linked closing plus any imported
-    // resultatavslut, as the SQL function resolves it.
-    rpc: async (fn: string) => {
-      if (fn !== 'result_closing_entry_ids') throw new Error(`unexpected rpc ${fn}`)
-      const linkedPosted =
-        closingEntryId && (options?.closingEntryStatus ?? 'posted') === 'posted' ? [closingEntryId] : []
-      return { data: [...linkedPosted, ...(options?.importedClosingIds ?? [])], error: null }
     },
   }
 }
@@ -418,15 +423,12 @@ describe('generateINK2Declaration: open fiscal year', () => {
   })
 })
 
-describe('generateINK2Declaration: year closed by an imported resultatavslut', () => {
-  // A migrated year: the previous system's resultatavslut arrived as an
-  // imported verifikat, so there is no closing_entry_id, yet 2099 already
-  // carries årets resultat. The pre-closing view drops it by shape.
-  it('reads the result and does not add it to equity a second time', async () => {
+describe('generateINK2Declaration: result moved into equity outside our year-end run', () => {
+  it('reads a year closed by an imported resultatavslut without counting the result twice', async () => {
+    // No closing_entry_id: the resultatavslut came from the previous system.
+    // The two views still differ by exactly that transfer.
     const result = await generateINK2Declaration(
-      anySupabase(
-        makeSupabase({ closingEntryId: null, importedClosingIds: ['imported-closing-1'], isClosed: true }),
-      ),
+      anySupabase(makeSupabase({ closingEntryId: null, isClosed: true })),
       COMPANY_ID,
       PERIOD_ID,
     )
@@ -437,6 +439,35 @@ describe('generateINK2Declaration: year closed by an imported resultatavslut', (
     expect(result.totals.totalEquityLiabilities).toBe(612_000)
     expect(result.totals.totalAssets).toBe(612_000)
     expect(result.warnings.some((w) => w.includes('inte i balans'))).toBe(false)
+    expect(result.warnings.some((w) => w.includes('konto 2099'))).toBe(false)
+  })
+
+  it('adds back only the remainder after a partial transfer against 2099 in an open year', async () => {
+    // A member books 1 000 of revenue straight into 2099 on bokslutsdagen and
+    // nothing else is closed. The pre-closing view leaves the voucher out;
+    // equity must carry the 1 000 on 2099 plus the 441 000 still on the
+    // result accounts, not drop the whole add-back.
+    const closed = PRE_CLOSING_ROWS.map((r) => {
+      if (r.account_number === '3001') return row('3001', 'Försäljning', -699_000)
+      if (r.account_number === '2099') return row('2099', 'Årets resultat', -1_000)
+      return r
+    })
+    stubTrialBalances(closed, PRE_CLOSING_ROWS)
+
+    const result = await generateINK2Declaration(
+      anySupabase(makeSupabase({ closingEntryId: null, isClosed: false })),
+      COMPANY_ID,
+      PERIOD_ID,
+    )
+
+    expect(result.ink2r['7410']).toBe(700_000)
+    expect(result.ink2r['7450']).toBe(442_000)
+    expect(result.ink2r['7302']).toBe(1_000)
+    expect(result.totals.totalEquityLiabilities).toBe(612_000)
+    expect(result.totals.totalAssets).toBe(612_000)
+    expect(result.warnings.some((w) => w.includes('inte i balans'))).toBe(false)
+    // Not fully closed, so the declared-versus-2099 check does not apply.
+    expect(result.warnings.some((w) => w.includes('konto 2099'))).toBe(false)
   })
 })
 
@@ -458,7 +489,6 @@ describe('generateINK2Declaration: guards', () => {
         }
         return makeSupabase().from(table)
       },
-      rpc: makeSupabase().rpc,
     }
 
     await expect(
