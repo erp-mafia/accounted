@@ -1222,8 +1222,8 @@ export default function SupplierInvoiceDetailPage() {
                           <Button
                             type="button"
                             variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 shrink-0"
+                            size="icon-sm"
+                            className="shrink-0"
                             aria-label={tCommon('more_options')}
                           >
                             <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
