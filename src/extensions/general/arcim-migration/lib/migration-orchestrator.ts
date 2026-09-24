@@ -69,6 +69,7 @@ import {
   type FxUnresolved,
 } from './entity-mapper'
 import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
+import { existingInvoiceKey, listedInvoiceKeys, type ExistingSupplierInvoiceIdentity } from './supplier-invoice-identity'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
 
@@ -1229,22 +1230,20 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
 
         await loadSupplierRegister()
 
-        // Load existing (supplier_invoice_number, supplier_id) pairs once.
-        const existingSuppInv = await fetchAllRows<{
-          supplier_invoice_number: string | null
-          supplier_id: string | null
-        }>(({ from, to }) =>
+        // Load every existing supplier invoice's identity once: (supplier,
+        // number), or (supplier, date, amount) for a number-less one.
+        const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity>(({ from, to }) =>
           supabase
             .from('supplier_invoices')
-            .select('supplier_invoice_number, supplier_id')
+            .select('supplier_invoice_number, supplier_id, invoice_date, total')
             .eq('company_id', companyId)
             .range(from, to)
         )
         const existingSuppInvKeys = new Set(
-          existingSuppInv
-            .filter((r) => r.supplier_invoice_number && r.supplier_id)
-            .map((r) => `${r.supplier_id}::${r.supplier_invoice_number}`)
+          existingSuppInv.map(existingInvoiceKey).filter((key): key is string => key !== null)
         )
+        const isStored = (supplierId: string, inv: SupplierInvoiceDto): boolean =>
+          listedInvoiceKeys(supplierId, inv).some((key) => existingSuppInvKeys.has(key))
 
         // Compute next arrival number locally. Unique index is
         // (company_id, arrival_number); we're the only writer during
@@ -1276,9 +1275,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           return nameToSupplierId.get(inv.supplier.name) ?? null
         }
         const isAlreadyImported = (inv: SupplierInvoiceDto): boolean => {
-          if (!inv.invoiceNumber) return false
           const supplierId = resolveExistingSupplierId(inv)
-          return !!supplierId && existingSuppInvKeys.has(`${supplierId}::${inv.invoiceNumber}`)
+          return !!supplierId && isStored(supplierId, inv)
         }
         const fresh = listed.filter((inv) => !isAlreadyImported(inv))
         const alreadyImported = listed.length - fresh.length
@@ -1329,8 +1327,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           }
 
           if (supplierId) {
-            const dupKey = `${supplierId}::${inv.invoiceNumber}`
-            if (existingSuppInvKeys.has(dupKey)) {
+            if (isStored(supplierId, inv)) {
               skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
               skipped++
               continue
@@ -1416,9 +1413,14 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
             }
             return false
           }
+          if (isStored(r.supplierId, r.dto)) {
+            skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
+            skipped++
+            return false
+          }
           if (r.dto.invoiceNumber) {
             const dupKey = `${r.supplierId}::${r.dto.invoiceNumber}`
-            if (existingSuppInvKeys.has(dupKey) || seenSuppInvKeys.has(dupKey)) {
+            if (seenSuppInvKeys.has(dupKey)) {
               skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
               skipped++
               return false

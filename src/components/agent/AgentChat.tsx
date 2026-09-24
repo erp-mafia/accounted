@@ -34,7 +34,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // once-per-navigation page-entry animation, so resuming a 20-message thread
 // used to fire 20 simultaneous 500ms slides.
 const MESSAGE_ENTER_CLASS =
-  'animate-in fade-in-0 slide-in-from-bottom-2 duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]'
+  'animate-in fade-in-0 slide-in-from-bottom-2 duration-150 ease-emphasized'
 
 // Markdown parser loads separately from the chat surface: react-markdown +
 // remark-gfm pull in the whole unified/remark tree.
@@ -901,7 +901,7 @@ export default function AgentChat({
         <button
           type="button"
           onClick={jumpToLatest}
-          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-md hover:bg-secondary transition-colors"
+          className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-[var(--shadow-md)] hover:bg-secondary/60 transition-colors"
         >
           <ArrowDown className="h-3 w-3" />
           Nytt svar
@@ -959,7 +959,7 @@ export default function AgentChat({
             onChange={(e) => setInput(e.target.value)}
             placeholder="Skriv din fråga…"
             rows={1}
-            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring max-h-32 overflow-y-auto"
+            className="flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring max-h-32 overflow-y-auto"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
@@ -1045,7 +1045,7 @@ function MessageBubble({
         {isUser ? (
           message.text || (streamingTail ? <Cursor /> : '')
         ) : message.text ? (
-          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
+          <div className="prose prose-sm max-w-none text-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 prose-headings:font-display prose-headings:font-normal prose-headings:tracking-tight prose-h2:text-base prose-h2:mt-3 prose-h2:mb-2 prose-h3:text-sm prose-h3:mt-3 prose-h3:mb-1 prose-p:my-2 prose-p:leading-6 prose-strong:font-semibold prose-strong:text-foreground prose-ul:my-2 prose-li:my-0.5 prose-blockquote:border-l-2 prose-blockquote:border-foreground/30 prose-blockquote:not-italic prose-blockquote:text-muted-foreground prose-blockquote:pl-3 prose-blockquote:my-2 prose-code:bg-secondary prose-code:rounded-sm prose-code:px-1 prose-code:py-0.5 prose-code:text-xs prose-code:before:content-none prose-code:after:content-none prose-a:text-foreground prose-a:underline prose-a:underline-offset-2 prose-pre:bg-secondary prose-pre:text-foreground prose-pre:border prose-pre:border-border prose-pre:rounded-lg prose-pre:my-2 prose-pre:p-3 prose-pre:text-xs prose-pre:leading-relaxed prose-pre:overflow-x-auto [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:text-foreground [&_pre_code]:text-xs prose-table:my-2 prose-table:text-xs prose-table:border-collapse [&_table]:w-full [&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium [&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] [&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top [&_tbody_tr:last-child_td]:border-b-0">
             {markdownLoaded ? (
               <MarkdownMessage text={message.text} />
             ) : (
@@ -1082,10 +1082,7 @@ function MessageBubble({
               {tc.completed ? (
                 <Check className="h-2.5 w-2.5 text-muted-foreground/60" strokeWidth={3} />
               ) : (
-                <span className="relative inline-flex h-1.5 w-1.5">
-                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40 opacity-75" />
-                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
-                </span>
+                <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
               )}
               {prettyToolName(tc.name)}
             </span>
@@ -1191,7 +1188,7 @@ function MessageActions({
   }
 
   const btn =
-    'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors'
+    'inline-flex items-center gap-1.5 rounded-sm px-1.5 py-1 text-[11px] text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors'
 
   return (
     <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
@@ -1261,10 +1258,7 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
         aria-expanded={show}
       >
         {active ? (
-          <span className="relative inline-flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-foreground/40 opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
-          </span>
+          <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
         ) : (
           <Brain className="h-3 w-3" />
         )}

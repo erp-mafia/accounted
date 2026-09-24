@@ -293,15 +293,8 @@ export function FiscalYearResetDialog({
             {t('fy_confirm_cancel')}
           </Button>
           {eligibility?.eligible ? (
-            <Button variant="destructive" onClick={handleReset} disabled={!canReset}>
-              {isResetting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('fy_reset_resetting')}
-                </>
-              ) : (
-                t('fy_reset_submit')
-              )}
+            <Button variant="destructive" onClick={handleReset} disabled={!canReset} loading={isResetting}>
+              {isResetting ? t('fy_reset_resetting') : t('fy_reset_submit')}
             </Button>
           ) : null}
         </DialogFooter>

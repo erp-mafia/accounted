@@ -54,7 +54,7 @@ function markPrereqSeen(): void {
 }
 
 const pillClass =
-  'inline-flex h-6 shrink-0 items-center gap-2 rounded-full bg-primary px-3 text-[11.5px] text-primary-foreground transition-colors duration-150 hover:bg-primary/85 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  'inline-flex h-6 shrink-0 items-center gap-2 rounded-full bg-primary px-3 text-[11px] text-primary-foreground transition-colors duration-150 hover:bg-primary/85 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 /**
  * "Kvittojakten": one click opens the connected AI client with the prompt

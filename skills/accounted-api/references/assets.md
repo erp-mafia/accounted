@@ -31,7 +31,7 @@ Response `200`:
 ```ts
 {
   data: {
-    assets: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string }[]
+    assets: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string }[]
   },
   meta: {
     request_id: string,
@@ -63,6 +63,8 @@ Example response `200`:
         "bas_accumulated_account": "1229",
         "bas_expense_account": "7832",
         "k3_components": null,
+        "opening_accumulated_depreciation": 0,
+        "opening_depreciation_date": null,
         "notes": null,
         "disposed_at": null,
         "disposal_type": null,
@@ -96,6 +98,10 @@ Adds an asset to the anläggningsregister. BAS accounts default per category (fr
 
 **Pitfalls:**
 - k3_components is accepted only when the company applies K3: 422 K3_REQUIRED_FOR_COMPONENTS otherwise. Components must sum to acquisition_cost.
+- opening_accumulated_depreciation must be between 0 and acquisition_cost - salvage_value. A positive amount requires opening_depreciation_date between acquisition_date and today (Europe/Stockholm). Zero clears the opening date.
+- Opening depreciation registers an amount already in the imported ledger and posts no voucher. Enter the amount for this asset from the previous asset register and manually reconcile the register totals with the imported ledger before depreciation or disposal; no automatic reconciliation is performed.
+- Opening fields lock after depreciation posted through Accounted's asset register or disposal. Manual ledger postings do not lock them.
+- A positive opening amount cannot be combined with non-empty k3_components. Opening balances for K3 component assets are unsupported; keep the component breakdown.
 - Account overrides must sit inside the category range (e.g. 1200-1299 for equipment) and may not be flagged Ej K2 for a K2 company (422 K2_EXCLUDED_ACCOUNT).
 - useful_life_months drives linear depreciation from acquisition_date, pro-rated in the first fiscal year.
 
@@ -119,6 +125,8 @@ Request body:
   bas_accumulated_account?: string,
   bas_expense_account?: string,
   k3_components?: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null,
+  opening_accumulated_depreciation?: number,
+  opening_depreciation_date?: string | null,
   notes?: string
 }
 ```
@@ -149,6 +157,8 @@ Response `200`:
     bas_accumulated_account: string,
     bas_expense_account: string,
     k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null,
+    opening_accumulated_depreciation: number,
+    opening_depreciation_date: string | null,
     notes: string | null,
     disposed_at: string | null,
     disposal_type: "sale" | "scrap" | "business_transfer" | null,
@@ -188,6 +198,8 @@ Example response `200`:
     "bas_accumulated_account": "1229",
     "bas_expense_account": "7832",
     "k3_components": null,
+    "opening_accumulated_depreciation": 0,
+    "opening_depreciation_date": null,
     "notes": null,
     "disposed_at": null,
     "disposal_type": null,
@@ -240,6 +252,8 @@ Response `200`:
     bas_accumulated_account: string,
     bas_expense_account: string,
     k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null,
+    opening_accumulated_depreciation: number,
+    opening_depreciation_date: string | null,
     notes: string | null,
     disposed_at: string | null,
     disposal_type: "sale" | "scrap" | "business_transfer" | null,
@@ -279,6 +293,8 @@ Example response `200`:
     "bas_accumulated_account": "1229",
     "bas_expense_account": "7832",
     "k3_components": null,
+    "opening_accumulated_depreciation": 0,
+    "opening_depreciation_date": null,
     "notes": "Serienummer C02XY…",
     "disposed_at": null,
     "disposal_type": null,
@@ -310,6 +326,8 @@ Patches the register row. Name, notes, salvage value and useful life are always 
 
 **Pitfalls:**
 - k3_components: null clears an existing breakdown; a non-null array is validated against the acquisition_cost that will be in effect after the patch and requires K3.
+- Opening depreciation is validated against the merged row: 0 <= opening_accumulated_depreciation <= acquisition_cost - salvage_value; a positive amount needs opening_depreciation_date between acquisition_date and today (Europe/Stockholm). Zero clears the date. A positive amount cannot be combined with non-empty k3_components; component opening balances are unsupported, so keep the breakdown.
+- Opening edits post no voucher and perform no automatic reconciliation. Manually reconcile the register totals with the imported ledger before depreciation or disposal. Opening fields lock after depreciation posted through Accounted's asset register or disposal (409 ASSET_CORRECTION_BLOCKED); manual ledger postings do not lock them.
 - An empty body is rejected with 400 VALIDATION_ERROR.
 - Account overrides on a K2 company may not land on an Ej K2 account (422 K2_EXCLUDED_ACCOUNT).
 
@@ -334,7 +352,9 @@ Request body:
   bas_asset_account?: string,
   bas_accumulated_account?: string,
   bas_expense_account?: string,
-  k3_components?: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null
+  k3_components?: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null,
+  opening_accumulated_depreciation?: number,
+  opening_depreciation_date?: string | null
 }
 ```
 
@@ -361,6 +381,8 @@ Response `200`:
     bas_accumulated_account: string,
     bas_expense_account: string,
     k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null,
+    opening_accumulated_depreciation: number,
+    opening_depreciation_date: string | null,
     notes: string | null,
     disposed_at: string | null,
     disposal_type: "sale" | "scrap" | "business_transfer" | null,
@@ -400,6 +422,8 @@ Example response `200`:
     "bas_accumulated_account": "1229",
     "bas_expense_account": "7832",
     "k3_components": null,
+    "opening_accumulated_depreciation": 0,
+    "opening_depreciation_date": null,
     "notes": "Serienummer C02XY…",
     "disposed_at": null,
     "disposal_type": null,
@@ -498,7 +522,7 @@ Response `200`:
 ```ts
 {
   data: {
-    asset: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string },
+    asset: { name: string, category: "immaterial" | "building" | "land_improvement" | "machinery" | "equipment" | "vehicle" | "computer" | "other_tangible", acquisition_date: string, acquisition_cost: number, salvage_value: number, useful_life_months: number, depreciation_method: string, bas_asset_account: string, bas_accumulated_account: string, bas_expense_account: string, k3_components: { name: string, cost: number, useful_life_months: number, salvage_value?: number }[] | null, opening_accumulated_depreciation: number, opening_depreciation_date: string | null, notes: string | null, disposed_at: string | null, disposal_type: "sale" | "scrap" | "business_transfer" | null, disposed_proceeds: number | null, disposal_journal_entry_id: string | null, has_posted_depreciation: boolean, deletable: boolean, created_at: string, updated_at: string, id: string },
     disposal_entry: { journal_entry_id: string, voucher_number: number | null } | null,
     gain_or_loss: number
   },
@@ -531,6 +555,8 @@ Example response `200`:
       "bas_accumulated_account": "1229",
       "bas_expense_account": "7832",
       "k3_components": null,
+      "opening_accumulated_depreciation": 0,
+      "opening_depreciation_date": null,
       "notes": null,
       "disposed_at": "2026-09-15",
       "disposal_type": "sale",

@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
+import { POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 
 /**
  * The category picker (Kick-style): the template list opens beside the
@@ -81,7 +82,8 @@ export function CategoryPopover({
           className={cn(
             // Three rows: head, the scrolling list, foot. A grid keeps the list
             // inside the panel's max height so the foot never paints over it.
-            'fixed z-50 grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)] focus:outline-none',
+            'fixed z-50 grid grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden focus:outline-none',
+            POPOVER_SURFACE_CLASS,
             className,
           )}
           style={{

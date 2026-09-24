@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Loader2, AlertTriangle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { classifyAccountClient as classifyAccount } from '@/lib/bookkeeping/account-classifier-client'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -334,9 +334,8 @@ export function AddAccountDialog({
               <Button
                 type="button"
                 onClick={() => void handleReactivate()}
-                disabled={isSaving}
+                loading={isSaving}
               >
-                {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 Aktivera kontot istället
               </Button>
             </div>
@@ -349,9 +348,9 @@ export function AddAccountDialog({
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={isSaving || inactiveConflict || accountNumber.length !== 4 || !accountName.trim()}
+            disabled={inactiveConflict || accountNumber.length !== 4 || !accountName.trim()}
+            loading={isSaving}
           >
-            {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Skapa konto
           </Button>
         </DialogFooter>

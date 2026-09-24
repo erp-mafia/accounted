@@ -36,7 +36,7 @@ export default function AddAccountMenu() {
           <DialogHeader className="px-5 pt-5">
             <DialogTitle>{t('add_account')}</DialogTitle>
           </DialogHeader>
-          <ul className="border-t border-border/70 pb-2">
+          <ul className="border-t border-border pb-2">
             {SOURCES.map((s) => (
               <li key={s.key}>
                 <Link
@@ -54,7 +54,7 @@ export default function AddAccountMenu() {
                   )}
                   <span className="min-w-0">
                     <span className="block text-[13px] font-medium">{t(`add_${s.key}`)}</span>
-                    <span className="block text-[12px] text-muted-foreground">{t(`add_${s.key}_desc`)}</span>
+                    <span className="block text-[12.5px] text-muted-foreground">{t(`add_${s.key}_desc`)}</span>
                   </span>
                 </Link>
               </li>

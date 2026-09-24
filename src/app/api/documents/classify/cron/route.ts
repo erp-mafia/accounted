@@ -2,7 +2,6 @@ import { NextResponse } from 'next/server'
 import { withCronContext } from '@/lib/api/with-cron-context'
 import { createServiceRoleClient } from '@/lib/supabase/service-client'
 import { classifyUnclassifiedDocuments } from '@/lib/documents/classify/classify'
-import { arkivRollout } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -17,27 +16,20 @@ const MAX_COMPANIES = 20
 
 export const GET = withCronContext('documents.classify', async (_request, ctx) => {
   const supabase = createServiceRoleClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!)
-  // A listed rollout names its companies: scanning the newest untyped rows of
-  // the whole platform for them would find none once other archives fill it.
-  const rollout = arkivRollout()
-  let companies: string[]
-  if (rollout === 'all') {
-    const { data, error } = await supabase
-      .from('document_attachments')
-      .select('company_id')
-      .is('doc_type', null)
-      .not('pages_read_at', 'is', null)
-      .gt('page_count', 0)
-      .order('created_at', { ascending: false })
-      .limit(500)
-    if (error) {
-      ctx.log.error('classify backfill fetch failed', { reason: error.message })
-      return NextResponse.json({ ok: false, error: getErrorMessage(error) }, { status: 500 })
-    }
-    companies = [...new Set(((data ?? []) as Array<{ company_id: string | null }>).map((r) => r.company_id).filter((c): c is string => !!c))].slice(0, MAX_COMPANIES)
-  } else {
-    companies = rollout.slice(0, MAX_COMPANIES)
+  // The shelf is on for everyone: the companies with untyped, read documents are found from the newest such rows.
+  const { data, error } = await supabase
+    .from('document_attachments')
+    .select('company_id')
+    .is('doc_type', null)
+    .not('pages_read_at', 'is', null)
+    .gt('page_count', 0)
+    .order('created_at', { ascending: false })
+    .limit(500)
+  if (error) {
+    ctx.log.error('classify backfill fetch failed', { reason: error.message })
+    return NextResponse.json({ ok: false, error: getErrorMessage(error) }, { status: 500 })
   }
+  const companies = [...new Set(((data ?? []) as Array<{ company_id: string | null }>).map((r) => r.company_id).filter((c): c is string => !!c))].slice(0, MAX_COMPANIES)
   const totals = { companies: companies.length, processed: 0, classified: 0, held: 0, skipped: 0, errors: 0 }
   for (const companyId of companies) {
     const c = await classifyUnclassifiedDocuments(supabase, companyId, BATCH_PER_COMPANY)

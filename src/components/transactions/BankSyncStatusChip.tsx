@@ -78,7 +78,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href={selfHosted ? '/settings/banking' : '/settings/billing'}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
@@ -114,7 +114,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href={`/settings/banking?select_accounts=${encodeURIComponent(state.connectionId)}`}
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
@@ -132,7 +132,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>
@@ -150,7 +150,7 @@ export default function BankSyncStatusChip() {
     return (
       <Link
         href="/settings/banking"
-        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-muted/50"
+        className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
         <AlertTriangle className="h-3.5 w-3.5" />
         <span>

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Currency, Customer, InvoiceDocumentType } from '@/types'
 import {
+  deriveInvoiceVatHeader,
   explainVatTreatment,
   getVatRules,
   getPermittedVatRates,
@@ -530,27 +531,12 @@ export async function buildInvoiceWriteData(params: {
   )
   const isMixedRate = uniqueRates.size > 1
 
-  // Reverse-charge / export notation must describe what the invoice actually
-  // does. With a taxed-where-performed line now permitted (see the gate above),
-  // an invoice to a foreign business can carry only Swedish VAT: that supply is
-  // neither reverse-charged nor exported, so the header must not claim it is.
-  // "Omvänd betalningsskyldighet" (ML 17 kap 24 § p.11) next to charged Swedish
-  // VAT is a false statement: it tells the buyer to self-assess tax the seller
-  // already collected, and the buyer then cannot deduct it either.
-  //
-  // A mixed invoice (0% consulting + 12% hotel) keeps the notation: its
-  // zero-rated lines genuinely ARE reverse-charged, and the notation is
-  // required whenever the buyer is liable for any part. The per-rate booking
-  // splits them correctly on its own (generatePerRateLines only applies the
-  // invoice-level treatment to rate-0 lines), so 3308 and 3002/2621 both land
-  // in the right ruta.
-  const isSpecialTreatment =
-    vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export'
-  // No priced lines at all (text-only document) charges nothing either way:
-  // keep the customer's treatment rather than restamping it as domestic.
-  const hasZeroRatedLine = uniqueRates.size === 0 || uniqueRates.has(0)
-  const headerRules =
-    !isSpecialTreatment || hasZeroRatedLine ? vatRules : getVatRules('swedish_business')
+  // Header treatment, ruta and statutory notice: the same derivation that
+  // re-derives an open draft when its customer changes (see
+  // deriveInvoiceVatHeader for the mixed-rate and Swedish-rate rules).
+  const vatHeader = deriveInvoiceVatHeader(vatRules, [...uniqueRates], {
+    vatRegistered: !notVatRegistered,
+  })
 
   let exchangeRate: number | null = null
   let exchangeRateDate: string | null = null
@@ -626,10 +612,10 @@ export async function buildInvoiceWriteData(params: {
     // Skatteverket portion is on 1513 and clears when the agency pays out.
     // Proformas / delivery notes / quotes have no payment obligation → keep 0.
     remaining_amount: documentType === 'invoice' ? total - deductionTotal : 0,
-    vat_treatment: notVatRegistered ? 'exempt' : headerRules.treatment,
+    vat_treatment: vatHeader.vat_treatment,
     vat_rate: documentType === 'delivery_note' ? 0 : (isMixedRate ? null : (uniqueRates.values().next().value ?? vatRules.rate)),
-    moms_ruta: notVatRegistered ? null : headerRules.momsRuta,
-    reverse_charge_text: notVatRegistered ? null : (headerRules.reverseChargeText || null),
+    moms_ruta: vatHeader.moms_ruta,
+    reverse_charge_text: vatHeader.reverse_charge_text,
     your_reference: input.your_reference,
     our_reference: input.our_reference,
     // Always a concrete value so a draft edit that cleared the field NULLs

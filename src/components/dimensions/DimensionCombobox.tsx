@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { Loader2, Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
+import { cn } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   DIMENSION_CODE_PATTERN,
@@ -293,7 +295,11 @@ export default function DimensionCombobox({
       {isOpen && !disabled && (
         <div
           ref={listRef}
-          className="absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md"
+          className={cn(
+            'absolute z-50 top-full left-0 mt-1 min-w-[16rem] w-[max(100%,20rem)] max-h-[300px] overflow-y-auto',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
+          )}
         >
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
@@ -320,7 +326,7 @@ export default function DimensionCombobox({
                   type="button"
                   data-highlighted={isHighlighted}
                   className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+                    isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
                   }`}
                   onMouseDown={(e) => {
                     e.preventDefault()
@@ -342,7 +348,7 @@ export default function DimensionCombobox({
               className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-center gap-2 border-t border-input ${
                 highlightedIndex === filteredValues.length
                   ? 'bg-primary/10 text-primary'
-                  : 'hover:bg-muted/50'
+                  : 'hover:bg-secondary/60'
               }`}
               onMouseDown={(e) => {
                 e.preventDefault()

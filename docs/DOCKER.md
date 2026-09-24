@@ -18,10 +18,11 @@ mkdir Accounted && cd Accounted
 
 # Compose file + env template
 curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.yml
-curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/.env.docker.example
 
-# Cron sidecar (Dockerfile + schedule)
+# Env template + cron sidecar (Dockerfile + schedule)
 mkdir -p docker
+curl -fsSL -o docker/.env.example \
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/.env.example
 curl -fsSL -o docker/cron.Dockerfile \
   https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/cron.Dockerfile
 curl -fsSL -o docker/crontab.self-hosted \
@@ -31,7 +32,7 @@ curl -fsSL -o docker/crontab.self-hosted \
 ### 2. Configure your environment
 
 ```bash
-cp .env.docker.example .env
+cp docker/.env.example .env
 ```
 
 Open `.env` and fill in the **required** values:
@@ -101,9 +102,10 @@ overlay from the same Accounted tag or full commit as the base Compose file:
 
 ```bash
 ACCOUNTED_REF=replace-with-the-same-tag-or-full-commit
-curl -fsSLo docker-compose.resources.yml \
-  "https://raw.githubusercontent.com/erp-mafia/accounted/${ACCOUNTED_REF}/docker-compose.resources.yml"
-docker compose -f docker-compose.yml -f docker-compose.resources.yml up -d
+mkdir -p docker
+curl -fsSLo docker/compose.resources.yml \
+  "https://raw.githubusercontent.com/erp-mafia/accounted/${ACCOUNTED_REF}/docker/compose.resources.yml"
+docker compose -f docker-compose.yml -f docker/compose.resources.yml up -d
 ```
 
 Compose only applies the files named in each invocation. Keep the resource
@@ -111,10 +113,10 @@ overlay in every later `up` command, after any other overlay. For example:
 
 ```bash
 # HTTPS with Caddy
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml -f docker-compose.resources.yml up -d
+docker compose -f docker-compose.yml -f docker/compose.caddy.yml -f docker/compose.resources.yml up -d
 
 # Local image build
-docker compose -f docker-compose.yml -f docker-compose.build.yml -f docker-compose.resources.yml up --build -d
+docker compose -f docker-compose.yml -f docker/compose.build.yml -f docker/compose.resources.yml up --build -d
 ```
 
 Do not use this overlay if Container Manager rejects either key or the Docker
@@ -146,8 +148,9 @@ NEXT_PUBLIC_APP_URL=https://gnubok.example.com
 ### 3. Download the overlay + Caddyfile
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/erp-mafia/accounted/main/docker-compose.caddy.yml
 mkdir -p docker
+curl -fsSL -o docker/compose.caddy.yml \
+  https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/compose.caddy.yml
 curl -fsSL -o docker/Caddyfile \
   https://raw.githubusercontent.com/erp-mafia/accounted/main/docker/Caddyfile
 ```
@@ -155,7 +158,7 @@ curl -fsSL -o docker/Caddyfile \
 ### 4. Start with the overlay
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+docker compose -f docker-compose.yml -f docker/compose.caddy.yml up -d
 ```
 
 Caddy obtains a cert on first boot (takes ~10 s). Visit `https://gnubok.example.com`.
@@ -252,11 +255,11 @@ If you prefer to build locally instead of pulling the pre-built image:
 # Clone the repo
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-cp .env.docker.example .env
+cp docker/.env.example .env
 # Fill in .env
 
 # Build and start
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+docker compose -f docker-compose.yml -f docker/compose.build.yml up --build -d
 ```
 
 ---

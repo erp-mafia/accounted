@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { factHistory, listLiveFacts, type FactRow } from '@/lib/arkiv/facts/store'
 import { PREDICATES, predicateDef, type FactSubjectKind } from '@/lib/arkiv/facts/predicates'
 import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT } from '@/lib/arkiv/search'
@@ -54,6 +54,10 @@ const notFound = (message: string) => coded('NOT_FOUND', message)
 
 function assertEnabled(companyId: string): void {
   if (!isArkivEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'Arkiv is not enabled for this company yet. Nothing to retry: the other tools work as usual.')
+}
+/** The brain (facts, agreements, findings, the graph) rolls out per company; the shelf tools (search, get_record, get_source) work for everyone. */
+function assertBrain(companyId: string): void {
+  if (!isArkivBrainEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'The company brain is not switched on for this company yet. The archive tools work as usual: gnubok_search_records, gnubok_get_record and gnubok_get_source read the documents and their pages.')
 }
 
 interface Deps {
@@ -479,7 +483,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const ref = parseRecordRef(args.record_ref)
         const depth = Number(args.depth ?? 1) >= 2 ? 2 : 1
         const links = await linksOf(supabase, companyId, ref)
@@ -517,7 +521,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       annotations: deps.readOnly,
       catalogVisibility: 'search',
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const subject = parseSubjectRef(args.subject_ref, companyId)
         const predicate = typeof args.predicate === 'string' && args.predicate ? args.predicate : null
         if (predicate && !PREDICATES[predicate]) throw invalid(`unknown predicate ${predicate}`)
@@ -574,7 +578,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       },
       annotations: deps.readOnly,
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const ref = parseRecordRef(String(args.record_ref ?? ''))
         if (!ref || ref.kind !== 'document') throw invalid('record_ref must be document:<uuid>')
         const question = String(args.question ?? '').trim()
@@ -644,7 +648,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         required: ['center', 'depth', 'node_count', 'link_count', 'capped', 'computed_at', 'text', 'nodes', 'links'],
       },
       async execute(args, companyId, _userId, supabase) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const ref = String(args.ref ?? '').trim()
         if (!/^[a-z_]+:[A-Za-z0-9_-]+$/.test(ref)) throw invalid('ref must look like kind:id, as in the graph')
         const depth = Math.max(1, Math.min(3, Number(args.depth ?? 1) || 1))
@@ -683,7 +687,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
         required: ['finding_id', 'status', 'note'],
       },
       async execute(args, companyId, userId, supabase) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const findingId = String(args.finding_id ?? '').trim()
         if (!UUID_RE.test(findingId)) throw invalid('finding_id must be a uuid from Accounted://arkiv/missing')
         const resolution = String(args.resolution ?? '')
@@ -818,7 +822,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       // A rare write: reached through gnubok_search_tools and the briefing, off the default catalog.
       catalogVisibility: 'search',
       async execute(args, companyId, userId, supabase, actor) {
-        assertEnabled(companyId)
+        assertBrain(companyId)
         const subject = parseSubjectRef(args.subject_ref, companyId)
         const def = predicateDef(String(args.predicate ?? ''))
         if (!def) throw invalid(`unknown predicate; use one of ${Object.keys(PREDICATES).join(', ')}`)

@@ -155,7 +155,7 @@ export default function SupplierInvoicePicker({
               onClick={() => onSelect(invoice)}
               className={cn(
                 'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
+                'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 exact && 'border-success/50 bg-success/5',
                 close && 'border-primary/30'
               )}
@@ -168,17 +168,17 @@ export default function SupplierInvoicePicker({
                       {invoice.supplier_invoice_number ?? '(utan nummer)'}
                     </span>
                     {invoice.status === 'overdue' && (
-                      <span className="text-[10px] uppercase tracking-wide text-destructive">
+                      <span className="text-[11px] uppercase tracking-wide text-destructive">
                         Förfallen
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
-                      <span className="text-[10px] uppercase tracking-wide text-attn">
+                      <span className="text-[11px] uppercase tracking-wide text-attn">
                         Delbetald
                       </span>
                     )}
                     {foreignCurrency && (
-                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
                         {invoiceCurrency}
                       </span>
                     )}
@@ -197,9 +197,9 @@ export default function SupplierInvoicePicker({
                   >
                     {formatCurrency(remaining, invoiceCurrency)}
                   </p>
-                  {exact && <p className="text-[10px] text-success">Exakt match</p>}
+                  {exact && <p className="text-[11px] text-success">Exakt match</p>}
                   {candidateSek != null && (
-                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                    <p className="text-[11px] text-muted-foreground tabular-nums">
                       ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
                     </p>
                   )}

@@ -41,7 +41,6 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
-  Loader2,
 } from 'lucide-react'
 import DimensionValueForm, {
   type DimensionValueFormInput,
@@ -736,8 +735,7 @@ function NewDimensionForm({
       </div>
 
       <div className="flex justify-end pt-2">
-        <Button type="submit" disabled={isSaving}>
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSaving}>
           {t('form_create')}
         </Button>
       </div>

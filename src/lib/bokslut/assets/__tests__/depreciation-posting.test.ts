@@ -142,7 +142,25 @@ describe('commitAnnualPostings', () => {
       ],
     })
     // The register records exactly what the voucher books.
-    expect(link).toEqual({ asset_id: 'a1', planned_depreciation: 20000 })
+    expect(link).toEqual({
+      asset_id: 'a1', planned_depreciation: 20000,
+      opening_accumulated_depreciation: 0, opening_depreciation_date: null,
+    })
+  })
+
+  it('carries the opening snapshot used by the proposal into the atomic posting', async () => {
+    listAssets.mockResolvedValue([{
+      ...makeAsset('a1', 'Maskin'),
+      opening_accumulated_depreciation: 10000,
+      opening_depreciation_date: '2026-06-30',
+    }])
+    createAssetDepreciationEntry.mockResolvedValueOnce(posted('je-1', 'sched-1'))
+    const { supabase } = makeSupabase()
+    await commitAnnualPostings(supabase, 'co', 'user-1', 'period-1')
+    expect(createAssetDepreciationEntry.mock.calls[0][4]).toMatchObject({
+      opening_accumulated_depreciation: 10000,
+      opening_depreciation_date: '2026-06-30',
+    })
   })
 
   it('skips an asset the proposal already shows as posted, without calling the engine', async () => {

@@ -3,9 +3,9 @@
 import { useState, useEffect, use } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
-  Loader2,
   CheckCircle,
   AlertCircle,
   FileText,
@@ -129,10 +129,15 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
 
   if (isLoading) {
     return (
-      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-primary mx-auto mb-4" />
-          <p className="text-muted-foreground">Laddar...</p>
+      <div className="min-h-dvh bg-frame py-12 px-4" aria-busy="true">
+        <span className="sr-only">Laddar...</span>
+        <div className="max-w-lg mx-auto space-y-6">
+          <div className="flex flex-col items-center gap-2">
+            <Skeleton className="h-7 w-56" />
+            <Skeleton className="h-4 w-32" />
+          </div>
+          <Skeleton className="h-72 w-full rounded-xl" />
+          <Skeleton className="h-44 w-full rounded-xl" />
         </div>
       </div>
     )
@@ -140,7 +145,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
 
   if (error && !invoice) {
     return (
-      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
             <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
@@ -159,7 +164,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
   // Already responded view
   if (invoice.alreadyResponded || successMessage) {
     return (
-      <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white flex items-center justify-center p-4">
+      <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
         <div className="max-w-md w-full">
           {invoice.brand && <BrandMark brand={invoice.brand} />}
           <Card className="w-full">
@@ -196,7 +201,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
   const feeDueSeparately = invoice.feeDueSeparately ?? 0
 
   return (
-    <div className="min-h-dvh bg-gradient-to-b from-slate-50 to-white py-12 px-4">
+    <div className="min-h-dvh bg-frame py-12 px-4">
       <div className="max-w-lg mx-auto">
         {/* Brand chrome (WL-13): only when the invoice's company has a brand */}
         {invoice.brand && <BrandMark brand={invoice.brand} />}
@@ -308,35 +313,33 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
           </CardHeader>
           <CardContent className="space-y-3">
             <Button
-              className="w-full justify-start h-auto py-4 px-4"
+              className="w-full justify-start h-auto px-4"
               variant="outline"
               onClick={() => handleAction('marked_paid')}
-              disabled={isSubmitting}
+              loading={isSubmitting}
             >
-              <CheckCircle className="h-5 w-5 mr-3 text-success" />
-              <div className="text-left">
+              {!isSubmitting && <CheckCircle className="h-5 w-5 mr-3 text-success" />}
+              <div className="text-left py-4">
                 <p className="font-medium">Jag har betalat</p>
                 <p className="text-sm text-muted-foreground font-normal">
                   Betalningen är redan genomförd
                 </p>
               </div>
-              {isSubmitting && <Loader2 className="h-4 w-4 ml-auto animate-spin" />}
             </Button>
 
             <Button
-              className="w-full justify-start h-auto py-4 px-4"
+              className="w-full justify-start h-auto px-4"
               variant="outline"
               onClick={() => handleAction('disputed')}
-              disabled={isSubmitting}
+              loading={isSubmitting}
             >
-              <MessageSquare className="h-5 w-5 mr-3 text-muted-foreground" />
-              <div className="text-left">
+              {!isSubmitting && <MessageSquare className="h-5 w-5 mr-3 text-muted-foreground" />}
+              <div className="text-left py-4">
                 <p className="font-medium">Kontakta avsändaren</p>
                 <p className="text-sm text-muted-foreground font-normal">
                   Jag har frågor eller invändningar
                 </p>
               </div>
-              {isSubmitting && <Loader2 className="h-4 w-4 ml-auto animate-spin" />}
             </Button>
           </CardContent>
         </Card>

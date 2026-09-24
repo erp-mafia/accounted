@@ -6,6 +6,7 @@ import { Check } from 'lucide-react'
 import { useBranding } from '@/lib/branding/brand-context'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, type AiClient } from '@/lib/onboarding/ai-clients'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
+import { Button } from '@/components/ui/button'
 
 /**
  * The Klart step's connectors: one chip per client (Claude, ChatGPT, Grok),
@@ -53,9 +54,9 @@ export function AgentChips({ connected, onConnect }: {
                 {t('ai_connected')}
               </span>
             ) : (
-              <button type="button" className="go" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
+              <Button variant="secondary" size="sm" onClick={() => connect(c.id)} aria-label={`${t('ai_connect')} ${c.name}`}>
                 {t('ai_connect')}
-              </button>
+              </Button>
             )}
           </span>
         )

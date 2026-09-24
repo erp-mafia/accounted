@@ -27,6 +27,12 @@ vi.mock('@/lib/sandbox/guard', () => ({
   guardSandbox: vi.fn().mockResolvedValue(null),
 }))
 
+// Open drafts re-derive their VAT header after a passing check.
+const mockSyncDrafts = vi.fn().mockResolvedValue(0)
+vi.mock('@/lib/invoices/sync-draft-vat-headers', () => ({
+  syncDraftVatHeadersForCustomer: (...args: unknown[]) => mockSyncDrafts(...args),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/vat/validate', () => {
@@ -184,5 +190,39 @@ describe('POST /api/vat/validate', () => {
 
     expect(status).toBe(200)
     expect(body).toMatchObject({ valid: false, error: expect.stringContaining('unavailable') })
+  })
+
+  it('re-derives the customer drafts after a passing check', async () => {
+    mockValidateVatNumber.mockResolvedValueOnce({ valid: true, vat_number: 'FR10819489626' })
+
+    const req = createMockRequest('/api/vat/validate', {
+      method: 'POST',
+      body: { vat_number: 'FR10819489626', customer_id: '550e8400-e29b-41d4-a716-446655440000' },
+    })
+
+    const res = await POST(req, { params: Promise.resolve({}) })
+    expect(res.status).toBe(200)
+    expect(mockSyncDrafts).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      '550e8400-e29b-41d4-a716-446655440000',
+    )
+  })
+
+  it('leaves drafts alone when the check fails or no customer is named', async () => {
+    mockValidateVatNumber.mockResolvedValueOnce({ valid: false, unavailable: true })
+    await POST(
+      createMockRequest('/api/vat/validate', {
+        method: 'POST',
+        body: { vat_number: 'FR10819489626', customer_id: '550e8400-e29b-41d4-a716-446655440000' },
+      }),
+      { params: Promise.resolve({}) },
+    )
+    mockValidateVatNumber.mockResolvedValueOnce({ valid: true, vat_number: 'FR10819489626' })
+    await POST(
+      createMockRequest('/api/vat/validate', { method: 'POST', body: { vat_number: 'FR10819489626' } }),
+      { params: Promise.resolve({}) },
+    )
+    expect(mockSyncDrafts).not.toHaveBeenCalled()
   })
 })

@@ -584,3 +584,118 @@ describe('dispatcher injects __keyScopes into gnubok_get_agent_briefing', () => 
     expect((event as unknown as { companyId: string }).companyId).toBe('11111111-1111-4111-8111-111111111111')
   })
 })
+
+// tools/list advertises company_id on the bridge itself, so agents send it
+// next to `tool`. It used to be dropped there and the inner tool ran on the
+// key's default company (feedback seq 561118, 694132): another company's data,
+// silently.
+describe('bridge company_id next to tool', () => {
+  const OTHER_COMPANY = '22222222-2222-4222-8222-222222222222'
+  const DEFAULT_COMPANY = '11111111-1111-4111-8111-111111111111'
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('routes the inner tool to the company named next to tool', async () => {
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_sie_import_status',
+        company_id: OTHER_COMPANY,
+        arguments: {},
+      }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_sie_import_status')
+    expect((event as unknown as { companyId: string }).companyId).toBe(OTHER_COMPANY)
+  })
+
+  it('accepts the same id in both places', async () => {
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_sie_import_status',
+        company_id: OTHER_COMPANY,
+        arguments: { company_id: OTHER_COMPANY },
+      }),
+    )
+
+    const event = await eventPromise
+    expect(event.errorKind).not.toBe('bridge_refused')
+    expect((event as unknown as { companyId: string }).companyId).toBe(OTHER_COMPANY)
+  })
+
+  it('refuses two different ids instead of picking one', async () => {
+    const eventPromise = captureNextToolCalled()
+
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_call_tool', {
+        tool: 'gnubok_sie_import_status',
+        company_id: OTHER_COMPANY,
+        arguments: { company_id: DEFAULT_COMPANY },
+      }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toMatch(/company_id is given twice/)
+    const event = await eventPromise
+    expect(event.errorKind).toBe('bridge_refused')
+  })
+
+  it('carries company_id through gnubok_stage_tool too', async () => {
+    keyWithScopes(['payroll:write'])
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', {
+        tool: 'gnubok_log_mileage_trip',
+        company_id: OTHER_COMPANY,
+        arguments: MILEAGE_TRIP_ARGS,
+      }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect((event as unknown as { companyId: string }).companyId).toBe(OTHER_COMPANY)
+  })
+})
+
+// Guessed names from prod telemetry (82 unknown_tool calls, 22 companies, 30
+// days): the answer names the real tool first, with how to reach it.
+describe('unknown tool: did you mean', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  async function unknownToolMessage(name: string): Promise<string> {
+    const response = await handleMcpRequest(mcpToolCall(name))
+    const json = (await response.json()) as { error?: { message?: string } }
+    return json.error?.message ?? ''
+  }
+
+  it('suggests the real read tool for a guessed get/list name', async () => {
+    keyWithScopes(['reports:read', 'bookkeeping:read', 'transactions:read', 'companies:read'])
+    const message = await unknownToolMessage('gnubok_get_chart_of_accounts')
+    expect(message).toMatch(/Did you mean: [^?]*gnubok_list_accounts/)
+  })
+
+  it('names the bridge for a search-only suggestion', async () => {
+    keyWithScopes(['reports:read', 'bookkeeping:read', 'transactions:read', 'companies:read'])
+    const message = await unknownToolMessage('gnubok_list_bank_accounts')
+    expect(message).toMatch(/gnubok_list_cash_accounts( \(via gnubok_call_tool\))?/)
+  })
+
+  it('never suggests a tool the key cannot call', async () => {
+    keyWithScopes([])
+    const message = await unknownToolMessage('gnubok_get_chart_of_accounts')
+    expect(message).not.toMatch(/Did you mean: [^?]*gnubok_list_accounts/)
+    expect(message).toContain('gnubok_search_tools')
+  })
+})

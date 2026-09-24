@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { Check, ChevronDown } from 'lucide-react'
 
 export interface ContextPickerItem {
@@ -119,7 +120,11 @@ export function ContextPicker({
             // click in it from dismissing the dialog, and pointer-events-auto
             // undoes the modal body lock that would swallow item clicks.
             data-dialog-companion=""
-            className="pointer-events-auto fixed z-[60] min-w-[220px] max-w-[320px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            className={cn(
+              'pointer-events-auto fixed z-[60] min-w-[220px] max-w-[320px] py-1',
+              POPOVER_SURFACE_CLASS,
+              POPOVER_ENTER_CLASS,
+            )}
             style={{ top: pos.top, left: pos.left }}
           >
             <div className="max-h-72 overflow-y-auto px-1">

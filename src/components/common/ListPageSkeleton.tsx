@@ -24,7 +24,7 @@ export function ListPageSkeleton({ rows = 6, toolbar = true }: { rows?: number; 
           <Skeleton className="ml-auto h-3 w-14" />
         </div>
         {Array.from({ length: rows }, (_, i) => (
-          <div key={i} className="flex items-center justify-between gap-4 border-b border-border/60 py-3.5 last:border-b-0">
+          <div key={i} className="flex items-center justify-between gap-4 border-b border-border py-3.5 last:border-b-0">
             <Skeleton className="h-4 w-48" />
             <div className="flex items-center gap-6">
               <Skeleton className="h-4 w-20" />

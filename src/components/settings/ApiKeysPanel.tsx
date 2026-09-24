@@ -3,6 +3,7 @@
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
@@ -24,7 +25,7 @@ import {
   SettingsReveal,
 } from '@/components/settings/SettingsRows'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Loader2, Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight } from 'lucide-react'
+import { Plus, Copy, Check, Trash2, Key, ChevronDown, AlertTriangle, ArrowUpRight } from 'lucide-react'
 import { cn, formatDateLong } from '@/lib/utils'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 import { getBranding } from '@/lib/branding/service'
@@ -90,9 +91,9 @@ function CopyBlock({ text, copyAriaLabel }: { text: string; copyAriaLabel: strin
       </pre>
       <Button
         variant="outline"
-        size="sm"
+        size="icon-sm"
         className={cn(
-          'absolute right-1.5 top-1.5 h-7 w-7 p-0 transition-opacity focus-visible:opacity-100',
+          'absolute right-1.5 top-1.5 transition-opacity focus-visible:opacity-100',
           state === 'failed' ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
         )}
         onClick={handleCopy}
@@ -147,7 +148,7 @@ function ScopeCard({
           className="shrink-0"
         />
         <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
-        <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {tools > 0 ? t('tools_count', { count: tools }) : t('rest_badge')}
         </span>
       </div>
@@ -551,8 +552,10 @@ export function ApiKeysPanel() {
         </div>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         ) : keys.length === 0 ? (
           <EmptyState
@@ -578,7 +581,7 @@ export function ApiKeysPanel() {
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm">{key.name}</span>
                     {key.mode === 'test' && (
-                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px] font-normal">
+                      <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[11px] font-normal">
                         {t('badge_test')}
                       </Badge>
                     )}
@@ -598,8 +601,8 @@ export function ApiKeysPanel() {
                 </div>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground hover:text-destructive"
                   onClick={() => handleRevoke(key.id, key.name)}
                   aria-label={t('revoke_aria', { name: key.name })}
                 >
@@ -704,8 +707,7 @@ export function ApiKeysPanel() {
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
               {t('cancel')}
             </Button>
-            <Button onClick={handleCreate} disabled={isCreating || newKeyScopes.size === 0}>
-              {isCreating && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+            <Button onClick={handleCreate} disabled={newKeyScopes.size === 0} loading={isCreating}>
               {t('create')}
             </Button>
           </DialogFooter>

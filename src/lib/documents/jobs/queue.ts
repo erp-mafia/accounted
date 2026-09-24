@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { arkivRollout, isArkivEnabled } from '@/lib/arkiv/flag'
+import { arkivBrainRollout, isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
@@ -45,9 +45,9 @@ export async function enqueueDocumentJob(supabase: SupabaseClient, companyId: st
   return data === true
 }
 
-/** Queue extract jobs for admitted documents in the rollout that never had one. Returns how many were queued. */
+/** Queue extract jobs for admitted documents of the brain rollout that never had one. Returns how many were queued. */
 export async function enqueueMissingExtractions(supabase: SupabaseClient, limit: number): Promise<number> {
-  const rollout = arkivRollout()
+  const rollout = arkivBrainRollout()
   if (rollout !== 'all' && rollout.length === 0) return 0
   const { data, error } = await supabase.rpc('enqueue_missing_document_extractions', {
     p_company_ids: rollout === 'all' ? null : rollout,
@@ -153,7 +153,7 @@ async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<strin
   if (out.status === 'skipped') return `skipped: ${out.reason}`
   if (isArkivEnabled(job.company_id)) {
     if (!doc.doc_type) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
-    else if (finishing && doc.admission_state === 'admitted') await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+    else if (finishing && doc.admission_state === 'admitted' && isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   }
   return `read ${out.pages} pages (${out.reader}, ${plan.lane})${out.partial ? `, partial: ${out.partial}` : ''}`
 }
@@ -172,13 +172,14 @@ async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities
       await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'read')
       return `classified ${out.classification.doc_type} (${out.admission}), reading the rest`
     }
-    await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+    // The brain reads the record out of the document; the shelf stops at the type.
+    if (isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   }
   return `classified ${out.classification.doc_type} (${out.admission})`
 }
 
 async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities: Map<string, CompanyIdentity>): Promise<string> {
-  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
+  if (!isArkivBrainEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await extractDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
@@ -188,7 +189,7 @@ async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities:
 }
 
 async function runDerive(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
-  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
+  if (!isArkivBrainEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await deriveDocument(supabase, job.document_id)
   if (out.status === 'error') throw new Error(out.reason)
   const facts = await recordFactsForDocument(supabase, job.document_id)

@@ -181,6 +181,18 @@ describe('normalizeBokioAccessToken', () => {
     expect(normalizeBokioAccessToken(input)).toBe(expected);
   });
 
+  it('strips a NUL and other control characters from every string in the response body', async () => {
+    // A NUL inside an invoice number made Postgres reject the insert, so the
+    // invoice silently went missing from the import (2026-09-23).
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json({ items: [{ invoiceNumber: 'B00CEDB7-00\u000002', note: 'rad 1\nrad 2\u0007' }] }),
+    );
+
+    const result = await new BokioClient().get<{ items: { invoiceNumber: string; note: string }[] }>('t', '/x');
+
+    expect(result.items[0]).toEqual({ invoiceNumber: 'B00CEDB7-0002', note: 'rad 1\nrad 2' });
+  });
+
   it('does not remove internal token characters', () => {
     expect(normalizeBokioAccessToken('token with spaces')).toBe('token with spaces');
   });

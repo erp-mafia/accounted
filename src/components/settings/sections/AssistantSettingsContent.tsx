@@ -8,7 +8,6 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
-import { AgentSkillsPanel } from '@/components/settings/AgentSkillsPanel'
 import { AgentKnowledgePanel } from '@/components/agent-knowledge/AgentKnowledgePanel'
 import {
   SettingsGroup,
@@ -28,7 +27,7 @@ type View = 'knowledge' | 'memory' | 'skills'
 const VIEW_ROUTE: Record<View, string> = {
   knowledge: '/settings/assistant',
   memory: '/settings/assistant?view=memory',
-  skills: '/settings/assistant?view=skills',
+  skills: '/skills',
 }
 
 const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
@@ -44,6 +43,7 @@ export function AssistantSettingsContent() {
   const router = useRouter()
   const raw = searchParams.get('view')
   const view: View = raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : 'knowledge'
+  useEffect(() => { if (view === 'skills') router.replace('/skills') }, [view, router])
 
   function setView(next: View) {
     // 'knowledge' is the default: keep its URL clean (no query string).
@@ -64,7 +64,6 @@ export function AssistantSettingsContent() {
       <div className="mt-6">
         {view === 'knowledge' && <AgentKnowledgePanel />}
         {view === 'memory' && <AgentMemoryPanel />}
-        {view === 'skills' && <AgentSkillsPanel />}
       </div>
 
       <FabVisibilityRow />

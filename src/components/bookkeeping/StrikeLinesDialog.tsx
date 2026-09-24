@@ -333,8 +333,8 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
                   </div>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 min-h-[44px] min-w-[44px] sm:order-last"
+                    size="icon-sm"
+                    className="sm:order-last"
                     onClick={() => removeNewLine(index)}
                   >
                     <Trash2 className="h-4 w-4" />

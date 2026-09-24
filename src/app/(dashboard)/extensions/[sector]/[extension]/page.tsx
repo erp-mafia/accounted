@@ -14,6 +14,7 @@ import CategoryBadge from '@/components/extensions/CategoryBadge'
 import { WORKSPACES } from '@/lib/extensions/_generated/workspace-map'
 import { Button } from '@/components/ui/button'
 import Link from 'next/link'
+import { PageHeader } from '@/components/ui/page-header'
 
 export default async function ExtensionDetailPage({
   params,
@@ -57,6 +58,19 @@ export default async function ExtensionDetailPage({
 
   return (
     <div>
+      <PageHeader
+        title={extensionName}
+        action={
+          hasWorkspace ? (
+            <Button asChild>
+              <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
+                {t('open')}
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      />
+
       {/* Breadcrumb */}
       <nav className="flex items-center gap-1.5 text-sm text-muted-foreground mb-6">
         <Link href="/extensions" className="hover:text-foreground transition-colors">
@@ -74,26 +88,16 @@ export default async function ExtensionDetailPage({
       </nav>
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4 mb-8">
-        <div className="flex items-start gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
-            <Icon className="h-6 w-6 text-foreground" />
-          </div>
-          <div>
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{extensionName}</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">{extensionDescription}</p>
-            <div className="mt-2">
-              <CategoryBadge category={definition.category} />
-            </div>
+      <div className="flex items-start gap-4 mb-8">
+        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-secondary flex-shrink-0">
+          <Icon className="h-6 w-6 text-foreground" />
+        </div>
+        <div>
+          <p className="text-sm text-muted-foreground">{extensionDescription}</p>
+          <div className="mt-2">
+            <CategoryBadge category={definition.category} />
           </div>
         </div>
-        {hasWorkspace && (
-          <Button asChild>
-            <Link href={`/e/${sectorSlug}/${extensionSlug}`}>
-              {t('open')}
-            </Link>
-          </Button>
-        )}
       </div>
 
       {/* Details */}

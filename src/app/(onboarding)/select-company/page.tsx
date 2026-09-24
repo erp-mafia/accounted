@@ -7,6 +7,7 @@ import {
 } from '@/lib/company/pending-invites'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import BankIdCompanyPicker from '@/components/onboarding/BankIdCompanyPicker'
+import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
 
 export const dynamic = 'force-dynamic'
 
@@ -100,9 +101,12 @@ export default async function SelectCompanyPage({
     .map((m) => (Array.isArray(m.company) ? m.company[0] ?? null : m.company))
     .filter((c): c is CompanyRow => !!c && !c.archived_at)
 
+  // Both sides keyed the same way: a sole trader's CompanyRoles entry is the
+  // 16-digit TIC registration number, the stored firm the 10-digit
+  // personnummer, and only the shared key sees them as one company.
   const memberOrgNumbers = new Set(
     memberCompanies
-      .map((c) => (c.org_number ? c.org_number.replace(/[\s-]/g, '') : null))
+      .map((c) => orgNumberKey(c.org_number))
       .filter((n): n is string => !!n),
   )
 
@@ -142,7 +146,10 @@ export default async function SelectCompanyPage({
 
   // Drop roles for companies the user already belongs to: those are added.
   const rolesNotAlreadyMine = activeRoles.filter(
-    (r) => !memberOrgNumbers.has(r.companyRegistrationNumber.replace(/[\s-]/g, '')),
+    (r) => {
+      const key = registrationNumberKey(r.companyRegistrationNumber)
+      return !key || !memberOrgNumbers.has(key)
+    },
   )
 
   // Other accounts can independently use the same organisation number.

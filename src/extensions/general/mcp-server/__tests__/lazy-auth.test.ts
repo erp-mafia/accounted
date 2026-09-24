@@ -34,6 +34,7 @@ vi.mock('../skills', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../skills')>()
   return {
     ...actual,
+    findSkill: vi.fn().mockResolvedValue({ slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private', summary: 'Company instructions', body: 'Private workflow', tier: 'own', tags: ['own'] }),
     loadAllSkills: vi.fn().mockResolvedValue([
       {
         slug: 'month-end-close',
@@ -49,6 +50,7 @@ vi.mock('../skills', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { findSkill } from '../skills'
 
 const ENDPOINT = 'http://localhost:3000/api/extensions/ext/mcp-server/mcp'
 
@@ -166,6 +168,38 @@ describe('MCP lazy authentication', () => {
     expect(response.headers.get('WWW-Authenticate')).toMatch(
       /^Bearer resource_metadata="http:\/\/localhost:3000\/\.well-known\/oauth-protected-resource"$/
     )
+  })
+
+  it.each([
+    ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['accounted_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['gnubok_get_task', { kind: 'bookkeep' }],
+    ['accounted_get_task', { kind: 'bookkeep' }],
+  ])('requires a tenant before calling %s', async (name, args) => {
+    const response = await handleMcpRequest(rpc('tools/call', { name, arguments: args }))
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).toContain('resource_metadata')
+  })
+
+  it.each([
+    ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', _keyScopes: ['agent:read'] }],
+    ['gnubok_get_task', { kind: 'bookkeep' }],
+  ])('requires agent:read for %s even from a valid key', async (name, args) => {
+    const response = await handleMcpRequest(rpc('tools/call', { name, arguments: args }, { token: 'test-token' }))
+    const result = (await response.json()).result
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toContain('agent:read')
+    expect(findSkill).not.toHaveBeenCalled()
+  })
+
+  it('loads private instructions through an authorized tenant key', async () => {
+    mocks.validateApiKey.mockResolvedValue({ userId: 'user-1', companyId: '11111111-1111-4111-8111-111111111111', scopes: ['agent:read'], apiKeyId: 'key-1', apiKeyName: 'Test key', mode: 'live' })
+    const slug = 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const response = await handleMcpRequest(rpc('tools/call', { name: 'accounted_load_skill', arguments: { slug } }, { token: 'test-token' }))
+    const result = (await response.json()).result
+    expect(result.isError).not.toBe(true)
+    expect(result.content[0].text).toContain('Private workflow')
+    expect(findSkill).toHaveBeenCalledWith(slug, expect.anything(), '11111111-1111-4111-8111-111111111111')
   })
 
   it('names the metadata document on the host the client called', async () => {

@@ -153,6 +153,12 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock, inser
   })
 
   const supabase = {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        updateSpy(name === 'persist_bank_sync_result'
+          ? { p_completed_at: args.p_completed_at, p_accounts: args.p_accounts, p_session_id: args.p_session_id }
+          : { p_status: args.p_status, p_message: args.p_message, p_session_id: args.p_session_id })
+        return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
+      }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }),
     },
@@ -215,7 +221,7 @@ describe('POST /sync (enable-banking): dead session reconnect', () => {
     // The connection must be marked 'expired' so the UI surfaces the reconnect
     // affordance instead of looping on the dead session.
     expect(updateSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ status: 'expired' })
+      expect.objectContaining({ p_status: 'expired' })
     )
   })
 })

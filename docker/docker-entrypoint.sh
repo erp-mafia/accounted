@@ -11,7 +11,7 @@ for var in NEXT_PUBLIC_SUPABASE_URL NEXT_PUBLIC_SUPABASE_ANON_KEY SUPABASE_SERVI
 done
 
 if [ -n "$missing" ]; then
-  printf "ERROR: Missing required environment variables:\n%b\nSee .env.docker.example for reference.\n" "$missing" >&2
+  printf "ERROR: Missing required environment variables:\n%b\nSee docker/.env.example for reference.\n" "$missing" >&2
   exit 1
 fi
 

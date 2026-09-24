@@ -345,7 +345,6 @@ export default function AccountMappingStep({
               <Button
                 variant="outline"
                 size="sm"
-                className="h-8"
                 onClick={() => fileInputRef.current?.click()}
               >
                 {/* Keyed to the same thing as the line beside it: a file
@@ -648,8 +647,7 @@ export default function AccountMappingStep({
                             <Button
                               type="button"
                               variant="outline"
-                              size="icon"
-                              className="h-11 w-11 sm:h-8 sm:w-8"
+                              size="icon-sm"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
                               onClick={() => onVatTreatmentChange(
                                 mapping.sourceAccount,
@@ -711,21 +709,20 @@ export default function AccountMappingStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           Tillbaka
         </Button>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
           {stats.vatReview > 0 && stats.unmapped === 0 && (
             <Button
               variant="outline"
-              className="min-h-11"
               onClick={onConfirmAllVatTreatments}
             >
               <CheckCircle className="mr-2 h-4 w-4" />
               {t('vat_review_confirm_all', { count: stats.vatReview })}
             </Button>
           )}
-          <Button className="min-h-11" onClick={onContinue} disabled={!canContinue}>
+          <Button onClick={onContinue} disabled={!canContinue}>
             {canContinue
               ? 'Fortsätt till granskning'
               : stats.unmapped > 0
@@ -809,7 +806,7 @@ function ConfidenceBadge({
   }
 
   if (confidence >= 0.9) {
-    return <Badge variant="success">Exakt</Badge>
+    return <span className="text-xs text-muted-foreground">Exakt</span>
   }
 
   if (confidence >= 0.7) {

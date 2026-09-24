@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import {
   DIMENSION_CODE_PATTERN,
   PROJECT_DIM_NO,
@@ -201,8 +201,7 @@ export default function DimensionValueForm({
         ) : (
           <span />
         )}
-        <Button type="submit" disabled={isSaving}>
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSaving}>
           {isEditing ? t('form_save') : t('form_create')}
         </Button>
       </div>

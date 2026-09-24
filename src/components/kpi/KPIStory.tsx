@@ -151,7 +151,7 @@ function ResultBarsPane({ report }: { report: KPIReport }) {
           )
         })}
       </svg>
-      <div className="mt-1 flex justify-between px-1 text-[10.5px] text-muted-foreground">
+      <div className="mt-1 flex justify-between px-1 text-[11px] text-muted-foreground">
         {months.map((m) => (
           <span key={m.label}>{m.label}</span>
         ))}
@@ -378,7 +378,7 @@ function BreakdownRow({
 }) {
   const width = max > 0 ? Math.max(3, Math.round((amount / max) * 96)) : 3
   return (
-    <div className="flex items-center gap-3 border-b border-border/60 py-3 text-[13px] last:border-b-0">
+    <div className="flex items-center gap-3 border-b border-border py-3 text-[13px] last:border-b-0">
       {prefix && (
         <span className="w-8 shrink-0 font-mono text-[11px] text-muted-foreground">{prefix}</span>
       )}

@@ -1,13 +1,14 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Copy, Link2, Loader2 } from 'lucide-react'
+import { Copy, Link2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import { Skeleton } from '@/components/ui/skeleton'
 import JournalEntryForm, { type FormLine } from '@/components/bookkeeping/JournalEntryForm'
 
 export interface CopyPrefill {
@@ -84,9 +85,11 @@ export default function NewJournalEntryDialog({
         </DialogHeader>
 
         {isLoading ? (
-          <div className="flex items-center justify-center gap-2 py-12 text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">{t('loading_source_voucher')}</span>
+          <div className="space-y-3 py-4" aria-busy="true" aria-label={t('loading_source_voucher')}>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-2/3" />
           </div>
         ) : (
           <>

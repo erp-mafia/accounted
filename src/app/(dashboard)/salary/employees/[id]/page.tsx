@@ -336,7 +336,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 variant="ghost"
                 size="sm"
                 onClick={openEdit}
-                className="min-h-10 text-muted-foreground hover:text-foreground"
+                className="text-muted-foreground hover:text-foreground"
               >
                 {t('detail_edit')}
               </Button>
@@ -345,7 +345,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 size="sm"
                 onClick={handleDeactivate}
                 disabled={deactivating}
-                className="min-h-10 text-muted-foreground hover:text-destructive"
+                className="text-muted-foreground hover:text-destructive"
               >
                 {t('detail_deactivate')}
               </Button>

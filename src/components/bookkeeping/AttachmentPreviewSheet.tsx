@@ -7,7 +7,6 @@ import {
   ExternalLink,
   FileText,
   ImageIcon,
-  Loader2,
   Lock,
   Paperclip,
   RefreshCw,
@@ -282,23 +281,17 @@ export default function AttachmentPreviewSheet({
                     <div className="flex shrink-0 items-center gap-1">
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0"
+                        size="icon-sm"
                         onClick={() => handleOpenReplacePicker(doc.id)}
-                        disabled={isReplacing}
+                        loading={isReplacing}
                         title={t('replace')}
                         aria-label={t('replace')}
                       >
-                        {isReplacing ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <RefreshCw className="h-3.5 w-3.5" />
-                        )}
+                        {!isReplacing && <RefreshCw className="h-3.5 w-3.5" />}
                       </Button>
                       <Button
                         variant="ghost"
-                        size="sm"
-                        className="h-8 w-8 p-0"
+                        size="icon-sm"
                         onClick={() => setBlockedDoc(doc)}
                         title={t('remove')}
                         aria-label={t('remove')}
@@ -330,13 +323,10 @@ export default function AttachmentPreviewSheet({
                       </div>
                       <Button
                         onClick={() => handleOpenReplacePicker(doc.id)}
-                        disabled={isReplacing}
+                        loading={isReplacing}
                       >
                         {isReplacing ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            {tj('replace_uploading')}
-                          </>
+                          tj('replace_uploading')
                         ) : (
                           t('corrupt_replace_cta')
                         )}
@@ -445,13 +435,10 @@ export default function AttachmentPreviewSheet({
                 onClick={() => {
                   if (blockedDoc) handleOpenReplacePicker(blockedDoc.id)
                 }}
-                disabled={blockedDoc !== null && replacingDocId === blockedDoc.id}
+                loading={blockedDoc !== null && replacingDocId === blockedDoc.id}
               >
                 {blockedDoc !== null && replacingDocId === blockedDoc.id ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {tj('replace_uploading')}
-                  </>
+                  tj('replace_uploading')
                 ) : (
                   tj('remove_blocked_replace_cta')
                 )}

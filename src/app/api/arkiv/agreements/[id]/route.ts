@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
@@ -92,7 +92,7 @@ function deadlinePage(sources: Record<string, { page: number | null }>, sourceKe
 }
 
 export const GET = withRouteContext('arkiv.agreement', async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const { data, error } = await ctx.supabase
     .from('agreements')

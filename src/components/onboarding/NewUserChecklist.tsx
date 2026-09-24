@@ -237,7 +237,7 @@ export default function NewUserChecklist({
         <div
           role="status"
           className={cn(
-            'flex flex-col items-center py-4 text-center transition-opacity duration-500',
+            'flex flex-col items-center py-4 text-center transition-opacity duration-300',
             retiring === 'closing' ? 'opacity-0' : 'opacity-100',
           )}
         >

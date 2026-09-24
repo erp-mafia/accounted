@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { ArrowLeft, Calculator, Loader2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -64,14 +65,15 @@ const LINE_ITEM_TYPE_KEYS: Record<SalaryLineItemType, string> = {
 
 // Same chip vocabulary as the Löner list and the run header (chips mark
 // exceptions): booked renders as muted text, everything else as a chip.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+// paid and booked are the normal outcome, so they render as muted text
+// (MUTED_STATUSES) and never reach the chip.
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
   draft: 'secondary',
   review: 'secondary',
   approved: 'secondary',
-  paid: 'success',
-  booked: 'success',
   corrected: 'outline',
 }
+const MUTED_STATUSES = new Set(['paid', 'booked'])
 
 /** A line as the detail route returns it: the source columns say where it came from. */
 type LineRow = SalaryLineItem & {
@@ -220,8 +222,14 @@ export default function SalaryRunEmployeeDetailPage({
   // selection, the scroll position and any open dialog with it.
   if (!current && loading) {
     return (
-      <div className="flex items-center justify-center py-12 text-muted-foreground">
-        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> {t('loading')}
+      <div role="status" aria-label={t('loading')} className="space-y-8">
+        <Skeleton className="h-8 w-64" />
+        <div className="flex flex-wrap gap-x-10 gap-y-4">
+          {[1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} className="h-10 w-28" />
+          ))}
+        </div>
+        <Skeleton className="h-64 w-full rounded-lg" />
       </div>
     )
   }
@@ -277,26 +285,26 @@ export default function SalaryRunEmployeeDetailPage({
 
   return (
     <div className="space-y-8 stagger-enter" aria-busy={loading}>
-      {/* Back link on its own quiet row */}
-      <div>
-        <Link
-          href={`/salary/runs/${runId}`}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back_to_run')}
-        </Link>
-      </div>
-
-      {/* Header: serif name with the run's status as the one status element,
-          a quiet meta line, and the next step on the right. */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
+      {/* Header: the page-header hooks turn it into the top bar (convention
+          2), like the run and employee pages. The way back to the run is a
+          quiet arrow before the name instead of a row of its own; the run's
+          status is the one status element, the meta line stays inline, and
+          the next step sits on the right. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">
+            <Link
+              href={`/salary/runs/${runId}`}
+              aria-label={t('back_to_run')}
+              title={t('back_to_run')}
+              className="inline-flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </Link>
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
             </h1>
-            {run.status === 'booked' ? (
+            {MUTED_STATUSES.has(run.status) ? (
               <span className="text-sm text-muted-foreground">{statusLabel}</span>
             ) : (
               <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>{statusLabel}</Badge>
@@ -305,7 +313,7 @@ export default function SalaryRunEmployeeDetailPage({
               <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="page-header-meta mt-1 text-sm text-muted-foreground">
             <span className="tabular-nums">{employee.personnummer_masked}</span>
             {' · '}
             <span className="tabular-nums">{t('payslip_period', { period: periodLabel })}</span>
@@ -323,27 +331,24 @@ export default function SalaryRunEmployeeDetailPage({
               </>
             )}
           </p>
-          {/* A failed reload or recalculation is said here, with the payslip
-              still on screen, instead of replacing the page. */}
-          {error && (
-            <p className="mt-2 text-sm text-destructive" role="alert">
-              {error}
-            </p>
-          )}
         </div>
         {run.status === 'draft' && (
-          <div className="flex shrink-0 items-center gap-2">
-            <Button onClick={handleCalculate} disabled={calculating}>
-              {calculating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Calculator className="mr-2 h-4 w-4" />
-              )}
+          <div className="page-header-action flex shrink-0 items-center gap-2">
+            <Button onClick={handleCalculate} loading={calculating}>
+              {!calculating && <Calculator className="mr-2 h-4 w-4" />}
               {t('calculate')}
             </Button>
           </div>
         )}
       </div>
+
+      {/* A failed reload or recalculation is said under the bar, with the
+          payslip still on screen, instead of replacing the page. */}
+      {error && (
+        <p className="text-sm text-destructive" role="alert">
+          {error}
+        </p>
+      )}
 
       {/* Summary: flat label/number pairs, no tiles. The override is the
           exception, so it is a chip next to the label. */}
@@ -469,18 +474,14 @@ export default function SalaryRunEmployeeDetailPage({
                         {isRemovableLine(li) && (
                           <Button
                             variant="ghost"
-                            size="icon"
-                            className={cn('-my-1 h-8 w-8 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
+                            size="icon-sm"
+                            className={cn('-my-1 text-muted-foreground hover:text-foreground', HOVER_REVEAL_CLASS)}
                             onClick={() => handleRemoveLine(li.id)}
-                            disabled={removingLineId === li.id}
+                            loading={removingLineId === li.id}
                             aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
                             title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
                           >
-                            {removingLineId === li.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <X className="h-4 w-4" />
-                            )}
+                            {removingLineId !== li.id && <X className="h-4 w-4" />}
                           </Button>
                         )}
                       </td>

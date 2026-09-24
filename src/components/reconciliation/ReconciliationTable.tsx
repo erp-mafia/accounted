@@ -3,7 +3,7 @@
 import { Fragment, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
 import { AccountLogo } from './ReconciliationRail'
@@ -56,12 +56,14 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
       >
         <td className={cn(TD_CLASS, '!pl-0')}>
           <button type="button" onClick={() => onSelect(a.account_key)} className="flex items-center gap-3 text-left">
-            <AccountLogo account={a} className="h-7 w-7 text-[10px]" />
-            <span className="min-w-0">
-              <span className="block truncate font-medium" data-ph-mask>
+            <AccountLogo account={a} className="h-7 w-7 text-[11px]" />
+            {/* One line (convention 4): number, currency and the
+                superseded marker ride muted beside the name. */}
+            <span className="flex min-w-0 items-baseline gap-2">
+              <span className="truncate font-medium" data-ph-mask>
                 {a.name}
               </span>
-              <span className="block truncate text-xs text-muted-foreground">
+              <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                 <span data-ph-mask>{a.account_number}</span>
                 {a.currency !== 'SEK' ? ` · ${a.currency}` : ''}
                 {a.superseded_by ? ` · ${t('rail_superseded')}` : ''}
@@ -98,7 +100,14 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
           {a.signed_off_through ? formatDate(a.signed_off_through) : t('v2_never')}
         </td>
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right !pr-0')}>
-          <Button size="sm" variant="outline" className="h-7 px-3.5 text-xs" onClick={() => onSelect(a.account_key)}>
+          {/* The name and the open-rows count open the same flow, so the
+              button waits for the hover instead of repeating on every row. */}
+          <Button
+            size="sm"
+            variant="outline"
+            className={HOVER_REVEAL_CLASS}
+            onClick={() => onSelect(a.account_key)}
+          >
             {t('v2_reconcile')}
           </Button>
         </td>
@@ -136,7 +145,7 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
                       <button
                         type="button"
                         onClick={() => setManualOpen((v) => !v)}
-                        className="normal-case tracking-normal text-[12px] font-normal text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                        className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
                       >
                         {manualOpen ? t('v2_hide_manual') : t('v2_show_manual', { count: manual.length })}
                       </button>
@@ -149,7 +158,6 @@ export function ReconciliationTable({ accounts, onSelect, footer }: Reconciliati
           </tbody>
         </table>
       </div>
-      <p className="mt-3 max-w-[70ch] text-[12.5px] text-muted-foreground">{t('v2_note')}</p>
       {footer}
     </div>
   )

@@ -48,8 +48,8 @@ const OPTS = { prefix: 'test', identifier: 'ip:1', maxRequests: 5, windowMs: 60_
 describe('checkRateLimit', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubEnv('UPSTASH_REDIS_REST_URL', '')
-    vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', '')
+    for (const name of ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'KV_REST_API_URL', 'KV_REST_API_TOKEN',
+      'UPSTASH_STORAGE_KV_REST_API_URL', 'UPSTASH_STORAGE_KV_REST_API_TOKEN']) vi.stubEnv(name, '')
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
     vi.stubEnv('NODE_ENV', 'production')
   })
@@ -99,6 +99,49 @@ describe('checkRateLimit', () => {
 
       vi.stubEnv('UPSTASH_REDIS_REST_TOKEN', 'tok')
       expect(isRateLimiterConfigured()).toBe(true)
+    })
+  })
+
+  // The Vercel Marketplace integration names the pair KV_REST_API_* under an
+  // install-time prefix; the hosted project got UPSTASH_STORAGE_ (2026-09-23)
+  // and the limiter kept failing open because only UPSTASH_REDIS_REST_* was read.
+  describe('credential names', () => {
+    it('uses the Marketplace pair with the UPSTASH_STORAGE_ prefix', async () => {
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_URL', 'https://eu.upstash.example')
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_TOKEN', 'storage-tok')
+      const { isRateLimiterConfigured, checkRateLimit } = await loadModule()
+      mocks.limit.mockResolvedValue({ success: true, reset: Date.now() + 1000, limit: 5, remaining: 4 })
+
+      expect(isRateLimiterConfigured()).toBe(true)
+      expect(await checkRateLimit(OPTS)).toEqual({ ok: true })
+      expect(mocks.redisCtor).toHaveBeenCalledWith({ url: 'https://eu.upstash.example', token: 'storage-tok' })
+      expect(mocks.logError).not.toHaveBeenCalled()
+    })
+
+    it('uses the unprefixed Marketplace pair', async () => {
+      vi.stubEnv('KV_REST_API_URL', 'https://kv.example')
+      vi.stubEnv('KV_REST_API_TOKEN', 'kv-tok')
+      const { isRateLimiterConfigured } = await loadModule()
+      expect(isRateLimiterConfigured()).toBe(true)
+    })
+
+    it('prefers UPSTASH_REDIS_REST_* and never mixes a URL with another pair\'s token', async () => {
+      vi.stubEnv('UPSTASH_REDIS_REST_URL', 'https://explicit.example')
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_URL', 'https://eu.upstash.example')
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_TOKEN', 'storage-tok')
+      const { checkRateLimit } = await loadModule()
+      mocks.limit.mockResolvedValue({ success: true, reset: Date.now() + 1000, limit: 5, remaining: 4 })
+
+      await checkRateLimit(OPTS)
+      // The explicit URL has no token, so the complete Marketplace pair is used as a whole.
+      expect(mocks.redisCtor).toHaveBeenCalledWith({ url: 'https://eu.upstash.example', token: 'storage-tok' })
+    })
+
+    it('ignores the read-only token: a limiter must write', async () => {
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_URL', 'https://eu.upstash.example')
+      vi.stubEnv('UPSTASH_STORAGE_KV_REST_API_READ_ONLY_TOKEN', 'ro-tok')
+      const { isRateLimiterConfigured } = await loadModule()
+      expect(isRateLimiterConfigured()).toBe(false)
     })
   })
 

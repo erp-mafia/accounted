@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { rememberCreateMode } from '@/lib/ui-state/client'
 import { Check, ChevronDown, Loader2, type LucideIcon } from 'lucide-react'
@@ -118,16 +119,12 @@ export function SplitButton({
       <Button
         variant={variant}
         className="rounded-r-none"
-        disabled={active.disabled || active.busy}
-        aria-busy={active.busy || undefined}
+        disabled={active.disabled}
+        loading={active.busy}
         title={active.disabled ? active.disabledTitle : undefined}
         onClick={() => runOption(active)}
       >
-        {active.busy ? (
-          <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
-        ) : (
-          active.icon && <active.icon className="mr-1.5 h-4 w-4" />
-        )}
+        {!active.busy && active.icon && <active.icon className="mr-1.5 h-4 w-4" />}
         {active.busy ? (active.busyLabel ?? active.label) : active.label}
       </Button>
       <Button
@@ -152,7 +149,7 @@ export function SplitButton({
           <div
             ref={menuRef}
             role="menu"
-            className="fixed z-[60] min-w-[240px] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-top-1 duration-150"
+            className={cn('fixed z-[60] min-w-[240px] py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
             <div className="px-1">

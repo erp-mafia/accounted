@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
+import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { ENTITY_TYPE_LABELS_SV } from '@/lib/company/entity-type'
@@ -153,9 +154,11 @@ export default function BankIdCompanyPicker({
       </div>
 
       <div className="mt-6 text-center">
-        <Link href="/onboarding" className="jny-btn-quiet" style={{ textDecoration: 'none' }}>
-          {t('add_company_manually')} &hellip;
-        </Link>
+        <Button asChild variant="ghost" size="sm" className="text-muted-foreground">
+          <Link href="/onboarding">
+            {t('add_company_manually')} &hellip;
+          </Link>
+        </Button>
       </div>
     </div>
   )

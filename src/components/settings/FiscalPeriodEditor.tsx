@@ -272,20 +272,13 @@ export function FiscalPeriodEditor() {
                 onClick={handleSave}
                 disabled={
                   !isDirty ||
-                  isSaving ||
                   !startDate ||
                   !endDate ||
                   validation.error !== null
                 }
+                loading={isSaving}
               >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('fp_saving')}
-                  </>
-                ) : (
-                  t('fp_save')
-                )}
+                {isSaving ? t('fp_saving') : t('fp_save')}
               </Button>
             </div>
           </>

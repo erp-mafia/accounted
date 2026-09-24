@@ -2,6 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { ImportNotices } from '@/components/import/ImportNotices'
+import { ImportStatRow } from '@/components/import/ImportStatRow'
 import { makeNotice, noticesFromParseIssues } from '@/lib/import/notices'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -18,10 +19,6 @@ import {
   ArrowLeft,
   ArrowRight,
   AlertTriangle,
-  Calendar,
-  TrendingUp,
-  TrendingDown,
-  FileText,
 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
@@ -48,6 +45,9 @@ export default function BankFilePreviewStep({
   // Wise/camt.053 files can mix currencies per row: the parser-level totals
   // sum across currencies, so income/expenses are grouped per currency here.
   const currencyTotals = summarizeByCurrency(transactions)
+  const totalsRows = currencyTotals.length
+    ? currencyTotals
+    : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]
   const duplicateCount = duplicateInfo?.duplicate_count ?? 0
   // Table rows render transactions.slice(0, 50), so the slice index IS the
   // original array index the server flagged.
@@ -55,63 +55,45 @@ export default function BankFilePreviewStep({
 
   return (
     <div className="space-y-6">
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <FileText className="h-4 w-4" />
-              <span className="text-sm">Transaktioner</span>
-            </div>
-            <p className="text-2xl font-display tabular-nums">{stats.parsed_rows}</p>
-            {stats.skipped_rows > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {stats.skipped_rows} rader hoppades över
-              </p>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <Calendar className="h-4 w-4" />
-              <span className="text-sm">Period</span>
-            </div>
-            <p className="text-sm font-medium">
-              {date_from || '-'} till {date_to || '-'}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <TrendingUp className="h-4 w-4" />
-              <span className="text-sm">Inkomster</span>
-            </div>
-            {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
-              <p key={row.currency} className="text-lg font-display tabular-nums">
-                {formatCurrency(row.total_income, row.currency)}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent className="pt-6">
-            <div className="flex items-center gap-2 text-muted-foreground mb-1">
-              <TrendingDown className="h-4 w-4" />
-              <span className="text-sm">Utgifter</span>
-            </div>
-            {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
-              <p key={row.currency} className="text-lg font-display tabular-nums">
-                {formatCurrency(row.total_expenses, row.currency)}
-              </p>
-            ))}
-          </CardContent>
-        </Card>
-      </div>
+      {/* Summary: flat label/number pairs, no boxed tiles */}
+      <ImportStatRow
+        stats={[
+          {
+            key: 'rows',
+            label: 'Transaktioner',
+            value: stats.parsed_rows,
+            note: stats.skipped_rows > 0 ? `${stats.skipped_rows} rader hoppades över` : undefined,
+          },
+          {
+            key: 'period',
+            label: 'Period',
+            value: `${date_from || '-'} till ${date_to || '-'}`,
+            plain: true,
+          },
+          {
+            key: 'income',
+            label: 'Inkomster',
+            value: (
+              <div className="space-y-1">
+                {totalsRows.map((row) => (
+                  <p key={row.currency}>{formatCurrency(row.total_income, row.currency)}</p>
+                ))}
+              </div>
+            ),
+          },
+          {
+            key: 'expenses',
+            label: 'Utgifter',
+            value: (
+              <div className="space-y-1">
+                {totalsRows.map((row) => (
+                  <p key={row.currency}>{formatCurrency(row.total_expenses, row.currency)}</p>
+                ))}
+              </div>
+            ),
+          },
+        ]}
+      />
 
       {/* Duplicate rows (ingest skips them) and rows the parser could not
           read: one folded list, nothing boxed. */}
@@ -211,11 +193,11 @@ export default function BankFilePreviewStep({
 
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={onContinue} disabled={hasIssues || transactions.length === 0}>
+        <Button onClick={onContinue} disabled={hasIssues || transactions.length === 0}>
           Fortsätt
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>

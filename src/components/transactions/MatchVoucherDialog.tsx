@@ -377,12 +377,9 @@ export function MatchVoucherDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             Avbryt
           </Button>
-          <Button onClick={handleConfirm} disabled={!canSubmit}>
+          <Button onClick={handleConfirm} disabled={!canSubmit} loading={submitting}>
             {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Matchar…
-              </>
+              'Matchar…'
             ) : isSplit ? (
               `Matcha ${selected.length} verifikationer`
             ) : (

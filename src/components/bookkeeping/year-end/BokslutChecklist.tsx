@@ -111,7 +111,7 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
                 return (
                   <li
                     key={item.key}
-                    className="group flex items-start gap-3 border-b border-border/60 py-2.5 text-[13px] leading-5 last:border-b-0"
+                    className="group flex items-start gap-3 border-b border-border py-2.5 text-[13px] leading-5 last:border-b-0"
                   >
                     <Checkbox
                       checked={done}
@@ -123,12 +123,12 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
                     <span className={cn('min-w-0 flex-1', na && 'text-muted-foreground line-through')}>
                       {label(item)}
                       {item.auto && item.stored_state == null && (
-                        <span className="ml-1.5 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground no-underline">
+                        <span className="ml-1.5 rounded-full bg-muted px-1.5 py-px text-[11px] text-muted-foreground no-underline">
                           {t('auto_chip')}
                         </span>
                       )}
                       {item.done_at && !item.auto && (
-                        <span className="ml-1.5 text-[11.5px] text-muted-foreground">{t('done_at', { date: formatDate(item.done_at) })}</span>
+                        <span className="ml-1.5 text-[11px] text-muted-foreground">{t('done_at', { date: formatDate(item.done_at) })}</span>
                       )}
                     </span>
                     <span className="flex shrink-0 items-center gap-3">

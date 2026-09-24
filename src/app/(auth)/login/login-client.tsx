@@ -13,7 +13,6 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
-  Loader2,
   Mail,
   ArrowLeft,
   KeyRound,
@@ -574,18 +573,16 @@ export function LoginClient({
               />
               <Button
                 type="submit"
-                className="w-full h-11"
+                size="lg"
+                className="w-full"
+                loading={isLoading}
                 disabled={
-                  isLoading ||
                   !!resetCooldownUntil ||
                   isTurnstileSubmissionBlocked(resetCaptchaToken)
                 }
               >
                 {isLoading ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {tAuth('reset_sending')}
-                  </>
+                  tAuth('reset_sending')
                 ) : resetCooldownUntil ? (
                   tAuth('reset_cooldown', { seconds: resetCooldownRemaining })
                 ) : (
@@ -783,17 +780,12 @@ export function LoginClient({
                 />
                 <Button
                   type="submit"
-                  className="w-full h-11"
-                  disabled={isLoading || isTurnstileSubmissionBlocked(passwordCaptchaToken)}
+                  size="lg"
+                  className="w-full"
+                  loading={isLoading}
+                  disabled={isTurnstileSubmissionBlocked(passwordCaptchaToken)}
                 >
-                  {isLoading ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {tAuth('logging_in')}
-                    </>
-                  ) : (
-                    tAuth('login_button')
-                  )}
+                  {isLoading ? tAuth('logging_in') : tAuth('login_button')}
                 </Button>
               </form>
             ) : (
@@ -811,13 +803,12 @@ export function LoginClient({
                     <Button
                       type="button"
                       variant="outline"
-                      className="w-full h-11 gap-2"
+                      size="lg"
+                      className="w-full"
                       onClick={handleSamlLogin}
-                      disabled={isLoading}
+                      loading={isLoading}
                     >
-                      {isLoading ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
+                      {!isLoading && (
                         <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                       )}
                       {tAuth('continue_with_provider', { provider: 'SAML' })}
@@ -828,13 +819,12 @@ export function LoginClient({
                 <Button
                   type="button"
                   variant="outline"
-                  className="w-full h-11 gap-2"
+                  size="lg"
+                  className="w-full"
                   onClick={handleSamlLogin}
-                  disabled={isLoading}
+                  loading={isLoading}
                 >
-                  {isLoading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
+                  {!isLoading && (
                     <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   )}
                   {tAuth('continue_with_provider', { provider: 'SAML' })}
@@ -864,7 +854,7 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('bankid')}
                   >
                     <Image
@@ -890,7 +880,7 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
                     <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
@@ -901,14 +891,12 @@ export function LoginClient({
                   <Button
                     type="button"
                     variant="outline"
-                    className="h-10 w-full gap-2"
+                    className="w-full"
                     onClick={handleSamlLogin}
-                    disabled={isLoading}
+                    loading={isLoading}
                   >
-                    {isLoading ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <KeyRound className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    {!isLoading && (
+                      <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     )}
                     {tAuth('continue_with_provider', { provider: 'SAML' })}
                   </Button>

@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface DestructiveConfirmDialogProps {
@@ -86,7 +86,6 @@ export function DestructiveConfirmDialog({
             variant="outline"
             onClick={() => onOpenChange(false)}
             disabled={isLoading}
-            className="min-h-11 w-full sm:w-auto"
           >
             {cancelLabel}
           </Button>
@@ -95,12 +94,8 @@ export function DestructiveConfirmDialog({
           <Button
             variant={variant === 'destructive' ? 'destructive' : 'default'}
             onClick={handleConfirm}
-            disabled={isLoading}
-            className="min-h-11 w-full sm:w-auto"
+            loading={isLoading}
           >
-            {isLoading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : null}
             {confirmLabel}
           </Button>
         </DialogFooter>

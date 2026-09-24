@@ -23,7 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Loader2, Plus, X } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import {
   type AccountDimensionRuleDto,
@@ -500,15 +500,12 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         <Button
                           size="sm"
                           disabled={
-                            isAddingRule ||
                             !newRuleDim ||
                             (newRuleNeedsValue && !newRuleValueCode)
                           }
+                          loading={isAddingRule}
                           onClick={handleAddRule}
                         >
-                          {isAddingRule && (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          )}
                           Lägg till
                         </Button>
                       </div>
@@ -551,8 +548,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Avbryt
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || !accountName.trim()}>
-            {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={handleSave} disabled={!accountName.trim()} loading={isSaving}>
             Spara
           </Button>
         </DialogFooter>

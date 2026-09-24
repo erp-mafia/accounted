@@ -1316,26 +1316,19 @@ export function AGIPanel(props: AGIPanelProps) {
                   size="sm"
                   variant="outline"
                   onClick={handleDownloadXml}
-                  disabled={actionLoading === 'download'}
+                  loading={actionLoading === 'download'}
                   title={t('download_xml_title')}
                 >
-                  {actionLoading === 'download' ? (
-                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Download className="mr-2 h-3.5 w-3.5" />
-                  )}
+                  {actionLoading !== 'download' && <Download className="mr-2 h-3.5 w-3.5" />}
                   {t('download_xml_button')}
                 </Button>
                 {!awaitingSigning && (
                   <Button
                     onClick={handleSubmitChain}
                     disabled={actionLoading !== null || !hasSkatteverket}
+                    loading={actionLoading === 'chain'}
                   >
-                    {actionLoading === 'chain' ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="mr-2 h-4 w-4" />
-                    )}
+                    {actionLoading !== 'chain' && <Send className="mr-2 h-4 w-4" />}
                     {t('chain_button')}
                   </Button>
                 )}
@@ -1353,12 +1346,9 @@ export function AGIPanel(props: AGIPanelProps) {
                   variant="outline"
                   onClick={handleSubmit}
                   disabled={actionLoading !== null || !hasSkatteverket}
+                  loading={actionLoading === 'submit'}
                 >
-                  {actionLoading === 'submit' ? (
-                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Send className="mr-2 h-3.5 w-3.5" />
-                  )}
+                  {actionLoading !== 'submit' && <Send className="mr-2 h-3.5 w-3.5" />}
                   {t('submit_button')}
                 </Button>
                 <Button
@@ -1366,12 +1356,9 @@ export function AGIPanel(props: AGIPanelProps) {
                   variant="outline"
                   onClick={handleCreateSigningLink}
                   disabled={actionLoading !== null || !underlagSubmitted}
+                  loading={actionLoading === 'granskning'}
                 >
-                  {actionLoading === 'granskning' ? (
-                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Lock className="mr-2 h-3.5 w-3.5" />
-                  )}
+                  {actionLoading !== 'granskning' && <Lock className="mr-2 h-3.5 w-3.5" />}
                   {t('signing_link_button')}
                 </Button>
                 <Button
@@ -1379,12 +1366,9 @@ export function AGIPanel(props: AGIPanelProps) {
                   variant="ghost"
                   onClick={handleCheckSubmitted}
                   disabled={actionLoading !== null}
+                  loading={actionLoading === 'check'}
                 >
-                  {actionLoading === 'check' ? (
-                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Download className="mr-2 h-3.5 w-3.5" />
-                  )}
+                  {actionLoading !== 'check' && <Download className="mr-2 h-3.5 w-3.5" />}
                   {t('check_kvittens_button')}
                 </Button>
                 {awaitingSigning && (
@@ -1393,12 +1377,9 @@ export function AGIPanel(props: AGIPanelProps) {
                     variant="ghost"
                     onClick={handleUnlock}
                     disabled={actionLoading !== null}
+                    loading={actionLoading === 'unlock'}
                   >
-                    {actionLoading === 'unlock' ? (
-                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Unlock className="mr-2 h-3.5 w-3.5" />
-                    )}
+                    {actionLoading !== 'unlock' && <Unlock className="mr-2 h-3.5 w-3.5" />}
                     {t('unlock_button')}
                   </Button>
                 )}

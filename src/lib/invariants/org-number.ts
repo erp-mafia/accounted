@@ -93,6 +93,24 @@ export function orgNumberKey(raw: string | null | undefined): string | null {
 }
 
 /**
+ * {@link orgNumberKey} for a Bolagsverket registration number as TIC returns
+ * it (CompanyRoles, Lens documents), or null when it is not one.
+ *
+ * TIC registers an enskild firma under 16 digits: the century-prefixed
+ * personnummer plus a 4-digit serial (`2002011732750001` for personnummer
+ * `0201173275`). Accounted stores that firm under the 10-digit personnummer,
+ * so comparing the raw registration number with `companies.org_number` never
+ * matches and a sole trader's own firm reads as a company not yet added.
+ * Every other shape keys exactly as {@link orgNumberKey}.
+ */
+export function registrationNumberKey(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const cleaned = stripOrgNumberFormatting(raw)
+  if (/^(18|19|20)\d{14}$/.test(cleaned)) return cleaned.slice(2, 12)
+  return orgNumberKey(cleaned)
+}
+
+/**
  * Normalize an org number to Accounted's canonical 10-digit storage form.
  *
  * Accepts hyphen/space-formatted input in either of the two shapes Swedish

@@ -1,0 +1,520 @@
+'use client'
+
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useTranslations } from 'next-intl'
+import { ArrowRight, Check, Loader2, Plus } from 'lucide-react'
+import useSWR from 'swr'
+import { useCompany } from '@/contexts/CompanyContext'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
+import type { CatalogSkill } from '@/lib/agent-skills/catalog'
+import type { WorklistCategory } from '@/lib/worklist/types'
+import { FREE_SKILLS, REGISTRY_SKILLS, hasTodoSignal, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
+import type { SkillUsage } from '@/lib/agent-skills/usage'
+import { AI_CLIENTS, aiConnectAction, aiPrefilledChatLink, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-status-poll'
+import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
+import { Button } from '@/components/ui/button'
+import { SkillSheet, type SheetTarget } from './SkillSheet'
+import { SkillCreator, type CreatorMode, type KeyRect } from './SkillCreator'
+import { SkillMarks } from './SkillMarks'
+import { Spark, centerIn, prefersReducedMotion, wait } from './spark'
+import styles from './skills.module.css'
+
+type SkillSummary = Omit<CatalogSkill, 'body'>
+type OwnRow = { slug: string; name: string; summary: string; installationId: string; draft?: boolean }
+type PageState = 'loading' | 'locked' | 'waiting' | 'unlocking' | 'open'
+type Row = { key: string; name: string; desc: string; own?: OwnRow; id?: RegistrySkillId }
+
+/** Set once the unlock ("Gnistan fortsätter") has played in this browser. */
+const UNLOCK_SEEN_KEY = 'accounted.skills.unlock-seen'
+
+function readSeen(): boolean {
+  try { return window.localStorage.getItem(UNLOCK_SEEN_KEY) === '1' } catch { return false }
+}
+function markSeen(): void {
+  try { window.localStorage.setItem(UNLOCK_SEEN_KEY, '1') } catch { /* private mode: the unlock simply plays again */ }
+}
+
+/** Null when the status is unavailable: a failed read never makes a connected client look disconnected. */
+async function fetchConnections(signal: AbortSignal): Promise<AiClient[] | null> {
+  try {
+    const response = await fetch('/api/ai/connections', { signal })
+    if (!response.ok) return null
+    return (await response.json()).data as AiClient[]
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Local development only: /skills?ai=claude (or chatgpt, grok) shows the page
+ * as connected without a real MCP connection. Compiled out of production.
+ */
+function simulatedClient(): AiClient | null {
+  if (process.env.NODE_ENV !== 'development') return null
+  const value = new URLSearchParams(window.location.search).get('ai')
+  return AI_CLIENTS.find((c) => c.id === value)?.id ?? null
+}
+
+/**
+ * Dev only: `?todo=1` fakes waiting Att göra work (and a few runs) so the
+ * counts and run counters can be seen without writing data.
+ */
+function simulatedTodo(): boolean {
+  return process.env.NODE_ENV === 'development' && new URLSearchParams(window.location.search).get('todo') === '1'
+}
+
+/** The "Att göra" counts; a failed read tags nothing rather than breaking the page. */
+async function readWorklist(url: string): Promise<Partial<Record<WorklistCategory, number>>> {
+  if (simulatedTodo()) return { book_transaction: 14, verifikat_missing_document: 3, inbox_document: 2 }
+  const response = await fetch(url)
+  if (!response.ok) return {}
+  return ((await response.json()).data as { counts: Record<WorklistCategory, number> }).counts
+}
+
+/** How often each skill was run; a failed read shows no counts. */
+async function readUsage(url: string): Promise<SkillUsage> {
+  if (simulatedTodo()) return { bookkeep: { count: 12, last_at: new Date().toISOString() }, 'reconcile-month': { count: 3, last_at: new Date().toISOString() } }
+  const response = await fetch(url)
+  if (!response.ok) return {}
+  return (await response.json()).data as SkillUsage
+}
+
+async function readCatalog(url: string): Promise<SkillSummary[]> {
+  const response = await fetch(url)
+  if (!response.ok) throw new Error('Skills request failed')
+  return (await response.json()).data as SkillSummary[]
+}
+
+export function SkillsPage() {
+  const { company } = useCompany()
+  return company ? <Registry key={company.id} companyId={company.id} /> : null
+}
+
+/** A copy of the finished key, pinned over the creator where the top plate was. */
+function spawnKey(key: KeyRect): HTMLDivElement {
+  const el = document.createElement('div')
+  el.className = styles.flykey
+  el.setAttribute('aria-hidden', 'true')
+  el.appendChild(key.face)
+  Object.assign(el.style, { width: `${key.width}px`, height: `${key.height}px`, transform: `translate(${key.left}px, ${key.top}px) scale(${key.scale})` })
+  document.body.appendChild(el)
+  return el
+}
+
+/**
+ * Flies the key into its row at one uniform scale (a stretched key squashes
+ * its text), then melts it into the row. Resolves as the row takes over.
+ */
+function flyKey(el: HTMLDivElement, row: Element): Promise<void> {
+  const box = row.getBoundingClientRect()
+  if (box.top < 0 || box.bottom > window.innerHeight) row.scrollIntoView({ block: 'center' })
+  const to = row.getBoundingClientRect()
+  const scale = to.height / el.offsetHeight
+  const target = `translate(${to.left}px, ${to.top + (to.height - el.offsetHeight * scale) / 2}px) scale(${scale})`
+  const move = el.animate([{ transform: el.style.transform }, { transform: target }], { duration: 900, easing: 'cubic-bezier(.65, 0, .25, 1)', fill: 'forwards' })
+  el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 260, delay: 760, easing: 'ease-out', fill: 'forwards' })
+  void move.finished.catch(() => undefined).finally(() => setTimeout(() => el.remove(), 300))
+  return wait(760)
+}
+
+function dropKey(el: HTMLDivElement) {
+  if (!el.animate) { el.remove(); return }
+  void el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 300, fill: 'forwards' }).finished.catch(() => undefined).finally(() => el.remove())
+}
+
+/**
+ * The in-app creator ("Resan" journey and its build animation) is switched
+ * off: Skapa skill opens the connected AI with the create-skill workflow
+ * typed in, and the AI saves the skill over MCP. Set to true to bring the
+ * journey back.
+ */
+const IN_APP_CREATOR = false
+
+function Registry({ companyId }: { companyId: string }) {
+  const t = useTranslations('skills_registry')
+  const { canWrite } = useCanWrite()
+  const { appName } = useBranding()
+  const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
+  const worklist = useSWR(['/api/worklist/counts', companyId], ([url]) => readWorklist(url))
+  const usage = useSWR(['/api/skills/usage', companyId], ([url]) => readUsage(url))
+  const doNow = skillsToDoNow(worklist.data ?? {})
+  // "Allt klart": the skill has a signal and the loaded worklist has nothing for it
+  const allDone = (id: RegistrySkillId) => !!worklist.data && hasTodoSignal(id) && !doNow.has(id)
+  const uses = (slug: string) => usage.data?.[slug]?.count ?? 0
+  // the one thing worth doing now: the skill with the most waiting
+  const own: OwnRow[] = (catalog.data ?? [])
+    .filter((skill) => skill.tier === 'own' && skill.shareStatus !== 'withdrawn' && skill.installations[0])
+    .map((skill) => ({ slug: skill.slug, name: skill.name, summary: skill.summary, installationId: skill.installations[0].installation_id, draft: skill.draft }))
+
+  // ── connection: asked on load and whenever the user comes back to the tab ──
+  const [connected, setConnected] = useState<AiClient[] | null>(null)
+  const [pending, setPending] = useState<AiClient | null>(null)
+  const [checkedOnce, setCheckedOnce] = useState(false)
+  const pollerRef = useRef<AiStatusPoller | null>(null)
+  useEffect(() => {
+    const simulated = simulatedClient()
+    const poller = createAiStatusPoller({
+      fetchStatus: simulated ? async () => [simulated] : fetchConnections,
+      onStatus: setConnected,
+      isHidden: () => document.visibilityState === 'hidden',
+    })
+    pollerRef.current = poller
+    poller.check()
+    const onBack = () => { if (document.visibilityState === 'visible') poller.check() }
+    window.addEventListener('focus', onBack)
+    document.addEventListener('visibilitychange', onBack)
+    return () => {
+      window.removeEventListener('focus', onBack)
+      document.removeEventListener('visibilitychange', onBack)
+      poller.stop()
+      pollerRef.current = null
+    }
+  }, [])
+
+  // ── elements the spark hops between ──
+  const pageRef = useRef<HTMLDivElement>(null)
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([])
+  const rowAnchors = useRef(new Map<string, HTMLSpanElement>())
+  const rowOrder = useRef<string[]>([])
+  const createRef = useRef<HTMLButtonElement>(null)
+  const createPlusRef = useRef<HTMLSpanElement>(null)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+
+  // ── Gnistan fortsätter: the spark lights the list, once after connecting ──
+  const [unlocking, setUnlocking] = useState<number | null>(null)
+  const [createLit, setCreateLit] = useState(false)
+  const startedUnlock = useRef(false)
+  const shouldUnlock = (list: AiClient[] | null, waitingFor: AiClient | null) =>
+    !!list?.length && !startedUnlock.current && (waitingFor !== null || !readSeen())
+  const runUnlock = useCallback(async () => {
+    startedUnlock.current = true
+    setPending(null)
+    setUnlocking(0)
+    const page = pageRef.current
+    const from = cardRefs.current[FREE_SKILLS - 1]
+    const anchors = rowOrder.current.map((key) => rowAnchors.current.get(key)).filter((el): el is HTMLSpanElement => !!el)
+    if (!page || !from || prefersReducedMotion() || !page.animate) {
+      markSeen()
+      setUnlocking(null)
+      return
+    }
+    const start = centerIn(page, from)
+    const spark = new Spark(page, { x: start.x, y: start.y + from.getBoundingClientRect().height / 2 }, styles.spark)
+    try {
+      await wait(250)
+      for (let i = 0; i < anchors.length; i++) {
+        if (!alive.current) return
+        await spark.hop(anchors[i], 300, 26)
+        setUnlocking(i + 1)
+        await wait(70)
+      }
+      if (createPlusRef.current && alive.current) {
+        await spark.hop(createPlusRef.current, 800, 60)
+        setCreateLit(true)
+        await wait(150)
+      }
+      await spark.fade()
+    } finally {
+      spark.remove()
+      markSeen()
+      if (alive.current) { setCreateLit(false); setUnlocking(null) }
+    }
+  }, [])
+  useEffect(() => {
+    if (shouldUnlock(connected, pending)) void runUnlock()
+  }, [connected, pending, runUnlock])
+
+  const isConnected = (connected?.length ?? 0) > 0
+  const state: PageState = connected === null
+    ? 'loading'
+    : unlocking !== null || shouldUnlock(connected, pending)
+      ? 'unlocking'
+      : isConnected ? 'open' : pending ? 'waiting' : 'locked'
+  const client = pickConnectedAiClient(connected ?? [], pending ?? undefined) ?? pending ?? 'claude'
+  const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
+
+  // ── connect ──
+  const [addressCopy, setAddressCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [creator, setCreator] = useState<CreatorMode | null>(null)
+  const connectAction = (target: AiClient) => aiConnectAction(target, { origin: window.location.origin, appName })
+  function connect(target: AiClient) {
+    setCreator(null)
+    setPending(target)
+    setAddressCopy('idle')
+    setCheckedOnce(false)
+    // Claude has an add-connector deep link. ChatGPT and Grok get the address to paste first.
+    if (target === 'claude') openAiConnector(connectAction(target).open)
+    pollerRef.current?.attempt(target)
+  }
+  function reopen(target: AiClient) {
+    openAiConnector(connectAction(target).open)
+    pollerRef.current?.attempt(target)
+  }
+  async function copyAddress(address: string) {
+    try {
+      await navigator.clipboard.writeText(address)
+      setAddressCopy('copied')
+    } catch {
+      setAddressCopy('failed')
+    }
+  }
+
+  // ── sheet, creator, and the forged key landing in the list ──
+  const [sheet, setSheet] = useState<SheetTarget | null>(null)
+  const [landing, setLanding] = useState<string | null>(null)
+  const [hitRow, setHitRow] = useState<string | null>(null)
+
+  async function saveOwn(skill: { name: string; description: string; body: string }, mode: CreatorMode): Promise<string | null> {
+    try {
+      const edit = mode.kind === 'edit'
+      const response = await fetch(edit ? `/api/skills/${mode.installationId}` : '/api/skills', {
+        method: edit ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(edit ? { action: 'edit', ...skill } : { kind: 'own', scope: 'company', ...skill }),
+      })
+      if (!response.ok) return null
+      if (edit) return mode.installationId
+      return ((await response.json()).data as { id: string }).id
+    } catch {
+      return null
+    }
+  }
+  async function addOwn(target: Extract<SheetTarget, { kind: 'own' }>): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/skills/${target.installationId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'add' }) })
+      if (!response.ok) return false
+      await catalog.mutate()
+      setSheet({ ...target, draft: false })
+      setHitRow(target.slug)
+      return true
+    } catch {
+      return false
+    }
+  }
+  async function deleteOwn(target: Extract<SheetTarget, { kind: 'own' }>): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/skills/${target.installationId}`, { method: 'DELETE' })
+      if (!response.ok) return false
+      setSheet(null)
+      await catalog.mutate()
+      return true
+    } catch {
+      return false
+    }
+  }
+  // "Hem": the forged key leaves the closing creator and flies into its row.
+  // It appears the moment the creator closes, so the journey fades out under
+  // it and the key waits there while the list learns about the new row.
+  const flying = useRef<HTMLDivElement | null>(null)
+  async function onSaved(installationId: string, key: KeyRect | null) {
+    const el = key ? spawnKey(key) : null
+    flying.current = el
+    setCreator(null)
+    setSheet(null)
+    await catalog.mutate().catch(() => undefined)
+    setLanding(installationId)
+    // Nothing claimed the key (the row never showed up): let it fade where it is.
+    setTimeout(() => { if (el && flying.current === el) { flying.current = null; dropKey(el) } }, 1500)
+  }
+  function createSkill() {
+    if (!isConnected) setCreator({ kind: 'gate' })
+    else if (IN_APP_CREATOR) setCreator({ kind: 'create' })
+    else openAiConnector(aiPrefilledChatLink(client, t('create_prompt')))
+  }
+  function openRow(row: Row) {
+    setSheet(row.own
+      ? { kind: 'own', slug: row.own.slug, name: row.own.name, installationId: row.own.installationId, draft: row.own.draft }
+      : { kind: 'registry', id: row.id!, locked: rowsLocked })
+  }
+  const landingSlug = landing ? own.find((row) => row.installationId === landing)?.slug : undefined
+  useEffect(() => {
+    if (!landingSlug) return
+    setLanding(null)
+    const page = pageRef.current
+    const anchor = rowAnchors.current.get(landingSlug)
+    const button = createRef.current
+    const key = flying.current
+    flying.current = null
+    if (!page || !anchor || !button || prefersReducedMotion() || !page.animate) { key?.remove(); setHitRow(landingSlug); return }
+    const row = anchor.closest(`.${styles.row}`)
+    if (key && row) {
+      void flyKey(key, row).then(() => { if (alive.current) setHitRow(landingSlug) })
+      return
+    }
+    if (key) dropKey(key)
+    const spark = new Spark(page, centerIn(page, button), styles.spark)
+    void (async () => {
+      try {
+        await wait(450)
+        if (!alive.current) return
+        await spark.hop(anchor, 900, 40)
+        if (alive.current) setHitRow(landingSlug)
+        await spark.fade()
+      } finally {
+        spark.remove()
+      }
+    })()
+  }, [landingSlug])
+
+  // ── derived view ──
+  const top = REGISTRY_SKILLS.slice(0, FREE_SKILLS)
+  // skills with work waiting on Att göra come first
+  const rest = REGISTRY_SKILLS.slice(FREE_SKILLS).map((skill) => skill.id)
+  const rows: Row[] = [
+    ...own.map((row) => ({ key: row.slug, name: row.name, desc: row.summary, own: row })),
+    ...[...rest.filter((id) => doNow.has(id)), ...rest.filter((id) => !doNow.has(id))]
+      .map((id) => ({ key: id, name: t(`skills.${id}.name`), desc: t(`skills.${id}.desc`), id })),
+  ]
+  useEffect(() => { rowOrder.current = rows.map((row) => row.key) })
+  const rowsLocked = state === 'locked' || state === 'waiting' || state === 'loading'
+  const sheetKey = sheet?.kind === 'registry' ? sheet.id : null
+  const pendingName = pending ? AI_CLIENTS.find((c) => c.id === pending)!.name : ''
+  const address = pending && pending !== 'claude' ? connectAction(pending).copy : null
+
+  return (
+    <div ref={pageRef} className={styles.page} data-state={state}>
+      <PageHeader
+        title={t('title')}
+        help={<HelpPopover><p>{t('help')}</p></HelpPopover>}
+      />
+
+      <section className={styles.hero}>
+        <div className={styles.intro}>
+          <h2>{t('hero_title')}</h2>
+        </div>
+        <div className={styles.cards}>
+          {top.map((skill, i) => (
+            <div
+              key={skill.id}
+              ref={(el) => { cardRefs.current[i] = el }}
+              className={styles.card}
+              style={{ '--i': i } as CSSProperties}
+              data-down={sheetKey === skill.id ? '' : undefined}
+              data-now={doNow.has(skill.id) ? '' : undefined}
+            >
+              <button type="button" className={styles.face} onClick={() => setSheet({ kind: 'registry', id: skill.id, locked: !isConnected })}>
+                <span className={styles.faceTop}>
+                  <SkillMarks id={skill.id} />
+                  {doNow.has(skill.id) && <span className={styles.now}>{t('now_count', { count: doNow.get(skill.id)! })}</span>}
+                  {allDone(skill.id) && <span className={styles.done}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
+                </span>
+                <h3>{t(`skills.${skill.id}.name`)}</h3>
+                <p>{t(`skills.${skill.id}.short`)}</p>
+                <span className={styles.foot}>
+                  {uses(skill.id) > 0 && <span className={styles.uses}>{t('uses', { count: uses(skill.id) })}</span>}
+                  <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                </span>
+              </button>
+            </div>
+          ))}
+          {/* the invitation to make one's own, as big as the keys beside it */}
+          <div className={styles.card}>
+            <button ref={createRef} type="button" className={styles.createFace} disabled={!canWrite} onClick={createSkill}>
+              <span ref={createPlusRef} className={styles.createPlus} data-lit={createLit ? '' : undefined} aria-hidden><Plus className="h-4 w-4" /></span>
+              <h3>{t('create_card_title')}</h3>
+              <p>{t('create_card_body', { client: clientName })}</p>
+              <span className={styles.createCta}>{t('create_card_cta', { client: clientName })}<ArrowRight className="h-3.5 w-3.5" aria-hidden /></span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className={styles.lower} aria-label={t('title')}>
+        {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
+        {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
+        <div className={styles.veilwrap}>
+          <ul className={styles.rows} aria-hidden={rowsLocked || undefined}>
+            {rows.map((row, i) => (
+              <li key={row.key}>
+                <div
+                  className={styles.row}
+                  style={{ '--i': i } as CSSProperties}
+                  data-own={row.own ? '' : undefined}
+                  data-now={row.id && doNow.has(row.id) ? '' : undefined}
+                  data-hit={hitRow === row.key || (unlocking !== null && i < unlocking) ? '' : undefined}
+                >
+                  <span className={styles.anchor} ref={(el) => { if (el) rowAnchors.current.set(row.key, el); else rowAnchors.current.delete(row.key) }} aria-hidden />
+                  <button type="button" className={styles.rowMain} tabIndex={rowsLocked ? -1 : undefined} onClick={() => openRow(row)}>
+                    <span className={styles.nm} data-ph-mask={row.own ? '' : undefined}>{row.name}</span>
+                  </button>
+                  <span className={styles.ds} data-ph-mask={row.own ? '' : undefined}>{row.desc}</span>
+                  {row.own?.draft && <span className={`${styles.now} ${styles.nowLight}`}>{t('draft_tag')}</span>}
+                  {row.id && doNow.has(row.id) && <span className={`${styles.now} ${styles.nowLight}`}>{t('now_count', { count: doNow.get(row.id)! })}</span>}
+                  {row.id && allDone(row.id) && <span className={`${styles.done} ${styles.doneLight}`}><Check className="h-3 w-3" aria-hidden />{t('all_done')}</span>}
+                  <span className={styles.foot}>
+                    {row.id && <SkillMarks id={row.id} />}
+                    {uses(row.key) > 0 && <span className={styles.uses}>{t('uses', { count: uses(row.key) })}</span>}
+                    <span className={styles.open} aria-hidden>{t('open_hint')}</span>
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+          <div className={styles.plate} data-gone={state === 'locked' || state === 'waiting' ? undefined : ''}>
+            {state === 'locked' && (
+              <div className={styles.gate}>
+                <h2>{t('sign_title')}</h2>
+                <div className={styles.gateClients}>
+                  {AI_CLIENTS.map((c, i) => (
+                    <Button key={c.id} size="lg" variant={i === 0 ? 'default' : 'outline'} className="gap-2 pl-3.5" onClick={() => connect(c.id)}>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={c.logo} alt="" width={18} height={18} className={styles.clientLogo} />
+                      {i === 0 ? t('connect_client', { client: c.name }) : c.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {state === 'waiting' && pending && (
+              <div className={styles.pin}>
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
+                <h2>{pending === 'claude' ? t('wait_claude_title') : t('wait_title', { client: pendingName })}</h2>
+                {pending === 'claude' ? <p>{t('wait_claude_body')}</p> : (
+                  <>
+                    {address && (
+                      <div className={styles.addr}>
+                        <code aria-label={t('server_address')}>{address}</code>
+                        <Button size="sm" onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
+                      </div>
+                    )}
+                    {addressCopy === 'failed' && <p role="status">{t('copy_failed')}</p>}
+                    <ol className={styles.stepsl}>
+                      <li>{t('step_1')}</li>
+                      <li>{t('step_2', { client: pendingName })}</li>
+                      <li>{t('step_3')}</li>
+                    </ol>
+                  </>
+                )}
+                <div className={styles.btns}>
+                  <Button variant="outline" onClick={() => reopen(pending)}>{t('open_client', { client: pendingName })}</Button>
+                  <Button onClick={() => { setCheckedOnce(true); pollerRef.current?.check() }}>{t('check_again')}</Button>
+                </div>
+                {checkedOnce && <p role="status">{t('still_waiting', { client: pendingName })}</p>}
+                <button type="button" className="text-xs text-muted-foreground underline underline-offset-4" onClick={() => setPending(null)}>{t('cancel')}</button>
+              </div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <SkillSheet
+        target={sheet}
+        companyId={companyId}
+        client={client}
+        canWrite={canWrite}
+        todo={sheetKey ? doNow.get(sheetKey) : undefined}
+        usage={sheet ? usage.data?.[sheet.kind === 'own' ? sheet.slug : sheet.id] : undefined}
+        onClose={() => setSheet(null)}
+        onConnect={(target) => { setSheet(null); connect(target) }}
+        onEdit={IN_APP_CREATOR ? (target) => { setSheet(null); setCreator({ kind: 'edit', installationId: target.installationId }) } : undefined}
+        onDelete={deleteOwn}
+        onAdd={addOwn}
+      />
+      <SkillCreator mode={creator} client={client} pageRef={pageRef} onClose={() => setCreator(null)} onConnect={connect} onSave={saveOwn} onSaved={onSaved} />
+    </div>
+  )
+}

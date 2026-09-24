@@ -9,7 +9,6 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { stageSkvManualPrefill } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { Loader2 } from 'lucide-react'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
@@ -203,10 +202,10 @@ export default function SkattekontoBookDialog({
           <Button
             variant="ghost"
             onClick={handleOpenDraft}
-            disabled={isBooking || isOpeningDraft}
-            className="min-h-11 w-full sm:w-auto text-muted-foreground"
+            disabled={isBooking}
+            loading={isOpeningDraft}
+            className="w-full sm:w-auto text-muted-foreground"
           >
-            {isOpeningDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             {t('open_draft')}
           </Button>
         ) : noRuleMatched && onMatch ? (
@@ -214,7 +213,7 @@ export default function SkattekontoBookDialog({
             variant="ghost"
             onClick={handleManualCreate}
             disabled={isBooking || isOpeningDraft}
-            className="min-h-11 w-full sm:w-auto text-muted-foreground"
+            className="w-full sm:w-auto text-muted-foreground"
           >
             {t('manual_create_cta')}
           </Button>

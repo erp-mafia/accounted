@@ -7,7 +7,9 @@ import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { VerdictList, type Verdict } from './Verdicts'
+import { CHANGE_LINK_CLASS } from './Sentence'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 type VatPick = 'standard_25' | 'reduced_12' | 'reduced_6' | 'exempt'
 const VAT_PICKS: { key: VatPick; label: string }[] = [
@@ -130,9 +132,9 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
         <div className="vatwrap">
           {!vatOpen ? (
             <>
-              <button type="button" className="imp-change" style={{ margin: '0 6px 0 0' }} onClick={() => setVatOpen(true)}>
+              <Button variant="link" size="sm" className={CHANGE_LINK_CLASS} style={{ margin: '0 6px 0 0' }} onClick={() => setVatOpen(true)}>
                 {t('vat_set_now')}
-              </button>
+              </Button>
               {t('vat_or_later')}
             </>
           ) : (
@@ -175,9 +177,9 @@ export function InsightPanel({ ctx, base = 200, summary = false }: { ctx: BooksC
             <p className="insight-headline">{headline}</p>
             <p className="insight-meta">
               {attention > 0 ? <span className="insight-attn">{t('insight_attention', { count: attention })}</span> : null}
-              <button type="button" className="jny-btn-quiet" onClick={() => setDetailsOpen(true)}>
+              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setDetailsOpen(true)}>
                 {t('insight_show')}
-              </button>
+              </Button>
             </p>
           </>
         )}

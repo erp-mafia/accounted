@@ -7,6 +7,7 @@ import { useState, useCallback, useEffect, useReducer, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useTranslations } from 'next-intl'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
@@ -651,8 +652,13 @@ function ProviderStep({
 
       {/* Provider selection: quiet list rows on the page, hairline-divided. */}
       {isLoadingStatus ? (
-        <div className="flex items-center justify-center py-8">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div className="divide-y divide-border" aria-busy="true">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-4 py-3">
+              <Skeleton className="h-8 w-8 shrink-0 rounded-sm" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
         </div>
       ) : (
         <div className="stagger-enter divide-y divide-border" data-no-stagger>
@@ -694,7 +700,7 @@ function ProviderStep({
                       <Badge variant="secondary">Kommer snart</Badge>
                     )}
                     {alreadyConnected && (
-                      <Badge variant="success">Ansluten</Badge>
+                      <span className="text-xs text-muted-foreground">Ansluten</span>
                     )}
                     {needsSieFirst && !comingSoon && !alreadyConnected && (
                       <Badge variant="warning">SIE krävs först</Badge>
@@ -860,7 +866,7 @@ function ConnectStep({
             Klicka nedan för att logga in i {providerName}.
             Fönstret stängs automatiskt när du är klar.
           </p>
-          <Button className="min-h-11" onClick={() => openProviderWindow(authUrl)}>
+          <Button onClick={() => openProviderWindow(authUrl)}>
             Logga in i {providerName}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -872,7 +878,7 @@ function ConnectStep({
           providers, so the same listener resumes the wizard. */}
       {authType === 'token' && consentId && !isLoading && hasLundifyActivation && activationUrl && (
         <div className="space-y-4">
-          <Button className="min-h-11" onClick={() => openProviderWindow(activationUrl)}>
+          <Button onClick={() => openProviderWindow(activationUrl)}>
             {t('ext_arcim_bl_activate_button')}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -953,7 +959,7 @@ function ConnectStep({
               </div>
             )}
             <Button
-              className={cn('min-h-11', isWintLogin && 'order-3')}
+              className={cn(isWintLogin && 'order-3')}
               onClick={() => onTokenSubmit(apiToken, companyId)}
               disabled={!canSubmit}
             >
@@ -965,7 +971,7 @@ function ConnectStep({
       )}
 
       <div className="flex border-t border-border pt-6">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
@@ -1113,7 +1119,7 @@ function PreviewStep({
             <p className="text-sm text-muted-foreground">{error}</p>
           </div>
           {authExpired && (
-            <Button size="sm" className="min-h-9" onClick={onReconnect} disabled={isLoading}>
+            <Button size="sm" onClick={onReconnect} disabled={isLoading}>
               <RotateCcw className="mr-2 h-4 w-4" />
               Återanslut {providerName}
             </Button>
@@ -1140,12 +1146,11 @@ function PreviewStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button
-          className="min-h-11"
           onClick={onContinue}
           disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
@@ -1207,7 +1212,7 @@ function MappingStep({
         </div>
         <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
         <div className="flex border-t border-border pt-6">
-          <Button variant="outline" className="min-h-11" onClick={onBack}>
+          <Button variant="outline" onClick={onBack}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             Tillbaka
           </Button>
@@ -1413,11 +1418,11 @@ function OptionsStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
-        <Button className="min-h-11" onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
+        <Button onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
           Starta migrering
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
@@ -1817,10 +1822,10 @@ function DocumentImportFollowUp({
             : t('ext_arcim_documents_prompt', { count: state.found })}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-          <Button className="min-h-11" onClick={onImport}>
+          <Button onClick={onImport}>
             {t('ext_arcim_documents_import_action')}
           </Button>
-          <Button variant="ghost" className="min-h-11" onClick={onDismiss}>
+          <Button variant="ghost" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
           </Button>
         </div>
@@ -1833,7 +1838,7 @@ function DocumentImportFollowUp({
       <section className="space-y-3" aria-live="polite">
         {title}
         <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty')}</p>
-        <Button variant="outline" className="min-h-11" onClick={onDiscover}>
+        <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
         </Button>
@@ -1899,7 +1904,7 @@ function DocumentImportFollowUp({
             <p className="text-sm text-destructive">
               {t('ext_arcim_documents_partial_failure')}
             </p>
-            <Button variant="outline" className="min-h-11" onClick={onImport}>
+            <Button variant="outline" onClick={onImport}>
               <RotateCcw className="mr-2 h-4 w-4" />
               {t('ext_arcim_documents_retry_import')}
             </Button>
@@ -1949,7 +1954,6 @@ function DocumentImportFollowUp({
       )}
       {!scopesUnavailable && (
         <Button
-          className="min-h-11"
           onClick={reconnectRequired ? onReconnect : discoveryFailed ? onDiscover : onImport}
         >
           {reconnectRequired ? (
@@ -2037,8 +2041,8 @@ function ResultStep({
         )}
         <SieFallbackLine message="Du kan istället importera din bokföringsdata manuellt via en SIE-fil." />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-          <Button variant="outline" className="min-h-11" onClick={onDone}>Klar</Button>
-          <Button className="min-h-11" onClick={onRetry}>
+          <Button variant="outline" onClick={onDone}>Klar</Button>
+          <Button onClick={onRetry}>
             <RotateCcw className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
@@ -2072,11 +2076,11 @@ function ResultStep({
           onReconnect={onReconnectDocuments}
         />
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-          <Button variant="outline" className="min-h-11" onClick={onDone}>
+          <Button variant="outline" onClick={onDone}>
             <ArrowLeft className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_standalone_back')}
           </Button>
-          <Button className="min-h-11" asChild>
+          <Button asChild>
             <Link href="/bookkeeping">
               Visa bokföring
               <ExternalLink className="ml-2 h-4 w-4" />
@@ -2407,18 +2411,18 @@ function ResultStep({
       )}
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onDone}>
+        <Button variant="outline" onClick={onDone}>
           <RotateCcw className="mr-2 h-4 w-4" />
           Ny migrering
         </Button>
         <div className="flex flex-col gap-2 sm:flex-row">
-          <Button variant="outline" className="min-h-11" asChild>
+          <Button variant="outline" asChild>
             <Link href="/customers">
               Visa kunder
               <ExternalLink className="ml-2 h-4 w-4" />
             </Link>
           </Button>
-          <Button className="min-h-11" asChild>
+          <Button asChild>
             <Link href="/bookkeeping">
               Visa bokföring
               <ExternalLink className="ml-2 h-4 w-4" />

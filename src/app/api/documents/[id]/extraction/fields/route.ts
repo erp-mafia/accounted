@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { recordHumanFields } from '@/lib/documents/extract/store'
 import { enqueueDocumentJob } from '@/lib/documents/jobs/queue'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
@@ -25,7 +25,7 @@ const bodySchema = z.object({
 })
 
 export const POST = withRouteContext('document.extraction.fields', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response

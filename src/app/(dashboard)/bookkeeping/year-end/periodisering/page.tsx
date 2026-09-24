@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Loader2, Lock, Plus, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Lock, Plus, Trash2 } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { PageHeader } from '@/components/ui/page-header'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -82,8 +83,8 @@ function suggestionKey(s: PeriodiseringSuggestion): string {
   return `${s.source_invoice_id}|${s.source_type}`
 }
 
-function confidenceVariant(c: PeriodiseringConfidence): 'success' | 'secondary' | 'outline' {
-  if (c === 'high') return 'success'
+// High confidence is the normal case and renders as muted text, not a chip.
+function confidenceVariant(c: PeriodiseringConfidence): 'secondary' | 'outline' {
   if (c === 'medium') return 'secondary'
   return 'outline'
 }
@@ -374,16 +375,16 @@ export default function PeriodiseringWizardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <h1 className="font-display text-2xl leading-8 tracking-tight">
-          {closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
-        </h1>
-        <Button variant="outline" asChild>
-          <Link href="/bookkeeping/year-end">
-            <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
-          </Link>
-        </Button>
-      </div>
+      <PageHeader
+        title={closingYear ? `Periodisering: Bokslut ${closingYear}` : 'Periodisering'}
+        action={
+          <Button variant="outline" asChild>
+            <Link href="/bookkeeping/year-end">
+              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
+            </Link>
+          </Button>
+        }
+      />
 
       {periods === null && !periodsError && (
         <Card>
@@ -722,9 +723,13 @@ function AutoStep({
                     >
                       {s.source_label}
                     </Label>
-                    <Badge variant={confidenceVariant(s.confidence)}>
-                      {confidenceLabel(s.confidence)}
-                    </Badge>
+                    {s.confidence === 'high' ? (
+                      <span className="text-xs text-muted-foreground">{confidenceLabel(s.confidence)}</span>
+                    ) : (
+                      <Badge variant={confidenceVariant(s.confidence)}>
+                        {confidenceLabel(s.confidence)}
+                      </Badge>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground">{s.reason}</p>
                   <div className="flex items-center gap-4 pt-1 text-xs">
@@ -787,10 +792,10 @@ function ManualStep({
                 variant="outline"
                 size="sm"
                 onClick={() => onAdd(t)}
-                className="justify-start text-left h-auto py-2 px-3"
+                className="justify-start text-left h-auto px-3"
               >
                 <Plus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 min-w-0">
+                <span className="flex-1 min-w-0 py-2">
                   <span className="block font-medium">{t.name}</span>
                   <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
                 </span>
@@ -848,7 +853,7 @@ function ManualEntryEditor({
     <div className="rounded-lg border border-border p-3 space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
-        <Button variant="ghost" size="sm" onClick={onRemove} className="h-7 px-2" aria-label="Ta bort">
+        <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -1004,7 +1009,8 @@ function ReviewStep({
         </Button>
         <Button
           onClick={onPost}
-          disabled={!canWrite || posting || totalCount === 0 || postSummary !== null}
+          disabled={!canWrite || totalCount === 0 || postSummary !== null}
+          loading={canWrite && posting}
           title={!canWrite ? 'Endast användare med skrivrättigheter kan posta periodiseringar.' : undefined}
         >
           {!canWrite ? (
@@ -1012,9 +1018,7 @@ function ReviewStep({
               <Lock className="mr-2 h-4 w-4" /> Posta alla
             </>
           ) : posting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-            </>
+            'Bokför…'
           ) : (
             'Posta alla'
           )}

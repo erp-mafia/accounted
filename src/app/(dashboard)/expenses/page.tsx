@@ -29,7 +29,8 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Checkbox } from '@/components/ui/checkbox'
-import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { ContextPicker } from '@/components/common/ContextPicker'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import InboxDocumentPicker, { type AvailableInboxDoc } from '@/components/bookkeeping/InboxDocumentPicker'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
@@ -93,11 +94,6 @@ interface ExtractedReceipt {
   invoice?: { invoiceDate?: string | null; currency?: string | null } | null
   supplier?: { name?: string | null } | null
   lineItems?: Array<{ description?: string | null }> | null
-}
-
-const STATUS_VARIANT: Record<ExpenseClaim['status'], 'secondary' | 'success'> = {
-  registered: 'secondary',
-  paid: 'success',
 }
 
 const OWNER_VALUE = 'owner'
@@ -974,16 +970,21 @@ export default function ExpenseClaimsPage() {
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
-          <SelectTrigger className="w-44">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">{t('filter_all')}</SelectItem>
-            <SelectItem value="registered">{t('status_registered')}</SelectItem>
-            <SelectItem value="paid">{t('status_paid')}</SelectItem>
-          </SelectContent>
-        </Select>
+        {/* The status filter is a toolbar chip-picker like the other list
+            pages, not a form select. */}
+        <ContextPicker
+          value={statusFilter}
+          onChange={(id) => setStatusFilter(id as typeof statusFilter)}
+          ariaLabel={t('th_status')}
+          triggerLabel={
+            statusFilter === 'all' ? t('filter_all') : t(`status_${statusFilter}`)
+          }
+          items={[
+            { id: 'all', label: t('filter_all') },
+            { id: 'registered', label: t('status_registered') },
+            { id: 'paid', label: t('status_paid') },
+          ]}
+        />
         {canWrite && selected.size > 0 && (
           <Button
             variant="outline"
@@ -1049,7 +1050,7 @@ export default function ExpenseClaimsPage() {
                 onClick={() => {
                   if (c.journal_entry_id) router.push(`/bookkeeping/${c.journal_entry_id}`)
                 }}
-                className={c.journal_entry_id ? 'cursor-pointer hover:bg-muted/40' : undefined}
+                className={`group transition-colors duration-150 hover:bg-secondary/35${c.journal_entry_id ? ' cursor-pointer' : ''}`}
               >
                 <td
                   className={`${TD_CLASS} w-8`}
@@ -1089,21 +1090,30 @@ export default function ExpenseClaimsPage() {
                   )}
                 </td>
                 <td className={TD_CLASS}>
-                  <Badge variant={STATUS_VARIANT[c.status]} className="font-normal">
-                    {t(`status_${c.status}`)}
-                  </Badge>
+                  {/* Chips mark exceptions (convention 5): a paid claim is
+                      done and reads as muted text; an outstanding one waits
+                      for its payout. */}
+                  {c.status === 'registered' ? (
+                    <Badge variant="outline" className="font-normal">
+                      {t(`status_${c.status}`)}
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t(`status_${c.status}`)}</span>
+                  )}
                   {c.batch && (
                     <span className="ml-2 text-xs text-muted-foreground tabular-nums">
                       {formatDate(c.batch.payout_date)}
                     </span>
                   )}
                 </td>
-                <td className={`${TD_CLASS} text-right tabular-nums`}>
+                {/* One-line rows (convention 4): the original-currency amount
+                    sits inline after the SEK amount instead of a second line. */}
+                <td className={`${TD_CLASS} whitespace-nowrap text-right tabular-nums`}>
                   {formatCurrency(c.amount_sek)}
                   {c.currency !== 'SEK' && c.amount_in_currency != null && (
-                    <div className="text-xs text-muted-foreground">
-                      ({c.amount_in_currency.toFixed(2)} {c.currency})
-                    </div>
+                    <span className="ml-1.5 text-xs text-muted-foreground">
+                      {formatCurrency(c.amount_in_currency, c.currency)}
+                    </span>
                   )}
                 </td>
                 <td className={`${TD_CLASS} w-16 text-right`} onClick={(e) => e.stopPropagation()}>
@@ -1111,7 +1121,7 @@ export default function ExpenseClaimsPage() {
                     <button
                       type="button"
                       onClick={() => setDeleting(c)}
-                      className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground hover:decoration-foreground"
+                      className={`${QUIET_LINK_CLASS} ${HOVER_REVEAL_CLASS}`}
                     >
                       {t('row_delete')}
                     </button>
@@ -1297,8 +1307,7 @@ export default function ExpenseClaimsPage() {
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon"
-                          className="h-5 w-5"
+                          size="icon-sm"
                           aria-label={t('form_receipt_none')}
                           onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
                         >
@@ -1676,8 +1685,7 @@ export default function ExpenseClaimsPage() {
                           <Button
                             type="button"
                             variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
+                            size="icon-sm"
                             aria-label={t('remove_row')}
                             onClick={() => removeRow(row.key)}
                           >
@@ -1789,8 +1797,8 @@ export default function ExpenseClaimsPage() {
               <Button
                 type="button"
                 onClick={handleCreate}
+                loading={submitting}
                 disabled={
-                  submitting ||
                   upload.phase === 'uploading' ||
                   bookingMode !== 'book' ||
                   regionUnanswered ||
@@ -1798,7 +1806,6 @@ export default function ExpenseClaimsPage() {
                   !bookingRowsValid
                 }
               >
-                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('form_register')}
               </Button>
             )}
@@ -1874,8 +1881,7 @@ export default function ExpenseClaimsPage() {
             >
               {t('form_cancel')}
             </Button>
-            <Button type="button" variant="destructive" onClick={handleDelete} disabled={submitting}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="button" variant="destructive" onClick={handleDelete} loading={submitting}>
               {t('delete_confirm')}
             </Button>
           </DialogFooter>
@@ -1930,8 +1936,7 @@ export default function ExpenseClaimsPage() {
             >
               {t('form_cancel')}
             </Button>
-            <Button type="button" onClick={handlePayout} disabled={submitting || !cashAccount}>
-              {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="button" onClick={handlePayout} disabled={!cashAccount} loading={submitting}>
               {t('payout_confirm')}
             </Button>
           </DialogFooter>

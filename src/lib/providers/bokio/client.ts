@@ -4,6 +4,7 @@ import { withRetry } from '../retry';
 import { BOKIO_BASE_URL, BOKIO_RATE_LIMIT } from './config';
 import { createLogger } from '@/lib/logger';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
 
 const log = createLogger('bokio-client');
 
@@ -124,7 +125,7 @@ export class BokioClient {
           );
         }
 
-        return await response.json() as T;
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 3,

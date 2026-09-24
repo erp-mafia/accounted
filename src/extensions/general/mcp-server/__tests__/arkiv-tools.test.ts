@@ -24,11 +24,11 @@ const JE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 beforeEach(() => {
   reset()
   rpc.mockClear()
-  process.env.ARKIV_COMPANY_IDS = CO
+  process.env.ARKIV_BRAIN_COMPANY_IDS = CO
 })
 
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
 })
 
 describe('Arkiv tools', () => {
@@ -61,21 +61,23 @@ describe('Arkiv tools', () => {
     }
   })
 
-  it('refuses every tool outside the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    await expect(tool('gnubok_search_records').execute({ query: 'hyra' }, CO, 'user-1', supabase)).rejects.toThrow(/not enabled/)
+  it('refuses the brain tools outside the brain rollout and says the shelf tools still work', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    for (const name of ['gnubok_get_neighbourhood', 'gnubok_get_fact_history', 'gnubok_propose_fact', 'gnubok_resolve_missing', 'gnubok_get_record_links', 'gnubok_ask_document']) {
+      await expect(tool(name).execute({ ref: `company:${CO}`, record_ref: `document:${DOC}`, question: 'x', predicate: 'org_number', subject_kind: 'company', value: 'x', note: 'x', finding_id: DOC }, CO, 'user-1', supabase), name).rejects.toThrow(/not switched on .* gnubok_search_records/)
+    }
   })
 
   it('codes its refusals so the envelope never answers UNKNOWN_ERROR for them', async () => {
     const { getStructuredError } = await import('@/lib/errors/get-structured-error')
     const caught = async (p: Promise<unknown>) => getStructuredError(await p.then(() => null, (e: unknown) => e))
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect(await caught(tool('gnubok_search_records').execute({ query: 'hyra' }, CO, 'user-1', supabase))).toMatchObject({
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    expect(await caught(tool('gnubok_get_neighbourhood').execute({ ref: `company:${CO}` }, CO, 'user-1', supabase))).toMatchObject({
       code: 'ARKIV_NOT_ENABLED',
-      message_sv: 'Arkiv är inte aktiverat för det här företaget ännu.',
+      message_sv: 'Företagshjärnan är inte aktiverad för det här företaget ännu. Arkivet fungerar som vanligt.',
       retryable: false,
     })
-    process.env.ARKIV_COMPANY_IDS = CO
+    process.env.ARKIV_BRAIN_COMPANY_IDS = CO
     expect(await caught(tool('gnubok_get_record').execute({ record_ref: 'invoice:x' }, CO, 'user-1', supabase))).toMatchObject({ code: 'VALIDATION_ERROR' })
     enqueue({ data: null })
     const missing = await caught(tool('gnubok_get_source').execute({ record_ref: `document:${DOC}` }, CO, 'user-1', supabase))

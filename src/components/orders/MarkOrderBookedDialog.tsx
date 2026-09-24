@@ -244,15 +244,8 @@ export default function MarkOrderBookedDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={handleConfirm} disabled={submitting}>
-            {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('mark_submitting')}
-              </>
-            ) : (
-              t('mark_confirm')
-            )}
+          <Button onClick={handleConfirm} loading={submitting}>
+            {submitting ? t('mark_submitting') : t('mark_confirm')}
           </Button>
         </DialogFooter>
       </DialogContent>

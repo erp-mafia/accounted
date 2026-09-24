@@ -1,4 +1,5 @@
 'use client'
+import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
@@ -131,6 +132,11 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
       }
       action={
         <div className="flex flex-wrap items-center justify-end gap-2">
+          <HandoffButton disabled={!window} task={{ kind: 'month-close', scope: {
+            ...(periodId ? { fiscal_period_id: periodId } : {}),
+            ...(window ? { date_from: window.from, date_to: window.to } : {}),
+            ...(flowAccount ? { account_key: flowAccount.account_key } : {}),
+          } }} />
           {flowAccount && (
             <button type="button" onClick={closeFlow} className={cn(QUIET_LINK_CLASS, 'mr-1')}>
               {t('v2_close')}
@@ -181,12 +187,16 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
     return (
       <div className="space-y-6" aria-busy>
         {header}
-        <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-          <div className="space-y-2">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-          <Skeleton className="h-48 w-full" />
+        {/* Shaped like the landing table it resolves into: one-line rows,
+            not the retired rail + panel layout. */}
+        <div>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 border-b border-border py-3">
+              <Skeleton className="h-7 w-7 shrink-0" />
+              <Skeleton className="h-4 w-48" />
+              <Skeleton className="ml-auto h-4 w-20" />
+            </div>
+          ))}
         </div>
       </div>
     )

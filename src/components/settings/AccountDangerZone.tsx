@@ -18,7 +18,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RetentionNotice } from '@/components/ui/retention-notice'
-import { ExternalLink, Loader2 } from 'lucide-react'
+import { ExternalLink } from 'lucide-react'
 import { SupportLink } from '@/components/ui/support-link'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -297,18 +297,11 @@ export function AccountDangerZone() {
               onClick={handleDelete}
               disabled={
                 !email ||
-                confirmText.trim().toLowerCase() !== email.toLowerCase() ||
-                isDeleting
+                confirmText.trim().toLowerCase() !== email.toLowerCase()
               }
+              loading={isDeleting}
             >
-              {isDeleting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('deleting')}
-                </>
-              ) : (
-                t('delete_confirm_button')
-              )}
+              {isDeleting ? t('deleting') : t('delete_confirm_button')}
             </Button>
           </DialogFooter>
         </DialogContent>

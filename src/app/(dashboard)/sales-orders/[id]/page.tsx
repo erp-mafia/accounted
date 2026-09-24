@@ -4,7 +4,7 @@ import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ArrowLeft, Check, ClipboardList, Lock, Pencil, ReceiptText, Truck } from 'lucide-react'
+import { Check, ClipboardList, Lock, Pencil, ReceiptText, Truck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
@@ -216,77 +216,73 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="space-y-8 stagger-enter">
-      <div>
-        <Link
-          href="/sales-orders"
-          className="mb-6 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">
-                {number ? t('title', { number }) : t('title_unnumbered')}
-              </h1>
-              {badgeVariant ? (
-                <Badge variant={badgeVariant}>{tList(STATUS_LABEL_KEY[status])}</Badge>
-              ) : (
-                <span className="text-sm text-muted-foreground">{tList(STATUS_LABEL_KEY[status])}</span>
-              )}
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground" data-ph-mask="">
-              {[order.customer?.name, formatDate(order.order_date)].filter(Boolean).join(' · ')}
-            </p>
+      {/* Header: the page-header hooks make it the panel's top bar
+          (convention 2), like the invoice and customer detail pages: the
+          sidebar says where we are, so there is no back link. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 data-ph-mask="" className="page-header-title font-display text-2xl leading-8 tracking-tight">
+              {number ? t('title', { number }) : t('title_unnumbered')}
+            </h1>
+            {badgeVariant ? (
+              <Badge variant={badgeVariant}>{tList(STATUS_LABEL_KEY[status])}</Badge>
+            ) : (
+              <span className="text-sm text-muted-foreground">{tList(STATUS_LABEL_KEY[status])}</span>
+            )}
           </div>
+          {/* page-header-desc: hidden in the top bar, since customer and
+              order date are the first rows of Detaljer below. */}
+          <p className="page-header-desc mt-1 text-sm text-muted-foreground" data-ph-mask="">
+            {[order.customer?.name, formatDate(order.order_date)].filter(Boolean).join(' · ')}
+          </p>
+        </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-            {canEdit && (
-              <Button variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
-                {canWrite ? (
-                  <Link href={`/sales-orders/${order.id}/edit`}>
-                    <Pencil className="mr-2 h-4 w-4" />
-                    {t('action_edit')}
-                  </Link>
-                ) : (
-                  <span>
-                    <Lock className="mr-2 h-4 w-4" />
-                    {t('action_edit')}
-                  </span>
-                )}
-              </Button>
-            )}
-            {canDeliver && (
-              <Button
-                variant={canInvoice ? 'outline' : 'default'}
-                onClick={() => setIsDeliveryOpen(true)}
-                disabled={!canWrite}
-                title={lockTitle}
-              >
-                {canWrite ? <Truck className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('action_register_delivery')}
-              </Button>
-            )}
-            {canInvoice && (
-              <Button onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
-                {canWrite ? <ReceiptText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('action_create_invoice')}
-              </Button>
-            )}
-            {canConfirm && (
-              <Button onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
-                {canWrite ? <Check className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('action_confirm')}
-              </Button>
-            )}
-            {canReopen && (
-              <Button onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
-                {canWrite ? <ClipboardList className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
-                {t('action_reopen')}
-              </Button>
-            )}
-          </div>
+        <div className="page-header-action flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {canEdit && (
+            <Button variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? (
+                <Link href={`/sales-orders/${order.id}/edit`}>
+                  <Pencil className="mr-2 h-4 w-4" />
+                  {t('action_edit')}
+                </Link>
+              ) : (
+                <span>
+                  <Lock className="mr-2 h-4 w-4" />
+                  {t('action_edit')}
+                </span>
+              )}
+            </Button>
+          )}
+          {canDeliver && (
+            <Button
+              variant={canInvoice ? 'outline' : 'default'}
+              onClick={() => setIsDeliveryOpen(true)}
+              disabled={!canWrite}
+              title={lockTitle}
+            >
+              {canWrite ? <Truck className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('action_register_delivery')}
+            </Button>
+          )}
+          {canInvoice && (
+            <Button onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <ReceiptText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('action_create_invoice')}
+            </Button>
+          )}
+          {canConfirm && (
+            <Button onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <Check className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('action_confirm')}
+            </Button>
+          )}
+          {canReopen && (
+            <Button onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
+              {canWrite ? <ClipboardList className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('action_reopen')}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -464,7 +460,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
               variant="ghost"
               size="sm"
               onClick={() => setPendingTransition('cancel')}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
+              className="text-muted-foreground hover:text-destructive"
             >
               {t('action_cancel')}
             </Button>
@@ -474,7 +470,7 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
               variant="ghost"
               size="sm"
               onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
+              className="text-muted-foreground hover:text-destructive"
             >
               {t('action_delete')}
             </Button>

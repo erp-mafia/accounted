@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { todayIso } from '@/lib/arkiv/agreements/dates'
 import type { AgreementKind, Period } from '@/lib/arkiv/agreements/derive'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -64,7 +64,7 @@ interface DeadlineRow {
 const AMOUNT_FIELDS = ['monthly_rent', 'monthly_fee', 'instalment_amount', 'principal', 'fee_amount']
 
 export const GET = withRouteContext('arkiv.agreements', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const today = todayIso()
   const { data: agreementData, error } = await ctx.supabase
     .from('agreements')

@@ -321,6 +321,25 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
   // If a `company_members` row arrives without an associated company object,
   // the join filter behaved differently than expected: drop the row AND
   // surface it as a warn so we notice silent data-integrity regressions.
+  // The display name the owner edits in Inställningar lives on
+  // company_settings; companies.name is the onboarding snapshot and goes stale
+  // on a rename. Same source as the MCP gnubok_list_companies and briefing
+  // (feedback seq 592092). Best-effort: a failed read keeps companies.name.
+  const displayNames = new Map<string, string>()
+  const companyIds = trimmed.map((r) => pickCompany(r)?.id).filter((id): id is string => !!id)
+  if (companyIds.length > 0) {
+    const { data: settingsRows, error: settingsError } = await ctx.supabase
+      .from('company_settings')
+      .select('company_id, company_name')
+      .in('company_id', companyIds)
+    if (settingsError) {
+      ctx.log.warn('companies.list: display-name lookup failed', { error: settingsError.message })
+    }
+    for (const row of (settingsRows ?? []) as { company_id: string; company_name: string | null }[]) {
+      if (row.company_name) displayNames.set(row.company_id, row.company_name)
+    }
+  }
+
   let droppedNulls = 0
   const companies = trimmed
     .map((r) => {
@@ -331,7 +350,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
       }
       return {
         id: c.id,
-        name: c.name,
+        name: displayNames.get(c.id) ?? c.name,
         org_number: c.org_number,
         entity_type: c.entity_type,
         role: r.role,

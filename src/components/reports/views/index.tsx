@@ -37,6 +37,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { PageHeader } from '@/components/ui/page-header'
+import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
@@ -353,7 +354,7 @@ function TrialBalanceSimplifiedRow({
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
@@ -401,7 +402,7 @@ function TrialBalanceDetailedRow({
 
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-muted/50 transition-colors">
+      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
         <td className="py-2" onClick={(e) => e.stopPropagation()}>
           <Toggle />
         </td>
@@ -784,14 +785,14 @@ export function ResultatrapportView({ periodId, dateRange, dimensionFilter = nul
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={colCount} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                      <td colSpan={colCount} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
                     {group.rows.map((row) => (
                       <tr
                         key={row.account_number}
-                        className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
+                        className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
                         onClick={() => onNavigateToAccount(row.account_number)}
                       >
                         <td className="px-4 py-1.5">
@@ -919,14 +920,14 @@ export function BalansrapportView({ periodId, dateRange, onNavigateToAccount }: 
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={5} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                      <td colSpan={5} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>
                     {group.rows.map((row) => (
                       <tr
                         key={row.account_number}
-                        className="border-b last:border-0 cursor-pointer hover:bg-muted/50 transition-colors"
+                        className="border-b last:border-0 cursor-pointer hover:bg-secondary/35 transition-colors"
                         onClick={() => onNavigateToAccount(row.account_number)}
                       >
                         <td className="px-4 py-1.5">
@@ -1025,14 +1026,14 @@ function ReportSectionTable({
           {sections.map((section) => (
             <React.Fragment key={section.title}>
               <tr className="bg-muted/30">
-                <td colSpan={3} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                <td colSpan={3} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
                   {section.title}
                 </td>
               </tr>
               {section.rows.map((row) => (
                 <tr
                   key={row.account_number}
-                  className={`border-b last:border-0 ${onNavigateToAccount ? 'cursor-pointer hover:bg-muted/50 transition-colors' : ''}`}
+                  className={`border-b last:border-0 ${onNavigateToAccount ? 'cursor-pointer hover:bg-secondary/35 transition-colors' : ''}`}
                   onClick={onNavigateToAccount ? () => onNavigateToAccount(row.account_number) : undefined}
                 >
                   <td className="px-4 py-1.5 w-20"><AccountNumber number={row.account_number} name={row.account_name} /></td>
@@ -1965,12 +1966,15 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
         <PageHeader
           title={pageTitle}
           action={
+            <div className="flex items-center gap-2">
+            <HandoffButton disabled={!data} task={{ kind: 'vat', scope: { ...(data ? { date_from: data.period.start, date_to: data.period.end } : {}), ...(isYearly && fiscalPeriodId ? { fiscal_period_id: fiscalPeriodId } : {}) } }} />
             <ReportExportMenu
               variant="outline"
               items={[
                 { format: 'xlsx', href: `/api/reports/vat-declaration/xlsx?${vatQueryString()}` },
               ]}
             />
+            </div>
           }
         />
       )}
@@ -2088,7 +2092,7 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
               <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Momsdeklaration · {data.period.start} till {data.period.end}
               </h3>
-              <span className="text-[11.5px] tabular-nums text-muted-foreground">
+              <span className="text-[11px] tabular-nums text-muted-foreground">
                 {data.invoiceCount} fakturor · {data.transactionCount} transaktioner
               </span>
             </div>
@@ -2784,7 +2788,7 @@ function SupplierLedgerRow({
   const { Toggle, Panel } = useReportRowExpansion(fetcher, `sup-${entry.supplier_id}`)
   return (
     <>
-      <tr className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+      <tr className="border-b last:border-0 hover:bg-secondary/35 transition-colors">
         <td className="py-2"><Toggle /></td>
         <td className="py-2">{entry.supplier_name}</td>
         <td className="py-2 text-right tabular-nums">{entry.current > 0 ? formatAmount(entry.current) : ''}</td>
@@ -3129,7 +3133,7 @@ export function JournalRegisterView({ periodId }: { periodId: string }) {
                 return (
                   <React.Fragment key={index}>
                     <tr
-                      className={`border-b cursor-pointer hover:bg-muted/50 ${isReversed ? 'line-through opacity-60' : ''}`}
+                      className={`border-b cursor-pointer hover:bg-secondary/35 ${isReversed ? 'line-through opacity-60' : ''}`}
                       onClick={() => toggleEntry(index)}
                     >
                       <td className="py-2">
@@ -3321,7 +3325,7 @@ function ARCustomerInvoiceRows({
       {loading && (
         <tr className="bg-muted/30">
           <td></td>
-          <td colSpan={7} className="py-1 text-[10px] text-muted-foreground">Letar verifikat…</td>
+          <td colSpan={7} className="py-1 text-[11px] text-muted-foreground">Letar verifikat…</td>
         </tr>
       )}
     </>
@@ -3463,7 +3467,7 @@ export function ARLedgerView({ periodId }: { periodId: string }) {
                   return (
                     <React.Fragment key={entry.customer_id}>
                       <tr
-                        className="border-b cursor-pointer hover:bg-muted/50"
+                        className="border-b cursor-pointer hover:bg-secondary/35"
                         onClick={() => toggleCustomer(entry.customer_id)}
                       >
                         <td className="py-2">
@@ -3699,7 +3703,7 @@ export function DimensionPnlView({ periodId, dateRange }: { periodId: string; da
                 {data.groups.map((group) => (
                   <React.Fragment key={group.class}>
                     <tr className="bg-muted/30">
-                      <td colSpan={colCount} className="px-4 py-2 text-[12px] font-semibold text-muted-foreground">
+                      <td colSpan={colCount} className="px-4 py-2 text-[12.5px] font-semibold text-muted-foreground">
                         {group.class_label}
                       </td>
                     </tr>

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -16,7 +17,7 @@ import {
 import { parseCompanyMembersPayload } from '@/components/settings/members-payload'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatDateLong } from '@/lib/utils'
-import { Loader2, Plus, Trash2, Mail } from 'lucide-react'
+import { Plus, Trash2, Mail } from 'lucide-react'
 
 interface CompanyMemberItem {
   id: string
@@ -259,8 +260,10 @@ export function CompanyMembersSection() {
           )}
         </div>
         {!loadError && (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         )}
       </div>
@@ -293,17 +296,13 @@ export function CompanyMembersSection() {
           {canInvite && !member.is_current_user && member.role !== 'owner' && member.source !== 'team' && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_remove_aria')}
               onClick={() => handleRemoveMember(member.id)}
-              disabled={removingId === member.id}
+              loading={removingId === member.id}
             >
-              {removingId === member.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {removingId !== member.id && <Trash2 className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -330,17 +329,13 @@ export function CompanyMembersSection() {
           {canInvite && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+              size="icon-sm"
+              className="shrink-0 text-muted-foreground hover:text-destructive"
               aria-label={t('members_revoke_aria')}
               onClick={() => handleRevokeInvite(inv)}
-              disabled={revokingId === inv.id}
+              loading={revokingId === inv.id}
             >
-              {revokingId === inv.id ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-3.5 w-3.5" />
-              )}
+              {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -419,15 +414,9 @@ export function CompanyMembersSection() {
             <option value="member">{t('members_role_member')}</option>
             <option value="admin">{t('members_role_admin')}</option>
           </SettingsSelect>
-          <Button type="submit" size="sm" disabled={isSending || !inviteEmail.trim()}>
-            {isSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('members_invite_button')}
-              </>
-            )}
+          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
+            {!isSending && <Plus className="mr-2 h-4 w-4" />}
+            {t('members_invite_button')}
           </Button>
         </form>
       )}

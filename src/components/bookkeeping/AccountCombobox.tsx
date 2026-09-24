@@ -4,6 +4,11 @@ import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, use
 import { createPortal } from 'react-dom'
 import { Plus } from 'lucide-react'
 import { Input } from '@/components/ui/input'
+import {
+  POPOVER_ENTER_CLASS,
+  POPOVER_ENTER_UP_CLASS,
+  POPOVER_SURFACE_CLASS,
+} from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
 import { getAccountClassName } from '@/lib/bookkeeping/account-descriptions'
 import {
@@ -359,6 +364,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           : { bottom: dropdownPos.bottom }),
       }
     : undefined
+  // A portal panel flips above the input when there is no room below.
+  const portalEnterClass =
+    dropdownPos?.top !== undefined ? POPOVER_ENTER_CLASS : POPOVER_ENTER_UP_CLASS
 
   // data-dialog-companion: DialogContent/SheetContent treat a pointerdown
   // inside a node carrying this attribute as an inside interaction, so
@@ -377,7 +385,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             type="button"
             data-highlighted={isHighlighted}
             className={`w-full text-left px-2 py-1.5 text-sm cursor-pointer flex items-baseline gap-2 ${
-              isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-muted/50'
+              isHighlighted ? 'bg-primary/10 text-primary' : 'hover:bg-secondary/60'
             }`}
             onMouseDown={(e) => {
               e.preventDefault()
@@ -417,7 +425,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {onCreateAccount && (
         <button
           type="button"
-          className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-muted/50"
+          className="mt-2 flex w-full items-center gap-2 rounded-sm border border-input bg-card px-2 py-1.5 text-left text-sm hover:bg-secondary/60"
           onMouseDown={(e) => {
             e.preventDefault()
             setIsOpen(false)
@@ -468,7 +476,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
         <div
           ref={listRef}
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto rounded-lg border border-input bg-card shadow-md',
+            'absolute z-50 top-full left-0 mt-1 max-h-[300px] overflow-y-auto',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
             flatListWidthClass,
           )}
         >
@@ -480,7 +490,11 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           <div
             ref={attachPortalListPanel}
             data-dialog-companion=""
-            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card shadow-md"
+            className={cn(
+              'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto',
+              POPOVER_SURFACE_CLASS,
+              portalEnterClass,
+            )}
             style={portalPanelStyle}
           >
             {listPanelContent}
@@ -493,7 +507,9 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
       {isOpen && !disabled && search.trim() && flatList.length === 0 && (flat ? (
         <div
           className={cn(
-            'absolute z-50 top-full left-0 mt-1 rounded-lg border border-input bg-card shadow-md p-3',
+            'absolute z-50 top-full left-0 mt-1 p-3',
+            POPOVER_SURFACE_CLASS,
+            POPOVER_ENTER_CLASS,
             flatListWidthClass,
           )}
         >
@@ -505,7 +521,11 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
           <div
             ref={attachPortalPanel}
             data-dialog-companion=""
-            className="fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto rounded-lg border border-input bg-card p-3 shadow-md"
+            className={cn(
+              'fixed z-50 overflow-y-auto overscroll-contain pointer-events-auto p-3',
+              POPOVER_SURFACE_CLASS,
+              portalEnterClass,
+            )}
             style={portalPanelStyle}
           >
             {emptyPanelContent}

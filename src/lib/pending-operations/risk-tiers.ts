@@ -69,6 +69,9 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // booked debit 19xx / credit 1513 and linked. Storno-reversible like the
   // other bank-row matches, so the same tier as match_transaction_invoice.
   settle_rot_rut_payout: 'medium',
+  // Linking an existing payout verifikat books nothing and a storno of that
+  // verifikat releases the link, so it sits with the other link operations.
+  link_rot_rut_payout_voucher: 'medium',
   // Anläggningsregister rows are master data: no voucher, editable until
   // depreciation is posted (then ASSET_CORRECTION_BLOCKED routes to storno).
   create_asset: 'low',

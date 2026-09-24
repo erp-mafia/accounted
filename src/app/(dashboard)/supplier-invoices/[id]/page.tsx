@@ -24,7 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Loader2, Pencil, Plus, CalendarClock, MoreHorizontal, Unlink } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal, Unlink } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -166,7 +166,7 @@ function InlineAccountCell({
           </div>
           {/* Any account in the company's own chart, by number or name: the
               template search covers the common ones, this covers the rest. */}
-          <div className="border-t border-border/70 bg-background px-3 py-2">
+          <div className="border-t border-border bg-background px-3 py-2">
             <AccountCombobox value={manual} accounts={accounts} onChange={setManual} onCommit={pick} />
           </div>
         </CategoryPopover>
@@ -930,11 +930,10 @@ export default function SupplierInvoiceDetailPage() {
             <Button
               onClick={handleApprove}
               disabled={isProcessing || !canWrite}
+              loading={processingAction === 'approve'}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {processingAction === 'approve' ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {processingAction === 'approve' ? null : canWrite ? (
                 <CheckCircle className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -967,11 +966,10 @@ export default function SupplierInvoiceDetailPage() {
               variant="outline"
               onClick={handleUncredit}
               disabled={isProcessing || !canWrite}
+              loading={processingAction === 'uncredit'}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {processingAction === 'uncredit' ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {processingAction === 'uncredit' ? null : canWrite ? (
                 <Undo2 className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -983,10 +981,13 @@ export default function SupplierInvoiceDetailPage() {
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  {processingAction === 'credit' || processingAction === 'delete' ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={tCommon('more_options')}
+                  loading={processingAction === 'credit' || processingAction === 'delete'}
+                >
+                  {processingAction !== 'credit' && processingAction !== 'delete' && (
                     <MoreHorizontal className="h-4 w-4" />
                   )}
                 </Button>
@@ -1268,13 +1269,10 @@ export default function SupplierInvoiceDetailPage() {
                 className="-my-1"
                 onClick={handleBook}
                 disabled={isProcessing || !canWrite}
+                loading={processingAction === 'book'}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {processingAction === 'book' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : !canWrite ? (
-                  <Lock className="mr-2 h-4 w-4" />
-                ) : null}
+                {processingAction !== 'book' && !canWrite && <Lock className="mr-2 h-4 w-4" />}
                 {t('book_action')}
               </Button>
             </span>
@@ -1488,11 +1486,10 @@ export default function SupplierInvoiceDetailPage() {
                             />
                             <Button
                               variant="ghost"
-                              size="icon"
+                              size="icon-sm"
                               onClick={() => removeEditLine(i)}
                               disabled={editLines.length <= 2}
                               aria-label="Ta bort rad"
-                              className="h-8 w-8"
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>

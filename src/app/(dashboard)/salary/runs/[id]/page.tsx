@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -1056,8 +1056,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             <Button variant="outline" onClick={() => setApproveOverride(null)} disabled={actionLoading === 'approve'}>
               {t('approve_override_cancel')}
             </Button>
-            <Button onClick={() => doApprove(true)} disabled={actionLoading === 'approve'}>
-              {actionLoading === 'approve' && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={() => doApprove(true)} loading={actionLoading === 'approve'}>
               {t('approve_override_confirm')}
             </Button>
           </DialogFooter>

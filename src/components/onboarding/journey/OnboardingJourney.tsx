@@ -103,6 +103,7 @@ import JourneyDatePicker from './JourneyDatePicker'
 import AddressFields from './AddressFields'
 import { InkText } from './ink'
 import './journey.css'
+import { Button } from '@/components/ui/button'
 
 /**
  * The journey onboarding flow. Renders the reducer's current step,
@@ -807,7 +808,7 @@ export default function OnboardingJourney({
                   {t('journey_form_more_pre', { form: t(FORM_LABEL_KEY[form]) })}{' '}
                   <button
                     type="button"
-                    className="jny-btn-quiet"
+                    className="jny-link"
                     onClick={() => dispatch({ type: 'ENTITY_PICKED', entityType: form })}
                   >
                     {t('journey_form_more_link', { form: t(FORM_LABEL_KEY[form]).toLowerCase() })}
@@ -1151,9 +1152,9 @@ export default function OnboardingJourney({
 
         <div className="jny-balance" aria-hidden="true" />
         <div className="jny-backrow">
-            <button type="button" className="jny-btn-quiet" disabled={!navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? dispatch({ type: 'BACK' }) : mode === 'add' ? router.push('/') : router.back())}>
+            <Button variant="ghost" className="text-muted-foreground" disabled={!navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? dispatch({ type: 'BACK' }) : mode === 'add' ? router.push('/') : router.back())}>
               &lsaquo; {t('back')}
-            </button>
+            </Button>
         </div>
       </div>
     </div>
@@ -1249,9 +1250,9 @@ function FyMonthStep({
       </div>
       {sel ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => onUse(sel)}>
+          <Button size="lg" onClick={() => onUse(sel)}>
             {t('journey_fymonth_use')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </Question>
@@ -1464,16 +1465,16 @@ function DoneStep({
       {mode === 'first' ? (
         <Reveal delay={notes.length > 0 ? 1400 + notes.length * 260 : 1200}>
           <div className="jny-qactions">
-            <button type="button" className="jny-btn" onClick={onContinue}>
+            <Button size="lg" onClick={onContinue}>
               {t('journey_done_continue')}
-            </button>
+            </Button>
           </div>
         </Reveal>
       ) : (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={onOpen}>
+          <Button size="lg" onClick={onOpen}>
             {t('journey_open_app', { appName })}
-          </button>
+          </Button>
         </div>
       )}
     </div>

@@ -925,10 +925,6 @@ export default function SkattekontoPage() {
         </p>
       )}
 
-      <p className="px-1 text-xs leading-5 text-muted-foreground">
-        {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
-      </p>
-
       <DestructiveConfirmDialog {...ignoreConfirmProps} />
 
       {bookTarget && (
@@ -1206,7 +1202,7 @@ function SkattekontoRow({
               identical apart from ränteberäkningsdatum. Without this the rows
               read as duplicates from the automatic hämtning. */}
           {showInterestDate && row.ranteberakningsdatum && (
-            <span className="text-[12px] tabular-nums text-muted-foreground">
+            <span className="text-[12.5px] tabular-nums text-muted-foreground">
               {t('interest_from', { date: formatDate(row.ranteberakningsdatum) })}
             </span>
           )}
@@ -1229,7 +1225,7 @@ function SkattekontoRow({
             ) : (
               /* Plain fact, not an exception: quiet text, and the band
                  header carries the count once. */
-              <span className="text-[11.5px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
+              <span className="text-[11px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
             )
           )}
         </span>
@@ -1370,8 +1366,9 @@ function MatchDialog({
                       {c.description}
                     </TableCell>
                     <TableCell>
+                      {/* Chips mark exceptions: posted is the normal case. */}
                       {c.status === 'posted' ? (
-                        <Badge variant="secondary">Bokförd</Badge>
+                        <span className="text-muted-foreground">Bokförd</span>
                       ) : c.status === 'draft' ? (
                         <Badge variant="outline">Utkast</Badge>
                       ) : (

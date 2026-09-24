@@ -28,6 +28,7 @@ describe('GET /api/arkiv/documents/[id]', () => {
   })
 
   it('returns the record with fields, facts, links and the verifikat', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
     enqueue({ data: { id: DOC, file_name: 'Registreringsbevis.pdf', created_at: '2026-09-15', page_count: 3, doc_type: 'registration.bolagsverket', admission_state: 'admitted', journal_entry_id: 'je-1' } })
     enqueue({ data: { summary: 'Registreringsbevis för Arcim Technology AB.', confidence: 0.98, decided_by: 'model' } })
     enqueue({ data: { id: 'ext-1', schema_type: 'registration.bolagsverket', pass: 'consensus', payload: { org_number: { value: '559538-6219', normalized: '5595386219', page: 2, quote: 'Organisationsnummer 559538-6219', confidence: 1 } }, review_fields: [] } })
@@ -43,5 +44,16 @@ describe('GET /api/arkiv/documents/[id]', () => {
     expect((view.record as { fields: unknown[] }).fields).toEqual([{ field: 'org_number', label: 'org_number', value: '5595386219', page: 2, quote: 'Organisationsnummer 559538-6219', confidence: 1, under_review: false }])
     expect(view.facts).toEqual([{ fact_id: 'f1', predicate: 'org_number', label: 'Organisationsnummer', value_text: '5595386219', valid_from: null, sys_from: '2026-09-15', source_kind: 'extraction', superseded_by: false }])
     expect(view.links).toEqual([{ link_id: 'l1', target_kind: 'party', target_id: 'p1', basis: 'proven', method: 'org_number', label: 'Bolagsverket', href: '/parties?party=p1' }])
+  })
+
+  it('outside the brain the record is the document, what it is and its verifikat: no reading, facts, links or agreement are fetched', async () => {
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
+    enqueue({ data: { id: DOC, file_name: 'Registreringsbevis.pdf', created_at: '2026-09-15', page_count: 3, doc_type: 'registration.bolagsverket', admission_state: 'admitted', journal_entry_id: 'je-1', pages_read_at: '2026-09-15', read_error: null, extracted_data: null } })
+    enqueue({ data: { summary: 'Registreringsbevis för Arcim Technology AB.', confidence: 0.98, decided_by: 'model', signals: [] } })
+    enqueue({ data: { id: 'je-1', voucher_series: 'A', voucher_number: 7 } })
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    const view = (body as { data: Record<string, unknown> }).data
+    expect(view).toMatchObject({ title: 'Registreringsbevis', journal_entry: { id: 'je-1', voucher: 'A7' }, classification: { summary: 'Registreringsbevis för Arcim Technology AB.' }, read: { state: 'read' }, record: null, facts: [], links: [], agreement: null })
   })
 })

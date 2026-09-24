@@ -186,6 +186,12 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
   // the consent click is the self-attestation (ASVS V16.1.1 / SOC 2 CC6.1).
   const conflictingScope = findStageApproveConflict(grantedScopes)
   const sodAcknowledgedAt = conflictingScope ? new Date().toISOString() : null
+  let storedClient: string | null = builtInRedirectProvider(payload.redirectUri)
+  if (!storedClient) {
+    const { data: registration } = await supabase.from('oauth_client_registrations')
+      .select('id').eq('redirect_uri', payload.redirectUri).is('revoked_at', null).maybeSingle()
+    if (registration) storedClient = `registered:${registration.id}`
+  }
 
   const { error: insertError } = await supabase
     .from('api_keys')
@@ -200,8 +206,9 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
       // Which built-in client this is (claude, chatgpt, grok, ...): the
       // onboarding Done step and Hem show a connected state per client.
       // The redirect URI was validated against the allowlist at /authorize
-      // and travels in the code payload; a registered client stores null.
-      client: builtInRedirectProvider(payload.redirectUri),
+      // and travels in the code payload. Registered clients carry a typed
+      // reference for actor labels, never a client-supplied provider name.
+      client: storedClient,
       // Literal keys (null when no conflict): the no-phantom-columns scanner
       // resolves object literals only, never spreads.
       sod_acknowledged_at: sodAcknowledgedAt,

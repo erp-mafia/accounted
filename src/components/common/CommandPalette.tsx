@@ -282,7 +282,7 @@ export default function CommandPalette({ initialOpen = false }: { initialOpen?: 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="mb-1.5 last:mb-0">
-      <p className="px-4 pt-2 pb-1 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{title}</p>
+      <p className="px-4 pt-2 pb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{title}</p>
       <div>{children}</div>
     </div>
   )

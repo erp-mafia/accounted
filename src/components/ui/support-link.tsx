@@ -430,14 +430,11 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           type="button"
           variant="outline"
           size="sm"
-          disabled={isSending || isPreparing || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
+          disabled={isSending || attachments.length >= SUPPORT_MAX_ATTACHMENTS}
+          loading={isPreparing}
           onClick={() => fileInputRef.current?.click()}
         >
-          {isPreparing ? (
-            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <Paperclip className="mr-2 h-3.5 w-3.5" />
-          )}
+          {!isPreparing && <Paperclip className="mr-2 h-3.5 w-3.5" />}
           {t('attach_label')}
         </Button>
         <span className="text-xs text-muted-foreground">
@@ -459,14 +456,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         </Button>
         <Button
           type="submit"
-          disabled={isSending || isPreparing || message.trim().length < 5}
+          disabled={isPreparing || message.trim().length < 5}
+          loading={isSending}
         >
-          {isSending ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('sending')}
-            </>
-          ) : (
+          {isSending ? t('sending') : (
             <>
               <Send className="mr-2 h-4 w-4" />
               {t('send')}
@@ -491,8 +484,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)} disabled={isSending}>
           {t('cancel')}
         </Button>
-        <Button type="submit" disabled={isSending || message.trim().length === 0}>
-          {isSending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+        <Button type="submit" disabled={message.trim().length === 0} loading={isSending}>
+          {!isSending && <Send className="mr-2 h-4 w-4" />}
           {isSending ? t('sending') : t('reply')}
         </Button>
       </DialogFooter>

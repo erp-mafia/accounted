@@ -457,3 +457,27 @@ describe('Skatteverket tools: scopes', () => {
     expect(findStageApproveConflict(['skatteverket:write'])).toBeNull()
   })
 })
+
+describe('gnubok_vat_declaration_status: output schema matches what Skatteverket sends', () => {
+  // inlämnat is a LIST of submissions. A client that validates
+  // structuredContent refused the whole result while the schema said object
+  // (feedback seq 694132); via gnubok_call_tool the same call worked.
+  it('allows an array for submitted and decided', () => {
+    const props = (vatStatus.outputSchema as { properties: Record<string, { type: string[] }> }).properties
+    expect(props.submitted.type).toEqual(expect.arrayContaining(['object', 'array', 'null']))
+    expect(props.decided.type).toEqual(expect.arrayContaining(['object', 'array', 'null']))
+  })
+
+  it('passes an array answer through unchanged', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    const submissions = [{ kvittensnummer: 'K1' }, { kvittensnummer: 'K2' }]
+    mockSkvRequest.mockResolvedValue({ ok: true, status: 200, json: async () => submissions, text: async () => '' })
+    const { supabase } = createQueuedMockSupabase()
+
+    const result = await vatStatus.execute(
+      { period_type: 'quarterly', year: 2026, period: 2, state: 'submitted' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' },
+    ) as { submitted: unknown }
+
+    expect(result.submitted).toEqual(submissions)
+  })
+})

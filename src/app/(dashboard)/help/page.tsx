@@ -2,27 +2,15 @@
 
 import { useState, useMemo } from 'react'
 import { useTranslations } from 'next-intl'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import { HelpLink } from '@/components/ui/info-tooltip'
 import { PageHeader } from '@/components/ui/page-header'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
-import {
-  Search,
-  BookOpen,
-  Receipt,
-  Calculator,
-  FileText,
-  FileDown,
-  ExternalLink,
-  ChevronDown,
-  ChevronUp,
-  Briefcase,
-  Landmark,
-} from 'lucide-react'
+import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { SegmentedControl } from '@/components/ui/segmented-control'
+import { Search, FileDown, ExternalLink, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
-import { Mail } from 'lucide-react'
 
 interface GlossaryTerm {
   term: string
@@ -211,82 +199,72 @@ const glossaryTerms: GlossaryTerm[] = [
 ]
 
 const categoryConfig = {
-  skatt: { labelKey: 'category_skatt', icon: Calculator, color: 'bg-secondary text-muted-foreground' },
-  moms: { labelKey: 'category_moms', icon: Receipt, color: 'bg-secondary text-muted-foreground' },
-  faktura: { labelKey: 'category_faktura', icon: FileText, color: 'bg-secondary text-muted-foreground' },
-  bokföring: { labelKey: 'category_bokforing', icon: BookOpen, color: 'bg-secondary text-muted-foreground' },
-  bank: { labelKey: 'category_bank', icon: Landmark, color: 'bg-secondary text-muted-foreground' },
-  företag: { labelKey: 'category_foretag', icon: Briefcase, color: 'bg-secondary text-muted-foreground' },
+  skatt: { labelKey: 'category_skatt' },
+  moms: { labelKey: 'category_moms' },
+  faktura: { labelKey: 'category_faktura' },
+  bokföring: { labelKey: 'category_bokforing' },
+  bank: { labelKey: 'category_bank' },
+  företag: { labelKey: 'category_foretag' },
 }
 
-function TermCard({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
+// One hairline row per term (convention 4): the term and its everyday name
+// on one line, the definition, related terms and the Skatteverket link in the
+// expanded fold. The category shows as the filter above, not as an icon tile
+// on every row.
+function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpanded: boolean; onToggle: () => void }) {
   const t = useTranslations('help')
-  const config = categoryConfig[term.category]
-  const CategoryIcon = config.icon
 
   return (
-    <Card className={cn('transition-colors', isExpanded && 'ring-2 ring-primary/20')}>
-      <CardContent className="pt-4">
-        <button
-          onClick={onToggle}
-          className="w-full text-left"
-        >
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-start gap-3">
-              <div className={cn('p-2 rounded-lg', config.color)}>
-                <CategoryIcon className="h-4 w-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h3>{term.term}</h3>
-                  {term.simpleTerm && (
-                    <span className="text-sm text-muted-foreground font-normal">
-                      {term.simpleTerm}
-                    </span>
-                  )}
-                </div>
-                {!isExpanded && (
-                  <p className="text-sm text-muted-foreground line-clamp-2 mt-1">
-                    {term.definition}
-                  </p>
-                )}
-              </div>
-            </div>
-            {isExpanded ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1" />
-            ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-1" />
-            )}
-          </div>
-        </button>
+    <div className="border-b border-border">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isExpanded}
+        className="flex w-full items-center justify-between gap-4 px-1 py-3 text-left transition-colors duration-150 hover:bg-secondary/35"
+      >
+        <span className="flex min-w-0 items-baseline gap-2">
+          <span className="shrink-0 text-sm font-medium">{term.term}</span>
+          {term.simpleTerm && (
+            <span className="truncate text-[13px] text-muted-foreground">{term.simpleTerm}</span>
+          )}
+        </span>
+        <ChevronDown
+          className={cn(
+            'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150',
+            isExpanded && 'rotate-180',
+          )}
+          aria-hidden="true"
+        />
+      </button>
 
-        {isExpanded && (
-          <div className="mt-4 pl-11 space-y-3 animate-fade-in">
-            <p className="text-sm text-muted-foreground leading-relaxed">
-              {term.definition}
+      {isExpanded && (
+        <div className="space-y-3 px-1 pb-4 animate-fade-in">
+          <p className="max-w-prose text-sm leading-relaxed text-muted-foreground">
+            {term.definition}
+          </p>
+
+          {term.relatedTerms && term.relatedTerms.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {t('related_label')} {term.relatedTerms.join(', ')}
             </p>
+          )}
 
-            {term.relatedTerms && term.relatedTerms.length > 0 && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-muted-foreground">{t('related_label')}</span>
-                <span className="text-xs text-muted-foreground">
-                  {term.relatedTerms.join(', ')}
-                </span>
-              </div>
-            )}
-
-            {term.skatteverketUrl && (
-              <HelpLink href={term.skatteverketUrl}>
-                {t('read_more_skv')}
-                <ExternalLink className="h-3 w-3" />
-              </HelpLink>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          {term.skatteverketUrl && (
+            <HelpLink href={term.skatteverketUrl}>
+              {t('read_more_skv')}
+              <ExternalLink className="h-3 w-3" />
+            </HelpLink>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
+
+// Quiet link row for the resources below the glossary: title with the muted
+// description on the same line, hairline between rows.
+const LINK_ROW_CLASS =
+  'flex items-baseline gap-3 border-b border-border px-1 py-3 text-sm text-foreground transition-colors duration-150 hover:bg-secondary/35 hover:text-foreground hover:no-underline'
 
 export default function HelpPage() {
   const t = useTranslations('help')
@@ -328,56 +306,42 @@ export default function HelpPage() {
     })
   }
 
+  const categoryOptions = [
+    { value: 'all', label: t('filter_all') },
+    ...Object.entries(categoryConfig).map(([key, config]) => ({ value: key, label: t(config.labelKey) })),
+  ]
+
   return (
     <div className="space-y-8">
       <PageHeader
         title={t('title')}
-        description={t('subtitle')}
+        help={
+          <HelpPopover>
+            <p>{t('subtitle')}</p>
+          </HelpPopover>
+        }
       />
 
-      {/* Search */}
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-        <Input
-          type="search"
+      {/* Toolbar: search + category filter on one row */}
+      <div className="flex flex-wrap items-center gap-3">
+        <ToolbarSearch
           placeholder={t('search_placeholder')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          aria-label={t('search_placeholder')}
         />
-      </div>
-
-      {/* Category filters */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setSelectedCategory(null)}
-          className={cn(
-            'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
-            selectedCategory === null
-              ? 'bg-primary text-primary-foreground'
-              : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
-          )}
-        >
-          {t('filter_all')}
-        </button>
-        {Object.entries(categoryConfig).map(([key, config]) => (
-          <button
-            key={key}
-            onClick={() => setSelectedCategory(selectedCategory === key ? null : key)}
-            className={cn(
-              'rounded-full px-4 py-[7px] text-[13px] transition-colors duration-150',
-              selectedCategory === key
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-secondary/60 text-muted-foreground hover:bg-secondary hover:text-foreground'
-            )}
-          >
-            {t(config.labelKey)}
-          </button>
-        ))}
+        <div className="max-w-full overflow-x-auto">
+          <SegmentedControl
+            value={selectedCategory ?? 'all'}
+            onChange={(value) => setSelectedCategory(value === 'all' ? null : value)}
+            options={categoryOptions}
+            aria-label={t('category_filter_label')}
+          />
+        </div>
       </div>
 
       {/* Terms list */}
-      <div className="space-y-4">
+      <div>
         {filteredTerms.length === 0 ? (
           <EmptyState
             icon={Search}
@@ -385,105 +349,66 @@ export default function HelpPage() {
             description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
           />
         ) : (
-          filteredTerms.map((term) => (
-            <TermCard
-              key={term.term}
-              term={term}
-              isExpanded={expandedTerms.has(term.term)}
-              onToggle={() => toggleTerm(term.term)}
-            />
-          ))
+          <div className="stagger-enter">
+            {filteredTerms.map((term) => (
+              <TermRow
+                key={term.term}
+                term={term}
+                isExpanded={expandedTerms.has(term.term)}
+                onToggle={() => toggleTerm(term.term)}
+              />
+            ))}
+          </div>
         )}
       </div>
 
       {/* Document templates */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('templates_title')}</CardTitle>
-          <CardDescription>{t('templates_subtitle')}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <a
-              href="/docs/arkivplan-mall.md"
-              download
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <FileDown className="h-4 w-4" />
-                <span className="font-medium">Arkivplan</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
-              </p>
-            </a>
-            <a
-              href="/docs/systemdokumentation-mall.md"
-              download
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <FileDown className="h-4 w-4" />
-                <span className="font-medium">Systemdokumentation</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
-              </p>
-            </a>
-          </div>
-        </CardContent>
-      </Card>
+      <section>
+        <h2 className="flex items-center gap-2 px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('templates_title')}
+          <HelpPopover className="shrink-0">{t('templates_subtitle')}</HelpPopover>
+        </h2>
+        <a href="/docs/arkivplan-mall.md" download className={LINK_ROW_CLASS}>
+          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Arkivplan</span>
+          <span className="truncate text-xs text-muted-foreground">
+            Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
+          </span>
+        </a>
+        <a href="/docs/systemdokumentation-mall.md" download className={LINK_ROW_CLASS}>
+          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Systemdokumentation</span>
+          <span className="truncate text-xs text-muted-foreground">
+            Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
+          </span>
+        </a>
+      </section>
 
       {/* External resources */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">{t('external_resources_title')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <HelpLink
-              href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <ExternalLink className="h-4 w-4" />
-                <span>Skatteverkets företagarguide</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Omfattande guide för nya företagare
-              </p>
-            </HelpLink>
-            <HelpLink
-              href="https://www.verksamt.se/"
-              className="p-3 rounded-lg border border-border transition-colors duration-150 hover:bg-secondary/60 block"
-            >
-              <div className="flex items-center gap-2">
-                <ExternalLink className="h-4 w-4" />
-                <span>Verksamt.se</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Starta och driva företag i Sverige
-              </p>
-            </HelpLink>
-          </div>
-        </CardContent>
-      </Card>
+      <section>
+        <h2 className="px-1 pb-2 text-sm font-medium uppercase tracking-wider text-muted-foreground">
+          {t('external_resources_title')}
+        </h2>
+        <HelpLink
+          href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
+          className={LINK_ROW_CLASS}
+        >
+          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Skatteverkets företagarguide</span>
+          <span className="truncate text-xs text-muted-foreground">Omfattande guide för nya företagare</span>
+        </HelpLink>
+        <HelpLink href="https://www.verksamt.se/" className={LINK_ROW_CLASS}>
+          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <span className="shrink-0 font-medium">Verksamt.se</span>
+          <span className="truncate text-xs text-muted-foreground">Starta och driva företag i Sverige</span>
+        </HelpLink>
+      </section>
 
-      {/* Support section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <Mail className="h-5 w-5 text-muted-foreground" />
-            <CardTitle>{t('support_title')}</CardTitle>
-          </div>
-          <CardDescription>
-            {t('support_subtitle')}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <SupportLink variant="inline" subject="Fråga från hjälpsidan" />
-        </CardContent>
-      </Card>
+      {/* Support: one quiet line */}
+      <section className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-sm">
+        <span className="text-muted-foreground">{t('support_subtitle')}</span>
+        <SupportLink variant="inline" subject="Fråga från hjälpsidan" />
+      </section>
     </div>
   )
 }

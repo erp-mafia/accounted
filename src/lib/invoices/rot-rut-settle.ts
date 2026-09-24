@@ -18,6 +18,10 @@
  * begäran settled by it, through the same writer and the same tail as the
  * single path; a bundle is always booked at exactly the decided sums.
  *
+ * A fully paid begäran also clears the öre its invoices carried on 1513 beyond
+ * the whole-kronor request (3740, see lib/invoices/rot-rut-receivable.ts),
+ * recomputed here at booking so the voucher never trusts a stale preview.
+ *
  * The journal entry IS the accounting record: engine failure blocks the whole
  * operation. Everything after the voucher is best-effort-with-loud-logging,
  * never an unbook (the voucher is immutable per BFL).
@@ -31,6 +35,7 @@ import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-inv
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { roundOre } from '@/lib/money'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('invoices/rot-rut-settle')
@@ -314,6 +319,13 @@ export async function settleRotRutPayoutRequest(
     }
   }
 
+  const fullyPaid = amount >= Number(payoutRequest.requested_total)
+  // Partial payouts and reduced beslut keep their remainder on 1513 for the
+  // manual follow-up; only a fully paid begäran clears its öre.
+  const oreRounding = fullyPaid
+    ? await getPayoutOreRounding(supabase, companyId, payoutRequest, amount)
+    : { rounding: 0, invoiceCount: 0 }
+
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
@@ -323,6 +335,8 @@ export async function settleRotRutPayoutRequest(
       deductionType: payoutRequest.deduction_type,
       paymentDate: params.paymentDate,
       amount,
+      oreRounding: oreRounding.rounding,
+      invoiceCount: oreRounding.invoiceCount,
       bankAccount: params.bankAccount,
     })
     journalEntryId = entry.id
@@ -330,7 +344,6 @@ export async function settleRotRutPayoutRequest(
     return { ok: false, kind: 'error', error: engineError, stage: 'book' }
   }
 
-  const fullyPaid = amount >= Number(payoutRequest.requested_total)
   const { updated, error: updateError } = await attachSettlementVoucher(
     supabase,
     companyId,
@@ -521,17 +534,28 @@ export async function settleRotRutPayoutRequestSet(
     }
   }
 
+  // Same rule as the single path: only a fully paid leg clears its öre.
+  const oreRoundings = await Promise.all(
+    legs.map((leg) =>
+      leg.fullyPaid
+        ? getPayoutOreRounding(supabase, companyId, leg.request, leg.amount)
+        : { rounding: 0, invoiceCount: 0 },
+    ),
+  )
+
   // The voucher is the accounting record: engine failure must block.
   let journalEntryId: string
   try {
     const entry = await createRotRutPayoutSetEntry(supabase, companyId, userId, {
       paymentDate: params.paymentDate,
       bankAccount: params.bankAccount,
-      legs: legs.map((leg) => ({
+      legs: legs.map((leg, i) => ({
         requestId: leg.request.id,
         requestName: leg.request.name,
         deductionType: leg.request.deduction_type,
         amount: leg.amount,
+        oreRounding: oreRoundings[i].rounding,
+        invoiceCount: oreRoundings[i].invoiceCount,
       })),
     })
     journalEntryId = entry.id

@@ -2,9 +2,10 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, Mail, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { Mail, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -319,8 +320,10 @@ export function TeamPanel() {
           )}
         </div>
         {!loadError && (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <div aria-busy className="space-y-3 py-3">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
         )}
       </div>
@@ -378,8 +381,8 @@ export function TeamPanel() {
             {removable && (
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                size="icon-sm"
+                className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('remove_aria', { email: member.email })}
                 onClick={() => setRemoveTarget(member)}
               >
@@ -416,31 +419,25 @@ export function TeamPanel() {
               </span>
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                size="icon-sm"
+                className="shrink-0 text-muted-foreground hover:text-foreground"
                 aria-label={t('resend_aria', { email: inv.email })}
                 onClick={() => void handleResendInvite(inv)}
-                disabled={resendingId === inv.id || revokingId === inv.id}
+                disabled={revokingId === inv.id}
+                loading={resendingId === inv.id}
               >
-                {resendingId === inv.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="h-3.5 w-3.5" />
-                )}
+                {resendingId !== inv.id && <RefreshCw className="h-3.5 w-3.5" />}
               </Button>
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                size="icon-sm"
+                className="shrink-0 text-muted-foreground hover:text-destructive"
                 aria-label={t('revoke_aria', { email: inv.email })}
                 onClick={() => void handleRevokeInvite(inv)}
-                disabled={revokingId === inv.id || resendingId === inv.id}
+                disabled={resendingId === inv.id}
+                loading={revokingId === inv.id}
               >
-                {revokingId === inv.id ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3.5 w-3.5" />
-                )}
+                {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
               </Button>
             </div>
           )
@@ -504,15 +501,9 @@ export function TeamPanel() {
               <SelectItem value="admin">{t('role_admin')}</SelectItem>
             </SelectContent>
           </Select>
-          <Button type="submit" size="sm" disabled={isSending || !inviteEmail.trim()}>
-            {isSending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                <Plus className="mr-2 h-4 w-4" />
-                {t('invite_button')}
-              </>
-            )}
+          <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
+            {!isSending && <Plus className="mr-2 h-4 w-4" />}
+            {t('invite_button')}
           </Button>
         </form>
       )}

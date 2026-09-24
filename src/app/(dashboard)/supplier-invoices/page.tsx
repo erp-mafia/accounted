@@ -71,10 +71,11 @@ function isBatchSelectable(inv: SupplierInvoice): boolean {
 // One derivable chip per row (concept scene 21): Registrerad is the "waiting
 // for attest" state (outline), Godkänd the beige ready-to-pay state; paid is
 // the sage exception-free end state.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+// Chips mark exceptions (design.md convention 5): approved and paid are the
+// normal flow and render as muted text, the same rule as the detail header.
+// Only these deviating states get a chip.
+const EXCEPTION_STATUS_VARIANTS: Record<string, 'secondary' | 'outline' | 'warning' | 'destructive'> = {
   registered: 'outline',
-  approved: 'secondary',
-  paid: 'success',
   partially_paid: 'warning',
   overdue: 'destructive',
   disputed: 'warning',
@@ -592,8 +593,8 @@ export default function SupplierInvoicesPage() {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
-                className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                size="icon-sm"
+                className={cn('text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
                 aria-label={t('group_picker_aria')}
                 title={t('group_by')}
               >
@@ -745,7 +746,7 @@ export default function SupplierInvoicesPage() {
             </thead>
             <tbody className="stagger-enter">
               {orderedInvoices.map((inv, rowIndex) => {
-                const chipVariant = STATUS_VARIANTS[inv.status] || 'secondary'
+                const chipVariant = EXCEPTION_STATUS_VARIANTS[inv.status]
                 const chipLabel =
                   inv.status === 'paid' && inv.paid_at
                     ? t('status_paid_date', { date: formatDate(inv.paid_at) })
@@ -853,9 +854,13 @@ export default function SupplierInvoicesPage() {
                     </td>
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       <span className="inline-flex items-center gap-1">
-                        <Badge variant={chipVariant} className="font-normal">
-                          {chipLabel}
-                        </Badge>
+                        {chipVariant ? (
+                          <Badge variant={chipVariant} className="font-normal">
+                            {chipLabel}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">{chipLabel}</span>
+                        )}
                         {activeBatchInvoiceIds.has(inv.id) && inv.status !== 'paid' && (
                           <Badge variant="outline" className="font-normal">
                             {t('in_batch_chip')}
@@ -874,7 +879,7 @@ export default function SupplierInvoicesPage() {
                           type="button"
                           className={cn(
                             QUIET_LINK_CLASS,
-                            'opacity-0 transition-opacity duration-150 focus-visible:opacity-100 group-hover:opacity-100',
+                            HOVER_REVEAL_CLASS,
                             approvingId !== null && 'pointer-events-none opacity-50',
                           )}
                           onClick={() => handleApprove(inv.id)}

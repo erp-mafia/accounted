@@ -88,7 +88,7 @@ export default async function EmailChangeStatusPage({
         </div>
         <h1 className="font-display text-3xl tracking-tight">{content.heading}</h1>
         <p className="text-muted-foreground text-sm mt-2">{content.body}</p>
-        <Button asChild className="mt-8 h-11 px-6">
+        <Button asChild size="lg" className="mt-8">
           <Link href={href}>{content.cta}</Link>
         </Button>
       </div>

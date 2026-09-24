@@ -10,6 +10,8 @@ import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { mapSetupEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
 import { isScbConfigured } from '@/lib/parties/scb/config'
+import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
+import { setActiveCompany } from '@/lib/company/context'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,6 +49,33 @@ export async function findCompanyRoleByOrgNumber(
   return { legalName: match.legalName, legalEntityType: match.legalEntityType }
 }
 
+/**
+ * The id of the non-archived company this user belongs to whose org number
+ * is `orgNumber` (any TIC or typed shape), or null. Exported for unit testing.
+ */
+export async function findOwnCompanyByOrgNumber(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  orgNumber: string,
+): Promise<string | null> {
+  const key = registrationNumberKey(orgNumber)
+  if (!key) return null
+
+  const { data } = await supabase
+    .from('company_members')
+    .select('company:company_id ( id, org_number, archived_at )')
+    .eq('user_id', userId)
+
+  type CompanyRow = { id: string; org_number: string | null; archived_at: string | null }
+  for (const row of (data ?? []) as unknown as Array<{ company: CompanyRow | CompanyRow[] | null }>) {
+    const company = Array.isArray(row.company) ? row.company[0] ?? null : row.company
+    if (company && !company.archived_at && orgNumberKey(company.org_number) === key) {
+      return company.id
+    }
+  }
+  return null
+}
+
 export default async function OnboardingPage({
   searchParams,
 }: {
@@ -73,6 +102,25 @@ export default async function OnboardingPage({
     ? await hasPendingInviteForEmail(user.email)
     : false
 
+  // A deep link to a company this user already has opens that company
+  // instead of starting the journey for a duplicate. The BankID picker used
+  // to list a sole trader's own firm (its 16-digit TIC number never matched
+  // the stored personnummer), and the resulting URL lives on in history and
+  // bookmarks, so the guard belongs here and not only in the picker.
+  const { org_number: rawOrgNumber } = await searchParams
+  const existingCompanyId = rawOrgNumber
+    ? await findOwnCompanyByOrgNumber(supabase, user.id, rawOrgNumber)
+    : null
+  if (existingCompanyId) {
+    try {
+      await setActiveCompany(supabase, user.id, existingCompanyId)
+    } catch {
+      // Not switchable (e.g. a frozen seat): the middleware resolves the
+      // company to open, which is still better than a second copy.
+    }
+    redirect('/')
+  }
+
   const { data: teamMembership } = await supabase
     .from('team_members')
     .select('team_id')
@@ -95,7 +143,6 @@ export default async function OnboardingPage({
   // The BankID picker routes here with ?org_number=… for every pick. Strip
   // formatting so whatever Step 2 displays matches what the rest of the flow
   // will store.
-  const { org_number: rawOrgNumber } = await searchParams
   const initialOrgNumber = rawOrgNumber ? rawOrgNumber.replace(/[\s-]/g, '') : undefined
 
   // BankID prefill: look up the CompanyRoles row (no Lens call) to seed

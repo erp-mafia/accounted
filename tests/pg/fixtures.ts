@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { BankBookingContext } from '@/types'
 import { getPool } from './setup'
 import type { PoolClient } from 'pg'
 
@@ -253,6 +254,7 @@ export async function insertPostedJournalEntry(params: {
   voucherNumber?: number
   sourceType?: string
   sourceId?: string | null
+  bankBookingContext?: BankBookingContext[]
   createdAt?: string
   committedAt?: string | null
   legacyImport?: boolean
@@ -273,10 +275,10 @@ export async function insertPostedJournalEntry(params: {
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
           entry_date, description, source_type, source_id, status, created_at, committed_at,
-          import_batch_id,source_ordinal,source_content_hash)
+          import_batch_id,source_ordinal,source_content_hash,bank_booking_context)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'draft',
                COALESCE($11::timestamptz, now()), $12::timestamptz,
-               $13,CASE WHEN $13::uuid IS NOT NULL THEN 0 END,CASE WHEN $13::uuid IS NOT NULL THEN repeat('a',64) END)`,
+               $13,CASE WHEN $13::uuid IS NOT NULL THEN 0 END,CASE WHEN $13::uuid IS NOT NULL THEN repeat('a',64) END,$14::jsonb)`,
       [
         id,
         params.userId,
@@ -291,6 +293,7 @@ export async function insertPostedJournalEntry(params: {
         params.createdAt ?? null,
         params.committedAt ?? null,
         batch,
+        JSON.stringify(params.bankBookingContext ?? []),
       ],
     )
     if(params.legacyImport) await client.query('ALTER TABLE journal_entries ENABLE TRIGGER guard_sie_entry_provenance')
@@ -323,6 +326,21 @@ export async function insertPostedJournalEntry(params: {
   } finally {
     client.release()
   }
+}
+
+// Bank-origin read fixtures use a real source snapshot just like application
+// posting. Callers create that transaction first and attach any later pointer
+// separately, so tests can still exercise the posting-to-link gap.
+export async function insertPostedBankJournalEntry(params: Omit<
+  Parameters<typeof insertPostedJournalEntry>[0], 'sourceType' | 'sourceId' | 'bankBookingContext'
+> & { transactionId: string }): Promise<string> {
+  const { rows } = await getPool().query<BankBookingContext>(`SELECT t.id AS transaction_id,
+    t.cash_account_id, t.date::text AS date, t.amount::float8 AS amount,
+    COALESCE(t.currency, 'SEK') AS currency,
+    public.bank_anchor_settlement_account(t.company_id, t.cash_account_id, t.currency) AS settlement_account
+    FROM public.transactions t WHERE t.id = $1 AND t.company_id = $2`, [params.transactionId, params.companyId])
+  if (rows.length !== 1) throw new Error('Expected one same-company bank fixture source')
+  return insertPostedJournalEntry({ ...params, sourceType: 'bank_transaction', sourceId: params.transactionId, bankBookingContext: rows })
 }
 
 // Insert a balanced pair of journal entry lines (1 debit row + 1 credit row

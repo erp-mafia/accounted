@@ -68,6 +68,7 @@ import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitle
 import type { EntityType } from '@/types'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { SidebarV2 } from './SidebarV2'
+import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavGateFlags, type NavV2Item } from './nav-v2'
 
 void _ENABLED_EXTENSION_IDS
@@ -129,8 +130,7 @@ type NavLabelKey =
   | 'invoice_inbox'
   | 'arkiv'
   | 'arkiv_all'
-  | 'arkiv_agreements'
-  | 'arkiv_authority'
+  | 'arkiv_history'
   | 'invoices'
   | 'quotes'
   | 'sales_orders'
@@ -410,6 +410,10 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     // An unsent support draft belongs to this user; never leave it in the tab.
     clearSupportDraft()
     await supabase.auth.signOut()
+    // signOut only expires the Path=/ host-only auth cookie; a duplicate
+    // written under another Path or Domain would survive and keep the
+    // browser signed out of its own reads after the next login (PH 99).
+    scrubAuthCookies(document, window.location)
     router.push(isSandbox ? '/sandbox' : '/login')
   }
 
@@ -458,7 +462,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
       setIsMobileMenuOpen(false)
       setIsClosing(false)
       closeTimerRef.current = null
-    }, 200)
+    }, 150)
   }
 
   useEffect(() => {
@@ -641,12 +645,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
     (item) => item.href !== '/chat' || agentIdentity.isVerified,
   )
 
-  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean }) => {
+  const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean; newBadge?: boolean }) => {
     const baseClass =
-      'rounded-full bg-muted/60 text-muted-foreground/70 text-[9px] font-medium uppercase tracking-wider px-1.5 py-0.5'
+      'rounded-full bg-muted/60 text-muted-foreground/70 text-[11px] font-medium uppercase tracking-wider px-1.5 py-0.5'
     if (item.comingSoon) return <span className={baseClass}>{tNav('badge_coming_soon')}</span>
     if (item.devBadge) return <span className={baseClass}>{tNav('badge_dev')}</span>
     if (item.betaBadge) return <span className={baseClass}>{tNav('badge_beta')}</span>
+    if (item.newBadge) return <span className={baseClass}>{tNav('badge_new')}</span>
     return null
   }
 
@@ -697,14 +702,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                   <span className="flex-1">{tNav('back_to_clients')}</span>
                 </NavLink>
               )}
-              <div className="mx-3 mt-2 border-t border-border/60" />
+              <div className="mx-3 mt-2 border-t border-border" />
             </div>
           ) : null
         }
         userBlock={
           <div className="flex-shrink-0">
             <SubscriptionTouchpoint variant="sidebar" />
-            <div className="mx-3 border-t border-border/60" />
+            <div className="mx-3 border-t border-border" />
             <div className="px-3 py-2">
               <UserMenu
                 userName={userName}
@@ -725,7 +730,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           Height is --bottom-nav-h (globals.css): the tab row plus the safe
           area inset, the same token every bottom-pinned bar offsets by, so
           the nav and the bars cannot drift apart (#2738). */}
-      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] bg-card/98 backdrop-blur-sm border-t border-border/40" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
+      <nav data-mobile-nav="" data-ph-unmask className="md:hidden fixed bottom-0 left-0 right-0 z-50 h-[var(--bottom-nav-h)] bg-card/98 backdrop-blur-sm border-t border-border" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }} aria-label={tNav('mobile_navigation')}>
         <div className="flex items-center justify-around h-full px-2">
           {mobileNavItems.map((item) => {
             const active = isActive(item.href)
@@ -739,7 +744,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                 <div className="relative">
                   {renderNavIcon(item, cn('h-5 w-5 mb-1', active && 'text-primary'))}
                   {badge !== null && (
-                    <span data-ph-mask className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-semibold px-0.5">
+                    <span data-ph-mask className="absolute -top-1.5 -right-2.5 min-w-[16px] h-[16px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-semibold px-0.5">
                       {badge > 99 ? '99+' : badge}
                     </span>
                   )}
@@ -754,7 +759,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               'relative flex flex-col items-center justify-center flex-1 h-full text-xs',
               enabled
                 ? cn(
-                    'transition-colors duration-200',
+                    'transition-colors duration-150',
                     active ? 'text-primary' : 'text-muted-foreground'
                   )
                 : 'text-muted-foreground/40'
@@ -774,7 +779,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           <button
             onClick={openMobileMenu}
             aria-label={tNav('open_menu')}
-            className="flex flex-col items-center justify-center flex-1 h-full text-xs text-muted-foreground transition-colors duration-200"
+            className="flex flex-col items-center justify-center flex-1 h-full text-xs text-muted-foreground transition-colors duration-150"
           >
             <Menu className="h-5 w-5 mb-1" />
             <span>{tNav('menu')}</span>
@@ -789,7 +794,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           <div
             className={cn(
               "md:hidden fixed inset-0 bg-background/80 backdrop-blur-sm z-50",
-              isClosing ? "animate-out fade-out duration-200" : "animate-in fade-in duration-300"
+              isClosing ? "animate-out fade-out duration-150" : "animate-in fade-in duration-300"
             )}
             onClick={closeMobileMenu}
             aria-hidden="true"
@@ -797,9 +802,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
           {/* Bottom sheet */}
           <div
             className={cn(
-              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border/40 overflow-y-auto overscroll-contain",
+              "md:hidden fixed inset-x-0 bottom-0 z-50 bg-card rounded-t-xl border-t border-border overflow-y-auto overscroll-contain",
               isClosing
-                ? "animate-out slide-out-to-bottom duration-200"
+                ? "animate-out slide-out-to-bottom duration-150"
                 : "animate-in slide-in-from-bottom duration-300"
             )}
             style={{ maxHeight: '85dvh', paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
@@ -818,8 +823,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               </div>
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-8 w-8 -mr-1"
+                size="icon-sm"
+                className="-mr-1"
                 onClick={closeMobileMenu}
                 aria-label={tNav('close_menu')}
               >
@@ -874,7 +879,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                       {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                       <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                       {decorBadge ? decorBadge : badge !== null && (
-                        <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+                        <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[11px] font-semibold px-1.5">
                           {badge > 99 ? '99+' : badge}
                         </span>
                       )}
@@ -912,7 +917,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               {sidebarGroups.filter(({ items }) => items.length > 0).map(({ key, items }) => (
                 <div key={key}>
                   <div className="flex items-center gap-3 my-1.5 px-3">
-                    <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav(groupLabelKey[key])}</span>
+                    <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav(groupLabelKey[key])}</span>
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
@@ -930,7 +935,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
                           {renderNavIcon(item, cn('h-[18px] w-[18px] flex-shrink-0', active ? 'text-primary' : 'text-muted-foreground'))}
                           <span className="text-sm flex-1">{tNav(item.labelKey)}</span>
                           {decorBadge ? decorBadge : badge !== null && (
-                            <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5">
+                            <span data-ph-mask className="min-w-[20px] h-[20px] flex items-center justify-center rounded-full bg-primary/15 text-primary text-[11px] font-semibold px-1.5">
                               {badge > 99 ? '99+' : badge}
                             </span>
                           )}
@@ -970,7 +975,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               {visibleExtensionNavItems.length > 0 && (
                 <>
                   <div className="flex items-center gap-3 my-1.5 px-3">
-                    <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_extensions')}</span>
+                    <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('group_extensions')}</span>
                     <div className="flex-1 h-px bg-border/30" />
                   </div>
                   <div className="space-y-0.5">
@@ -1018,7 +1023,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
 
               {/* Mitt konto divider */}
               <div className="flex items-center gap-3 my-1.5 px-3">
-                <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('mitt_konto')}</span>
+                <span className="text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">{tNav('mitt_konto')}</span>
                 <div className="flex-1 h-px bg-border/30" />
               </div>
 
@@ -1077,7 +1082,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, pa
               </div>
               <Button
                 variant="ghost"
-                className="w-full justify-start text-muted-foreground active:text-foreground text-sm h-11 px-3"
+                size="lg"
+                className="w-full justify-start text-muted-foreground active:text-foreground text-sm px-3"
                 onClick={() => {
                   closeMobileMenu()
                   handleLogout()

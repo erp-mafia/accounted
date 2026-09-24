@@ -81,10 +81,10 @@ export function JournalEntryReviewContent({
       {(showBalanceBadge || (attachmentCount != null && attachmentCount > 0)) && (
         <div className="flex items-center gap-2">
           {showBalanceBadge && (
-            <Badge variant="success">
-              <CheckCircle2 className="h-3 w-3 mr-1" />
+            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <CheckCircle2 className="h-3.5 w-3.5" />
               Debet = Kredit
-            </Badge>
+            </span>
           )}
           {attachmentCount != null && attachmentCount > 0 && (
             <Badge variant="outline">

@@ -64,8 +64,8 @@ function DenseRow({
     >
       <span className={cn('h-2.5 w-2.5 shrink-0 rounded-full', HUE_DOT_CLASS[hue])} aria-hidden />
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      {note && <span className="shrink-0 text-[10.5px] text-muted-foreground">{note}</span>}
-      {account && <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-muted-foreground">{account}</span>}
+      {note && <span className="shrink-0 text-[11px] text-muted-foreground">{note}</span>}
+      {account && <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">{account}</span>}
     </button>
   )
 }
@@ -138,7 +138,7 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/50 ${
+      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-secondary/60 ${
         selected
           ? 'border-primary bg-primary/5 ring-1 ring-primary'
           : 'border-border'
@@ -160,13 +160,13 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(converted?.vat_treatment)}
-                className="text-[10px] px-1.5 py-0"
+                className="text-[11px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {!converted && (
-              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
                 <PenLine className="h-3 w-3" />
                 {t('opens_editor_badge')}
               </span>
@@ -203,7 +203,7 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
     <button
       type="button"
       onClick={onClick}
-      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/50 ${
+      className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors hover:bg-secondary/60 ${
         selected
           ? 'border-primary bg-primary/5 ring-1 ring-primary'
           : 'border-border'
@@ -221,13 +221,13 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
             {vatLabelKey && (
               <Badge
                 variant={getVatBadgeVariant(template.vat_treatment)}
-                className="text-[10px] px-1.5 py-0"
+                className="text-[11px] px-1.5 py-0"
               >
                 {t(vatLabelKey)}
               </Badge>
             )}
             {template.requires_vat_registration_data && (
-              <Badge variant="warning" className="text-[10px] px-1.5 py-0 gap-0.5">
+              <Badge variant="warning" className="text-[11px] px-1.5 py-0 gap-0.5">
                 <AlertTriangle className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>
@@ -260,14 +260,14 @@ function AccountResultCard({ account, onClick, dense }: { account: AccountSearch
     <button
       type="button"
       onClick={onClick}
-      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
+      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-secondary/60"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 flex-1 items-baseline gap-2">
           <span className="font-mono text-sm shrink-0">{account.account_number}</span>
           <span className="font-medium text-sm leading-tight truncate">{account.account_name}</span>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+        <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
           <PenLine className="h-3 w-3" />
           {t('opens_editor_badge')}
         </span>
@@ -642,7 +642,7 @@ export default function TemplatePicker({
                       key={s.template_id}
                       type="button"
                       onClick={() => onSelectCounterparty!(s.template_id)}
-                      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-muted/50"
+                      className="w-full text-left rounded-lg border border-border px-3 py-2.5 transition-colors hover:bg-secondary/60"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0 flex-1">
@@ -661,7 +661,7 @@ export default function TemplatePicker({
                             )}
                           </div>
                         </div>
-                        <span className="text-[10px] text-muted-foreground flex-shrink-0 mt-0.5">
+                        <span className="text-[11px] text-muted-foreground flex-shrink-0 mt-0.5">
                           {s.description_sv}
                         </span>
                       </div>
@@ -738,7 +738,7 @@ export default function TemplatePicker({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="w-full justify-between text-xs text-muted-foreground h-8"
+                  className="w-full justify-between text-muted-foreground"
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
                   {t('more_templates', { count: allAdvanced.length })}

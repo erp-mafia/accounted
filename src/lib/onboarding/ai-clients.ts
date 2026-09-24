@@ -86,7 +86,7 @@ export function aiConnectAction(client: AiClient, input: { origin: string; appNa
   }
 }
 
-/** The Kvittojakten skill served to each client (extensions/general/mcp-server/skills/kvittojakten.ts). */
+/** The Kvittojakten skill served to each client (lib/agent-skills/workflows/kvittojakten.ts). */
 export function kvittojaktenSkillSlug(client: AiClient): string {
   return `kvittojakten-${client}`
 }

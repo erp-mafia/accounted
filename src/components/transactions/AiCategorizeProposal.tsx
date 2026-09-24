@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import AgentAvatar from '@/components/agent/AgentAvatar'
@@ -81,12 +82,13 @@ export function proposalMetaFromRead(read: AssistantRead, pick: AssistantPick): 
 
 const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground'
 
-/** The assistant's one-line "working" status (avatar + text), pulsing. Shared with the review dialog's own document read. */
+/** The assistant's one-line "working" status (avatar, spinner, text). Shared with the review dialog's own document read. */
 export function AiStatusLine({ text }: { text: string }) {
   const { identity } = useAgentSheet()
   return (
-    <p className={cn(LINE_CLASS, 'animate-pulse')}>
+    <p className={LINE_CLASS}>
       <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
+      <Loader2 className="h-3.5 w-3.5 flex-none animate-spin" aria-hidden="true" />
       {text}
     </p>
   )
@@ -164,7 +166,7 @@ export default function AiCategorizeProposal({
   const why = read.reasoning ? (expanded ? read.reasoning : firstSentence(read.reasoning)) : ''
   const hasMore = !!read.reasoning && why !== read.reasoning.trim()
   const more = hasMore ? (
-    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12px]')} onClick={() => setExpanded((v) => !v)}>
+    <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')} onClick={() => setExpanded((v) => !v)}>
       {expanded ? t('ai_less') : t('ai_more')}
     </button>
   ) : null
@@ -204,7 +206,7 @@ export default function AiCategorizeProposal({
       {!agrees && (
         <button
           type="button"
-          className={cn(QUIET_LINK_CLASS, 'text-[12px] font-medium')}
+          className={cn(QUIET_LINK_CLASS, 'text-[12.5px] font-medium')}
           onClick={() => {
             takenRef.current = pick.account
             onTake(pick, { auto: false })

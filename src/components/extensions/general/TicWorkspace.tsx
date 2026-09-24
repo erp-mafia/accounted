@@ -91,14 +91,15 @@ function formatIsoDate(iso: string | null): string {
 
 function statusColorToVariant(
   color: 'red' | 'yellow' | 'green' | 'neutral' | null
-): 'destructive' | 'warning' | 'success' | 'secondary' {
+): 'destructive' | 'warning' | 'secondary' | null {
+  // Green is the normal state: null renders muted text, not a chip.
   switch (color) {
     case 'red':
       return 'destructive'
     case 'yellow':
       return 'warning'
     case 'green':
-      return 'success'
+      return null
     default:
       return 'secondary'
   }
@@ -484,9 +485,15 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                 <li key={i} className="flex items-center justify-between gap-3 text-sm">
                   <div className="flex items-center gap-2">
                     {/* data-ph-mask: the Bolagsverket status text is user data */}
-                    <Badge variant={statusColorToVariant(status.color)} data-ph-mask="">
-                      {status.description ?? status.code ?? '-'}
-                    </Badge>
+                    {statusColorToVariant(status.color) ? (
+                      <Badge variant={statusColorToVariant(status.color) ?? undefined} data-ph-mask="">
+                        {status.description ?? status.code ?? '-'}
+                      </Badge>
+                    ) : (
+                      <span className="text-xs text-muted-foreground" data-ph-mask="">
+                        {status.description ?? status.code ?? '-'}
+                      </span>
+                    )}
                     {status.isCeased && (
                       <span className="text-xs text-muted-foreground">
                         {t('deregistered')}

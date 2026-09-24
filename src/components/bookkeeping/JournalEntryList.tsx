@@ -41,9 +41,10 @@ import {
   VTD_CLASS,
   QUIET_LINK_CLASS,
   CHECKBOX_REVEAL_CLASS,
+  HOVER_REVEAL_CLASS,
   RowFoldout,
 } from '@/components/ui/dry-table'
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, RotateCcw } from 'lucide-react'
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -173,7 +174,7 @@ function SortableHeader({
           className={cn('h-3.5 w-3.5 shrink-0', !active && 'text-muted-foreground/60')}
         />
         {active && stack.length > 1 && (
-          <span className="text-[10px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
+          <span className="text-[11px] font-medium tabular-nums text-muted-foreground" aria-hidden="true">
             {index + 1}
           </span>
         )}
@@ -1148,7 +1149,7 @@ export default function JournalEntryList({
             <button
               type="button"
               onClick={() => setSearchInput('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-muted text-muted-foreground"
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-sm hover:bg-secondary/60 text-muted-foreground"
               title={t('clear_search')}
               aria-label={t('clear_search')}
             >
@@ -1162,7 +1163,7 @@ export default function JournalEntryList({
             <Button
               variant="outline"
               size="sm"
-              className="h-8 gap-2 text-xs shrink-0"
+              className="gap-2 shrink-0"
               aria-label={
                 dialogFilterCount > 0
                   ? t('filter_with_count', { count: dialogFilterCount })
@@ -1174,7 +1175,7 @@ export default function JournalEntryList({
               {dialogFilterCount > 0 && (
                 <Badge
                   variant="secondary"
-                  className="h-4 min-w-4 justify-center px-1 text-[10px] tabular-nums"
+                  className="h-4 min-w-4 justify-center px-1 text-[11px] tabular-nums"
                 >
                   {dialogFilterCount}
                 </Badge>
@@ -1271,7 +1272,7 @@ export default function JournalEntryList({
                     <button
                       type="button"
                       onClick={() => { setDateFrom(''); setDateTo(''); setDateFromInput(''); setDateToInput(''); setPage(0) }}
-                      className="p-1 rounded-sm hover:bg-muted text-muted-foreground shrink-0"
+                      className="p-1 rounded-sm hover:bg-secondary/60 text-muted-foreground shrink-0"
                       title={t('clear_date_filter')}
                       aria-label={t('clear_date_filter')}
                     >
@@ -1443,8 +1444,7 @@ export default function JournalEntryList({
               <option value={t('no_doc_required_suggestion_tax_payment')} />
               <option value={t('no_doc_required_suggestion_salary')} />
             </datalist>
-            <Button size="sm" onClick={handleBatchExempt} disabled={batchSubmitting}>
-              {batchSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button size="sm" onClick={handleBatchExempt} loading={batchSubmitting}>
               {t('batch_mark_no_doc')}
             </Button>
             {!allEligibleSelected && (
@@ -1671,15 +1671,14 @@ export default function JournalEntryList({
                             <Button
                               size="sm"
                               variant="outline"
-                              className="h-7 px-3.5 text-xs"
-                              disabled={!canWrite || committingId === entry.id}
+                              disabled={!canWrite}
+                              loading={committingId === entry.id}
                               title={!canWrite ? t('read_only_tooltip') : undefined}
                               onClick={(e) => {
                                 e.stopPropagation()
                                 openCommitConfirm(entry)
                               }}
                             >
-                              {committingId === entry.id && <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />}
                               {t('post')}
                             </Button>
                           )}
@@ -1696,11 +1695,11 @@ export default function JournalEntryList({
                                 // p-2 grows the tap target to 30px without
                                 // changing row height (the row is ~40px from
                                 // the description cell).
-                                'inline-flex items-center rounded-sm p-2 text-muted-foreground transition-opacity duration-150 hover:text-foreground',
-                                // Quiet at rest on desktop, but the table has no
-                                // mobile card to fall back on, so touch keeps the
-                                // icon visible.
-                                'opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100',
+                                'inline-flex items-center rounded-sm p-2 text-muted-foreground hover:text-foreground',
+                                // Quiet at rest; coarse pointers (phones and
+                                // tablets) keep the icon visible, since the
+                                // table has no mobile card to fall back on.
+                                HOVER_REVEAL_CLASS,
                               )}
                             >
                               <Copy className="h-3.5 w-3.5" />
@@ -1708,7 +1707,7 @@ export default function JournalEntryList({
                           )}
                           <ChevronRight
                             className={cn(
-                              'h-3.5 w-3.5 text-muted-foreground transition-all duration-200',
+                              'h-3.5 w-3.5 text-muted-foreground transition-[transform,opacity] duration-150',
                               isExpanded
                                 ? 'rotate-90 opacity-100'
                                 : 'opacity-0 group-hover:opacity-100',
@@ -1831,10 +1830,11 @@ export default function JournalEntryList({
                                   <Button
                                     size="sm"
                                     onClick={() => openCommitConfirm(entry)}
-                                    disabled={!canWrite || committingId === entry.id}
+                                    disabled={!canWrite}
+                                    loading={canWrite && committingId === entry.id}
                                     title={!canWrite ? t('read_only_tooltip') : undefined}
                                   >
-                                    {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : committingId === entry.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    {!canWrite && <Lock className="mr-2 h-4 w-4" />}
                                     {t('post')}
                                   </Button>
                                 )}
@@ -1928,8 +1928,7 @@ export default function JournalEntryList({
             <Button variant="outline" size="sm" onClick={() => setBulkOpen(false)} disabled={bulkSubmitting}>
               {t('bulk_cancel')}
             </Button>
-            <Button size="sm" onClick={handleBulkConfirm} disabled={bulkSubmitting || !bulkCount}>
-              {bulkSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button size="sm" onClick={handleBulkConfirm} disabled={!bulkCount} loading={bulkSubmitting}>
               {t('bulk_mark_confirm', { count: bulkCount ?? 0 })}
             </Button>
           </DialogFooter>
@@ -1990,12 +1989,9 @@ export default function JournalEntryList({
           warningText={t('reverse_warning')}
           confirmLabel={t('reverse_confirm_label')}
         >
-          <div className="flex items-start gap-3 rounded-lg border bg-muted/50 p-4">
-            <RotateCcw className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
-            <div className="text-sm">
-              <p className="font-medium mb-1">{t('reverse_dialog_heading', { voucher: formatVoucher(reverseEntryTarget) })}</p>
-              <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
-            </div>
+          <div className="space-y-1 text-sm">
+            <p className="font-medium">{t('reverse_dialog_heading', { voucher: formatVoucher(reverseEntryTarget) })}</p>
+            <p className="text-muted-foreground">{t('reverse_dialog_body')}</p>
           </div>
         </ConfirmationDialog>
       )}
@@ -2047,8 +2043,7 @@ export default function JournalEntryList({
             <div className="flex items-center gap-1">
               <Button
                 variant="outline"
-                size="icon"
-                className="h-8 w-8"
+                size="icon-sm"
                 disabled={page === 0}
                 onClick={() => setPage(0)}
                 aria-label={t('first_page')}
@@ -2058,8 +2053,7 @@ export default function JournalEntryList({
               </Button>
               <Button
                 variant="outline"
-                size="icon"
-                className="h-8 w-8"
+                size="icon-sm"
                 disabled={page === 0}
                 onClick={() => setPage(page - 1)}
                 aria-label={t('previous')}
@@ -2072,8 +2066,7 @@ export default function JournalEntryList({
               </span>
               <Button
                 variant="outline"
-                size="icon"
-                className="h-8 w-8"
+                size="icon-sm"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(page + 1)}
                 aria-label={t('next')}
@@ -2083,8 +2076,7 @@ export default function JournalEntryList({
               </Button>
               <Button
                 variant="outline"
-                size="icon"
-                className="h-8 w-8"
+                size="icon-sm"
                 disabled={(page + 1) * pageSize >= count}
                 onClick={() => setPage(Math.ceil(count / pageSize) - 1)}
                 aria-label={t('last_page')}

@@ -1273,7 +1273,7 @@ export const arcimMigrationExtension: Extension = {
           // express an account the company added outside the standard, so
           // such an account was impossible to map onto. See
           // ./lib/mapping-targets.
-          const mappingTargets = await buildMappingTargets(supabase, companyId)
+          const mappingTargets = await buildMappingTargets(supabase, companyId, moduleLog)
           let mappings = suggestMappings(allAccounts, mappingTargets, existingRecords)
 
           // The momskod each account has in the source system. SIE4 #KONTO

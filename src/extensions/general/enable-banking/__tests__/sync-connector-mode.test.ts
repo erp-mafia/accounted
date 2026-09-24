@@ -30,6 +30,10 @@ const account: StoredAccount = {
 
 /** A supabase stand-in that answers the connection lookup with the session id. */
 const supabase = {
+  rpc: vi.fn(async () => ({ data: {
+    connectionId: 'conn-1', sessionId: 'sess-1', accountUid: 'acc-1',
+    currency: 'SEK', cashAccountId: 'cash-1', ledgerAccount: '1930', token: 'route-token',
+  }, error: null })),
   from: (table: string) => {
     if (table !== 'bank_connections') throw new Error(`unexpected table ${table}`)
     const chain = { select: () => chain, eq: () => chain, maybeSingle: async () => ({ data: { session_id: 'sess-1' }, error: null }) }

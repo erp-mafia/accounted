@@ -86,7 +86,7 @@ export function SuggestionQueue({
           {/* Selection actions float: the header checkbox selects every row,
               and the bar below carries the rest. Nothing sits above the table. */}
           {count > 0 && (
-            <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-lg animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
+            <div className="fixed bottom-[calc(var(--bottom-nav-h)+1rem)] left-1/2 z-30 flex -translate-x-1/2 items-center gap-x-5 whitespace-nowrap rounded-full border border-border bg-background px-4 py-2 text-[12.5px] shadow-[var(--shadow-md)] animate-fade-in md:left-[calc(50%+var(--nav-w)/2)]">
               <span className="tabular-nums">
                 <strong className="font-semibold">{count}</strong> {t('selected_n', { count }).replace(/^\d+\s*/, '')}
               </span>
@@ -176,7 +176,7 @@ export function SuggestionQueue({
                     ) : null}
                     {isForeign(row) ? (
                       <span
-                        className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 text-[10.5px] text-foreground"
+                        className="inline-flex shrink-0 items-center rounded-full border border-border px-1.5 text-[11px] text-foreground"
                         title={t('row_foreign', { country: regionName(row.country as string, locale) })}
                       >
                         {row.country}

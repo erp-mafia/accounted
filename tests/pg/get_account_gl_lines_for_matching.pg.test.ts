@@ -19,9 +19,12 @@
  * is covered in mark-entry-as-opening-balance.pg.test.ts.)
  */
 import { describe, it, expect } from 'vitest'
+import type { PoolClient } from 'pg'
+import { randomUUID } from 'node:crypto'
 import { getPool } from './setup'
 import {
   insertAuthUser,
+  insertPostedBankJournalEntry,
   insertCashAccount,
   insertCompany,
   insertFiscalPeriod,
@@ -45,7 +48,7 @@ async function insertPostedJournalEntry(params: {
     { account: '1930', debit: amount, credit: 0 },
     { account: '2091', debit: 0, credit: amount },
   ]
-  return insertAtomicPostedJournalEntry({
+  const entry = {
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
@@ -58,7 +61,43 @@ async function insertPostedJournalEntry(params: {
       debitAmount: line.debit,
       creditAmount: line.credit,
     })),
-  })
+  }
+  if (params.sourceType === 'bank_transaction') {
+    const transactionId = await insertTransaction({ ...params, date: params.entryDate, amount })
+    return insertPostedBankJournalEntry({ ...entry, transactionId })
+  }
+  return insertAtomicPostedJournalEntry(entry)
+}
+
+// Historical NULL/sign contradictions must remain readable, but the current
+// writer correctly refuses creating them. Clone only the current read RPC and
+// its transaction input into this connection's temporary namespace. Journal,
+// cash and tenant checks continue reading the ordinary valid fixture rows.
+async function withHistoricalBankLink(
+  params: { companyId: string; userId: string; journalEntryId: string; amount: number; date: string; cashAccountId: null },
+  read: (client: PoolClient) => Promise<void>,
+) {
+  await expect(insertTransaction(params)).rejects.toMatchObject({ code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' })
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(`CREATE TEMP TABLE historical_transactions ON COMMIT DROP AS
+      SELECT id, company_id, journal_entry_id, cash_account_id, amount FROM public.transactions WHERE false`)
+    const { rows } = await client.query<{ definition: string }>(
+      "SELECT pg_get_functiondef('public.get_account_gl_lines_for_matching(uuid,text,date,date,boolean)'::regprocedure) AS definition")
+    const definition = rows[0].definition
+    expect(definition.match(/FUNCTION public\.get_account_gl_lines_for_matching\(/g)).toHaveLength(1)
+    expect(definition.match(/public\.transactions\b/g)).toHaveLength(4)
+    await client.query(definition
+      .replace('FUNCTION public.get_account_gl_lines_for_matching(', 'FUNCTION pg_temp.get_account_gl_lines_for_matching(')
+      .replaceAll('public.transactions', 'pg_temp.historical_transactions'))
+    await client.query(`INSERT INTO pg_temp.historical_transactions(id, company_id, journal_entry_id, cash_account_id, amount)
+      VALUES ($1, $2, $3, NULL, $4)`, [randomUUID(), params.companyId, params.journalEntryId, params.amount])
+    await read(client)
+  } finally {
+    await client.query('ROLLBACK')
+    client.release()
+  }
 }
 
 describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
@@ -78,6 +117,7 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     const matchedEntry = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-03-20', sourceType: 'manual', voucherNumber: 2, amount: 30000,
+      lines: [{ account: '1930', debit: 0, credit: 30000 }, { account: '2999', debit: 30000, credit: 0 }],
     })
     await insertTransaction({ companyId, userId, currency: 'SEK', journalEntryId: matchedEntry })
     await insertTransaction({ companyId, userId, currency: 'SEK', journalEntryId: matchedEntry })
@@ -105,15 +145,15 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     expect(byId.get(matchedEntry)).toBe(2)
   })
 
-  it('still excludes opening_balance / storno / correction even with p_include_matched', async () => {
+  it('still excludes opening_balance / storno even with p_include_matched', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     const fiscalPeriodId = await insertFiscalPeriod({
       userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
     })
 
-    // These book-only / IB vouchers have no bank-feed counterpart and can never
-    // be a match target: the include_matched opt-in must not resurrect them.
+    // An IB and a storno have no bank-feed counterpart and can never be a match
+    // target: the include_matched opt-in must not resurrect them.
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1, amount: 50000,
@@ -121,10 +161,6 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'storno', voucherNumber: 2, amount: 25000,
-    })
-    await insertPostedJournalEntry({
-      userId, companyId, fiscalPeriodId,
-      entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 3, amount: 25000,
     })
     const bankEntry = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
@@ -141,7 +177,45 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     expect(returnedIds.has(bankEntry)).toBe(true)
     expect(rows.find((r) => r.source_type === 'opening_balance')).toBeUndefined()
     expect(rows.find((r) => r.source_type === 'storno')).toBeUndefined()
-    expect(rows.find((r) => r.source_type === 'correction')).toBeUndefined()
+  })
+
+  it('offers an unmatched correction voucher, and hides one its bank row already settles (20260923150000)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
+    })
+
+    // The rebooking half of storno-and-rebook is the LIVE booking of the bank
+    // movement. Never matched: it is the candidate the user must be able to pick.
+    const unmatchedCorrection = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 1, amount: 25000,
+    })
+    // Already settled (correctEntry re-points the original's bank link onto it).
+    const matchedCorrection = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-04', sourceType: 'correction', voucherNumber: 2, amount: 4000,
+    })
+    await insertTransaction({ companyId, userId, currency: 'SEK', amount: 4000, date: '2026-05-04', journalEntryId: matchedCorrection })
+
+    const { rows: defaults } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1)`,
+      [companyId],
+    )
+    const defaultIds = new Set(defaults.map((r) => r.journal_entry_id))
+    expect(defaultIds.has(unmatchedCorrection)).toBe(true)
+    expect(defaultIds.has(matchedCorrection)).toBe(false)
+
+    const { rows: withMatched } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_include_matched => true)`,
+      [companyId],
+    )
+    const byId = new Map(withMatched.map((r) => [r.journal_entry_id, r.linked_transaction_count]))
+    expect(byId.get(unmatchedCorrection)).toBe(0)
+    expect(byId.get(matchedCorrection)).toBe(1)
   })
 })
 
@@ -214,6 +288,7 @@ describe('get_account_gl_lines_for_matching RPC: account-scoped link count (#102
     const salaryEntry = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-06-25', sourceType: 'manual', voucherNumber: 1, amount: 30000,
+      lines: [{ account: '1930', debit: 0, credit: 30000 }, { account: '2999', debit: 30000, credit: 0 }],
     })
     await insertTransaction({
       companyId, userId, amount: -10000, date: '2026-06-25',
@@ -356,25 +431,25 @@ describe('get_account_gl_lines_for_matching RPC: direction-aware NULL links (202
         { account: '1931', debit: 0, credit: 2593.75 },
       ],
     })
-    await insertTransaction({
+    await withHistoricalBankLink({
       companyId, userId, amount: -2593.75, date: '2026-01-28',
       journalEntryId: reverse, cashAccountId: null,
+    }, async client => {
+      const { rows: on1930 } = await client.query(
+        `SELECT journal_entry_id
+           FROM pg_temp.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1930')`,
+        [companyId],
+      )
+      expect(on1930.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
+
+      // On 1931 (non-primary) the same row's sign MATCHES the -net leg: settled.
+      const { rows: on1931 } = await client.query(
+        `SELECT journal_entry_id
+           FROM pg_temp.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+        [companyId],
+      )
+      expect(on1931.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
     })
-
-    const { rows: on1930 } = await getPool().query(
-      `SELECT journal_entry_id
-         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1930')`,
-      [companyId],
-    )
-    expect(on1930.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
-
-    // On 1931 (non-primary) the same row's sign MATCHES the -net leg: settled.
-    const { rows: on1931 } = await getPool().query(
-      `SELECT journal_entry_id
-         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
-      [companyId],
-    )
-    expect(on1931.find((r) => r.journal_entry_id === reverse)).toBeUndefined()
   })
 
   it('keeps a sign-compatible NULL row settling the transfer leg', async () => {
@@ -383,17 +458,17 @@ describe('get_account_gl_lines_for_matching RPC: direction-aware NULL links (202
     // Same transfer, but the NULL row is an inflow: it plausibly IS the 1931
     // leg, so the voucher stays settled there (conservative).
     const transfer = await insertTransferInto1931({ userId, companyId, fiscalPeriodId, amount: 2593.75 })
-    await insertTransaction({
+    await withHistoricalBankLink({
       companyId, userId, amount: 2593.75, date: '2026-01-27',
       journalEntryId: transfer, cashAccountId: null,
+    }, async client => {
+      const { rows: on1931 } = await client.query(
+        `SELECT journal_entry_id
+           FROM pg_temp.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+        [companyId],
+      )
+      expect(on1931.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
     })
-
-    const { rows: on1931 } = await getPool().query(
-      `SELECT journal_entry_id
-         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
-      [companyId],
-    )
-    expect(on1931.find((r) => r.journal_entry_id === transfer)).toBeUndefined()
   })
 
   it('never flags a single-bank-leg voucher over a NULL link, whatever the sign', async () => {
@@ -411,17 +486,17 @@ describe('get_account_gl_lines_for_matching RPC: direction-aware NULL links (202
         { account: '5810', debit: 1200, credit: 0 },
       ],
     })
-    await insertTransaction({
+    await withHistoricalBankLink({
       companyId, userId, amount: 1200, date: '2026-02-10',
       journalEntryId: income, cashAccountId: null,
+    }, async client => {
+      const { rows: on1931 } = await client.query(
+        `SELECT journal_entry_id
+           FROM pg_temp.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
+        [companyId],
+      )
+      expect(on1931.find((r) => r.journal_entry_id === income)).toBeUndefined()
     })
-
-    const { rows: on1931 } = await getPool().query(
-      `SELECT journal_entry_id
-         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_account_number => '1931')`,
-      [companyId],
-    )
-    expect(on1931.find((r) => r.journal_entry_id === income)).toBeUndefined()
   })
 
   it('keeps full legacy behavior when the company has no primary cash account', async () => {

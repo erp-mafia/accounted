@@ -8,7 +8,7 @@ import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Download, Loader2, ChevronDown } from 'lucide-react'
+import { Download, ChevronDown } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -226,12 +226,8 @@ export function PaymentFilePanel({
               />
               {t('instructions_toggle')}
             </button>
-            <Button onClick={handleDownload} disabled={downloading}>
-              {downloading ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={handleDownload} loading={downloading}>
+              {!downloading && <Download className="mr-2 h-4 w-4" />}
               {t('download')}
             </Button>
           </div>

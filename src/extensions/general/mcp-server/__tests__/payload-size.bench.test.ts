@@ -544,6 +544,14 @@ describe('tools/list payload size guard', () => {
     //     reachable through gnubok_call_tool and named by the briefing, so the
     //     graph walk costs the default catalog nothing. Measured 63 381 on
     //     the rebased branch. Ceiling unchanged.
+    //   * Contextual handoffs and own skills (feat/contextual-ai-accounting):
+    //     gnubok_get_task (the first call of every in-app AI handoff) and
+    //     gnubok_create_skill (a direct write, so neither bridge reaches it)
+    //     join the default catalog. Paid for by trims: the list_skills,
+    //     load_skill and briefing texts, both new tools' notes, and get_task's
+    //     scope, which the handoff passes verbatim and Zod validates, so the
+    //     wire schema no longer lists its fields. Measured 63 477. Ceiling
+    //     unchanged.
     expect(approxTokens).toBeLessThan(63_500)
   })
 

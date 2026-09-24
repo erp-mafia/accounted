@@ -1,4 +1,5 @@
 'use client'
+import { HandoffButton } from '@/components/ai-handoff/HandoffButton'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
@@ -262,6 +263,10 @@ export default function YearEndPage() {
       <div className="page-header flex items-center justify-between gap-3 flex-wrap">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">Årsbokslut</h1>
         <div className="flex items-center gap-2">
+          <HandoffButton disabled={!selectedPeriodId} task={{ kind: 'year-end', scope: {
+            ...(selectedPeriodId ? { fiscal_period_id: selectedPeriodId } : {}),
+            ...(selectedOption ? { date_from: selectedOption.period_start, date_to: selectedOption.period_end } : {}),
+          } }} />
           {showWizard && periods && periods.length > 0 && step !== 'result' && (
             <ContextPicker
               items={periods.map((p) => ({

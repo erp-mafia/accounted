@@ -135,7 +135,7 @@ export function readPalette(canvas: HTMLCanvasElement): Palette {
     hair: tokenColor('--border', '#dad9d5'),
     sage: tokenColor('--success', '#4d8066'),
     ochre: tokenColor('--warning', '#c58f3a'),
-    attn: tokenColor('--warning', '#82602b'),
+    attn: tokenColor('--attn', '#82602b'),
     paper: tokenColor('--background', '#ffffff'),
   }
 }

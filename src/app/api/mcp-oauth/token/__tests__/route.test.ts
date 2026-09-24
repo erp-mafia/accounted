@@ -158,7 +158,7 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(inserted.client).toBe('chatgpt')
     })
 
-    it('stores client null for a redirect URI that is not a built-in client', async () => {
+    it('stores client null for a redirect URI without a live registration', async () => {
       vi.mocked(decryptAuthCode).mockReturnValue({
         userId: 'user-1',
         codeChallenge: 'challenge',
@@ -175,6 +175,22 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(res.status).toBe(200)
       const inserted = findCall('api_keys', 'insert')?.[0] as Record<string, unknown>
       expect(inserted.client).toBeNull()
+    })
+
+    it('stores a registered client reference without changing the OAuth key classification', async () => {
+      const redirectUri = 'https://agent.testbrand.example/oauth/callback'
+      vi.mocked(decryptAuthCode).mockReturnValue({ userId: 'user-1', codeChallenge: 'challenge', redirectUri, exp: Date.now() + 60_000 })
+      vi.mocked(verifyPkce).mockReturnValue(true)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      const results = exchangeResults()
+      results.splice(3, 0, { data: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }, error: null })
+      enqueueMany(results)
+      const res = await POST(formRequest({ ...codeExchange, redirect_uri: redirectUri }))
+      expect(res.status).toBe(200)
+      expect(findCall('api_keys', 'insert')?.[0]).toMatchObject({ client: 'registered:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'MCP-klient (OAuth)' })
+      expect(findCall('oauth_client_registrations', 'eq')).toEqual(['redirect_uri', redirectUri])
+      expect(findCall('oauth_client_registrations', 'is')).toEqual(['revoked_at', null])
     })
 
     it('rejects an already-used auth code (replay)', async () => {

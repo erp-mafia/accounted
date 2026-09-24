@@ -161,6 +161,7 @@ const RETAINED = new Set([
   // Company, team and configuration
   'agent_memory.created_by_user_id',
   'agent_profiles.verified_by_user_id',
+  'company_skills.created_by',
   'api_keys.sod_acknowledged_by',
   'booking_template_hidden.hidden_by',
   'booking_template_library.created_by',

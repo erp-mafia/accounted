@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2, Plus, X } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -228,12 +228,8 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
                 className="w-56"
               />
             </div>
-            <Button type="submit" disabled={adding || !email.trim()}>
-              {adding ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="mr-2 h-4 w-4" />
-              )}
+            <Button type="submit" disabled={!email.trim()} loading={adding}>
+              {!adding && <Plus className="mr-2 h-4 w-4" />}
               {t('access_add')}
             </Button>
           </form>
@@ -268,14 +264,10 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
                         variant="ghost"
                         size="icon"
                         aria-label={t('access_remove')}
-                        disabled={removingId === entry.id}
+                        loading={removingId === entry.id}
                         onClick={() => void removeEntry(entry.id)}
                       >
-                        {removingId === entry.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <X className="h-4 w-4" />
-                        )}
+                        {removingId !== entry.id && <X className="h-4 w-4" />}
                       </Button>
                     </td>
                   )}

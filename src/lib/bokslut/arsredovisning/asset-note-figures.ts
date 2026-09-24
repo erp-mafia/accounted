@@ -17,7 +17,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { computeAnnualDepreciation } from '@/lib/bokslut/assets/depreciation-engine'
+import {
+  computeAnnualDepreciation,
+  openingDepreciationOf,
+} from '@/lib/bokslut/assets/depreciation-engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { Asset } from '@/types'
 
@@ -151,16 +154,29 @@ export function computeAssetNoteFigures(params: {
       return start != null && start < currentPeriod.period_start
     })
 
-    let ibAck: number
+    // Depreciation booked in a previous system before the asset entered
+    // Accounted. It is on the ledger's 12x9 balance but on no schedule row,
+    // so it is added to the booked figures here. An opening amount dated
+    // inside the current period is treated as on the books at its start (the
+    // usual case is a fiscal-year-end date, which lands before the period).
+    const opening = openingDepreciationOf(asset)
+    const openingAck =
+      opening && opening.date <= currentPeriod.period_end ? opening.amount : 0
+
+    // Depreciation booked or planned in Accounted before the period. The
+    // engine is fed this alone (its opening-balance path reads the opening
+    // amount from the asset itself).
+    let accountedAck: number
     if (priorPosted.length > 0) {
-      ibAck = round2(
+      accountedAck = round2(
         priorPosted.reduce((sum, r) => sum + (Number(r.planned_depreciation) || 0), 0),
       )
     } else if (asset.acquisition_date >= currentPeriod.period_start) {
-      ibAck = 0
+      accountedAck = 0
     } else {
-      ibAck = fallbackAccumulatedBefore(asset, currentPeriod.period_start, fiscalPeriods)
+      accountedAck = fallbackAccumulatedBefore(asset, currentPeriod.period_start, fiscalPeriods)
     }
+    const ibAck = round2(openingAck + accountedAck)
 
     const disposedDuringPeriod =
       asset.disposed_at != null &&
@@ -179,18 +195,19 @@ export function computeAssetNoteFigures(params: {
           ? Number(currentPosted.planned_depreciation) || 0
           : 0
         avgaendeAck = round2(
-          rows.reduce((sum, r) => sum + (Number(r.planned_depreciation) || 0), 0),
+          openingAck +
+            rows.reduce((sum, r) => sum + (Number(r.planned_depreciation) || 0), 0),
         )
       } else {
         // Nothing ever posted: preview what the engine would have booked so
         // the disposed asset still nets out of the roll-forward.
-        aretsAvskrivning = computeAnnualDepreciation(asset, currentPeriod, ibAck).amount
+        aretsAvskrivning = computeAnnualDepreciation(asset, currentPeriod, accountedAck).amount
         avgaendeAck = round2(ibAck + aretsAvskrivning)
       }
     } else if (currentPosted) {
       aretsAvskrivning = Number(currentPosted.planned_depreciation) || 0
     } else {
-      aretsAvskrivning = computeAnnualDepreciation(asset, currentPeriod, ibAck).amount
+      aretsAvskrivning = computeAnnualDepreciation(asset, currentPeriod, accountedAck).amount
     }
 
     figures.set(asset.id, {

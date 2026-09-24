@@ -5,6 +5,7 @@ import {
   createMockRequest,
   parseJsonResponse,
   makeInvoiceInboxItem,
+  makeTransaction,
 } from '@/tests/helpers'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -423,7 +424,8 @@ describe('POST /items/:id/book-direct', () => {
   it('books with transaction link: source_type=bank_transaction, source_id=transaction.id', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
-    enqueue({ data: { id: TX_UUID, journal_entry_id: null } })
+    enqueue({ data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }) })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: null })  // transaction update
     enqueue({ data: null })  // inbox item update
 
@@ -447,6 +449,8 @@ describe('POST /items/:id/book-direct', () => {
       expect.objectContaining({
         source_type: 'bank_transaction',
         source_id: TX_UUID,
+        bank_booking_context: [expect.objectContaining({ transaction_id: TX_UUID,
+          cash_account_id: null, amount: -99, currency: 'SEK', settlement_account: '1930' })],
       }),
     )
   })
@@ -460,6 +464,8 @@ describe('POST /items/:id/book-direct', () => {
     enqueue({
       data: makeInvoiceInboxItem({ document_id: 'doc-1', matched_transaction_id: TX_UUID }),
     })
+    enqueue({ data: makeTransaction({ id: TX_UUID, journal_entry_id: null, amount: -99 }) })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement account
     enqueue({ data: null }) // inbox item update
 
     const ctx = buildCtx(supabase)
@@ -470,6 +476,10 @@ describe('POST /items/:id/book-direct', () => {
     })
     const res = await route.handler(request, ctx)
     expect(res.status).toBe(200)
+    expect(createJournalEntryMock.mock.calls[0][3]).toMatchObject({ source_type: 'inbox_item',
+      bank_booking_context: [{ transaction_id: TX_UUID, cash_account_id: null, amount: -99,
+        currency: 'SEK', settlement_account: '1930' }],
+    })
 
     // The preserved match must also be BOOKED. Keeping the link while leaving
     // the bank line open is the worse half of the bug: the item looks resolved

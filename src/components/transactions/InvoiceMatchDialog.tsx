@@ -897,11 +897,10 @@ export default function InvoiceMatchDialog({
                         />
                         <Button
                           variant="ghost"
-                          size="icon"
+                          size="icon-sm"
                           onClick={() => removeEditLine(i)}
                           disabled={editLines.length <= 2}
                           aria-label={t('booking_remove_line')}
-                          className="h-8 w-8"
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>

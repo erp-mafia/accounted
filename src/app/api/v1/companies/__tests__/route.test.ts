@@ -173,3 +173,37 @@ describe('GET /api/v1/companies', () => {
     expect(res.status).toBe(401)
   })
 })
+
+describe('GET /api/v1/companies display name', () => {
+  it('returns the name edited in Inställningar, not the onboarding snapshot: feedback seq 592092', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: [membershipRow()], error: null },
+        company_settings: {
+          data: [{ company_id: '8fd5b1f4-0000-4000-8000-000000000001', company_name: 'Acme Renamed AB' }],
+          error: null,
+        },
+      }),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+    const body = await res.json()
+
+    expect(body.data[0].name).toBe('Acme Renamed AB')
+  })
+
+  it('keeps companies.name when the settings read fails', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: [membershipRow()], error: null },
+        company_settings: { data: null, error: { message: 'boom' } },
+      }),
+    )
+
+    const res = await listCompanies(makeRequest(), staticRouteContext())
+    const body = await res.json()
+
+    expect(res.status).toBe(200)
+    expect(body.data[0].name).toBe('Acme AB')
+  })
+})

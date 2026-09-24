@@ -8,16 +8,16 @@ import type { StoredAccount } from '@/extensions/general/enable-banking/types'
 import { isMirrorCardAccount } from '@/extensions/general/enable-banking/lib/mirror-card-account'
 import { eventBus } from '@/lib/events/bus'
 import {
-  upsertFromPsd2,
   resolvePsd2LedgerAccount,
-  defaultLedgerForCurrency,
   normalizeIban,
 } from '@/lib/cash-accounts/service'
 import {
   fanOutSessionRenewal,
   fetchCrossCompanyAccountContext,
 } from '@/extensions/general/enable-banking/lib/session-sharing'
-import { supersedeSiblingConnections } from '@/extensions/general/enable-banking/lib/supersede'
+import { finishBankSupersession } from '@/extensions/general/enable-banking/lib/supersede'
+import { revokeUnusedSession } from '@/extensions/general/enable-banking/lib/session-revocation'
+import { readBankCallbackConfiguration, finalizeBankCallback, type BankMirrorPlan } from '@/lib/cash-accounts/configuration'
 import { classifyBankConnectionDenial, getBankConnectionErrorMessage } from '@/lib/errors/get-error-message'
 import { renderFinalizeShell, renderFinalizeRedirect } from './finalize-page'
 import { isConnectorState, verifyConnectorState } from '@/lib/connect/hosted/state'
@@ -27,7 +27,7 @@ import {
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
 
-// This route emits bank_connection.consent_granted / .cash_account_mirror_failed
+// This route emits bank_connection.consent_granted / .finalize_failed
 // (ASVS V16 / GDPR Art.30 audit events). ensureInitialized() must run at module
 // load so registerEventLogHandler() has subscribed before the first emit();
 // otherwise the audit row is silently dropped on a cold instance where this
@@ -174,6 +174,8 @@ export async function GET(request: Request) {
               .from('bank_connections')
               .delete()
               .eq('id', pendingConn.id)
+              .eq('company_id', pendingConn.company_id)
+              .eq('oauth_state', state)
               .eq('status', 'pending')
           } else {
             // Reconnect of an established connection: keep the row (it holds
@@ -190,6 +192,9 @@ export async function GET(request: Request) {
               .from('bank_connections')
               .update({ status: isSessionExpiry ? 'expired' : 'error', error_message: userMessage, oauth_state: null })
               .eq('id', pendingConn.id)
+              .eq('company_id', pendingConn.company_id)
+              .eq('oauth_state', state)
+              .in('status', ['pending', 'expired', 'error'])
           }
 
           // Durable audit trail for the failed attempt (issue #1716): the
@@ -334,7 +339,7 @@ export async function GET(request: Request) {
   // failures resolve to the cleanup redirect target.
   const finalizePromise = (async (): Promise<string> => {
     try {
-      return await finalizeConnection(supabase, pendingConnection, code, connectorState)
+      return await finalizeConnection(supabase, pendingConnection, code, connectorState, state)
     } catch (finalizeError) {
       const reason =
         finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
@@ -342,7 +347,6 @@ export async function GET(request: Request) {
         message: reason,
         stack: finalizeError instanceof Error ? finalizeError.stack : undefined,
         name: finalizeError instanceof Error ? finalizeError.name : undefined,
-        state,
         connectionId: pendingConnection.id,
       })
       // Durable audit trail (issue #1716): the fresh-connect row is deleted by
@@ -366,7 +370,7 @@ export async function GET(request: Request) {
           connectionId: pendingConnection.id,
         })
       }
-      return cleanupFailedFinalize(supabase, pendingConnection)
+      return cleanupFailedFinalize(supabase, pendingConnection, state)
     }
   })()
 
@@ -436,7 +440,13 @@ async function finalizeConnection(
   pendingConnection: PendingConnection,
   code: string,
   connectorState: string | null,
+  oauthState: string,
 ): Promise<string> {
+  const snapshot = await readBankCallbackConfiguration(supabase, pendingConnection.company_id,
+    pendingConnection.user_id, pendingConnection.id, oauthState)
+  pendingConnection = { ...pendingConnection, ...snapshot.connection,
+    accounts_data: snapshot.connection.accounts_data as StoredAccount[] }
+
   const userId = pendingConnection.user_id
 
   console.log('[enable-banking] Exchanging code for session', {
@@ -446,6 +456,25 @@ async function finalizeConnection(
   })
 
   const sessionData = await createSession(code, connectorState ?? undefined)
+  try {
+    return await persistBankSession(supabase, pendingConnection, sessionData, oauthState, snapshot.token)
+  } catch (error) {
+    // A lost RPC response may still mean the transaction committed. The
+    // all-holder claim refuses cleanup of a session now in use anywhere.
+    try {
+      await revokeUnusedSession(supabase, sessionData.session_id)
+    } catch {
+      log.warn('unused callback consent cleanup was not confirmed', { connectionId: pendingConnection.id })
+    }
+    throw error
+  }
+}
+
+async function persistBankSession(
+  supabase: ServiceClient, pendingConnection: PendingConnection,
+  sessionData: Awaited<ReturnType<typeof createSession>>, oauthState: string, expectedToken: string,
+): Promise<string> {
+  const userId = pendingConnection.user_id
   const { session_id, accounts, access } = sessionData
   const consentExpiresAt = access.valid_until
 
@@ -462,124 +491,42 @@ async function finalizeConnection(
   // them here. The first sync (after the user enables specific accounts)
   // populates balance + balance_updated_at via lib/sync.ts. Accounts the
   // user deselects never have their balance pulled.
-  // Dedup scopes the row's accounts were first ingested under. The scope of a
-  // legacy account without an explicit dedup_scope is what lib/sync.ts derived
-  // for it historically: the normalized IBAN, else its (then-current) uid.
-  // Matching by IBAN first covers the ASPSPs that mint new uids on every
-  // re-authorization; the uid match covers no-IBAN accounts whose uid is
-  // stable. A no-IBAN account whose uid changed cannot be matched here: it
-  // gets a fresh scope, same as before this field existed.
   const priorAccounts = pendingConnection.accounts_data ?? []
-  // explicit: the prior account carried a stored dedup_scope (as opposed to
-  // one derived here from its IBAN/uid). The supersede pass below only lets a
-  // carried sibling scope onto an account whose own scope is NOT explicit.
-  const priorScopeByIban = new Map<string, { scope: string; explicit: boolean }>()
-  const priorScopeByUid = new Map<string, { scope: string; explicit: boolean }>()
-  // The user's earlier sync choice per account ("Synkas ej" = enabled:false)
-  // must survive a renewal: a deselected private card that comes back
-  // pre-checked lands its transactions in the company's books the moment the
-  // user saves the picker with defaults. Matched by uid first (exact resource
-  // identity; one session can list the same IBAN twice, e.g. one resource per
-  // balance type), then by IBAN for ASPSPs that mint new uids on re-auth.
-  const priorEnabledByIban = new Map<string, boolean>()
-  const priorEnabledByUid = new Map<string, boolean>()
-  for (const prior of priorAccounts) {
-    const priorIban = normalizeIban(prior.iban)
-    const priorScope = prior.dedup_scope || priorIban || prior.uid
-    const priorEntry = { scope: priorScope, explicit: Boolean(prior.dedup_scope) }
-    if (priorIban && !priorScopeByIban.has(priorIban)) priorScopeByIban.set(priorIban, priorEntry)
-    if (!priorScopeByUid.has(prior.uid)) priorScopeByUid.set(prior.uid, priorEntry)
-    const priorEnabled = prior.enabled !== false
-    if (priorIban && !priorEnabledByIban.has(priorIban)) priorEnabledByIban.set(priorIban, priorEnabled)
-    if (!priorEnabledByUid.has(prior.uid)) priorEnabledByUid.set(prior.uid, priorEnabled)
-  }
-
+  const priorByNewUid = new Map<string, StoredAccount>()
+  const compatible = (prior: { currency: string; iban?: string | null }, current: { currency: string; iban?: string | null }) =>
+    prior.currency.toUpperCase() === current.currency.toUpperCase() &&
+    (!normalizeIban(prior.iban) || !normalizeIban(current.iban) || normalizeIban(prior.iban) === normalizeIban(current.iban))
   const accountsMetadata: StoredAccount[] = accounts.map((account: AccountInfo) => {
-    const normalizedIban = normalizeIban(account.account_id?.iban)
+    const iban = normalizeIban(account.account_id?.iban)
+    const currency = account.currency.toUpperCase()
+    let prior = priorAccounts.find(p => p.uid === account.uid && compatible(p, { currency, iban }))
+    if (!prior && iban) {
+      const matches = priorAccounts.filter(p => p.currency.toUpperCase() === currency && normalizeIban(p.iban) === iban)
+      if (matches.length > 1) throw new Error('Bank callback identity ambiguous')
+      prior = matches[0]
+    }
+    if (prior) priorByNewUid.set(account.uid, prior)
     return {
-      uid: account.uid,
-      iban: account.account_id?.iban,
-      bban: extractBban(account),
-      name: account.name || account.product,
-      currency: account.currency,
-      // Carry the user's earlier choice for an account we have seen before;
-      // only genuinely new accounts default to enabled. The picker shown
-      // right after this callback pre-checks from this flag, and no
-      // transactions are fetched before the user saves it.
-      enabled:
-        priorEnabledByUid.get(account.uid) ??
-        (normalizedIban ? priorEnabledByIban.get(normalizedIban) : undefined) ??
-        true,
-      // Pin the external_id account scope at first ingest so it survives
-      // re-authorizations. Byte-identical to the derivation lib/sync.ts
-      // applied before this field existed (normalized IBAN, else uid).
-      dedup_scope:
-        (normalizedIban ? priorScopeByIban.get(normalizedIban)?.scope : undefined) ??
-        priorScopeByUid.get(account.uid)?.scope ??
-        normalizedIban ??
-        account.uid,
+      uid: account.uid, iban: account.account_id?.iban ?? prior?.iban, bban: extractBban(account),
+      name: account.name || account.product, currency, enabled: prior?.enabled !== false,
+      dedup_scope: prior?.dedup_scope || normalizeIban(prior?.iban) || prior?.uid || iban || account.uid,
     }
   })
-
-  // The maps above leave one corner open (issue #1709): a NO-IBAN account
-  // whose uid changed on an in-place reconnect matches neither by IBAN nor by
-  // uid, so its scope regenerates, every historical external_id changes, and
-  // the whole history re-imports as fresh unbooked rows. Pair such accounts by
-  // elimination, but only when the pairing is unambiguous: per currency,
-  // EXACTLY ONE prior account left unclaimed (no new account matched it via
-  // IBAN or uid) and EXACTLY ONE new account with a fresh scope, and neither
-  // side carries an IBAN. Anything else keeps the fresh-scope behavior. The
-  // asymmetry is deliberate: a wrong pairing can at worst skip a new
-  // transaction whose account+date+amount+occurrence all collide with an old
-  // row, while a missed pairing re-imports the full history unbooked.
+  // Pair retired no-IBAN resources only when exactly one unmatched account
+  // remains on each side in that currency. Never guess between two cards.
   const pairedPriorUidByNewUid = new Map<string, string>()
-  if (priorAccounts.length > 0) {
-    const newIbans = new Set<string>()
-    const newUids = new Set<string>()
-    for (const account of accountsMetadata) {
-      const normalizedIban = normalizeIban(account.iban)
-      if (normalizedIban) newIbans.add(normalizedIban)
-      newUids.add(account.uid)
-    }
-    const unclaimedPriorsByCurrency = new Map<string, StoredAccount[]>()
-    for (const prior of priorAccounts) {
-      const priorIban = normalizeIban(prior.iban)
-      if ((priorIban && newIbans.has(priorIban)) || newUids.has(prior.uid)) continue
-      const currency = (prior.currency || '').toUpperCase()
-      const bucket = unclaimedPriorsByCurrency.get(currency)
-      if (bucket) bucket.push(prior)
-      else unclaimedPriorsByCurrency.set(currency, [prior])
-    }
-    const freshScopeByCurrency = new Map<string, StoredAccount[]>()
-    for (const account of accountsMetadata) {
-      const normalizedIban = normalizeIban(account.iban)
-      const matchedPrior =
-        (normalizedIban ? priorScopeByIban.has(normalizedIban) : false) ||
-        priorScopeByUid.has(account.uid)
-      if (matchedPrior) continue
-      const currency = (account.currency || '').toUpperCase()
-      const bucket = freshScopeByCurrency.get(currency)
-      if (bucket) bucket.push(account)
-      else freshScopeByCurrency.set(currency, [account])
-    }
-    for (const [currency, unclaimed] of unclaimedPriorsByCurrency) {
-      const fresh = freshScopeByCurrency.get(currency) ?? []
-      if (unclaimed.length !== 1 || fresh.length !== 1) continue
-      const prior = unclaimed[0]
-      const survivor = fresh[0]
-      if (normalizeIban(prior.iban) || normalizeIban(survivor.iban)) continue
-      survivor.dedup_scope = prior.dedup_scope || prior.uid
-      // The pairing is an identity claim, so the user's earlier sync choice
-      // travels with it: a deselected account must not come back pre-checked.
-      survivor.enabled = prior.enabled !== false
-      pairedPriorUidByNewUid.set(survivor.uid, prior.uid)
-      console.log('[enable-banking] Paired no-IBAN account across a uid change', {
-        connectionId: pendingConnection.id,
-        currency,
-        priorUid: prior.uid,
-        newUid: survivor.uid,
-      })
-    }
+  const matchedPriorUids = new Set([...priorByNewUid.values()].map(p => p.uid))
+  for (const account of accountsMetadata) {
+    if (priorByNewUid.has(account.uid) || normalizeIban(account.iban)) continue
+    const old = priorAccounts.filter(p => !matchedPriorUids.has(p.uid) && p.currency.toUpperCase() === account.currency)
+    const fresh = accountsMetadata.filter(a => !priorByNewUid.has(a.uid) && a.currency === account.currency)
+    if (old.length !== 1 || fresh.length !== 1 || normalizeIban(old[0].iban)) continue
+    const prior = old[0]
+    account.dedup_scope = prior.dedup_scope || prior.uid
+    account.enabled = prior.enabled !== false
+    pairedPriorUidByNewUid.set(account.uid, prior.uid)
+    priorByNewUid.set(account.uid, prior)
+    matchedPriorUids.add(prior.uid)
   }
 
   // Cross-company guard: at one-session banks (SEB) the PSU's single consent
@@ -614,10 +561,7 @@ async function finalizeConnection(
     // waiting to be superseded) is already folded into crossCompany:
     // activeCompanyIbans outrank claims and deselections there, so such
     // accounts fall through to the enabled default below.
-    const seenOnThisRow =
-      priorEnabledByUid.has(account.uid) ||
-      (normalizedIban ? priorEnabledByIban.has(normalizedIban) : false) ||
-      pairedPriorUidByNewUid.has(account.uid)
+    const seenOnThisRow = priorByNewUid.has(account.uid)
     if (seenOnThisRow) {
       // The carried enabled/disabled state stands. The claim label is
       // metadata on top of it: accountsMetadata is rebuilt without the prior
@@ -640,16 +584,11 @@ async function finalizeConnection(
           claimedCount += 1
         }
       }
-      // Same re-stamp for a mirror card account the user has left off: the
-      // note must survive a renewal. An ENABLED one is the user's deliberate
-      // choice and is never touched. Only a same-uid account is kept out of
-      // the mirror pass (it was never mirrored, or its row already carries
-      // this uid); a PAIRED one (uid change, see pairedPriorUidByNewUid) must
-      // reach the mirror pass so its existing cash_accounts row is re-keyed
-      // to the new uid instead of going stale under the retired one.
+      // Preserve the explanation while it stays disabled. Existing own
+      // mirrors are re-keyed later; an unmirrored card stays unmirrored.
       if (account.enabled === false && isMirrorCardAccount(account)) {
         account.mirror_card_account = true
-        if (!pairedPriorUidByNewUid.has(account.uid)) guardDisabledUids.add(account.uid)
+        guardDisabledUids.add(account.uid)
       }
       continue
     }
@@ -708,50 +647,65 @@ async function finalizeConnection(
     })
   }
 
-  // Stay in 'pending_selection' until the user confirms which accounts to sync.
-  // The cron and manual sync routes both skip this status, so no transactions
-  // can be pulled before the user has had a chance to deselect accounts.
-  // Do not set last_synced_at here either: no transactions have been fetched
-  // yet, and setting it would cause the cron's first-sync 90-day backfill
-  // path to be skipped. The first successful sync sets it.
-  const { data: updatedConnection, error: updateError } = await supabase
-    .from('bank_connections')
-    .update({
-      session_id,
-      status: 'pending_selection',
-      accounts_data: accountsMetadata,
-      consent_expires: consentExpiresAt,
-      oauth_state: null, // Clear to prevent replay
-    })
-    .eq('id', pendingConnection.id)
-    .select('id, bank_name, company_id, user_id')
-    .single()
-
-  if (updateError) {
-    console.error('[enable-banking] Failed to update connection after session creation', {
-      connectionId: pendingConnection.id,
-      updateError: { message: updateError.message, code: updateError.code, details: updateError.details },
-      sessionId: '[REDACTED]',
-    })
-    throw new Error(`Failed to update connection: ${updateError.message}`)
+  // Preparation performs reads only. Every chart row, consent change and
+  // intended mirror is applied by the finalizer under one company lock.
+  const { data: mirroredRows, error: mirrorReadError } = await supabase
+    .from('cash_accounts')
+    .select('id, external_uid, ledger_account, iban, currency')
+    .eq('company_id', pendingConnection.company_id)
+    .eq('bank_connection_id', pendingConnection.id)
+  if (mirrorReadError) throw Object.assign(new Error(mirrorReadError.message), { code: mirrorReadError.code })
+  type Mirror = { id: string; external_uid: string | null; ledger_account: string; iban: string | null; currency: string }
+  const mirroredByUid = new Map((mirroredRows as Mirror[] ?? []).map(row => [row.external_uid, row]))
+  const ownRows = new Map<string, Mirror>()
+  for (const account of accountsMetadata) {
+    const prior = priorByNewUid.get(account.uid)
+    const row = mirroredByUid.get(prior?.uid ?? account.uid)
+    if (row && compatible(row, account)) ownRows.set(account.uid, row)
   }
+  const assignedLedgers = new Set([...ownRows.values()].map(row => row.ledger_account))
+  const mirrors: BankMirrorPlan[] = []
+  for (const account of accountsMetadata) {
+    const own = ownRows.get(account.uid)
+    // Guard-disabled new accounts must never promote the manual primary.
+    // Existing own mirrors still follow a safe UID change while disabled.
+    if (guardDisabledUids.has(account.uid) && !own) continue
+    const resolved = own ? { ledgerAccount: own.ledger_account, reuseCashAccountId: own.id }
+      : await resolvePsd2LedgerAccount(supabase, pendingConnection.company_id, userId, {
+        iban: account.iban, currency: account.currency, accountName: account.name,
+        exclude: assignedLedgers, prepareOnly: true,
+      })
+    if (!resolved) throw new Error('Bank callback ledger allocation failed')
+    account.ledger_account = resolved.ledgerAccount
+    assignedLedgers.add(resolved.ledgerAccount)
+    mirrors.push({ uid: account.uid, ledger_account: resolved.ledgerAccount, reuse_cash_account_id: resolved.reuseCashAccountId })
+  }
+  const receipt = await finalizeBankCallback(supabase, {
+    companyId: pendingConnection.company_id, userId, connectionId: pendingConnection.id, oauthState, expectedToken,
+    sessionId: session_id, consentExpires: consentExpiresAt ?? null, accounts: accountsMetadata, mirrors,
+    noIbanPairs: Object.fromEntries(pairedPriorUidByNewUid),
+  })
+  const updatedConnection = receipt.connection
 
   // A renewed consent belongs to every company that shared the old session,
-  // not just the one whose button was pressed. Without this the siblings keep
+  // including consents on superseded rows after a fresh bank-list connect.
+  // Without this the siblings keep
   // pointing at the session the bank has just replaced and die on their next
   // sync, which is the original one-session-per-PSU problem wearing a
   // different hat. Non-fatal: this connection is already renewed and correct.
-  if (pendingConnection.session_id && pendingConnection.session_id !== session_id) {
+  const replacedSessions = new Set([receipt.old_session_id, ...receipt.superseded.map(row => row.session_id)]
+    .filter((id): id is string => Boolean(id) && id !== session_id))
+  for (const oldSessionId of replacedSessions) {
     try {
       await fanOutSessionRenewal(supabase, {
-        oldSessionId: pendingConnection.session_id,
+        oldSessionId,
         newSessionId: session_id,
         consentExpires: consentExpiresAt ?? null,
         excludeConnectionId: pendingConnection.id,
         // Several ASPSPs mint new account uids on re-authorization, so the
         // siblings need their stored uids re-pointed by IBAN too. Carrying the
         // session id alone would leave them calling dead uids.
-        sessionAccounts: accountsMetadata,
+        sessionAccounts: receipt.accounts,
       })
     } catch (renewalError) {
       console.error('[enable-banking] Failed to carry renewed session to siblings', {
@@ -761,205 +715,16 @@ async function finalizeConnection(
     }
   }
 
-  // A successful (re)connect supersedes any older row for the same bank in
-  // this company. Without this, a renewal performed via the bank list left
-  // the old row parked in 'expired' ("Åtgärd krävs" forever, red chip) with
-  // the transaction history stranded on it, so the picker treated the renewal
-  // as a first connect and re-imported bookkept periods. Runs BEFORE the
-  // cash_accounts mirror below: the supersede demotes the old row's ledger
-  // claims to manual, and the mirror then promotes them onto this row by
-  // IBAN, exactly like a disconnect-then-reconnect. Non-fatal: this
-  // connection is already renewed and correct.
-  let carriedScopeDirty = false
-  try {
-    const supersedeResult = await supersedeSiblingConnections(supabase, {
-      companyId: updatedConnection.company_id,
-      userId: updatedConnection.user_id,
-      newConnectionId: updatedConnection.id,
-      bankName: updatedConnection.bank_name ?? null,
-      newSessionId: session_id,
-      newAccounts: accountsMetadata,
-    })
-    // Carry the superseded rows' dedup scopes onto this row's accounts so a
-    // renewal keeps minting the same transaction external_ids (see
-    // StoredAccount.dedup_scope). An account whose OWN prior row already
-    // carried an explicit dedup_scope keeps it: that scope is the one its
-    // external_ids were actually minted under, and a sibling's scope for the
-    // same IBAN must not clobber it. Only accounts whose scope was derived
-    // here (IBAN/uid fallback) take the carried one. Persisted by the
-    // accounts_data write below.
-    if (supersedeResult.dedupScopeByIban.size > 0) {
-      for (const account of accountsMetadata) {
-        const normalizedIban = normalizeIban(account.iban)
-        const carried = normalizedIban
-          ? supersedeResult.dedupScopeByIban.get(normalizedIban)
-          : undefined
-        const survivorExplicit =
-          (normalizedIban ? priorScopeByIban.get(normalizedIban)?.explicit : undefined) ??
-          priorScopeByUid.get(account.uid)?.explicit ??
-          false
-        if (carried && !survivorExplicit && account.dedup_scope !== carried) {
-          account.dedup_scope = carried
-          carriedScopeDirty = true
-        }
-      }
-    }
-  } catch (supersedeError) {
-    log.error('supersede pass failed', supersedeError as Error, {
-      connectionId: updatedConnection.id,
-    })
-  }
-
-  // Mirror each PSD2 account into cash_accounts so routing decisions read
-  // from the canonical entity table. Accounts already mirrored under the same
-  // (connection, uid) keep their ledger_account — re-deriving it here would
-  // clobber the user's remaps. Everything else goes through
-  // resolvePsd2LedgerAccount, which matches on IBAN before allocating: a
-  // re-authorization that mints new account uids, and a fresh connect that
-  // mints a whole new connection row, both have to land back on the mapping
-  // the user already chose instead of overflowing into the next free slots.
-  const { data: mirroredRows } = await supabase
-    .from('cash_accounts')
-    .select('id, external_uid, ledger_account')
-    .eq('company_id', updatedConnection.company_id)
-    .eq('bank_connection_id', updatedConnection.id)
-  const mirroredByUid = new Map(
-    ((mirroredRows ?? []) as Array<{ id: string; external_uid: string; ledger_account: string }>).map(
-      (r) => [r.external_uid, r],
-    ),
-  )
-  // Only ledgers still claimed by a uid the bank returned in THIS session
-  // block the resolver. A row whose uid the ASPSP retired on re-auth (SEB
-  // mints new uids on every renewal) is exactly the row the IBAN match must
-  // promote; seeding its ledger into the exclude set made the resolver reject
-  // its own IBAN hit and allocate a fresh 19xx slot per renewal, so the chart
-  // grew a dead sub-account each time. Stale ledgers are still safe from the
-  // allocator: findFreeLedgerAccount skips every ledger a cash_accounts row
-  // holds, whatever its uid.
-  const sessionUids = new Set(accountsMetadata.map((a) => a.uid))
-  const assignedLedgers = new Set<string>(
-    [...mirroredByUid.values()]
-      .filter((row) => sessionUids.has(row.external_uid))
-      .map((row) => row.ledger_account),
-  )
-  let accountsDataDirty = carriedScopeDirty
-
-  for (const account of accountsMetadata) {
-    // Nothing the guard disabled is mirrored here: a claimed account's row
-    // would be another company's data in this routing table (and an enabled
-    // one would double-claim the IBAN), and mirroring enabled:false for any
-    // new-to-row account can promote an existing manual holder — the seeded
-    // primary 1930 included — flipping it to disabled under a foreign
-    // identity. No 19xx slot is burned either. The selection save allocates
-    // and mirrors whichever of them the user deliberately turns on.
-    if (guardDisabledUids.has(account.uid)) continue
-    let targetLedger = mirroredByUid.get(account.uid)?.ledger_account
-    let reuseCashAccountId: string | null = null
-    if (!targetLedger) {
-      // A paired no-IBAN account (uid change on an in-place reconnect) reuses
-      // this connection's own row for the retired uid: same ledger, same row
-      // id. upsertFromPsd2 promotes the named row in place, re-keying it to
-      // the new uid, so transactions.cash_account_id links survive and the
-      // content-dedup account guard in lib/transactions/ingest.ts keeps
-      // matching. Without this the resolver would see the old row as a live
-      // claim and allocate an overflow 19xx slot plus a NEW cash_accounts row,
-      // which is the second half of issue #1709.
-      const pairedPriorUid = pairedPriorUidByNewUid.get(account.uid)
-      const pairedRow = pairedPriorUid ? mirroredByUid.get(pairedPriorUid) : undefined
-      if (pairedRow && !assignedLedgers.has(pairedRow.ledger_account)) {
-        targetLedger = pairedRow.ledger_account
-        reuseCashAccountId = pairedRow.id
-      }
-    }
-    if (!targetLedger) {
-      const resolved = await resolvePsd2LedgerAccount(
-        supabase,
-        updatedConnection.company_id,
-        updatedConnection.user_id,
-        {
-          iban: account.iban,
-          currency: account.currency,
-          accountName: account.name,
-          exclude: assignedLedgers,
-        },
-      )
-      targetLedger = resolved?.ledgerAccount ?? defaultLedgerForCurrency(account.currency)
-      reuseCashAccountId = resolved?.reuseCashAccountId ?? null
-      if (resolved?.source === 'iban') {
-        console.log('[enable-banking] Reused existing ledger mapping for known IBAN', {
-          connectionId: updatedConnection.id,
-          uid: account.uid,
-          ledgerAccount: targetLedger,
-        })
-      }
-    }
-    assignedLedgers.add(targetLedger)
-    if (account.ledger_account !== targetLedger) {
-      account.ledger_account = targetLedger
-      accountsDataDirty = true
-    }
+  await finishBankSupersession(supabase, {
+    companyId: updatedConnection.company_id, userId, newConnectionId: updatedConnection.id,
+    bankName: updatedConnection.bank_name, newSessionId: session_id,
+  }, receipt.superseded)
+  if (receipt.old_session_id && receipt.old_session_id !== session_id &&
+    !receipt.superseded.some(row => row.session_id === receipt.old_session_id)) {
     try {
-      await upsertFromPsd2(supabase, updatedConnection.company_id, {
-        bank_connection_id: updatedConnection.id,
-        external_uid: account.uid,
-        currency: account.currency,
-        ledger_account: targetLedger,
-        iban: account.iban ?? null,
-        bban: account.bban ?? null,
-        name: account.name ?? null,
-        enabled: account.enabled ?? true,
-        reuse_cash_account_id: reuseCashAccountId,
-      })
-    } catch (cashErr) {
-      const reason = cashErr instanceof Error ? cashErr.message : String(cashErr)
-      console.error('[enable-banking] Failed to mirror cash_account on callback', {
-        connectionId: updatedConnection.id,
-        uid: account.uid,
-        error: reason,
-      })
-      // Persist the failure to event_log so a security review can see that
-      // a PSD2 account returned by the bank was not mirrored into our
-      // routing table; otherwise this is only visible in console output
-      // (ASVS V16 / ISO 27001 A.8.15 / SOC 2 CC7.2).
-      try {
-        await eventBus.emit({
-          type: 'bank_connection.cash_account_mirror_failed',
-          payload: {
-            connectionId: updatedConnection.id,
-            bankName: updatedConnection.bank_name ?? null,
-            accountUid: account.uid,
-            ledgerAccount: targetLedger,
-            currency: account.currency,
-            reason,
-            userId: updatedConnection.user_id,
-            companyId: updatedConnection.company_id,
-          },
-        })
-      } catch (emitError) {
-        // A.8.15: structured error (not bare console) so log-based alerting
-        // catches a dropped security event instead of it vanishing silently.
-        log.error(AUDIT_EMIT_FAILED, emitError as Error, {
-          eventType: 'bank_connection.cash_account_mirror_failed',
-          connectionId: updatedConnection.id,
-          accountUid: account.uid,
-        })
-      }
-    }
-  }
-
-  // Persist the allocated ledgers into accounts_data so the AccountPicker
-  // pre-fills the actual assignments instead of colliding currency
-  // defaults. Non-fatal: cash_accounts is the routing source of truth.
-  if (accountsDataDirty) {
-    const { error: accountsDataError } = await supabase
-      .from('bank_connections')
-      .update({ accounts_data: accountsMetadata })
-      .eq('id', updatedConnection.id)
-    if (accountsDataError) {
-      console.warn('[enable-banking] Failed to persist allocated ledgers to accounts_data', {
-        connectionId: updatedConnection.id,
-        error: accountsDataError.message,
-      })
+      await revokeUnusedSession(supabase, receipt.old_session_id)
+    } catch {
+      log.warn('previous callback consent cleanup was not confirmed', { connectionId: updatedConnection.id })
     }
   }
 
@@ -1002,6 +767,7 @@ async function finalizeConnection(
 async function cleanupFailedFinalize(
   supabase: ServiceClient,
   pendingConnection: PendingConnection,
+  oauthState: string,
 ): Promise<string> {
   try {
     if (pendingConnection.status === 'pending') {
@@ -1009,12 +775,16 @@ async function cleanupFailedFinalize(
         .from('bank_connections')
         .delete()
         .eq('id', pendingConnection.id)
+        .eq('company_id', pendingConnection.company_id)
+        .eq('oauth_state', oauthState)
         .eq('status', 'pending')
     } else {
       await supabase
         .from('bank_connections')
         .update({ status: 'error', error_message: FINALIZE_FAILED_MESSAGE, oauth_state: null })
         .eq('id', pendingConnection.id)
+        .eq('company_id', pendingConnection.company_id)
+        .eq('oauth_state', oauthState)
         .in('status', ['pending', 'expired', 'error'])
     }
   } catch (cleanupError) {

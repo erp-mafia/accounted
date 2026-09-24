@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -13,7 +13,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
  * reader; membership is what withRouteContext already established.
  */
 export const GET = withRouteContext('arkiv.brain', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   try {
     const graph = await getCompanyGraph(createServiceClient(), ctx.companyId)
     return NextResponse.json({ data: graph })

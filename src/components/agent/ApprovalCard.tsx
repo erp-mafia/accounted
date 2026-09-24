@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Check, X, Loader2, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
+import { Check, X, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
@@ -337,9 +337,9 @@ export default function ApprovalCard({
       className={cn(
         // Subtle accent border-top tells the eye what to do BEFORE reading
         // the risk label. high = destructive red, medium = warning yellow,
-        // low = neutral foreground. animate-scale-in gives the card a soft
+        // low = neutral foreground. animate-fade-in gives the card a soft
         // entrance when it first lands inline in the conversation.
-        'rounded-lg border bg-card px-4 py-3 space-y-3 border-t-2 animate-scale-in',
+        'rounded-lg border bg-card px-4 py-3 space-y-3 border-t-2 animate-fade-in',
         riskLevel === 'high'
           ? 'border-destructive/50 border-t-destructive'
           : riskLevel === 'medium'
@@ -379,7 +379,7 @@ export default function ApprovalCard({
             value={confirmText}
             onChange={(e) => setConfirmText(e.target.value)}
             disabled={isBusy}
-            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             autoComplete="off"
             aria-label="Bekräfta med ordet godkänn"
           />
@@ -437,9 +437,10 @@ export default function ApprovalCard({
               size="sm"
               onClick={handleReject}
               disabled={isBusy}
+              loading={state === 'rejecting'}
               className="flex-1"
             >
-              {state === 'rejecting' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Avvisa'}
+              Avvisa
             </Button>
             <Button
               variant="outline"
@@ -463,9 +464,10 @@ export default function ApprovalCard({
               size="sm"
               onClick={handleActivateAndCommit}
               disabled={isBusy}
+              loading={state === 'committing'}
               className="flex-1"
             >
-              {state === 'committing' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Aktivera och godkänn'}
+              Aktivera och godkänn
             </Button>
             <Button
               variant="outline"
@@ -485,13 +487,10 @@ export default function ApprovalCard({
               size="sm"
               onClick={handleCommit}
               disabled={isBusy || !canCommit}
+              loading={state === 'committing'}
               className="flex-1"
             >
-              {state === 'committing' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                'Godkänn'
-              )}
+              Godkänn
             </Button>
             <Button
               variant="outline"
@@ -517,21 +516,21 @@ export default function ApprovalCard({
 function PeriodBadge({ status }: { status: PeriodStatus }) {
   if (status.status === 'open') {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-success">
+      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-success">
         <ShieldCheck className="h-3 w-3" /> Period öppen
       </span>
     )
   }
   if (status.status === 'locked') {
     return (
-      <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-warning">
+      <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-warning">
         <Lock className="h-3 w-3" /> Period låst
         {status.lock_date ? <span className="tabular-nums">· {status.lock_date}</span> : null}
       </span>
     )
   }
   return (
-    <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-destructive">
+    <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-destructive">
       <Lock className="h-3 w-3" /> Period stängd
     </span>
   )
