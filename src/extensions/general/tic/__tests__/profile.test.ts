@@ -277,6 +277,15 @@ describe('TIC profile route', () => {
     expect(data.activityStatus).toBe('ceased')
   })
 
+  it('keeps activityStatus when a stale isCeased disagrees with an active firm', async () => {
+    mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isActive' })
+    mockKeptSupplementary()
+
+    const res = await profileHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.activityStatus).toBe('isActive')
+  })
+
   it('includes financial summary from company document', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockKeptSupplementary()

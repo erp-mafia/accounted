@@ -1,4 +1,5 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
+import { isLensDocumentCeased } from './lens-status'
 import type { TICCompanyDocument } from './tic-types'
 import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
 import { normalizeOrgNumber, registrationNumberKey } from '@/lib/invariants/org-number'
@@ -66,7 +67,7 @@ export function pickCompanyName(names: TICCompanyDocument['names']): string {
 export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLookupResult {
   const companyName = pickCompanyName(doc.names)
 
-  const isCeased = doc.isCeased ?? doc.activityStatus === 'isNoLongerActive'
+  const isCeased = isLensDocumentCeased(doc)
 
   const address = doc.mostRecentRegisteredAddress
     ? {
