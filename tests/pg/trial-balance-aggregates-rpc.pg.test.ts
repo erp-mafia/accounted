@@ -877,6 +877,64 @@ describe('result_closing_entry_ids and exclude-final on a migrated year', () => 
     expect(operational.get('3001')).toEqual({ debit: 10000, credit: 10000 })
   })
 
+  it("a member's own last-day voucher against 2099 cannot hide a cost: the result still equals booked 2099", async () => {
+    // Security review of this change (PR #3012): any member can post a
+    // voucher of this shape. Dropping it is safe because the shape can only
+    // be a transfer of result into equity: the statutory resultaträkning
+    // keeps showing the full activity, and its result equals the booked 2099.
+    const ctx = await seedCompany()
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 1, entryDate: '2026-05-10',
+      lines: [
+        { account: '1930', debit: 12500, credit: 0 },
+        { account: '3001', debit: 0, credit: 10000 },
+        { account: '2611', debit: 0, credit: 2500 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, entryDate: '2026-06-10',
+      lines: [
+        { account: '5010', debit: 4000, credit: 0 },
+        { account: '1930', debit: 0, credit: 4000 },
+      ],
+    })
+    // The member moves 1 000 of the cost straight into equity.
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 3, entryDate: '2026-12-31',
+      lines: [
+        { account: '5010', debit: 0, credit: 1000 },
+        { account: '2099', debit: 1000, credit: 0 },
+      ],
+    })
+    // Then our own resultatavslut closes what is left, linked on the period.
+    const closingEntryId = await insertJournalEntry({
+      ...ctx, voucherNumber: 4, sourceType: 'year_end', entryDate: '2026-12-31',
+      lines: [
+        { account: '3001', debit: 10000, credit: 0 },
+        { account: '5010', debit: 0, credit: 3000 },
+        { account: '2099', debit: 0, credit: 7000 },
+      ],
+    })
+    await getPool().query(`UPDATE public.fiscal_periods SET closing_entry_id = $1 WHERE id = $2`, [
+      closingEntryId,
+      ctx.fiscalPeriodId,
+    ])
+
+    const preClosing = bucket(await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-final'), 'period')
+    const full = bucket(await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'include'), 'period')
+
+    // The full cost stays on the resultaträkning.
+    expect(preClosing.get('5010')).toEqual({ debit: 4000, credit: 0 })
+    const rrResult = [...preClosing.entries()]
+      .filter(([account]) => account >= '3' && account < '9')
+      .reduce((sum, [, v]) => sum + v.credit - v.debit, 0)
+    const booked2099 = full.get('2099')!.credit - full.get('2099')!.debit
+    expect(rrResult).toBe(6000)
+    expect(booked2099).toBe(6000)
+    // The voucher itself stays in the ledger.
+    expect(full.get('5010')).toEqual({ debit: 4000, credit: 4000 })
+  })
+
   it('is SECURITY INVOKER: a non-member gets an empty set', async () => {
     const ctx = await seedMigratedYear()
     const stranger = await insertAuthUser()
