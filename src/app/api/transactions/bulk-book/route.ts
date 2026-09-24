@@ -341,8 +341,8 @@ export const POST = withRouteContext(
             currency,
             line_description: formLine.line_description || undefined,
             sort_order: sortOrder++,
-            // Dimensions PR7: header default applies to all template lines.
-            dimensions: body.default_dimensions,
+            // Per-line template bag wins over the batch header default.
+            dimensions: mergeDimensionBags(body.default_dimensions, formLine.dimensions),
           })
         }
       } else {
@@ -365,8 +365,8 @@ export const POST = withRouteContext(
                 ? `${formLine.line_description ?? ''}: ${txTag}`.trim()
                 : formLine.line_description || undefined,
               sort_order: sortOrder++,
-              // Dimensions PR7: header default applies to all template lines.
-              dimensions: body.default_dimensions,
+              // Per-line template bag wins over the batch header default.
+              dimensions: mergeDimensionBags(body.default_dimensions, formLine.dimensions),
             })
           }
         }

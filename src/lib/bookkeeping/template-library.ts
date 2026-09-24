@@ -1,6 +1,7 @@
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine, VatTreatment } from '@/types'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
+import { normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
 import { isReverseChargeVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { roundOre } from '@/lib/money'
 
@@ -26,6 +27,7 @@ export function isLibraryTemplateId(id: string): boolean { return id.startsWith(
  *      Ruta 30-32 and Ruta 48 by rate/(1+rate) (25% became 20%).
  *   3. Settlement lines: amount = totalAmount (the full payment)
  *   4. Business lines: amount = totalAmount × ratio (cost/revenue net of VAT handled separately)
+ *   5. Business lines: optional SIE dimension bag copied onto the form line when set
  *
  * For simple two-line templates (no VAT), the ratio is typically 1.0
  * on both sides and totalAmount is used directly.
@@ -52,12 +54,19 @@ export function applyTemplate(
       amount = Math.round(totalAmount * (line.ratio ?? 1) * 100) / 100
     }
 
-    result.push({
+    const formLine: FormLine = {
       account_number: line.account,
       debit_amount: line.side === 'debit' ? amount.toFixed(2) : '',
       credit_amount: line.side === 'credit' ? amount.toFixed(2) : '',
       line_description: line.label,
-    })
+    }
+    if (line.type === 'business' && line.dimensions) {
+      const bag = normalizeLineDimensions({ dimensions: line.dimensions })
+      if (Object.keys(bag).length > 0) {
+        formLine.dimensions = bag
+      }
+    }
+    result.push(formLine)
   }
 
   return result
@@ -170,10 +179,13 @@ export function convertLibraryToBookingTemplate(
 /** A single concrete booking row, as produced by the manual-booking forms
  *  (BookDirectlyDialog / JournalEntryForm). Amounts are strings straight from
  *  the inputs; either debit or credit is set, not both. */
+/** One journal row passed into {@link deriveTemplateLinesFromBooking}. */
 export interface BookingRowInput {
   account_number: string
   debit_amount: string
   credit_amount: string
+  /** Optional SIE dimension bag; kept on derived business lines only. */
+  dimensions?: Record<string, string>
 }
 
 /** Standard Swedish VAT rates a template line can carry (matches the rate
@@ -230,7 +242,11 @@ export function deriveTemplateLinesFromBooking(
       const debit = Math.abs(parseFloat(row.debit_amount) || 0)
       const credit = Math.abs(parseFloat(row.credit_amount) || 0)
       const side: 'debit' | 'credit' = debit >= credit ? 'debit' : 'credit'
-      return { account, side, amount: Math.max(debit, credit) }
+      const dimensions =
+        row.dimensions && Object.keys(normalizeLineDimensions({ dimensions: row.dimensions })).length > 0
+          ? normalizeLineDimensions({ dimensions: row.dimensions })
+          : undefined
+      return { account, side, amount: Math.max(debit, credit), dimensions }
     })
     .filter((row) => /^\d{4}$/.test(row.account) && row.amount > 0)
 
@@ -284,6 +300,7 @@ export function deriveTemplateLinesFromBooking(
       side: row.side,
       type: 'business',
       ratio: Math.round((row.amount / total) * 10000) / 10000,
+      ...(row.dimensions ? { dimensions: row.dimensions } : {}),
     }
   })
 }

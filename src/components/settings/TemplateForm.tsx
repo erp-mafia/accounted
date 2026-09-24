@@ -13,8 +13,10 @@ import { Loader2, Trash2, Plus } from 'lucide-react'
 import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
+import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { formatCurrency } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { useSettings } from '@/components/settings/useSettings'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -41,6 +43,8 @@ export function TemplateForm({
 }) {
   const t = useTranslations('settings_booking_templates')
   const { toast } = useToast()
+  const { settings: companySettings } = useSettings()
+  const dimensionsEnabled = companySettings?.dimensions_enabled === true
   const [isSubmitting, setIsSubmitting] = useState(false)
   // When customizing a system template (mode 'duplicate') we suggest a distinct
   // "(anpassad)" name so the company copy doesn't read as the standard one.
@@ -64,6 +68,7 @@ export function TemplateForm({
         ],
   )
 
+  /** Updates one scalar field on a template line row. */
   function updateLine(index: number, field: keyof BookingTemplateLibraryLine, value: string | number) {
     setLines((prev) => {
       const updated = [...prev]
@@ -72,11 +77,33 @@ export function TemplateForm({
     })
   }
 
+  /** Sets or clears one SIE dimension code on a business line (kostnadsställe/projekt). */
+  function updateLineDimensions(index: number, sieDimNo: string, code: string | null) {
+    setLines((prev) => {
+      const updated = [...prev]
+      const current = { ...(updated[index].dimensions ?? {}) }
+      if (code === null) {
+        delete current[sieDimNo]
+      } else {
+        current[sieDimNo] = code
+      }
+      updated[index] = {
+        ...updated[index],
+        dimensions: Object.keys(current).length > 0 ? current : undefined,
+      }
+      return updated
+    })
+  }
+
+  /** Re-tags a line as business, VAT, or settlement and drops dimensions on non-business legs. */
   function updateLineType(index: number, newType: BookingTemplateLibraryLine['type']) {
     setLines((prev) => {
       const updated = [...prev]
       const current = updated[index]
       const next: BookingTemplateLibraryLine = { ...current, type: newType }
+      if (newType !== 'business') {
+        delete next.dimensions
+      }
       // Auto-pick a sensible default for the type-specific field so the
       // converter (and applyTemplate) sees a complete line shape.
       if (newType === 'vat' && next.vat_rate === undefined) {
@@ -303,6 +330,18 @@ export function TemplateForm({
                   </div>
                 )}
               </div>
+              {dimensionsEnabled && line.type === 'business' && (
+                <div className="pt-1">
+                  <p className="text-xs text-muted-foreground mb-1">{t('line_dimensions_help')}</p>
+                  <LineDimensionFields
+                    dimensions={line.dimensions}
+                    onChange={(sieDimNo, code) => updateLineDimensions(i, sieDimNo, code)}
+                    disabled={isSubmitting}
+                    stacked
+                    inputClassName="h-8"
+                  />
+                </div>
+              )}
             </div>
           )})}
           <Button type="button" variant="outline" size="sm" onClick={addLine}>
