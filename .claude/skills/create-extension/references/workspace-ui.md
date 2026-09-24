@@ -30,7 +30,7 @@ Declare in extension object:
 settingsPanel: { label: 'My Extension', path: '/settings/extensions/my-extension' },
 ```
 
-Register panel in `lib/extensions/settings-panel-registry.tsx`:
+Register panel in `src/lib/extensions/settings-panel-registry.tsx`:
 ```typescript
 case 'my-extension':
   return dynamic(() => import('@/components/extensions/general/my-extension/MyExtSettings'))

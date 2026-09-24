@@ -20,7 +20,7 @@ export const myExtension: Extension = {
 
 ## All Event Types
 
-Source: `lib/events/types.ts`. Every payload includes `userId`.
+Source: `src/lib/events/types.ts`. Every payload includes `userId`.
 
 | Event | Payload |
 |-------|---------|

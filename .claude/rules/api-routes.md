@@ -5,7 +5,7 @@ paths:
 
 # API Route Pattern
 
-**Default: wrap every cookie-session route in `withRouteContext`** (`lib/api/with-route-context.ts`). It is the only path that enforces MFA (AAL2) on hosted: it calls `requireAuth()`, resolves the active `companyId`, optionally gates non-viewer role (`requireWrite: true`), and converts thrown errors into the canonical envelope. **Never hand-roll `supabase.auth.getUser()` in a route**: that skips MFA. CI enforces this via the ratchet guard (`npm run check:guards`); a new route calling `getUser()` directly fails the build.
+**Default: wrap every cookie-session route in `withRouteContext`** (`src/lib/api/with-route-context.ts`). It is the only path that enforces MFA (AAL2) on hosted: it calls `requireAuth()`, resolves the active `companyId`, optionally gates non-viewer role (`requireWrite: true`), and converts thrown errors into the canonical envelope. **Never hand-roll `supabase.auth.getUser()` in a route**: that skips MFA. CI enforces this via the ratchet guard (`npm run check:guards`); a new route calling `getUser()` directly fails the build.
 
 ```typescript
 import { NextResponse } from 'next/server'
@@ -36,17 +36,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 - Writing a table whose RLS write policy is `user_is_company_admin(...)` (`company_settings`, `companies`, `company_members`, `company_invitations`, `api_keys`, `invoice_payee_defaults`)? Gate with `{ requireAdmin: true }`, not `requireWrite`. A `member` passes `requireWrite`, and RLS then refuses silently: the UPDATE matches zero rows with no error, which `.single()` turns into a 500. `requireAdmin` asks the database that same predicate, so the route and the policy cannot disagree; the contract is pinned in `tests/pg/company-settings-admin-gate.pg.test.ts`.
 - Dynamic route params: `{ params }: { params: Promise<{ id: string }> }` (Next.js 16, params are async). With `withRouteContext`, pass that shape as the generic and destructure `params` from the 3rd handler arg.
 - Response shapes: `{ data }` for success; failures are the canonical `{ error: { code, message, message_en?, requestId? } }` envelope (thrown errors → `errorResponse`). Don't hand-build `{ error: 'string' }`.
-- Zod schemas in `lib/api/schemas.ts`: 100+ schemas with shared primitives (uuid, isoDate, accountNumber, nonNegativeAmount).
+- Zod schemas in `src/lib/api/schemas.ts`: 100+ schemas with shared primitives (uuid, isoDate, accountNumber, nonNegativeAmount).
 - Routes that emit events must call `ensureInitialized()` at module level.
 - Opt out of `withRouteContext` only when the route genuinely can't guarantee a company context (e.g. onboarding): then call `requireAuth()` directly so MFA is still enforced.
 - API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
 - Journal entries a route creates: when the entry IS the accounting record (mark paid, mark sent under kontantmetoden, payout settle), a failed commit fails the request, otherwise AP/AR diverges from the ledger. When the entry is a side effect of the primary action (e.g. categorizing a transaction), log the failure with `log` and let the primary action succeed.
 
-## Endpoint map (`app/api/`)
+## Endpoint map (`src/app/api/`)
 
-Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.
+Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find src/app/api -name route.ts | awk -F/ '{print $4}' | sort | uniq -c`.
 
-- `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
+- `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `src/lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
 - `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch
 - `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, audit-trail, behandlingshistorik, bokslutsbilagor, continuity, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability, avgifter-basis
 - `/api/salary/*` (36): employees, payroll-config, tax-tables, KU, runs

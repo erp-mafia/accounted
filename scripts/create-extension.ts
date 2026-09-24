@@ -10,7 +10,7 @@
  *     --description "Short description of the extension"
  *
  * This will:
- *   1. Create extensions/<sector>/<name>/ directory
+ *   1. Create src/extensions/<sector>/<name>/ directory
  *   2. Generate manifest.json, index.ts, and api-routes.ts
  *   3. Add the extension ID to extensions.schema.json enum array
  */
@@ -21,15 +21,8 @@ import { fileURLToPath } from 'url'
 
 // ── Constants ────────────────────────────────────────────────
 
-const VALID_SECTORS = [
-  'general',
-  'restaurant',
-  'construction',
-  'hotel',
-  'tech',
-  'ecommerce',
-  'export',
-] as const
+// Mirrors SectorSlug in src/lib/extensions/types.ts.
+const VALID_SECTORS = ['general'] as const
 
 const VALID_CATEGORIES = [
   'import',
@@ -65,9 +58,9 @@ Options:
 Example:
   npx tsx scripts/create-extension.ts \\
     --name inventory-tracker \\
-    --sector restaurant \\
+    --sector general \\
     --category operations \\
-    --description "Track inventory levels for restaurant supplies"
+    --description "Track inventory levels"
 `)
   process.exit(1)
 }

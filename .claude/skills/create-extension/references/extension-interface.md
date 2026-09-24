@@ -1,6 +1,6 @@
 # Extension Interface Reference
 
-Source: `lib/extensions/types.ts`
+Source: `src/lib/extensions/types.ts`
 
 ## Extension Interface
 
@@ -22,7 +22,7 @@ interface Extension {
 }
 ```
 
-All surfaces are optional. Core reads only `eventHandlers`, `apiRoutes` and `services` today; the other fields are declared but not wired (settings panels are registered in `lib/extensions/settings-panel-registry.tsx`).
+All surfaces are optional. Core reads only `eventHandlers`, `apiRoutes` and `services` today; the other fields are declared but not wired (settings panels are registered in `src/lib/extensions/settings-panel-registry.tsx`).
 
 ## Key Supporting Types
 
@@ -81,7 +81,7 @@ export const loggerExtension: Extension = {
 
 **Level 3: Service provider** (registers a core interface at module load, or exposes named functions core resolves through the registry; see [Services](services-patterns.md)):
 ```typescript
-registerEmailService(createEmailService())  // extensions/general/email/index.ts
+registerEmailService(createEmailService())  // src/extensions/general/email/index.ts
 
 export const myExtensionExtension: Extension = {
   id: 'my-extension', name: 'My Extension', version: '1.0.0',

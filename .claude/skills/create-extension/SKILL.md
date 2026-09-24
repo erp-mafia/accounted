@@ -13,7 +13,7 @@ npx tsx scripts/create-extension.ts \
   --name my-extension --sector general --category operations \
   --description "Short description"
 ```
-Sector: `general` (`SectorSlug` in `lib/extensions/types.ts` accepts only `general`; the script still offers other sectors, which fail type-checking)
+Sector: `general` (`SectorSlug` in `src/lib/extensions/types.ts` accepts only `general`; the script accepts only `general` too)
 Categories: `import`, `operations`, `reports`, `accounting`
 
 **2. Enable**: add `"my-extension"` to `extensions.config.json`
@@ -112,7 +112,7 @@ interface ExtensionContext {
 | `eventHandlers`: react to core events | [Event Handlers](references/event-handlers.md) |
 | `apiRoutes`: HTTP endpoints | [API Routes](references/api-routes.md) |
 | `services`: named functions for core | [Services](references/services-patterns.md) |
-| Workspace UI and settings panel (manifest `workspace`, `lib/extensions/settings-panel-registry.tsx`) | [Workspace & UI](references/workspace-ui.md) |
+| Workspace UI and settings panel (manifest `workspace`, `src/lib/extensions/settings-panel-registry.tsx`) | [Workspace & UI](references/workspace-ui.md) |
 | Other fields on the type (`settingsPanel`, `sidebarItems`, `mappingRuleTypes`, `onInstall`, ...) are declared but not read by core | [Extension Interface](references/extension-interface.md) |
 
 ## Common Mistakes
