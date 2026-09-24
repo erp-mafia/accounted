@@ -14,6 +14,7 @@ import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
 import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, typesFor } from '@/lib/arkiv/list-records'
+import { UUID_RE } from '@/lib/invariants/uuid'
 
 /**
  * Arkiv phase 5: the six tools an agent reads the record with, and the one
@@ -41,8 +42,6 @@ export function parseRecordRef(ref: unknown): { kind: RecordKind; id: string } {
 }
 
 const recordRef = (kind: RecordKind, id: string) => `${kind}:${id}`
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Coded so the dispatch envelope resolves a registry entry instead of

@@ -2122,9 +2122,6 @@
     "series_row_accrual_only": "Applies to the invoice method (faktureringsmetoden), which this company does not use. The choice is saved and applies if the method changes.",
     "series_row_cash_only": "Applies to the cash method (kontantmetoden), which this company does not use. The choice is saved and applies if the method changes."
   },
-  "settings_tax": {},
-  "settings_team": {},
-  "settings_templates": {},
   "settings_salary": {
     "payments_heading": "Payment",
     "pay_day_label": "Pay day",
@@ -2236,7 +2233,6 @@
     "tax_mark_paid_timeout": "The server did not respond in time. Reload the page and check whether the change was saved.",
     "tax_mark_paid_network": "No connection to the server. Check your internet connection and try again."
   },
-  "settings_api": {},
   "settings_banking": {
     "connect_failed_title": "Connection failed",
     "bank_server_error": "The bank rejected the connection.",

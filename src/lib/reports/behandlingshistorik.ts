@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { chunk } from '@/lib/utils'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import {
   reportToWorkbook,
@@ -1734,12 +1735,6 @@ function summariseRun(run: RawBehandlingshistorikEvent[], rule: CollapseRule): R
 // ============================================================
 
 const ID_CHUNK = 200
-
-function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
 
 async function fetchPeriod(supabase: SupabaseClient, companyId: string, periodId: string): Promise<PeriodRow | null> {
   const { data, error } = await supabase

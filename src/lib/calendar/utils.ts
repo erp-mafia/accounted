@@ -103,34 +103,6 @@ export function getMonthGrid(year: number, month: number): Date[][] {
   return weeks
 }
 
-// Group invoices by due date
-export function groupInvoicesByDate(invoices: Invoice[]): Map<string, Invoice[]> {
-  const grouped = new Map<string, Invoice[]>()
-
-  for (const invoice of invoices) {
-    const dateKey = invoice.due_date
-    const existing = grouped.get(dateKey) || []
-    existing.push(invoice)
-    grouped.set(dateKey, existing)
-  }
-
-  return grouped
-}
-
-// Group deadlines by due date
-export function groupDeadlinesByDate(deadlines: Deadline[]): Map<string, Deadline[]> {
-  const grouped = new Map<string, Deadline[]>()
-
-  for (const deadline of deadlines) {
-    const dateKey = deadline.due_date
-    const existing = grouped.get(dateKey) || []
-    existing.push(deadline)
-    grouped.set(dateKey, existing)
-  }
-
-  return grouped
-}
-
 /**
  * SEK value of an invoice for aggregation, or null when it cannot be known:
  * total_sek stays NULL when the Riksbanken rate fetch failed at creation, and
@@ -156,22 +128,6 @@ export function createPaymentCalendarDay(date: string, invoices: Invoice[]): Pay
     totalExpected,
     overdueCount
   }
-}
-
-// Get invoices for a month
-export function getInvoicesForMonth(invoices: Invoice[], year: number, month: number): Invoice[] {
-  const monthStr = String(month + 1).padStart(2, '0')
-  const prefix = `${year}-${monthStr}`
-
-  return invoices.filter(inv => inv.due_date.startsWith(prefix))
-}
-
-// Get deadlines for a month
-export function getDeadlinesForMonth(deadlines: Deadline[], year: number, month: number): Deadline[] {
-  const monthStr = String(month + 1).padStart(2, '0')
-  const prefix = `${year}-${monthStr}`
-
-  return deadlines.filter(d => d.due_date.startsWith(prefix))
 }
 
 // Calculate summary for a period
@@ -224,21 +180,6 @@ export function calculatePeriodSummary(invoices: Invoice[]): PeriodSummary {
   }
 }
 
-// Get upcoming deadlines (next N days)
-export function getUpcomingDeadlines(deadlines: Deadline[], days: number = 7): Deadline[] {
-  const today = startOfDay(new Date())
-  const endDate = new Date(today)
-  endDate.setDate(endDate.getDate() + days)
-
-  return deadlines
-    .filter(d => {
-      if (d.is_completed) return false
-      const dueDate = parseDate(d.due_date)
-      return dueDate >= today && dueDate <= endDate
-    })
-    .sort((a, b) => a.due_date.localeCompare(b.due_date))
-}
-
 // Swedish deadline type labels
 export const DEADLINE_TYPE_LABELS: Record<string, string> = {
   delivery: 'Leverans',
@@ -269,16 +210,6 @@ export const PRIORITY_COLORS: Record<string, { bg: string; text: string; border:
 
 import type { DeadlineStatus } from '@/types'
 
-// Status labels in Swedish
-export const STATUS_LABELS: Record<DeadlineStatus, string> = {
-  upcoming: 'Kommande',
-  action_needed: 'Åtgärd krävs',
-  in_progress: 'Pågår',
-  submitted: 'Inskickad',
-  confirmed: 'Bekräftad',
-  overdue: 'Försenad'
-}
-
 // Status colors for styling
 export const STATUS_COLORS: Record<DeadlineStatus, { bg: string; text: string; border: string; dot: string }> = {
   upcoming: { bg: 'bg-primary/5', text: 'text-foreground', border: 'border-primary/20', dot: 'bg-primary' },
@@ -300,111 +231,6 @@ export function getDeadlinesNeedingAttention(deadlines: Deadline[]): Deadline[] 
     if (b.status === 'overdue' && a.status !== 'overdue') return 1
     return a.due_date.localeCompare(b.due_date)
   })
-}
-
-// Get tax deadlines only
-export function getTaxDeadlines(deadlines: Deadline[]): Deadline[] {
-  return deadlines.filter(d => d.deadline_type === 'tax')
-}
-
-// Get tax deadlines needing attention
-export function getTaxDeadlinesNeedingAttention(deadlines: Deadline[]): Deadline[] {
-  return getDeadlinesNeedingAttention(deadlines).filter(d => d.deadline_type === 'tax')
-}
-
-// Count deadlines by status
-export function countDeadlinesByStatus(deadlines: Deadline[]): Record<DeadlineStatus, number> {
-  const counts: Record<DeadlineStatus, number> = {
-    upcoming: 0,
-    action_needed: 0,
-    in_progress: 0,
-    submitted: 0,
-    confirmed: 0,
-    overdue: 0
-  }
-
-  for (const d of deadlines) {
-    if (!d.is_completed && d.status) {
-      counts[d.status]++
-    }
-  }
-
-  return counts
-}
-
-// Get all calendar events for a month (unified view)
-export interface CalendarEvent {
-  id: string
-  type: 'invoice' | 'deadline'
-  date: string
-  title: string
-  subtitle?: string
-  status?: string
-  priority?: string
-  isOverdue?: boolean
-  customerId?: string
-}
-
-export function getCalendarEventsForMonth(
-  invoices: Invoice[],
-  deadlines: Deadline[],
-  year: number,
-  month: number
-): CalendarEvent[] {
-  const events: CalendarEvent[] = []
-  const monthStr = String(month + 1).padStart(2, '0')
-  const prefix = `${year}-${monthStr}`
-  const today = formatDateISO(new Date())
-
-  // Invoice due dates
-  for (const inv of invoices) {
-    if (inv.due_date.startsWith(prefix) && !['paid', 'cancelled', 'credited'].includes(inv.status)) {
-      events.push({
-        id: `inv-${inv.id}`,
-        type: 'invoice',
-        date: inv.due_date,
-        title: `Faktura ${inv.invoice_number}`,
-        subtitle: inv.customer?.name,
-        status: inv.status,
-        isOverdue: inv.due_date < today && !['paid', 'cancelled', 'credited'].includes(inv.status),
-        customerId: inv.customer_id
-      })
-    }
-  }
-
-  // Deadlines
-  for (const d of deadlines) {
-    if (d.due_date.startsWith(prefix) && !d.is_completed) {
-      events.push({
-        id: `dl-${d.id}`,
-        type: 'deadline',
-        date: d.due_date,
-        title: d.title,
-        subtitle: d.customer?.name,
-        priority: d.priority,
-        isOverdue: d.due_date < today,
-        customerId: d.customer_id || undefined
-      })
-    }
-  }
-
-  // Sort by date
-  events.sort((a, b) => a.date.localeCompare(b.date))
-
-  return events
-}
-
-// Group calendar events by date
-export function groupCalendarEventsByDate(events: CalendarEvent[]): Map<string, CalendarEvent[]> {
-  const grouped = new Map<string, CalendarEvent[]>()
-
-  for (const event of events) {
-    const existing = grouped.get(event.date) || []
-    existing.push(event)
-    grouped.set(event.date, existing)
-  }
-
-  return grouped
 }
 
 // ============================================================
@@ -463,20 +289,6 @@ export function getTimeSlots(startHour: number = 8, endHour: number = 20): strin
     slots.push(`${String(hour).padStart(2, '0')}:00`)
   }
   return slots
-}
-
-// Get invoices for a date range (inclusive)
-export function getInvoicesForDateRange(invoices: Invoice[], startDate: Date, endDate: Date): Invoice[] {
-  const start = formatDateISO(startDate)
-  const end = formatDateISO(endDate)
-  return invoices.filter(inv => inv.due_date >= start && inv.due_date <= end)
-}
-
-// Get deadlines for a date range (inclusive)
-export function getDeadlinesForDateRange(deadlines: Deadline[], startDate: Date, endDate: Date): Deadline[] {
-  const start = formatDateISO(startDate)
-  const end = formatDateISO(endDate)
-  return deadlines.filter(d => d.due_date >= start && d.due_date <= end)
 }
 
 // Format date for week view header (e.g., "Mån 27")

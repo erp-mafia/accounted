@@ -48,8 +48,8 @@ Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift;
 
 - `/api/v1/*` (111): the public API-key REST surface (`withApiV1`, `lib/api/v1/`). Companies (list + create), customers, invoices, suppliers, supplier-invoices, transactions (incl. `{id}/ignore` POST/DELETE: no verifikat, the locked-period escape hatch for non-business rows), journal-entries, fiscal-periods, accounts, articles, documents, dimensions, employees, salary-runs, reports (16, incl. balance-sheet/income-statement PDFs), reconciliation (11, account-keyed), imports, operations, compliance, skatteverket/vat-declarations, settings, inbox-items, voucher-gap-explanations, webhooks, webhook-deliveries, openapi.json, health
 - `/api/bookkeeping/*` (64): accounts, account-balances, fiscal-periods, journal-entries (CRUD/reverse/correct), journal-entry-lines, accruals, voucher-gaps, voucher-sequences, no-doc-required, fix-cash-mismatch
-- `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, audit-trail, behandlingshistorik, bokslutsbilagor, continuity, monthly, dimension-pnl, kassaflödesanalys, statement-reconciliation, full-archive, salary-journal, vacation-liability, avgifter-basis
-- `/api/salary/*` (36): employees, payroll-config, tax-tables, KU, runs
+- `/api/reports/*` (58): GL, TB, BS/IS (+ balansrapport/resultatrapport), AR/supplier ledger, VAT, periodisk sammanställning, SIE, INK2, NE-bilaga, KPI, audit-trail, behandlingshistorik, bokslutsbilagor, monthly, dimension-pnl, kassaflödesanalys, full-archive (payroll reports live on v1 only)
+- `/api/salary/*` (36): employees, tax-tables (kommuner, status), KU, runs
 - `/api/invoices/*` (28), `/api/supplier-invoices/*` (16): CRUD + state transitions, bulk-book, recurring, reminders, self-billed, preview-pdf, next-number; supplier side adds exists + payment-batches (betalfil)
 - `/api/import/*` (26): bank-file, SIE (parse/execute/mappings), skattekonto-file, opening-balance, articles, customers, suppliers, documents
 - `/api/extensions/*` (21): `ext/[...path]` dynamic extension routes (catch-all → `/api/extensions/ext/{extensionId}/{routePath}`, path params as `_paramName` query), `[sector]` listing, plus first-party callbacks (enable-banking, cloud-backup, invoice-inbox, whatsapp-inbox, shopify, woocommerce, stripe, skatteverket, push-notifications)
@@ -68,4 +68,4 @@ Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift;
 - `/api/peppol/*` (2: inbound, outbound), `/api/webhooks/*` (2: dispatch cron, peppol/qvalia callback)
 - `/api/receipt-hunt/*` (2: run, cron), `/api/sandbox/*` (2: seed, cleanup), `/api/events/*` (2), `/api/notices/*` (2), `/api/idempotency/cleanup/cron`
 - `/api/mcp-oauth/*` (3: authorize, token, register), `/api/calendar/feed/[token]`, `/api/payslip/[token]/pdf`, `/api/storage/[...path]`
-- Singletons: `/api/audit-trail`, `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`
+- Singletons: `/api/auth/heartbeat`, `/api/currency/rate`, `/api/health`, `/api/kpi/preferences`, `/api/log`, `/api/onboarding/state`, `/api/support/contact`, `/api/vat/validate`, `/api/version`, `/api/worklist/counts`

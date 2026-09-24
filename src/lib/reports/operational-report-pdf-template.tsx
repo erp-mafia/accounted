@@ -6,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
+import { pdfAmount, formatDateSv } from '@/lib/pdf/number-text'
 import type {
   CompanySettings,
   LatestVoucherPerSeries,
@@ -227,17 +227,6 @@ const styles = StyleSheet.create({
   },
 })
 
-function formatAmount(amount: number): string {
-  // pdfNumberText: Intl emits U+2212 (true minus), which the bundled
-  // Helvetica/Courier fonts lack, so negatives would render as positives.
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(amount),
-  )
-}
-
 interface CommonHeaderProps {
   title: string
   company: CompanySettings
@@ -345,18 +334,18 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
               <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
-                <Text style={styles.colAmount}>{formatAmount(row.current_period)}</Text>
+                <Text style={styles.colAmount}>{pdfAmount(row.current_period)}</Text>
                 {hasPrior && (
-                  <Text style={styles.colAmountMuted}>{formatAmount(row.prior_period)}</Text>
+                  <Text style={styles.colAmountMuted}>{pdfAmount(row.prior_period)}</Text>
                 )}
               </View>
             ))}
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
-              <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_current)}</Text>
+              <Text style={styles.subtotalAmount}>{pdfAmount(group.subtotal_current)}</Text>
               {hasPrior && (
                 <Text style={[styles.subtotalAmount, { color: '#666' }]}>
-                  {formatAmount(group.subtotal_prior)}
+                  {pdfAmount(group.subtotal_prior)}
                 </Text>
               )}
             </View>
@@ -367,11 +356,11 @@ export function ResultatrapportPDF({ report, company, generatedAt, filterNote }:
           <View style={styles.summaryRow}>
             <Text style={styles.summaryEmphasis}>Beräknat resultat</Text>
             <Text style={styles.summaryAmountEmphasis}>
-              {formatAmount(report.net_result_current)}
+              {pdfAmount(report.net_result_current)}
             </Text>
             {hasPrior && (
               <Text style={[styles.summaryAmountEmphasis, { color: '#666' }]}>
-                {formatAmount(report.net_result_prior)}
+                {pdfAmount(report.net_result_prior)}
               </Text>
             )}
           </View>
@@ -417,18 +406,18 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
               <View key={row.account_number} style={styles.row} wrap={false}>
                 <Text style={styles.colAccount}>{row.account_number}</Text>
                 <Text style={styles.colName}>{row.account_name}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.ib)}</Text>
-                <Text style={styles.colAmountMuted}>{formatAmount(row.period_change)}</Text>
-                <Text style={styles.colAmount}>{formatAmount(row.ub)}</Text>
+                <Text style={styles.colAmountMuted}>{pdfAmount(row.ib)}</Text>
+                <Text style={styles.colAmountMuted}>{pdfAmount(row.period_change)}</Text>
+                <Text style={styles.colAmount}>{pdfAmount(row.ub)}</Text>
               </View>
             ))}
             <View style={styles.subtotalRow} wrap={false}>
               <Text style={styles.subtotalLabel}>Summa</Text>
-              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{formatAmount(group.subtotal_ib)}</Text>
+              <Text style={[styles.subtotalAmount, { color: '#666' }]}>{pdfAmount(group.subtotal_ib)}</Text>
               <Text style={[styles.subtotalAmount, { color: '#666' }]}>
-                {formatAmount(group.subtotal_ub - group.subtotal_ib)}
+                {pdfAmount(group.subtotal_ub - group.subtotal_ib)}
               </Text>
-              <Text style={styles.subtotalAmount}>{formatAmount(group.subtotal_ub)}</Text>
+              <Text style={styles.subtotalAmount}>{pdfAmount(group.subtotal_ub)}</Text>
             </View>
           </View>
         ))}
@@ -436,15 +425,15 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
         <View style={styles.summary} wrap={false}>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Summa tillgångar</Text>
-            <Text style={styles.summaryAmount}>{formatAmount(report.total_assets_ub)}</Text>
+            <Text style={styles.summaryAmount}>{pdfAmount(report.total_assets_ub)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Summa eget kapital, reserver, avsättningar och skulder</Text>
-            <Text style={styles.summaryAmount}>{formatAmount(report.total_equity_liabilities_ub)}</Text>
+            <Text style={styles.summaryAmount}>{pdfAmount(report.total_equity_liabilities_ub)}</Text>
           </View>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryLabel}>Beräknat resultat (ej bokslutsjusterat)</Text>
-            <Text style={styles.summaryAmount}>{formatAmount(report.beraknat_resultat)}</Text>
+            <Text style={styles.summaryAmount}>{pdfAmount(report.beraknat_resultat)}</Text>
           </View>
           <View
             style={[

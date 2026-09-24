@@ -6,7 +6,7 @@ import {
   View,
   StyleSheet,
 } from '@react-pdf/renderer'
-import { pdfNumberText, formatDateSv } from '@/lib/pdf/number-text'
+import { pdfAmount, formatDateSv } from '@/lib/pdf/number-text'
 import type { KassaflodesanalysReport } from './kassaflodesanalys'
 import type { CompanySettings } from '@/types'
 
@@ -163,17 +163,6 @@ const styles = StyleSheet.create({
   footerText: { fontSize: 8, color: '#888' },
 })
 
-function formatAmount(n: number): string {
-  // pdfNumberText: Intl's U+2212 has no glyph in the bundled Helvetica/Courier,
-  // so a negative cash flow would print as positive (issue #1982).
-  return pdfNumberText(
-    new Intl.NumberFormat('sv-SE', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n),
-  )
-}
-
 interface KassaflodePDFProps {
   report: KassaflodesanalysReport
   company: CompanySettings
@@ -224,44 +213,44 @@ export function KassaflodesanalysPDF({
           <View style={styles.row}>
             <Text style={styles.label}>Resultat efter finansiella poster</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.lopande.resultat_efter_finansiella_poster)}
+              {pdfAmount(report.lopande.resultat_efter_finansiella_poster)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Justeringar för avskrivningar</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.avskrivningar)}</Text>
+            <Text style={styles.amount}>{pdfAmount(report.lopande.avskrivningar)}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Övriga ej-kassaflödespåverkande poster</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.lopande.ovriga_ej_kassaflodesposter)}
+              {pdfAmount(report.lopande.ovriga_ej_kassaflodesposter)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Förändring av kortfristiga fordringar</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.lopande.delta_kortfristiga_fordringar)}
+              {pdfAmount(report.lopande.delta_kortfristiga_fordringar)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Förändring av varulager</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.delta_varulager)}</Text>
+            <Text style={styles.amount}>{pdfAmount(report.lopande.delta_varulager)}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Förändring av kortfristiga skulder</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.lopande.delta_kortfristiga_skulder)}
+              {pdfAmount(report.lopande.delta_kortfristiga_skulder)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Betald inkomstskatt</Text>
-            <Text style={styles.amount}>{formatAmount(report.lopande.skatt_betald)}</Text>
+            <Text style={styles.amount}>{pdfAmount(report.lopande.skatt_betald)}</Text>
           </View>
           <View style={styles.subtotalRow}>
             <Text style={styles.subtotalLabel}>
               Kassaflöde från den löpande verksamheten
             </Text>
-            <Text style={styles.subtotalAmount}>{formatAmount(report.lopande.total)}</Text>
+            <Text style={styles.subtotalAmount}>{pdfAmount(report.lopande.total)}</Text>
           </View>
         </View>
 
@@ -271,13 +260,13 @@ export function KassaflodesanalysPDF({
           <View style={styles.row}>
             <Text style={styles.label}>Förvärv av anläggningstillgångar</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.investerings.forvarv_anlaggningar)}
+              {pdfAmount(report.investerings.forvarv_anlaggningar)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Avyttring av anläggningstillgångar</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.investerings.avyttring_anlaggningar)}
+              {pdfAmount(report.investerings.avyttring_anlaggningar)}
             </Text>
           </View>
           <View style={styles.subtotalRow}>
@@ -285,7 +274,7 @@ export function KassaflodesanalysPDF({
               Kassaflöde från investeringsverksamheten
             </Text>
             <Text style={styles.subtotalAmount}>
-              {formatAmount(report.investerings.total)}
+              {pdfAmount(report.investerings.total)}
             </Text>
           </View>
         </View>
@@ -295,22 +284,22 @@ export function KassaflodesanalysPDF({
           <Text style={styles.sectionHeading}>Finansieringsverksamheten</Text>
           <View style={styles.row}>
             <Text style={styles.label}>Förändring av lån (långfristiga skulder)</Text>
-            <Text style={styles.amount}>{formatAmount(report.finansierings.delta_lan)}</Text>
+            <Text style={styles.amount}>{pdfAmount(report.finansierings.delta_lan)}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Utdelningar till ägare</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.finansierings.utdelningar)}
+              {pdfAmount(report.finansierings.utdelningar)}
             </Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Nyemission</Text>
-            <Text style={styles.amount}>{formatAmount(report.finansierings.nyemission)}</Text>
+            <Text style={styles.amount}>{pdfAmount(report.finansierings.nyemission)}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.label}>Erhållna aktieägartillskott</Text>
             <Text style={styles.amount}>
-              {formatAmount(report.finansierings.erhallna_aktieagartillskott)}
+              {pdfAmount(report.finansierings.erhallna_aktieagartillskott)}
             </Text>
           </View>
           <View style={styles.subtotalRow}>
@@ -318,7 +307,7 @@ export function KassaflodesanalysPDF({
               Kassaflöde från finansieringsverksamheten
             </Text>
             <Text style={styles.subtotalAmount}>
-              {formatAmount(report.finansierings.total)}
+              {pdfAmount(report.finansierings.total)}
             </Text>
           </View>
         </View>
@@ -326,7 +315,7 @@ export function KassaflodesanalysPDF({
         {/* Total */}
         <View style={[styles.totalBlock, styles.row]}>
           <Text style={styles.totalLabel}>Årets kassaflöde</Text>
-          <Text style={styles.totalAmount}>{formatAmount(report.total_cash_flow)}</Text>
+          <Text style={styles.totalAmount}>{pdfAmount(report.total_cash_flow)}</Text>
         </View>
 
         {/* Reconciliation */}
@@ -337,25 +326,25 @@ export function KassaflodesanalysPDF({
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Ingående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.opening_cash_1xxx)}
+              {pdfAmount(recon.opening_cash_1xxx)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Utgående saldo</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.closing_cash_1xxx)}
+              {pdfAmount(recon.closing_cash_1xxx)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Faktisk förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_actual)}
+              {pdfAmount(recon.delta_actual)}
             </Text>
           </View>
           <View style={styles.reconciliationRow}>
             <Text style={styles.reconciliationLabel}>Beräknad förändring</Text>
             <Text style={styles.reconciliationAmount}>
-              {formatAmount(recon.delta_calculated)}
+              {pdfAmount(recon.delta_calculated)}
             </Text>
           </View>
           {!recon.is_reconciled && (
@@ -368,7 +357,7 @@ export function KassaflodesanalysPDF({
               <Text
                 style={[styles.reconciliationAmount, styles.reconciliationMismatch]}
               >
-                {formatAmount(recon.mismatch_amount)}
+                {pdfAmount(recon.mismatch_amount)}
               </Text>
             </View>
           )}

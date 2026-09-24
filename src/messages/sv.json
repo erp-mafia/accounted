@@ -2122,9 +2122,6 @@
     "series_row_accrual_only": "Gäller faktureringsmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts.",
     "series_row_cash_only": "Gäller kontantmetoden, som företaget inte använder. Valet sparas och gäller om metoden byts."
   },
-  "settings_tax": {},
-  "settings_team": {},
-  "settings_templates": {},
   "settings_salary": {
     "payments_heading": "Utbetalning",
     "pay_day_label": "Utbetalningsdag",
@@ -2236,7 +2233,6 @@
     "tax_mark_paid_timeout": "Servern svarade inte i tid. Ladda om sidan och kontrollera om markeringen sparades.",
     "tax_mark_paid_network": "Ingen kontakt med servern. Kontrollera din internetanslutning och försök igen."
   },
-  "settings_api": {},
   "settings_banking": {
     "connect_failed_title": "Anslutning misslyckades",
     "bank_server_error": "Banken avvisade anslutningen.",
