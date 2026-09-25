@@ -105,7 +105,7 @@ Företagets hantering av pappersoriginal: [ ] Förstörs efter kontrollerad öve
 
 5.1. Accounted sköter automatisk daglig säkerhetskopiering av databasen via Supabase-infrastrukturen.
 
-5.2. Kunden rekommenderas att regelbundet ta ut en egen kopia under **Importera/Exportera > Exportera > Komplett arkiv** (ZIP-arkiv med SIE-filer, rapporter, underlag och behandlingshistorik) och spara den åtskild från originalet. Med tillägget Molnsynkronisering kan kopian laddas upp till Google Drive eller Dropbox.
+5.2. Kunden rekommenderas att regelbundet ta ut en egen kopia under **Importera/Exportera > Exportera > Komplett arkiv** (ZIP-arkiv med SIE-filer, rapporter, underlag och behandlingshistorik) och spara den åtskild från originalet. Med tillägget Molnsynkronisering kan kopian laddas upp till Google Drive eller Dropbox. Om kopian förvaras utanför Sverige, se avsnitt 7.3.
 
 Kundens kompletterande säkerhetskopiering:
 - Frekvens: [t.ex. månadsvis, kvartalsvis]

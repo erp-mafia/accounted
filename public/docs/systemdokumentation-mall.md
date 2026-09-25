@@ -337,7 +337,7 @@ Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och u
 
 14.1. I den molnbaserade tjänsten lagras räkenskapsinformationen i Sverige (AWS, Stockholm). Den bevaras till och med det sjunde året efter utgången av det kalenderår då räkenskapsåret avslutades (7 kap. 2 § BFL).
 
-14.2. Utöver leverantörens lagring bör företaget själv ta ut en egen kopia och förvara den åtskild från originalet. Detta görs under **Importera/Exportera > Exportera > Komplett arkiv** (ägare och administratörer). Med tillägget Molnsynkronisering kan kopian laddas upp till Google Drive eller Dropbox.
+14.2. Utöver leverantörens lagring bör företaget själv ta ut en egen kopia och förvara den åtskild från originalet. Detta görs under **Importera/Exportera > Exportera > Komplett arkiv** (ägare och administratörer). Med tillägget Molnsynkronisering kan kopian laddas upp till Google Drive eller Dropbox. Om kopian förvaras utanför Sverige gäller villkoren i 7 kap. 3 a § BFL, se arkivplanen.
 
 14.3. Företagets rutin för egen säkerhetskopiering: [BESKRIV HUR OFTA OCH VAR KOPIAN FÖRVARAS, t.ex. "En gång per kvartal samt vid varje bokslut. Förvaras krypterad på extern disk."]
 
