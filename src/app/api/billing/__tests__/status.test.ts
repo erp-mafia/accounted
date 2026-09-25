@@ -29,7 +29,12 @@ function makeSupabase(byTable: Record<string, TableResult>) {
     )
     return chain
   }
-  return { from: (t: string) => chainFor(t) }
+  // getCompanyEntitlements reads its grant rows through this RPC.
+  const rpc = (fn: string) => {
+    const result = fn === 'company_capability_grant_rows' ? byTable.capability_grants : undefined
+    return Promise.resolve({ data: result?.data ?? null, error: result?.error ?? null })
+  }
+  return { from: (t: string) => chainFor(t), rpc }
 }
 
 const requireAuthMock = vi.fn()
