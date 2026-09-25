@@ -17,7 +17,8 @@
  * is being finished; unset means nobody sees it. The shelf keeps working
  * underneath for everyone: the pipeline reads and types, the MCP tools serve
  * the pages, and the rows in Att göra that point into the section stay
- * hidden with it.
+ * hidden with it. Nothing leaves Underlag for the section while it is hidden
+ * (invoice-inbox route-from-arkiv).
  */
 export function arkivBrainRollout(): 'all' | string[] {
   const raw = process.env.ARKIV_BRAIN_COMPANY_IDS?.trim()

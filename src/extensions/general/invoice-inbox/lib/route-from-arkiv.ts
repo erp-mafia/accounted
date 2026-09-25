@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -7,6 +8,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
  * registration, decision or minutes that arrived through the inbox leaves
  * the queue for its own page in Arkiv, and can come back if a person
  * retypes it. Nothing here books or deletes anything.
+ *
+ * A document leaves Underlag only for a page the company can open: the
+ * shelf types documents for every company, but the Dokument section (where
+ * a routed document is shown and retyped) is open only for the companies in
+ * ARKIV_COMPANY_IDS. Outside it the document stays in Underlag, and the
+ * sweep brings back what was routed before (requeueHiddenRoutedItems).
  */
 export const VOUCHER_TYPES = new Set(['receipt', 'supplier_invoice', 'credit_note'])
 
@@ -102,6 +109,7 @@ export async function routeClassifiedDocument(
     return 'queued'
   }
 
+  if (!isArkivSectionEnabled(input.companyId)) return 'left'
   const waiting = items.filter((i) => !consumed(i) && !i.routed_to_arkiv_at && !inboxSawABill(i.extracted_data ?? d.extracted_data, input.docType))
   if (waiting.length === 0) return 'left'
   const { error } = await supabase
@@ -116,12 +124,15 @@ export async function routeClassifiedDocument(
 }
 
 /**
- * The nightly catch-up: queue rows whose document Arkiv has since classified
+ * The sweep's catch-up: queue rows whose document Arkiv has since classified
  * as something not booked from here (a handler that was not wired, an event
- * lost in a deploy) leave the queue the same way the live route does.
+ * lost in a deploy) leave the queue the same way the live route does, for
+ * the companies that see the Dokument section and no others.
  */
 export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<number> {
-  const { data, error } = await supabase
+  const section = arkivSectionRollout()
+  if (section !== 'all' && section.length === 0) return 0
+  let query = supabase
     .from('invoice_inbox_items')
     .select('id, document_id, extracted_data, document_attachments!inner(doc_type, admission_state)')
     .is('routed_to_arkiv_at', null)
@@ -129,7 +140,8 @@ export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<nu
     .is('created_journal_entry_id', null)
     .is('matched_transaction_id', null)
     .not('document_id', 'is', null)
-    .limit(500)
+  if (section !== 'all') query = query.in('company_id', section)
+  const { data, error } = await query.limit(500)
   if (error) throw new Error(`stale queue select failed: ${error.message}`)
   const rows = (data ?? []) as unknown as Array<{
     id: string
@@ -151,4 +163,28 @@ export async function routeStaleQueueItems(supabase: SupabaseClient): Promise<nu
     routed += ids.length
   }
   return routed
+}
+
+/**
+ * The other half of the rule above: a routed row of a company that does not
+ * see the Dokument section comes back to Underlag. It heals the rows routed
+ * before the rule (every company since the shelf opened for all on
+ * 2026-09-23) and a company taken off ARKIV_COMPANY_IDS later, so a routed
+ * row always points at a page the company can open. Booked rows are cleared
+ * too: they are shown among the booked ones instead of nowhere.
+ */
+export async function requeueHiddenRoutedItems(supabase: SupabaseClient): Promise<number> {
+  const section = arkivSectionRollout()
+  if (section === 'all') return 0
+  // A bounded batch per pass, like the catch-up above: the sweep runs every two minutes and drains a backlog
+  // (a large company taken off the list) in steps instead of one update that could time out and leave it all hidden.
+  const hidden = supabase.from('invoice_inbox_items').select('id').not('routed_to_arkiv_at', 'is', null)
+  const outside = section.length > 0 ? hidden.not('company_id', 'in', `(${section.map((id) => `"${id}"`).join(',')})`) : hidden
+  const { data, error } = await outside.limit(500)
+  if (error) throw new Error(`routed item requeue select failed: ${error.message}`)
+  const ids = ((data ?? []) as Array<{ id: string }>).map((r) => r.id)
+  if (ids.length === 0) return 0
+  const { error: updateError } = await supabase.from('invoice_inbox_items').update({ routed_to_arkiv_at: null, routed_doc_type: null }).in('id', ids)
+  if (updateError) throw new Error(`routed item requeue failed: ${updateError.message}`)
+  return ids.length
 }

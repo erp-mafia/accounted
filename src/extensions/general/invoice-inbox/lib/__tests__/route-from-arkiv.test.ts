@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { inboxSawABill, routeClassifiedDocument, routeStaleQueueItems } from '../route-from-arkiv'
+import { inboxSawABill, requeueHiddenRoutedItems, routeClassifiedDocument, routeStaleQueueItems } from '../route-from-arkiv'
 
 const mock = createQueuedMockSupabase()
 const { enqueue, reset, findCall, findCalls } = mock
@@ -19,7 +19,18 @@ const item = (over: Record<string, unknown> = {}) => ({
 const classified = (docType: string, admission: 'admitted' | 'held' = 'admitted') =>
   routeClassifiedDocument(supabase, { documentId: 'doc-1', companyId: 'co-1', userId: 'user-1', docType, admission })
 
-beforeEach(() => reset())
+const savedSection = process.env.ARKIV_COMPANY_IDS
+
+beforeEach(() => {
+  reset()
+  // co-1 sees the Dokument section unless a test says otherwise.
+  process.env.ARKIV_COMPANY_IDS = 'co-1'
+})
+
+afterEach(() => {
+  if (savedSection === undefined) delete process.env.ARKIV_COMPANY_IDS
+  else process.env.ARKIV_COMPANY_IDS = savedSection
+})
 
 describe('routeClassifiedDocument', () => {
   it('never queues a document that arrived more than a day before it was classified: the backfill types old uploads', async () => {
@@ -92,6 +103,101 @@ describe('routeClassifiedDocument', () => {
     enqueue({ data: null })
     expect(await classified('receipt')).toBe('not_found')
   })
+
+  it('keeps a document in Underlag when the company cannot see the Dokument section, and still queues a receipt', async () => {
+    delete process.env.ARKIV_COMPANY_IDS
+    enqueue({ data: doc })
+    enqueue({ data: [item()] })
+    expect(await classified('other')).toBe('left')
+    enqueue({ data: doc })
+    enqueue({ data: [item()] })
+    expect(await classified('agreement.loan')).toBe('left')
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+
+    process.env.ARKIV_COMPANY_IDS = 'co-2'
+    enqueue({ data: doc })
+    enqueue({ data: [] })
+    enqueue({})
+    expect(await classified('receipt')).toBe('queued')
+    expect(findCalls('invoice_inbox_items', 'insert')).toHaveLength(1)
+  })
+})
+
+describe('routeStaleQueueItems', () => {
+  it('asks nothing when no company sees the Dokument section', async () => {
+    delete process.env.ARKIV_COMPANY_IDS
+    expect(await routeStaleQueueItems(supabase)).toBe(0)
+    expect(mock.calls).toEqual([])
+  })
+
+  it('routes only the rows of the companies that see the section', async () => {
+    process.env.ARKIV_COMPANY_IDS = 'co-1,co-2'
+    enqueue({
+      data: [
+        { id: 'item-1', document_attachments: { doc_type: 'agreement.loan', admission_state: 'admitted' } },
+        { id: 'item-2', document_attachments: [{ doc_type: 'receipt', admission_state: 'admitted' }] },
+        { id: 'item-3', document_attachments: { doc_type: 'other', admission_state: 'held' } },
+      ],
+    })
+    enqueue({})
+    expect(await routeStaleQueueItems(supabase)).toBe(1)
+    expect(findCall('invoice_inbox_items', 'in')).toEqual(['company_id', ['co-1', 'co-2']])
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: expect.any(String), routed_doc_type: 'agreement.loan' })
+    expect(findCalls('invoice_inbox_items', 'in')[1]).toEqual(['id', ['item-1']])
+  })
+
+  it('scans every company when the section is open for everyone', async () => {
+    process.env.ARKIV_COMPANY_IDS = '*'
+    enqueue({ data: [] })
+    expect(await routeStaleQueueItems(supabase)).toBe(0)
+    expect(findCalls('invoice_inbox_items', 'in')).toEqual([])
+    expect(findCalls('invoice_inbox_items', 'select')).toHaveLength(1)
+  })
+})
+
+describe('requeueHiddenRoutedItems', () => {
+  it('brings back every routed row when no company sees the section', async () => {
+    delete process.env.ARKIV_COMPANY_IDS
+    enqueue({ data: [{ id: 'item-1' }, { id: 'item-2' }] })
+    enqueue({})
+    expect(await requeueHiddenRoutedItems(supabase)).toBe(2)
+    expect(findCalls('invoice_inbox_items', 'not')).toEqual([['routed_to_arkiv_at', 'is', null]])
+    expect(findCall('invoice_inbox_items', 'limit')).toEqual([500])
+    expect(findCall('invoice_inbox_items', 'update')?.[0]).toEqual({ routed_to_arkiv_at: null, routed_doc_type: null })
+    expect(findCall('invoice_inbox_items', 'in')).toEqual(['id', ['item-1', 'item-2']])
+  })
+
+  it('brings back the routed rows of the companies outside the section only', async () => {
+    process.env.ARKIV_COMPANY_IDS = 'co-1,co-2'
+    enqueue({ data: [{ id: 'item-9' }] })
+    enqueue({})
+    expect(await requeueHiddenRoutedItems(supabase)).toBe(1)
+    expect(findCalls('invoice_inbox_items', 'not')).toEqual([
+      ['routed_to_arkiv_at', 'is', null],
+      ['company_id', 'in', '("co-1","co-2")'],
+    ])
+    expect(findCall('invoice_inbox_items', 'in')).toEqual(['id', ['item-9']])
+  })
+
+  it('writes nothing when no routed row is hidden', async () => {
+    delete process.env.ARKIV_COMPANY_IDS
+    enqueue({ data: [] })
+    expect(await requeueHiddenRoutedItems(supabase)).toBe(0)
+    expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('touches nothing when the section is open for everyone', async () => {
+    process.env.ARKIV_COMPANY_IDS = '*'
+    expect(await requeueHiddenRoutedItems(supabase)).toBe(0)
+    expect(mock.calls).toEqual([])
+  })
+
+  it('throws on a failed update so the sweep logs it', async () => {
+    delete process.env.ARKIV_COMPANY_IDS
+    enqueue({ data: [{ id: 'item-1' }] })
+    enqueue({ error: { message: 'boom' } })
+    await expect(requeueHiddenRoutedItems(supabase)).rejects.toThrow('boom')
+  })
 })
 
 describe('inboxSawABill: where the readers disagree, the item stays in Underlag', () => {
@@ -129,7 +235,8 @@ describe('routing a bill the inbox saw', () => {
     })
     enqueue({})
     expect(await routeStaleQueueItems(supabase)).toBe(1)
-    expect(findCall('invoice_inbox_items', 'in')).toEqual(['id', ['deal']])
+    // The first `in` scopes the select to the section companies; the second names the rows routed.
+    expect(findCalls('invoice_inbox_items', 'in')[1]).toEqual(['id', ['deal']])
   })
 })
 

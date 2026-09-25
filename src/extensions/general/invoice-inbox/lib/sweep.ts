@@ -15,7 +15,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { routeStaleQueueItems } from './route-from-arkiv'
+import { requeueHiddenRoutedItems, routeStaleQueueItems } from './route-from-arkiv'
 import { createLogger } from '@/lib/logger'
 import { emptyResult } from './extract-invoice-fields'
 
@@ -39,18 +39,27 @@ export interface InboxSweepSummary {
   flipped: number
   /** Queue rows whose document Arkiv classified as something not booked from here, sent to Arkiv (phase 7 catch-up). */
   routed?: number
+  /** Routed rows of companies that do not see the Dokument section, brought back to Underlag. */
+  requeued?: number
 }
 
 /** Run one sweep pass. Never throws. */
 export async function runInboxSweep(supabase: SupabaseClient): Promise<InboxSweepSummary> {
   const summary = await flipStaleProcessing(supabase)
+  let requeued = 0
+  try {
+    requeued = await requeueHiddenRoutedItems(supabase)
+    if (requeued > 0) log.info('brought routed rows back to underlag', { requeued })
+  } catch (err) {
+    log.error('routed row requeue failed', { error: err instanceof Error ? err.message : String(err) })
+  }
   try {
     const routed = await routeStaleQueueItems(supabase)
     if (routed > 0) log.info('routed stale queue rows to arkiv', { routed })
-    return { ...summary, routed }
+    return { ...summary, routed, requeued }
   } catch (err) {
     log.error('stale queue routing failed', { error: err instanceof Error ? err.message : String(err) })
-    return { ...summary, routed: 0 }
+    return { ...summary, routed: 0, requeued }
   }
 }
 
