@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { fetchJunctionLinkMap, fetchUnlinkedGLLines, scopeTransactionsToAccount } from './bank-reconciliation'
+import {
+  alignLinkedTransactionsToWindow,
+  fetchJunctionLinkMap,
+  fetchUnlinkedGLLines,
+  scopeTransactionsToAccount,
+} from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
 import {
@@ -180,17 +185,41 @@ export async function listAccountItems(
       if (options.windowTo) query = query.lte('date', options.windowTo)
       const { data, error: txError } = await query.order('date', { ascending: false }).order('id', { ascending: true })
       if (txError) throw new Error(`Kunde inte hämta transaktioner: ${txError.message}`)
-      const rows = (data ?? []) as BankTxRow[]
+      const ownDateRows = (data ?? []) as BankTxRow[]
       // Rows anchored only through transaction_voucher_links (bulk-book,
       // residual bookings) are matched too; their pointer column is NULL.
       // The map (not just the id set) so a junction-anchored row can report
       // WHICH verifikat it is matched to: with only the pointer column read,
       // linked_journal_entry_id came back null on a split row (crm#48).
-      const junctionLinks = await fetchJunctionLinkMap(
+      const ownDateJunctionLinks = await fetchJunctionLinkMap(
         supabase,
         companyId,
-        rows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
+        ownDateRows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
       )
+      // A linked row belongs to the window of its verifikat, not its own date,
+      // the same rule getReconciliationStatus counts matched_count and the
+      // difference by; without it the matched list and the headline disagree
+      // on a link that straddles the window edge.
+      const aligned = await alignLinkedTransactionsToWindow<BankTxRow>({
+        supabase,
+        companyId,
+        bankAccount: account.ledger_account,
+        rows: ownDateRows,
+        junctionLinks: ownDateJunctionLinks,
+        from: options.windowFrom ?? null,
+        to: options.windowTo ?? null,
+        readFrom: options.windowFrom ?? null,
+        readTo: options.windowTo ?? null,
+        columns: 'items',
+        cashAccountId: account.id,
+        currency,
+        includeUnassigned: Boolean(account.is_primary),
+      })
+      // Same order as the read: newest first, id as tiebreaker.
+      const rows = [...aligned.rows].sort((a, b) =>
+        a.date === b.date ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.date < b.date ? 1 : -1,
+      )
+      const junctionLinks = aligned.junctionLinks
       const junctionLinked = new Set(junctionLinks.keys())
       // Rows nothing explains 1:1 are searched for a set of unlinked verifikat
       // summing exactly to them (#2293) before they are offered as unmatched:
