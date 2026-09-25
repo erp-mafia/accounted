@@ -38,6 +38,7 @@ import {
   upgradeLegacyCompanySettingsParams,
 } from '@/lib/pending-operations/schemas/company-settings'
 import { defineOperation, type OperationContext, type OperationOutcome } from './types'
+import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 
 const S = UpdateSettingsSchema.shape
 
@@ -168,7 +169,24 @@ type SettingsRow = Record<string, unknown>
 export function toSettingsResource(companyId: string, row: SettingsRow): Record<string, unknown> {
   const resource: Record<string, unknown> = { company_id: companyId, contact_person: row.default_our_reference ?? null }
   for (const field of RESOURCE_FIELDS) resource[field] = row[field] ?? null
+  resource.org_number = minimizedOrgNumber(row.org_number, row.entity_type)
   return resource
+}
+
+/**
+ * An enskild firma's org number is the owner's personnummer (GDPR Art. 5(1)(c)
+ * data minimisation): this read also feeds MCP, i.e. an agent's context, so
+ * the birth date is kept and the last four digits (sex and checksum) are
+ * masked, the same rule as maskPersonnummer on v1 rosters. An unknown legal
+ * form is treated as a person. A legal person's org number is public.
+ */
+function minimizedOrgNumber(orgNumber: unknown, entityType: unknown): string | null {
+  if (typeof orgNumber !== 'string' || orgNumber === '') return null
+  const form = typeof entityType === 'string' ? parseEntityType(entityType) : null
+  if (form && !usesPersonnummerAsOrgNumber(form)) return orgNumber
+  const digits = orgNumber.replace(/\D/g, '')
+  if (digits.length !== 10 && digits.length !== 12) return 'XXXXXXXXXX'
+  return `${digits.slice(0, digits.length - 4)}XXXX`
 }
 
 /** A column-keyed map under public names (default_our_reference is contact_person). */
@@ -188,7 +206,7 @@ const json = z.unknown()
 const SettingsResource = z.object({
   company_id: z.string().uuid(),
   entity_type: nullableString,
-  org_number: nullableString,
+  org_number: nullableString.describe('The company org number. For an enskild firma it is the owner\'s personnummer and the last four digits are masked.'),
   onboarding_complete: nullableBoolean,
   contact_person: nullableString.describe('Default "Vår referens" on new invoices (column default_our_reference).'),
   ...Object.fromEntries(

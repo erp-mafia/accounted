@@ -15,6 +15,7 @@ import {
   settingsUpdate,
   settingsUpdateBookkeepingLock,
   settingsUpdateTaxProfile,
+  toSettingsResource,
 } from '../company-settings'
 
 const keys = (schema: unknown) => Object.keys((schema as z.ZodObject<z.ZodRawShape>).shape)
@@ -56,5 +57,22 @@ describe('settings operations: field split', () => {
     for (const field of Object.keys(UpdateSettingsSchema.shape)) {
       expect(doors.includes(field) || field in NOT_ON_THE_API, field).toBe(true)
     }
+  })
+})
+
+describe('settings resource: the org number of an enskild firma', () => {
+  it('masks the last four digits when the org number is a personnummer', () => {
+    const resource = toSettingsResource('c1', { entity_type: 'enskild_firma', org_number: '198501011234' } as never)
+    expect(resource.org_number).toBe('19850101XXXX')
+  })
+
+  it('treats an unknown legal form as a person', () => {
+    const resource = toSettingsResource('c1', { entity_type: null, org_number: '8501011234' } as never)
+    expect(resource.org_number).toBe('850101XXXX')
+  })
+
+  it("returns a legal person's org number as it is: it is public", () => {
+    const resource = toSettingsResource('c1', { entity_type: 'aktiebolag', org_number: '5566778899' } as never)
+    expect(resource.org_number).toBe('5566778899')
   })
 })
