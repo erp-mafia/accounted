@@ -25,6 +25,8 @@ import {
   insertCompany,
   insertFiscalPeriod,
   insertPostedJournalEntry,
+  insertPostedBankJournalEntry,
+  insertTransaction,
 } from './fixtures'
 
 // Mirrors the TS call site (lib/reports/vat-declaration.ts): a small
@@ -79,7 +81,7 @@ async function insertJournalEntry(params: {
   lines: Array<{ account: string; debit: number; credit: number }>
 }): Promise<string> {
   if ((params.status ?? 'posted') === 'posted') {
-    return insertPostedJournalEntry({
+    const entry = {
       userId: params.userId,
       companyId: params.companyId,
       fiscalPeriodId: params.fiscalPeriodId,
@@ -93,7 +95,13 @@ async function insertJournalEntry(params: {
         debitAmount: line.debit,
         creditAmount: line.credit,
       })),
-    })
+    }
+    if (params.sourceType === 'bank_transaction') {
+      const amount = Math.round(params.lines.filter(line => line.account === '1930').reduce((sum, line) => sum + line.debit - line.credit, 0) * 100) / 100
+      const transactionId = await insertTransaction({ ...params, date: entry.entryDate, amount })
+      return insertPostedBankJournalEntry({ ...entry, transactionId })
+    }
+    return insertPostedJournalEntry(entry)
   }
 
   const id = randomUUID()

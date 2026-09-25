@@ -14,7 +14,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Plus, Trash2, Search, Check, BookmarkPlus } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -734,8 +735,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
               </div>
               <div className="max-h-56 overflow-y-auto rounded-lg border">
                 {isLoadingTransactions ? (
-                  <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Laddar…
+                  <div className="space-y-2 px-3 py-3" aria-busy="true" aria-label="Laddar…">
+                    {[0, 1, 2, 3].map((i) => (
+                      <Skeleton key={i} className="h-8 w-full" />
+                    ))}
                   </div>
                 ) : filteredTransactions.length === 0 ? (
                   <p className="py-6 text-center text-sm text-muted-foreground">
@@ -756,7 +759,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                               'w-full flex items-center justify-between gap-3 px-3 py-2 text-left text-sm transition-colors',
                               isSelected
                                 ? 'bg-primary/10 border-l-2 border-primary'
-                                : 'border-l-2 border-transparent hover:bg-accent/40'
+                                : 'border-l-2 border-transparent hover:bg-secondary/35'
                             )}
                             onClick={() =>
                               setSelectedTransactionId(isSelected ? null : tx.id)
@@ -772,7 +775,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <p className="truncate">{tx.description}</p>
                                 {isInboxMatch && (
-                                  <Badge variant="secondary" className="shrink-0 text-[10px] px-1.5 py-0">
+                                  <Badge variant="secondary" className="shrink-0 text-[11px] px-1.5 py-0">
                                     Matchad
                                   </Badge>
                                 )}
@@ -903,8 +906,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                         <Button
                           type="button"
                           variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
+                          size="icon-sm"
                           onClick={() => removeLine(idx)}
                           disabled={isSubmitting || lines.length <= 2}
                           aria-label="Ta bort rad"
@@ -993,9 +995,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 </Button>
               </div>
               {totals.balanced ? (
-                <Badge variant="success" className="text-[11px]">
-                  Balanserad
-                </Badge>
+                <span className="text-xs text-muted-foreground">Balanserad</span>
               ) : totals.diff !== 0 ? (
                 <span className="text-xs text-muted-foreground">
                   Dubbelklicka i ett tomt beloppsfält för att fylla i differensen
@@ -1041,16 +1041,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                 type="button"
                 onClick={handleSubmit}
                 disabled={!canSubmit}
+                loading={isSubmitting}
                 title={disabledReason ?? undefined}
               >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                    Bokför…
-                  </>
-                ) : (
-                  'Bokför'
-                )}
+                {isSubmitting ? 'Bokför…' : 'Bokför'}
               </Button>
             </div>
           </div>

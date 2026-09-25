@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
-import { insertPostedJournalEntry, insertTransaction, seedCompany } from '@/tests/pg/fixtures'
+import { insertPostedJournalEntry as insertPostedFixture, insertTransaction, seedCompany } from '@/tests/pg/fixtures'
 import { getPool, runAsServiceRole, withUserContext } from '@/tests/pg/setup'
 
 /**
@@ -44,6 +44,18 @@ interface TxState {
 }
 
 type Queryable = Pick<PoolClient, 'query'>
+
+// These bank sources are outgoing. Their voucher must use the same bank side
+// before the test can exercise removal of that otherwise valid anchor.
+function insertPostedJournalEntry(params: Parameters<typeof insertPostedFixture>[0]) {
+  return insertPostedFixture({
+    lines: [
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 100 },
+      { accountNumber: '2999', debitAmount: 100, creditAmount: 0 },
+    ],
+    ...params,
+  })
+}
 
 async function txState(id: string, db: Queryable = getPool()): Promise<TxState> {
   const { rows } = await db.query<TxState>(

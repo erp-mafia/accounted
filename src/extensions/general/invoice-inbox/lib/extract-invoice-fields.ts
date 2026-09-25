@@ -62,6 +62,8 @@ export interface ExtractionInput {
 export interface OwnCompanyIdentity {
   orgNumber: string | null
   name: string | null
+  /** The company itself, so the extraction call is metered to it (ai_usage_events). */
+  companyId?: string | null
 }
 
 export type ExtractionSkipped = ExtractionSkipReason | 'unsupported_media'
@@ -315,6 +317,7 @@ export async function fetchOwnCompanyIdentity(
     return {
       orgNumber: (data?.org_number as string | null) ?? null,
       name: (data?.name as string | null) ?? null,
+      companyId,
     }
   } catch (err) {
     // Fail open, but visibly: a persistent lookup failure (RLS misconfig,
@@ -323,7 +326,7 @@ export async function fetchOwnCompanyIdentity(
       company_id: companyId,
       error: err instanceof Error ? err.message : String(err),
     })
-    return { orgNumber: null, name: null }
+    return { orgNumber: null, name: null, companyId }
   }
 }
 
@@ -719,6 +722,7 @@ export async function extractInvoiceFields(
     const baseMaxTokens = readAiConfig().extractionMaxTokens
     const request = {
       document: toDocumentInput(input),
+      meter: { feature: 'inbox_extract', companyId: input.ownCompany?.companyId ?? null },
       system: SYSTEM_PROMPT,
       instruction: EXTRACTION_INSTRUCTION,
       jsonSchema: EXTRACTION_JSON_SCHEMA,

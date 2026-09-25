@@ -6,7 +6,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { TOOLBAR_FIELD_CLASS, ToolbarSearch } from '@/components/ui/toolbar-search'
 import { PageHeader } from '@/components/ui/page-header'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -14,6 +14,7 @@ import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { AgreementListItem } from '@/app/api/arkiv/agreements/route'
 import type { AgreementKind } from '@/lib/arkiv/agreements/derive'
 import { formatCurrency, formatDateLong } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 const KINDS: AgreementKind[] = ['rental', 'lease', 'loan', 'subscription']
 
@@ -61,7 +62,7 @@ export function ArkivAgreements() {
 
       <div className="flex flex-wrap items-center gap-2">
         <Select value={kind} onValueChange={(v) => setKind(v as 'all' | AgreementKind)}>
-          <SelectTrigger className="h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]" aria-label={t('col_type')}>
+          <SelectTrigger className={cn(TOOLBAR_FIELD_CLASS, 'w-auto gap-1.5')} aria-label={t('col_type')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

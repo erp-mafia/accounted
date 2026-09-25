@@ -1,3 +1,7 @@
+---
+audience: developer
+---
+
 # Peppol BIS Billing 3.0, Wire Format Reference
 
 ## The BIS suite and document identifiers

@@ -8,7 +8,6 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { AgentMemoryPanel } from '@/components/settings/AgentMemoryPanel'
-import { AgentSkillsPanel } from '@/components/settings/AgentSkillsPanel'
 import { AgentKnowledgePanel } from '@/components/agent-knowledge/AgentKnowledgePanel'
 import {
   SettingsGroup,
@@ -28,7 +27,7 @@ type View = 'knowledge' | 'memory' | 'skills'
 const VIEW_ROUTE: Record<View, string> = {
   knowledge: '/settings/assistant',
   memory: '/settings/assistant?view=memory',
-  skills: '/settings/assistant?view=skills',
+  skills: '/skills',
 }
 
 const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
@@ -37,13 +36,15 @@ const VIEW_OPTIONS: Array<{ value: View; label: string }> = [
   { value: 'skills', label: 'Kompetens' },
 ]
 
-export function AssistantSettingsContent() {
+/** `agentsEnabled`: the Kompetens view links to the Agenter page, hidden in production while it is finished. */
+export function AssistantSettingsContent({ agentsEnabled = true }: { agentsEnabled?: boolean }) {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const searchParams = useSearchParams()
   const router = useRouter()
   const raw = searchParams.get('view')
-  const view: View = raw === 'skills' ? 'skills' : raw === 'memory' ? 'memory' : 'knowledge'
+  const view: View = raw === 'skills' && agentsEnabled ? 'skills' : raw === 'memory' ? 'memory' : 'knowledge'
+  useEffect(() => { if (view === 'skills') router.replace('/skills') }, [view, router])
 
   function setView(next: View) {
     // 'knowledge' is the default: keep its URL clean (no query string).
@@ -55,7 +56,7 @@ export function AssistantSettingsContent() {
       <SettingsSectionHeader title={tNav('assistant')} intro={tIntro('assistant')} />
 
       <div className="mt-6">
-        <SettingsSeg value={view} onChange={setView} options={VIEW_OPTIONS} aria-label="Välj vy" />
+        <SettingsSeg value={view} onChange={setView} options={agentsEnabled ? VIEW_OPTIONS : VIEW_OPTIONS.filter((o) => o.value !== 'skills')} aria-label="Välj vy" />
       </div>
 
       {/* Only the active view mounts, so each panel's data is fetched lazily
@@ -64,7 +65,6 @@ export function AssistantSettingsContent() {
       <div className="mt-6">
         {view === 'knowledge' && <AgentKnowledgePanel />}
         {view === 'memory' && <AgentMemoryPanel />}
-        {view === 'skills' && <AgentSkillsPanel />}
       </div>
 
       <FabVisibilityRow />

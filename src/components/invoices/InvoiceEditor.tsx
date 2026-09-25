@@ -12,6 +12,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { addDays, format } from 'date-fns'
 import { Button } from '@/components/ui/button'
+import { POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS } from '@/components/ui/popover-surface'
 import { Input } from '@/components/ui/input'
 import { TagInput } from '@/components/ui/tag-input'
 import { Label } from '@/components/ui/label'
@@ -172,12 +173,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 // Borderless in-table cell input: quiet at rest, beige on hover, ringed on
 // focus. rounded-sm: nested leaf inside the rows surface (radius ladder).
 const CELL_INPUT_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/40 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
 
 // Ghost cell in the entry row: previews the append default in the italic
 // muted tone, hovers like a cell input so it reads as clickable.
 const ENTRY_GHOST_CLASS =
-  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/40 cursor-text'
+  'rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] italic text-muted-foreground/50 tabular-nums transition-colors duration-150 hover:bg-secondary/60 cursor-text'
 
 // The add-row links under the table. Quiet links on desktop, inflated to a
 // 40px touch target on coarse pointers: on Android they are the only way into
@@ -194,7 +195,7 @@ const ROW_ICON_BUTTON_CLASS =
 
 // Compact borderless Select trigger for in-table cells (unit, VAT).
 const CELL_SELECT_TRIGGER_CLASS =
-  'h-7 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/40 tabular-nums'
+  'h-7 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/60 tabular-nums'
 
 // Förval settings row: flat hairline rows, label left, control right.
 const SETTINGS_ROW_CLASS =
@@ -3209,7 +3210,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
               {/* Suggestion popover: anchored below the whole table wrap so it
                   never clips inside the horizontal scroll container. */}
               {entryOpen && (
-                <div className="absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-input bg-card shadow-md">
+                <div className={cn('absolute left-0 right-0 top-full z-30 mt-1 overflow-hidden', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
                   {/* The hint is a sibling of the listbox (listbox children
                       must be options); the input references it via
                       aria-describedby. */}
@@ -3224,7 +3225,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                         tabIndex={-1}
                         className={cn(
                           'flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left',
-                          i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/40',
+                          i === entryActiveIdx ? 'bg-secondary/60' : 'hover:bg-secondary/60',
                         )}
                         onPointerDown={(e) => {
                           // pointerdown, not mousedown: on touch the
@@ -3363,7 +3364,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             </div>
             <div
               id={settingsPanelId}
-              className="grid transition-[grid-template-rows] duration-200 motion-reduce:transition-none"
+              className="grid transition-[grid-template-rows] duration-300 motion-reduce:transition-none"
               style={{ gridTemplateRows: settingsOpen ? '1fr' : '0fr' }}
             >
               <div className={cn('min-h-0 overflow-hidden', !settingsOpen && 'invisible')} aria-hidden={!settingsOpen}>
@@ -3796,24 +3797,21 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={isPreviewing || inFlight}
+                  disabled={inFlight}
+                  loading={isPreviewing}
                   onClick={handleSubmit((data) => handlePreviewPDF(data), onInvalidSubmit)}
                 >
-                  {isPreviewing ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Eye className="mr-2 h-4 w-4" />
-                  )}
+                  {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
                   {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
                 </Button>
               )}
               <Button
                 type="submit"
                 disabled={inFlight || !canWrite}
+                loading={isFormSubmitting && !isSavingDraft}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {!canWrite && <Lock className="mr-2 h-4 w-4 inline" />}
-                {isFormSubmitting && !isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {primaryLabel}
               </Button>
             </div>
@@ -3858,13 +3856,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             <Button
               variant="outline"
               onClick={() => handlePreviewPDF()}
-              disabled={isPreviewing || isSubmitting}
+              disabled={isSubmitting}
+              loading={isPreviewing}
             >
-              {isPreviewing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="mr-2 h-4 w-4" />
-              )}
+              {!isPreviewing && <Eye className="mr-2 h-4 w-4" />}
               {isPreviewing ? t('preview_pdf_generating') : t('preview_pdf')}
             </Button>
           }
@@ -3975,12 +3970,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             >
               {t('send_later')}
             </Button>
-            <Button onClick={handleSendNow} disabled={isSending}>
-              {isSending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Send className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={handleSendNow} loading={isSending}>
+              {!isSending && <Send className="mr-2 h-4 w-4" />}
               {isSending ? t('send_now_sending') : t('send_now')}
             </Button>
           </DialogFooter>

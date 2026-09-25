@@ -18,6 +18,7 @@ import { NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
 import {
+  conflictCode,
   getErrorEntry,
   type StructuredErrorEntry,
   type StructuredErrorRemediation,
@@ -130,6 +131,10 @@ function extractCode(error: unknown): string | null {
 
   const obj = error as Record<string, unknown>
 
+  // Application conflicts use PT409 so PostgREST does not retry them as
+  // serialization failures. Callers must refresh stale inputs first.
+  if (obj.code === 'PT409') return conflictCode(obj.message)
+
   // Typed bookkeeping error: { code: 'JOURNAL_ENTRY_NOT_BALANCED', ... }
   if (typeof obj.code === 'string' && /^[A-Z_]+$/.test(obj.code)) {
     return obj.code
@@ -138,6 +143,7 @@ function extractCode(error: unknown): string | null {
   // Wrapped error: { error: { code: '...' } }
   if (typeof obj.error === 'object' && obj.error !== null) {
     const inner = obj.error as Record<string, unknown>
+    if (inner.code === 'PT409') return conflictCode(inner.message)
     if (typeof inner.code === 'string' && /^[A-Z_]+$/.test(inner.code)) {
       return inner.code
     }
@@ -193,6 +199,21 @@ function extractRemediation(error: unknown): StructuredErrorRemediation | null {
   }
 }
 
+/**
+ * PostgREST answers PGRST116 when `.single()` gets anything but one row. Only
+ * the zero-row case is "not found"; more than one row is a query bug and keeps
+ * its generic code. `details` names the count when present ("The result
+ * contains 0 rows"); without it, a lookup by id is the only shape that reaches
+ * here, and an id matches at most one row.
+ */
+function isNoRowFromSingle(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const obj = error as Record<string, unknown>
+  if (obj.code !== 'PGRST116') return false
+  const details = typeof obj.details === 'string' ? obj.details : ''
+  return details === '' || /\b0 rows\b/.test(details)
+}
+
 function extractEnglishMessage(error: unknown): string {
   if (typeof error === 'string') return error
   if (error instanceof Error) return error.message
@@ -217,6 +238,21 @@ export function getStructuredError(
   error: unknown,
   options: StructuredErrorOptions = {}
 ): StructuredError {
+  // A `.single()` lookup that matched no row. 46 MCP tools read one record
+  // that way, and a wrong or other-company id surfaced as UNKNOWN_ERROR with
+  // "Något gick fel. Försök igen.", which tells an agent to retry a call
+  // that can never succeed (get_inbox_item: 56 calls, 4 companies, 30 days).
+  if (isNoRowFromSingle(error)) {
+    const entry = getErrorEntry('NOT_FOUND')
+    return {
+      code: 'NOT_FOUND',
+      message_sv: entry?.message_sv ?? 'Resursen kunde inte hittas.',
+      message_en:
+        'Not found: no record with that id exists in this company. Check the id, and company_id if the record belongs to another company.',
+      retryable: false,
+    }
+  }
+
   const message_en = extractEnglishMessage(error)
   const message_sv = getErrorMessage(error)
 
@@ -329,6 +365,7 @@ function postgresCodeToStructured(code: string): string | null {
       return 'NOT_FOUND'
     case '40001':
     case '40P01':
+    case 'PT409':
       return 'CONFLICT'
     default:
       return null
@@ -402,7 +439,7 @@ export function errorResponse(
   if (isPostgresError(err)) {
     const mapped = isIgnoredTransactionJournalConstraint(err)
       ? 'TX_CATEGORIZE_IGNORED_CONFLICT'
-      : postgresCodeToStructured(err.code)
+      : err.code === 'PT409' ? conflictCode(err.message) : postgresCodeToStructured(err.code)
     if (mapped) {
       const entry = entryFor(mapped)
       logAtLevel(log, entry.httpStatus, 'database error', err as unknown as Error, {
@@ -526,7 +563,7 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return { code: err.code, details: { date: err.date, lockDate: err.lockDate } }
   }
   if (err instanceof BookkeepingDatabaseError) {
-    return { code: err.code, details: { operation: err.operation } }
+    return { code: err.code, details: { operation: err.operation, ...(err.pgCode ? { pgCode: err.pgCode } : {}) } }
   }
   return { code: 'INTERNAL_ERROR' }
 }

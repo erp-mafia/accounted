@@ -21,7 +21,7 @@ import { useFormat } from '@/lib/hooks/use-format'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ApiResponse, ArchiveEstimate } from '@/types'
-import { Download, Loader2 } from 'lucide-react'
+import { Download } from 'lucide-react'
 
 type Scope = 'all' | 'period'
 type ArchiveMode = 'active-company' | 'migration-reset-source'
@@ -301,12 +301,9 @@ export function FullArchiveDialog({
           )}
         </div>
         <DialogFooter>
-          <Button onClick={handleDownload} disabled={!canDownload}>
+          <Button onClick={handleDownload} disabled={!canDownload} loading={isDownloading}>
             {isDownloading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('archive_creating')}
-              </>
+              t('archive_creating')
             ) : (
               <>
                 <Download className="mr-2 h-4 w-4" />

@@ -11,7 +11,7 @@ import {
   TurnstileChallenge,
   type TurnstileChallengeHandle,
 } from '@/components/auth/TurnstileChallenge'
-import { Loader2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { getBranding } from '@/lib/branding/service'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -93,8 +93,11 @@ export default function SandboxPage() {
   // Loading state while checking auth
   if (isLoggedIn === null) {
     return (
-      <div className="min-h-dvh flex items-center justify-center bg-gradient-to-b from-background to-primary/[0.03]">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4" aria-busy="true">
+        <div className="w-full max-w-sm space-y-6">
+          <Skeleton className="h-10 w-40 mx-auto" />
+          <Skeleton className="h-48 w-full rounded-xl" />
+        </div>
       </div>
     )
   }
@@ -102,13 +105,13 @@ export default function SandboxPage() {
   // Already logged in as a real user
   if (isLoggedIn) {
     return (
-      <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+      <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
         <div className="w-full max-w-sm animate-slide-up">
           <div className="text-center mb-10">
             <BrandWordmark size="hero" className="mb-2" />
           </div>
 
-          <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+          <div className="rounded-xl border bg-card p-6">
             <h1 className="text-lg tracking-tight text-center mb-2">
               Du är redan inloggad
             </h1>
@@ -119,7 +122,7 @@ export default function SandboxPage() {
           </div>
 
           <div className="mt-6 flex flex-col items-center gap-3">
-            <Button asChild className="w-full h-11">
+            <Button asChild size="lg" className="w-full">
               <Link href="/">Gå till dashboard</Link>
             </Button>
           </div>
@@ -130,7 +133,7 @@ export default function SandboxPage() {
 
   // Sandbox landing
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-b from-background to-primary/[0.03] p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm animate-slide-up">
         <div className="text-center mb-10">
           <BrandWordmark size="hero" className="mb-2" />
@@ -142,7 +145,7 @@ export default function SandboxPage() {
           </p>
         </div>
 
-        <div className="rounded-xl border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="rounded-xl border bg-card p-6">
           <p className="mb-6 rounded-lg border border-border bg-secondary/40 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
             AI-assistenten och externa tjänster (e-post, bankuppkoppling,
             valutakurser, Skatteverket) är avstängda i sandlådan: de
@@ -156,18 +159,13 @@ export default function SandboxPage() {
           />
 
           <Button
-            className="w-full h-11"
+            size="lg"
+            className="w-full"
             onClick={handleStartSandbox}
-            disabled={isLoading || isTurnstileSubmissionBlocked(captchaToken)}
+            loading={isLoading}
+            disabled={isTurnstileSubmissionBlocked(captchaToken)}
           >
-            {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Startar...
-              </>
-            ) : (
-              'Starta sandbox'
-            )}
+            {isLoading ? 'Startar...' : 'Starta sandbox'}
           </Button>
 
           <p className="text-xs text-muted-foreground/70 text-center mt-3">

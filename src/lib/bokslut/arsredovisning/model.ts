@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   buildArsredovisningData,
   K3_CASH_FLOW_FAILED_WARNING,
+  K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
   k3ContentsNotice,
 } from './build-data'
 import { cashFlowOmissionRule, resolveCashFlowOmission } from './cash-flow-omission'
@@ -125,7 +126,7 @@ export function applyCashFlowOmission(
   if (omission.omitted) {
     delete report.kassaflodesanalys
     report.warnings = report.warnings
-      .filter((warning) => warning !== K3_CASH_FLOW_FAILED_WARNING)
+      .filter((warning) => warning !== K3_CASH_FLOW_FAILED_WARNING && warning !== K3_CASH_FLOW_TAX_ALLOCATION_WARNING)
       .map((warning) => (warning === k3ContentsNotice(true) ? k3ContentsNotice(false) : warning))
   }
 }

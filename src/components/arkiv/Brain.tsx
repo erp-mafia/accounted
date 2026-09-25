@@ -439,13 +439,13 @@ export default function Brain() {
               {t('brain_reset')}
             </Button>
           )}
-          <span className="ml-auto text-[12px] text-muted-foreground">{t('brain_hint_short')}</span>
+          <span className="ml-auto text-[12.5px] text-muted-foreground">{t('brain_hint_short')}</span>
         </div>
         <div className="relative h-[520px] w-full overflow-hidden rounded-lg border border-border bg-background" aria-label={t('brain_title')}>
           <div ref={wrapRef} className="absolute inset-0" />
           {drawError ? <p className="absolute inset-x-0 top-1/2 -translate-y-1/2 px-6 text-center text-[13px] text-muted-foreground">{drawError}</p> : null}
         </div>
-        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12.5px] text-muted-foreground">
           {CLUSTERS.map((c) => (
             <button key={c} type="button" className="flex items-center gap-1.5 hover:text-foreground" onClick={() => setFocus((cur) => (cur === c ? null : c))} aria-pressed={focus === c}>
               <i className="inline-block h-2 w-2 rounded-full" style={{ background: COLORS[c] }} />
@@ -511,7 +511,7 @@ function NodeCard({ node, graph, neighbours, onPick, clusterLabel }: { node: Gra
     <div className="space-y-3">
       <div>
         <div className="font-display text-lg leading-tight">{node.label}</div>
-        <div className="text-[12px] uppercase tracking-[0.08em] text-muted-foreground">{clusterLabel(node.cluster)}</div>
+        <div className="text-[12.5px] uppercase tracking-[0.08em] text-muted-foreground">{clusterLabel(node.cluster)}</div>
       </div>
       {metaLines(node, t).length ? (
         <ul className="space-y-0.5 text-[13px] text-muted-foreground">
@@ -534,7 +534,7 @@ function NodeCard({ node, graph, neighbours, onPick, clusterLabel }: { node: Gra
                 <button type="button" className="text-left underline decoration-border underline-offset-2 hover:decoration-foreground" onClick={() => onPick(other.ref)}>
                   {other.label}
                 </button>
-                <div className="text-[12px] text-muted-foreground">
+                <div className="text-[12.5px] text-muted-foreground">
                   {t(`brain_kind_${link.kind}` as never)}
                   {evidence(link.evidence) ? ` · ${evidence(link.evidence)}` : ''}
                 </div>
@@ -555,7 +555,7 @@ function ClusterCard({ cluster, graph, onPick, clusterLabel }: { cluster: Cluste
     <div className="space-y-3">
       <div>
         <div className="font-display text-lg leading-tight">{clusterLabel(cluster)}</div>
-        <div className="text-[12px] text-muted-foreground">{t('brain_nodes', { count: members.length })}</div>
+        <div className="text-[12.5px] text-muted-foreground">{t('brain_nodes', { count: members.length })}</div>
       </div>
       <p className="text-[13px] text-muted-foreground">{t(`brain_cluster_${cluster}_help` as never)}</p>
       <ul className="max-h-[420px] divide-y divide-border overflow-y-auto">

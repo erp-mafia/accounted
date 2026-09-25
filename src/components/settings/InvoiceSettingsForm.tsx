@@ -16,13 +16,12 @@ import type { CompanySettings } from '@/types'
 
 interface InvoiceSettingsFormProps {
   settings: CompanySettings
-  /** Rendered between Fakturainställningar and Påminnelser (self-saving controls). */
+  /** Rendered after Fakturainställningar (self-saving controls). */
   afterInvoiceSettings?: React.ReactNode
 }
 
 export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceSettingsFormProps) {
   const t = useTranslations('settings_invoice_form')
-  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
   return (
     <>
       <SettingsGroup label={t('heading')}>
@@ -109,7 +108,20 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
 
       {afterInvoiceSettings}
 
-      <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
+    </>
+  )
+}
+
+/**
+ * Automatiska påminnelser: whether reminders go out and after how many days.
+ * Lives on Försäljning → Utskick with the reminder texts since 2026-09-24;
+ * the host wraps it in its own SettingsFormWrapper.
+ */
+export function InvoiceReminderSettingsForm({ settings }: { settings: CompanySettings }) {
+  const t = useTranslations('settings_invoice_form')
+  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
+  return (
+    <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
         {!REMINDERS_SENDING_ENABLED && (
           <AttnLine className="px-1 pt-2">{t('sending_disabled_notice')}</AttnLine>
         )}
@@ -139,7 +151,7 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_1 ?? 15}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
           <SettingsRow
@@ -154,7 +166,7 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_2 ?? 30}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
           <SettingsRow
@@ -169,11 +181,10 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
               min="1"
               max="365"
               defaultValue={settings.reminder_days_level_3 ?? 45}
-              className="max-w-24 flex-none tabular-nums"
+              className="tabular-nums"
             />
           </SettingsRow>
         </SettingsReveal>
       </SettingsGroup>
-    </>
   )
 }

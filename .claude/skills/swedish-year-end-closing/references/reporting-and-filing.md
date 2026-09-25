@@ -1,5 +1,16 @@
 # Reporting Obligations, Filing, and SIE4
 
+<!-- toc -->
+**Contents**
+
+- [Årsredovisning for AB](#årsredovisning-for-ab)
+- [NE-bilaga for Enskild firma](#ne-bilaga-for-enskild-firma)
+- [Audit thresholds](#audit-thresholds)
+- [Filing deadlines](#filing-deadlines)
+- [SIE4 Export](#sie4-export)
+
+<!-- /toc -->
+
 ## Årsredovisning for AB
 
 Must contain, in order:
@@ -35,6 +46,7 @@ Every page: company name, organisationsnummer, registered office.
 - Medelantal anställda
 - Ställda säkerheter
 - Eventualförpliktelser
+- Väsentliga händelser efter räkenskapsårets slut, if any (a note, not the förvaltningsberättelse: ÅRL 5:22, K2 18.20, 18.20A, 18.22)
 
 K3 requires significantly more: deferred tax analysis, critical judgments, estimation uncertainty.
 
@@ -78,18 +90,31 @@ Exceeding → must have registered revisor, revisionsberättelse becomes part of
 |-----------|----------|---------|
 | Årsredovisning prepared | June 30 (6 months) | Bokföringsbrott risk |
 | Bolagsstämma (AGM) | June 30 (6 months) | Must adopt årsredovisning |
-| Årsredovisning to Bolagsverket | July 31 (7 months) | Förseningsavgift 5,000 SEK |
-| Inkomstdeklaration 2 to Skatteverket | August 1 | Förseningsavgift 6,250 SEK |
+| Årsredovisning to Bolagsverket | July 31 (7 months) | Förseningsavgift **7 500 SEK** (privat AB), 15 000 SEK (publikt AB) |
+| Inkomstdeklaration 2 to Skatteverket | August 1 (närmaste vardag) | Förseningsavgift escalating, see below |
 
 For brutet räkenskapsår: same intervals relative to fiscal year-end.
 
-### Late filing penalties (Bolagsverket)
-- After 7 months: **5,000 SEK**
-- After 9 months: additional **5,000 SEK**
-- After 11 months: additional **10,000 SEK**
-- Total maximum: **20,000 SEK** (private AB)
-- After 11 months: Bolagsverket initiates **tvångslikvidation**
-- Penalties are NOT tax-deductible
+### Late filing penalties Bolagsverket (privat AB, räkenskapsår som börjar 2025-01-01 eller senare)
+
+- Efter 7 månader: **7 500 SEK**
+- Efter 9 månader: ytterligare **7 500 SEK**
+- Efter 11 månader: ytterligare **15 000 SEK**
+- Totalt max: **30 000 SEK** (privat AB)
+- Efter 11 månader: Bolagsverket initierar **tvångslikvidation**
+- Avgifterna är inte avdragsgilla
+
+> **Höjt 2025**: tidigare nivåer var 5 000 / 5 000 / 10 000 = 20 000 SEK (privat AB) och tillämpades på räkenskapsår som inleddes före 2025-01-01. För publikt AB är beloppen dubbla: 15 000 / 15 000 / 30 000 = 60 000 SEK.
+
+### Late filing penalties Skatteverket: INK2 (förseningsavgift per SFL 48 kap 6 §)
+
+Upp till tre förseningsavgifter kan tas ut för samma deklaration. För aktiebolag/ekonomisk förening är varje avgift **6 250 SEK**: den andra och tredje är lika stora som den första (48 kap 6 § SFL), de eskalerar alltså inte:
+
+- Första avgiften: **6 250 SEK**
+- Andra avgiften (om deklarationen inte lämnats inom 3 månader): ytterligare **6 250 SEK** = totalt 12 500 SEK
+- Tredje avgiften (efter 5 månader): ytterligare **6 250 SEK** = totalt **18 750 SEK** (cap)
+
+Skattetillägg (20 % av undandragen skatt) kan tillkomma vid felaktig deklaration.
 
 ### Filing formats
 - Bolagsverket: **iXBRL** via API, or paper/PDF + fastställelseintyg (signed with BankID)

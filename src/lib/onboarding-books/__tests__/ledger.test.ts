@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allocateLedgers, freeLedgerSlots, ledgerName, ledgerOptions } from '../ledger'
+import { allocateLedgers, freeLedgerSlots, ledgerClaims, ledgerName, ledgerOptions } from '../ledger'
 
 describe('allocateLedgers', () => {
   it('first SEK account gets 1930, the next the first free slot, EUR its default', () => {
@@ -34,6 +34,71 @@ describe('allocateLedgers', () => {
 
   it('lowercase currency codes still find their default', () => {
     expect(allocateLedgers([{ uid: 'a', currency: 'usd' }], []).a).toBe('1933')
+  })
+})
+
+describe('a manual row on the currency default does not push the bank account off it', () => {
+  // The seeded 1930 row (or the bank account an SIE import brought) has no
+  // bank connection. The server promotes it in place, so the preview, which
+  // PATCH /accounts sends as an explicit mapping, must pick 1930 too.
+  const cashAccounts = [
+    { ledger_account: '1930', bank_connection_id: null, enabled: true },
+    { ledger_account: '1910', bank_connection_id: null, enabled: true },
+  ]
+
+  it('first SEK account keeps 1930 when only a manual row holds it', () => {
+    const { used, connected } = ledgerClaims(cashAccounts, 'conn-new')
+    expect(connected).toEqual([])
+    expect(allocateLedgers([{ uid: 'a', currency: 'SEK' }], used, {}, connected)).toEqual({ a: '1930' })
+  })
+
+  it('the server preset 1930 survives the preview', () => {
+    const { used, connected } = ledgerClaims(cashAccounts, 'conn-new')
+    expect(allocateLedgers([{ uid: 'a', currency: 'SEK' }], used, { a: '1930' }, connected)).toEqual({ a: '1930' })
+  })
+
+  it('a second SEK account overflows past every existing row', () => {
+    const { used, connected } = ledgerClaims(
+      [...cashAccounts, { ledger_account: '1931', bank_connection_id: null, enabled: true }],
+      'conn-new',
+    )
+    expect(
+      allocateLedgers([{ uid: 'a', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }], used, {}, connected),
+    ).toEqual({ a: '1930', b: '1932' })
+  })
+
+  it('another live connection on 1930 still blocks it', () => {
+    const { used, connected } = ledgerClaims(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-old', enabled: true }],
+      'conn-new',
+    )
+    expect(connected).toEqual(['1930'])
+    expect(allocateLedgers([{ uid: 'a', currency: 'SEK' }], used, { a: '1930' }, connected)).toEqual({ a: '1931' })
+  })
+
+  it('a disabled row of another connection does not block it', () => {
+    const { used, connected } = ledgerClaims(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-old', enabled: false }],
+      'conn-new',
+    )
+    expect(allocateLedgers([{ uid: 'a', currency: 'SEK' }], used, {}, connected)).toEqual({ a: '1930' })
+  })
+
+  it('rows of this connection are not claims at all', () => {
+    const { used, connected } = ledgerClaims(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-new', enabled: true }],
+      'conn-new',
+    )
+    expect(used).toEqual([])
+    expect(connected).toEqual([])
+  })
+
+  it('the Ändra list offers 1930 back when only a manual row holds it', () => {
+    const { used, connected } = ledgerClaims(cashAccounts, 'conn-new')
+    const opts = ledgerOptions('SEK', used, '1931', connected)
+    expect(opts).toContain('1930')
+    expect(opts).not.toContain('1910')
+    expect(ledgerOptions('SEK', used, '1931')).not.toContain('1930')
   })
 })
 

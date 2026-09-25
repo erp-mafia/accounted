@@ -67,6 +67,29 @@ describe('linkTransactionToJournalEntry: junction-row guard (#1553)', () => {
     potential_supplier_invoice_id: null,
   }
 
+  it.each(['PT409', 'XX000'])('returns the correct failure for %s before any payment effects', async code => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: base, error: null })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueue({ data: null, error: { code, message: 'bank link rejected' } })
+    expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-1', journalEntryId: 'je-1',
+    })).toMatchObject({ ok: false, code: code === 'PT409' ? 'CONFLICT' : 'LINK_TX_DB_ERROR' })
+    expect(findCalls('transactions', 'update')).toHaveLength(1)
+    expect(supabase.from).not.toHaveBeenCalledWith('invoice_payments')
+    expect(supabase.from).not.toHaveBeenCalledWith('payment_match_log')
+  })
+
+  it('names a voucher that books the bank ledger the wrong way instead of a generic conflict', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: base, error: null })
+    enqueue({ data: { id: 'je-1', status: 'posted', voucher_series: 'A', voucher_number: 1 }, error: null })
+    enqueue({ data: null, error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } })
+    expect(await linkTransactionToJournalEntry(supabase as never, 'user-1', 'company-1', {
+      transactionId: 'tx-1', journalEntryId: 'je-1',
+    })).toMatchObject({ ok: false, code: 'BANK_ANCHOR_SETTLEMENT_CHANGED' })
+  })
+
   it('refuses a transaction anchored through a bank_line junction row (1:N split, bulk-book) even though the pointer is NULL', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({

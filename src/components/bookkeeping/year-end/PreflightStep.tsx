@@ -95,7 +95,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
             Varningar
           </SectionHead>
           {report.warnings.map((warning, i) => (
-            <p key={i} className="border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
+            <p key={i} className="border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
               {warning}
             </p>
           ))}
@@ -112,7 +112,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
           {report.reminders.map((reminder) => (
             <div
               key={reminder.code}
-              className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
+              className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 text-muted-foreground last:border-b-0"
             >
               <p className="flex-1">{reminder.message}</p>
               {reminder.href && (
@@ -167,7 +167,7 @@ function BlockerRow({ blocker }: { blocker: DisplayBlocker }) {
   }
 
   return (
-    <div className="flex items-baseline justify-between gap-3 border-b border-border/60 px-1 py-3 text-[13px] leading-5 last:border-b-0">
+    <div className="flex items-baseline justify-between gap-3 border-b border-border px-1 py-3 text-[13px] leading-5 last:border-b-0">
       <p className="flex-1">{blocker.message}</p>
       {href && actionLabel && (
         <Link href={href} className={QUIET_LINK_CLASS}>

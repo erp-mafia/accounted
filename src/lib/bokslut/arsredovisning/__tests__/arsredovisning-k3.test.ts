@@ -31,11 +31,15 @@ vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: mockFetchAllRows,
 }))
 
-import { buildArsredovisningData, resolveMedelantalNote } from '../build-data'
+import {
+  buildArsredovisningData, resolveMedelantalNote,
+  K3_CASH_FLOW_FAILED_WARNING, K3_CASH_FLOW_TAX_ALLOCATION_WARNING,
+} from '../build-data'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
+import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 // Captured from the sequential (pre-dedupe) implementation: the parallel
 // TB-pair fetch must reproduce it byte for byte.
@@ -337,6 +341,16 @@ describe('buildArsredovisningData: K3', () => {
     expect(data.kassaflodesanalys).toBeDefined()
     expect(data.kassaflodesanalys?.total_cash_flow).toBe(300_000)
     expect(data.kassaflodesanalys?.reconciliation.is_reconciled).toBe(true)
+  })
+
+  it('preserves an unallocatable tax explanation instead of blaming bank balances', async () => {
+    vi.mocked(generateKassaflodesanalys).mockRejectedValueOnce(new CashFlowTaxAllocationError())
+    const supabase = makeSupabase({ accountingFramework: 'k3' })
+    // @ts-expect-error: chainable mock is not a complete SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.kassaflodesanalys).toBeUndefined()
+    expect(data.warnings).toContain(K3_CASH_FLOW_TAX_ALLOCATION_WARNING)
+    expect(data.warnings).not.toContain(K3_CASH_FLOW_FAILED_WARNING)
   })
 
   it('includes a separate equity_changes_statement when framework is K3', async () => {

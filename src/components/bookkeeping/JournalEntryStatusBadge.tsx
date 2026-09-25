@@ -4,11 +4,13 @@ import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import type { JournalEntry } from '@/types'
 
-type BadgeVariant = 'default' | 'secondary' | 'success' | 'warning' | 'destructive'
+type BadgeVariant = 'default' | 'secondary' | 'warning' | 'destructive'
 
-const statusVariants: Record<string, BadgeVariant> = {
+// null: the normal state is not an exception, so it renders as muted text
+// instead of a chip.
+const statusVariants: Record<string, BadgeVariant | null> = {
   draft: 'secondary',
-  posted: 'success',
+  posted: null,
   reversed: 'warning',
   cancelled: 'secondary',
 }
@@ -76,13 +78,17 @@ export default function JournalEntryStatusBadge({ entry, showStatus = true }: Pr
 
   return (
     <span className="inline-flex items-center gap-1">
-      {showStatus && statusVariant && statusLabelKey && (
-        <Badge variant={statusVariant} className="text-[10px] px-1.5 py-0">
-          {t(statusLabelKey)}
-        </Badge>
+      {showStatus && statusVariant !== undefined && statusLabelKey && (
+        statusVariant ? (
+          <Badge variant={statusVariant} className="text-[11px] px-1.5 py-0">
+            {t(statusLabelKey)}
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">{t(statusLabelKey)}</span>
+        )
       )}
       {sourceVariant && sourceLabelKey && (
-        <Badge variant={sourceVariant} className="text-[10px] px-1.5 py-0">
+        <Badge variant={sourceVariant} className="text-[11px] px-1.5 py-0">
           {t(sourceLabelKey)}
         </Badge>
       )}

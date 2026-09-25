@@ -41,7 +41,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 ```bash
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-./setup.sh              # Prompts for Supabase credentials, generates .env
+./docker/setup.sh       # Prompts for Supabase credentials, generates .env
 docker compose up -d
 ```
 

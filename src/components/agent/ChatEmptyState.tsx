@@ -114,7 +114,7 @@ export default function ChatEmptyState() {
           <Link
             key={s.label}
             href={`/chat/new?intent=general.help&prompt=${encodeURIComponent(s.prompt)}`}
-            className="group flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left text-sm transition-colors hover:border-foreground/30 hover:bg-secondary/30"
+            className="group flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-left text-sm transition-colors hover:border-foreground/30 hover:bg-secondary/60"
           >
             <span className="flex-1 text-muted-foreground group-hover:text-foreground transition-colors">
               {s.label}

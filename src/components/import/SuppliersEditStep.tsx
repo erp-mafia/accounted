@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { Trash2, AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
+import { Trash2, AlertTriangle, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SupplierType } from '@/types'
 import type { AnnotatedSupplierRow } from '@/lib/import/suppliers/types'
@@ -197,8 +197,7 @@ export default function SuppliersEditStep({
                   <td className="px-3 py-1.5">
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-8 w-8"
+                      size="icon-sm"
                       aria-label="Ta bort rad"
                       onClick={() => deleteRow(row.id)}
                     >
@@ -227,15 +226,10 @@ export default function SuppliersEditStep({
 
         <div className="flex justify-between pt-2">
           <Button variant="ghost" onClick={onBack} disabled={isLoading}>Tillbaka</Button>
-          <Button onClick={handleExecute} disabled={!canContinue}>
-            {isLoading ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                Importerar...
-              </>
-            ) : (
-              `Importera ${rows.length} rad${rows.length === 1 ? '' : 'er'}`
-            )}
+          <Button onClick={handleExecute} disabled={!canContinue} loading={isLoading}>
+            {isLoading
+              ? 'Importerar...'
+              : `Importera ${rows.length} rad${rows.length === 1 ? '' : 'er'}`}
           </Button>
         </div>
       </CardContent>

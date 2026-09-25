@@ -2,7 +2,6 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -240,8 +239,7 @@ export function AddPayslipLineDialog({
           <Button type="button" variant="outline" onClick={reset} disabled={submitting}>
             {t('add_line_cancel')}
           </Button>
-          <Button type="button" onClick={handleAdd} disabled={submitting}>
-            {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button type="button" onClick={handleAdd} loading={submitting}>
             {t('add_line_save')}
           </Button>
         </DialogFooter>

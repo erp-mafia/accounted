@@ -34,6 +34,7 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
   const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
   return {
     getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
+    deriveInvoiceVatHeader: actual.deriveInvoiceVatHeader,
     calculateVat: (...args: unknown[]) => mockCalculateVat(...args),
     getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
     // The builder gates on the permitted set (taxed-where-performed exceptions);

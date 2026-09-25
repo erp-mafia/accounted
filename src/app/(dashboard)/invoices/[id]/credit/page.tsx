@@ -15,7 +15,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
-import { Loader2, ArrowLeft, Lock } from 'lucide-react'
+import { ArrowLeft, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -196,29 +196,33 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         />
       )}
 
-      {/* Back link on its own quiet row, same as the invoice document */}
-      <button
-        type="button"
-        onClick={() => router.back()}
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        {t('back')}
-      </button>
-
-      {/* Header: serif title with the explanation behind "?", the credited
-          invoice as the kicker, and the one attention sentence under it. */}
-      <div>
-        <div className="flex items-center gap-2">
-          <h1 className="font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-          <HelpPopover>{t('warning_description')}</HelpPopover>
+      {/* Header: the page-header hooks turn it into the top bar. The title
+          carries the explanation behind "?", the credited invoice stays in
+          the bar as the meta line, and the back link sits on the right. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="page-header-lead min-w-0">
+          <div className="flex items-center gap-2">
+            <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
+            <HelpPopover>{t('warning_description')}</HelpPopover>
+          </div>
+          {/* data-ph-mask: the kicker carries the invoice number */}
+          <p data-ph-mask="" className="page-header-meta mt-1 text-sm text-muted-foreground">
+            {t('subtitle', { number: confirmNumber ?? '' })}
+          </p>
         </div>
-        {/* data-ph-mask: the kicker carries the invoice number */}
-        <p data-ph-mask="" className="mt-1 text-sm text-muted-foreground">
-          {t('subtitle', { number: confirmNumber ?? '' })}
-        </p>
-        <AttnLine className="mt-3">{t('warning_title')}</AttnLine>
+        <div className="page-header-action flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={() => router.back()}
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            {t('back')}
+          </button>
+        </div>
       </div>
+
+      <AttnLine>{t('warning_title')}</AttnLine>
 
       {/* Original invoice: read-only context as plain rows */}
       <DetailSection kicker={t('original_card_title')}>
@@ -364,18 +368,15 @@ export default function CreateCreditNotePage({ params }: { params: Promise<{ id:
         <Button
           onClick={handleSubmit}
           disabled={
-            isSubmitting ||
             !confirmNumber ||
             confirmText !== confirmNumber ||
             !canWrite
           }
+          loading={isSubmitting}
           title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isSubmitting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('creating')}
-            </>
+            t('creating')
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />

@@ -27,7 +27,7 @@ import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
-import { Loader2, FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-react'
+import { FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-react'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -583,7 +583,7 @@ export default function BulkBookDialog({
                             <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                             <span className="text-sm font-medium truncate">{tpl.name}</span>
                             {tpl.is_system && (
-                              <span className="flex-shrink-0 text-[10px] text-muted-foreground">
+                              <span className="flex-shrink-0 text-[11px] text-muted-foreground">
                                 {t('system_badge')}
                               </span>
                             )}
@@ -668,7 +668,7 @@ export default function BulkBookDialog({
                     </thead>
                     <tbody>
                       {manualLines.map((line) => (
-                        <tr key={line.id} className="border-b border-border/40 last:border-b-0">
+                        <tr key={line.id} className="border-b border-border last:border-b-0">
                           <td className="px-2 py-1">
                             <Input
                               value={line.account_number}
@@ -715,8 +715,8 @@ export default function BulkBookDialog({
                             <Button
                               type="button"
                               variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              size="icon-sm"
+                              className="text-muted-foreground hover:text-destructive"
                               onClick={() => removeManualLine(line.id)}
                               aria-label={t('manual_remove_line')}
                             >
@@ -795,7 +795,7 @@ export default function BulkBookDialog({
                   </thead>
                   <tbody>
                     {previewLines.slice(0, 30).map((line, i) => (
-                      <tr key={i} className="border-b border-border/40 last:border-b-0">
+                      <tr key={i} className="border-b border-border last:border-b-0">
                         <td className="px-3 py-1.5 font-mono">{line.account_number}</td>
                         <td className="px-3 py-1.5 text-muted-foreground truncate max-w-[240px]">
                           {line.line_description ?? '-'}
@@ -861,8 +861,7 @@ export default function BulkBookDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={() => handleConfirm()} disabled={!canConfirm}>
-            {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={() => handleConfirm()} disabled={!canConfirm} loading={submitting}>
             {t('confirm')}
           </Button>
         </DialogFooter>

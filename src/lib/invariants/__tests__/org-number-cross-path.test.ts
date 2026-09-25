@@ -110,7 +110,7 @@ function agiRejects(orgNumber: string): boolean {
     generateAGIXml(
       agiCompanyFixture(orgNumber),
       [],
-      { totalTax: 0, totalAvgifterBasis: 0, totalAvgifterAmount: 0, totalSjuklonekostnad: 0 } as never,
+      { totalTax: 0, totalAvgifterBasis: 0, totalAvgifterAmount: 0 } as never,
     )
     return false
   } catch {

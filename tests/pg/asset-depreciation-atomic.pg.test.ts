@@ -106,6 +106,16 @@ function commitDepreciation(
   ])
 }
 
+function commitWithOpening(
+  runner: { query: PoolClient['query'] }, seed: Seed, assetId: string, entryId: string,
+  openingAmount: number, openingDate: string | null,
+) {
+  return runner.query(`SELECT * FROM public.commit_asset_depreciation(
+    $1::uuid, $2::uuid, $3::uuid, $4::uuid, 20000::numeric,
+    $5::numeric, $6::date, NULL::text, NULL::text
+  )`, [seed.companyId, assetId, entryId, seed.fiscalPeriodId, openingAmount, openingDate])
+}
+
 /** Asset with one planenlig avskrivning posted through the real RPC. */
 async function seedPostedDepreciation(): Promise<
   Seed & { assetId: string; entryId: string; scheduleId: string; voucherNumber: number }
@@ -549,6 +559,98 @@ describe('posting and deleting the same asset serialise on its row lock', () => 
     expect(await assetExists(assetId)).toBe(false)
     expect((await entryState(entryId))?.status).toBe('draft')
     expect(await lastVoucherNumber(seed)).toBe(before)
+  })
+})
+
+describe('opening edits and depreciation posting share the asset row lock', () => {
+  const EDIT_SQL = `UPDATE public.assets SET opening_accumulated_depreciation = $2,
+    opening_depreciation_date = $3 WHERE id = $1`
+
+  it('poster first: the opening edit waits and is refused after the voucher posts', async () => {
+    const seed = await seedCompany()
+    const assetId = await insertAsset(seed)
+    const entryId = await insertDepreciationDraft(seed)
+    const poster = await getClient()
+    const editor = await getClient()
+    try {
+      await poster.query('BEGIN')
+      await commitWithOpening(poster, seed, assetId, entryId, 0, null)
+      const pid = await backendPid(editor)
+      const pending = editor.query(EDIT_SQL, [assetId, 1000, '2026-03-31'])
+      const outcome = expect(pending).rejects.toMatchObject({
+        code: 'PT409', message: 'ASSET_CORRECTION_BLOCKED',
+      })
+      await waitUntilBlockedOnLock(pid)
+      await poster.query('COMMIT')
+      await outcome
+    } finally {
+      await poster.query('ROLLBACK').catch(() => {})
+      poster.release()
+      editor.release()
+    }
+    const { rows } = await getPool().query(
+      'SELECT opening_accumulated_depreciation FROM public.assets WHERE id = $1', [assetId],
+    )
+    expect(Number(rows[0].opening_accumulated_depreciation)).toBe(0)
+    expect((await entryState(entryId))?.status).toBe('posted')
+    expect(await scheduleRows(assetId)).toHaveLength(1)
+  })
+
+  it.each([
+    { amount: 2000, date: '2026-03-31' },
+    { amount: 1000, date: '2026-06-30' },
+  ])('editor first: posting refuses a stale opening snapshot ($amount / $date)', async ({ amount, date }) => {
+    const seed = await seedCompany()
+    const assetId = await insertAsset(seed)
+    await getPool().query(EDIT_SQL, [assetId, 1000, '2026-03-31'])
+    const entryId = await insertDepreciationDraft(seed)
+    const before = await lastVoucherNumber(seed)
+    const editor = await getClient()
+    const poster = await getClient()
+    try {
+      await editor.query('BEGIN')
+      await editor.query(EDIT_SQL, [assetId, amount, date])
+      const pid = await backendPid(poster)
+      const pending = commitWithOpening(poster, seed, assetId, entryId, 1000, '2026-03-31')
+      const outcome = expect(pending).rejects.toMatchObject({ code: 'PT409', message: 'ASSET_OPENING_CHANGED' })
+      await waitUntilBlockedOnLock(pid)
+      await editor.query('COMMIT')
+      await outcome
+    } finally {
+      await editor.query('ROLLBACK').catch(() => {})
+      editor.release()
+      poster.release()
+    }
+    expect((await entryState(entryId))?.status).toBe('draft')
+    expect(await scheduleRows(assetId)).toHaveLength(0)
+    expect(await lastVoucherNumber(seed)).toBe(before)
+    // A fresh snapshot can post; the refused attempt consumed no voucher number.
+    await commitWithOpening(getPool(), seed, assetId, entryId, amount, date)
+    expect((await entryState(entryId))?.status).toBe('posted')
+    expect(await lastVoucherNumber(seed)).toBe(before + 1)
+  })
+
+  it('legacy callers cannot omit the opening snapshot for a migrated asset', async () => {
+    const seed = await seedCompany()
+    const assetId = await insertAsset(seed)
+    await getPool().query(EDIT_SQL, [assetId, 1000, '2026-03-31'])
+    const entryId = await insertDepreciationDraft(seed)
+    await expect(commitDepreciation(getPool(), seed, assetId, entryId)).rejects.toMatchObject({
+      code: 'PT409', message: 'ASSET_OPENING_CHANGED',
+    })
+    expect((await entryState(entryId))?.status).toBe('draft')
+    expect(await scheduleRows(assetId)).toHaveLength(0)
+  })
+
+  it('the snapshot-aware RPC retains the company authorization gate', async () => {
+    const seed = await seedCompany()
+    const outsider = await insertAuthUser()
+    const assetId = await insertAsset(seed)
+    const entryId = await insertDepreciationDraft(seed)
+    await expect(withUserContext(outsider, client =>
+      commitWithOpening(client, seed, assetId, entryId, 0, null),
+    )).rejects.toMatchObject({ code: '42501' })
+    expect((await entryState(entryId))?.status).toBe('draft')
   })
 })
 

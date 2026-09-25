@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
+import { AttnLine } from '@/components/ui/attn-line'
 import { Plus, Trash2, AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -43,7 +44,8 @@ import {
   formatFailedDocumentNames,
   type DocumentLinkFailure,
 } from '@/lib/documents/link-documents'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
@@ -1354,25 +1356,15 @@ export default function JournalEntryForm({
         </span>
       </div>
 
-      {(monthChanged || selectedPeriodLocked) && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-          <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-          <div className="flex-1 text-sm text-attn space-y-0.5">
-            {monthChanged && (
-              <p className="font-medium">
-                {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
-              </p>
-            )}
-            {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-          </div>
-        </div>
+      {/* Attention as ochre sentences (convention 6), not boxed banners. */}
+      {monthChanged && (
+        <AttnLine>
+          {t('review_month_changed', { prev: monthLabel(lastPostedMonth as string), current: monthLabel(entryMonth) })}
+        </AttnLine>
       )}
-
+      {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
       {uploadedFiles.filter((f) => f.status === 'uploaded').length === 0 && (
-        <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm text-attn">
-          <AlertTriangle className="h-5 w-5 mt-0.5 shrink-0" />
-          <p>{t('no_doc_body')}</p>
-        </div>
+        <AttnLine>{t('no_doc_body')}</AttnLine>
       )}
 
       <JournalEntryReviewContent
@@ -1393,8 +1385,7 @@ export default function JournalEntryForm({
         <Button variant="outline" onClick={() => setShowReview(false)} disabled={isSubmitting}>
           {t('review_back')}
         </Button>
-        <Button ref={bareConfirmRef} onClick={handleConfirm} disabled={isSubmitting}>
-          {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button ref={bareConfirmRef} onClick={handleConfirm} loading={isSubmitting}>
           {/* No underlag attached → explicit acknowledgement, equivalent to the
               blocking "Bokför utan underlag" dialog in the non-bare flow (BFL
               5 kap 6-7 §§). With a document it's the normal create label. */}
@@ -1654,10 +1645,10 @@ export default function JournalEntryForm({
               </div>
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 onClick={() => removeLine(index)}
                 disabled={lines.length <= 2}
-                className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                className="shrink-0 -mr-1 -mt-1"
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -1887,13 +1878,13 @@ export default function JournalEntryForm({
                       >
                         <Button
                           variant="ghost"
-                          size="sm"
+                          size="icon-sm"
                           onClick={() => setDimPopoverRow(dimPopoverRow === index ? null : index)}
-                          className={`h-8 w-8 p-0 min-h-[44px] min-w-[44px] ${
+                          className={
                             line.dimensions && Object.keys(line.dimensions).length > 0
                               ? 'text-foreground'
                               : 'text-muted-foreground'
-                          }`}
+                          }
                           aria-label={t('row_dimensions_aria')}
                           aria-expanded={dimPopoverRow === index}
                           title={t('row_dimensions_aria')}
@@ -1902,7 +1893,11 @@ export default function JournalEntryForm({
                         </Button>
                         {dimPopoverRow === index && (
                           <div
-                            className="absolute right-0 top-full z-50 mt-1 w-64 rounded-lg border bg-card p-3 shadow-md"
+                            className={cn(
+                              'absolute right-0 top-full z-50 mt-1 w-64 p-3',
+                              POPOVER_SURFACE_CLASS,
+                              POPOVER_ENTER_CLASS,
+                            )}
                             onKeyDown={(e) => {
                               // The comboboxes preventDefault their own Escape
                               // (closing their dropdown): only an unhandled
@@ -1926,10 +1921,9 @@ export default function JournalEntryForm({
                     )}
                     <Button
                       variant="ghost"
-                      size="sm"
+                      size="icon-sm"
                       onClick={() => removeLine(index)}
                       disabled={lines.length <= 2}
-                      className="h-8 w-8 p-0 min-h-[44px] min-w-[44px]"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -2012,10 +2006,11 @@ export default function JournalEntryForm({
           {editEntryId ? (
             <Button
               onClick={handleSaveEdit}
-              disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
+              disabled={isSubmitting || isUploading || !canWrite}
+              loading={canWrite && isSavingDraft}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {!canWrite && <Lock className="mr-2 h-4 w-4" />}
               {t('save_edit')}
             </Button>
           ) : (
@@ -2039,10 +2034,11 @@ export default function JournalEntryForm({
                 <Button
                   variant="outline"
                   onClick={handleSaveDraft}
-                  disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
+                  disabled={isSubmitting || isUploading || !canWrite}
+                  loading={canWrite && isSavingDraft}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
-                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : isSavingDraft && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  {!canWrite && <Lock className="mr-2 h-4 w-4" />}
                   {t('save_draft')}
                 </Button>
               )}
@@ -2155,19 +2151,16 @@ export default function JournalEntryForm({
         warningText={embedded ? '' : t('review_warning')}
       >
         {(monthChanged || selectedPeriodLocked) && (
-          <div className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
-            <div className="flex-1 text-sm text-attn space-y-0.5">
-              {monthChanged && (
-                <p className="font-medium">
-                  {t('review_month_changed', {
-                    prev: monthLabel(lastPostedMonth as string),
-                    current: monthLabel(entryMonth),
-                  })}
-                </p>
-              )}
-              {selectedPeriodLocked && <p>{t('review_period_locked')}</p>}
-            </div>
+          <div className="mb-4 space-y-1">
+            {monthChanged && (
+              <AttnLine>
+                {t('review_month_changed', {
+                  prev: monthLabel(lastPostedMonth as string),
+                  current: monthLabel(entryMonth),
+                })}
+              </AttnLine>
+            )}
+            {selectedPeriodLocked && <AttnLine>{t('review_period_locked')}</AttnLine>}
           </div>
         )}
         <JournalEntryReviewContent

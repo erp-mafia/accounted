@@ -22,7 +22,15 @@ AB must declare a schablonintäkt annually:
 
 ## Transition uppräkning
 
-Funds set aside when bolagsskatt was 22% (räkenskapsår starting 2018 or earlier) trigger a **6% uppräkning** on the reversed amount, preventing arbitrage from the rate change to 20.6%.
+Funds set aside at a higher bolagsskatt are grossed up when reversed in a tax year beginning after 2020-12-31, preventing arbitrage from the rate cuts (övergångsbestämmelser p. 5 till SFS 2018:1206; juridiska personer only):
+
+| Fund set aside in tax year beginning | Bolagsskatt then | Reversed at |
+|---|---|---|
+| Before 2019-01-01 | 22% | **106%** |
+| 2019-2020 | 21.4% | **104%** |
+| 2021 or later | 20.6% | **100%** (no uppräkning) |
+
+The uppräkning is reported on INK2S punkt 4.6d.
 
 ## BAS accounts
 

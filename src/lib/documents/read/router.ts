@@ -29,6 +29,17 @@ export async function readDocumentBytes(bytes: Buffer, mimeType: string | null |
       modelPages++
       if (out.text) pages.push({ pageNo, text: out.text, reader: 'claude_vision', hasTextLayer: false })
     }
+    // A picture inside a text page (a table pasted as an image): the model reads the whole page when it may; the text layer stays until then.
+    for (const pageNo of partial ? [] : (local.pagesWithImages ?? [])) {
+      if (!opts.allowModel) { partial = 'ai_gated'; break }
+      if (opts.maxModelPages != null && modelPages >= opts.maxModelPages) { partial = 'budget'; break }
+      const single = await extractSinglePagePdf(bytes, pageNo)
+      const out = await transcribeWithModel({ kind: 'pdf', data: single, fileName: `page-${pageNo}.pdf` }, { tier: opts.tier })
+      if (!out.ok) { partial = 'ai_unconfigured'; break }
+      modelPages++
+      const at = pages.findIndex((p) => p.pageNo === pageNo)
+      if (out.text && at >= 0) pages[at] = { ...pages[at], text: out.text, reader: 'claude_vision', hasTextLayer: true }
+    }
     pages.sort((a, b) => a.pageNo - b.pageNo)
     // Text pages are worth keeping on their own; the scanned ones wait for the model.
     if (pages.length === 0) return { ok: false, skipped: partial ?? 'empty' }

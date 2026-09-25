@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -140,8 +139,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving}>
             Avbryt
           </Button>
-          <Button onClick={handleSave} disabled={isSaving || !reasonValid}>
-            {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={handleSave} disabled={!reasonValid} loading={isSaving}>
             Spara ändring
           </Button>
         </DialogFooter>

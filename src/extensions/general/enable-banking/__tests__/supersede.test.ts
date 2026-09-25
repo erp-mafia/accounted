@@ -1,338 +1,92 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-const { mockDeleteSession, mockCountLiveSiblings } = vi.hoisted(() => ({
-  mockDeleteSession: vi.fn(),
-  mockCountLiveSiblings: vi.fn(),
-}))
-
-vi.mock('../lib/api-client', () => ({
-  deleteSession: (...args: unknown[]) => mockDeleteSession(...args),
-}))
-vi.mock('../lib/session-sharing', () => ({
-  countLiveSiblings: (...args: unknown[]) => mockCountLiveSiblings(...args),
-}))
-
+const { mockDeleteSession } = vi.hoisted(() => ({ mockDeleteSession: vi.fn() }))
+vi.mock('../lib/api-client', () => ({ deleteSession: (...args: unknown[]) => mockDeleteSession(...args) }))
 import { supersedeSiblingConnections } from '../lib/supersede'
 import { eventBus } from '@/lib/events/bus'
-import type { StoredAccount } from '../types'
 
-interface RecordedCall {
-  method: string
-  args: unknown[]
-}
-
-interface RecordedChain {
-  _calls: RecordedCall[]
-  [key: string]: unknown
-}
-
-function makeChain(result: { data?: unknown; error?: unknown } = {}): RecordedChain {
-  const calls: RecordedCall[] = []
-  const chain: Record<string, unknown> = { _calls: calls }
-  for (const m of ['select', 'eq', 'neq', 'in', 'order', 'limit', 'update', 'delete']) {
-    chain[m] = vi.fn((...args: unknown[]) => {
-      calls.push({ method: m, args })
-      return chain
-    })
-  }
-  chain.single = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })
-  chain.maybeSingle = vi.fn().mockResolvedValue({ data: result.data ?? null, error: result.error ?? null })
-  chain.then = (resolve: (v: unknown) => void) =>
-    resolve({ data: result.data ?? null, error: result.error ?? null })
-  return chain as RecordedChain
-}
-
-interface ScriptStep {
-  table: string
-  chain: RecordedChain
-}
-
-/** from() dispatcher that asserts the table order and hands out scripted chains. */
-function makeSupabase(script: ScriptStep[]): { client: SupabaseClient; from: ReturnType<typeof vi.fn> } {
-  let i = 0
-  const from = vi.fn((table: string) => {
-    const step = script[i]
-    i++
-    expect(step, `unexpected from('${table}') call #${i}`).toBeDefined()
-    expect(table).toBe(step.table)
-    return step.chain
+const accounts = [{ uid: 'new-uid', iban: 'SE1234', currency: 'SEK', dedup_scope: 'legacy-scope' }]
+const input = { companyId: 'company-1', userId: 'user-1', newConnectionId: 'new-1',
+  bankName: 'Test bank', newSessionId: 'new-session', newAccounts: accounts, preserveDedupScopeUids: ['new-uid'] }
+function setup(options: { error?: object; readError?: object; shared?: boolean; noSiblings?: boolean; missing?: boolean } = {}) {
+  const calls: string[] = []
+  const rpc = vi.fn(async (name: string) => {
+    calls.push(name)
+    if (name === 'read_bank_configuration') return { data: { token: 'snapshot-token', connection: {
+      id: 'new-1', bank_name: 'Test bank', status: 'pending_selection', session_id: 'new-session', accounts_data: accounts,
+    } }, error: options.readError ?? null }
+    if (name === 'supersede_bank_connections') return { data: options.missing ? null : {
+      accounts, superseded: options.noSiblings ? [] : [{ id: 'old-1', session_id: 'old-session' }, { id: 'old-2', session_id: 'old-session' }],
+    }, error: options.error ?? null }
+    if (name === 'claim_bank_session_revocation') return { data: options.shared ? { claimed: false, reason: 'shared' } : { claimed: true, token: 'claim-token' }, error: null }
+    if (name === 'finish_bank_session_revocation') return { data: true, error: null }
+    throw new Error(`Unexpected RPC ${name}`)
   })
-  return { client: { from } as unknown as SupabaseClient, from }
+  return { client: { rpc } as unknown as SupabaseClient, rpc, calls }
 }
+beforeEach(() => { vi.clearAllMocks(); eventBus.clear(); mockDeleteSession.mockResolvedValue(undefined) })
 
-function updatePayload(chain: RecordedChain): Record<string, unknown> {
-  const call = chain._calls.find((c) => c.method === 'update')
-  expect(call, 'expected an update on this chain').toBeDefined()
-  return call!.args[0] as Record<string, unknown>
-}
-
-const BASE_INPUT = {
-  companyId: 'company-1',
-  userId: 'user-1',
-  newConnectionId: 'new-1',
-  bankName: 'TestBank',
-  newSessionId: 'sess-new',
-}
-
-function makeSibling(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 'old-1',
-    status: 'expired',
-    session_id: 'sess-old',
-    accounts_data: [
-      {
-        uid: 'uid-old',
-        iban: 'SE45 5000 0000 0583 9825 7466',
-        currency: 'SEK',
-        dedup_scope: 'legacy-scope',
-      },
-    ] as StoredAccount[],
-    last_synced_at: '2026-08-01T00:00:00Z',
-    initial_sync_completed_at: '2026-06-01T00:00:00Z',
-    initial_sync_requested_from: '2026-01-01',
-    initial_sync_returned_min_date: '2026-01-02',
-    initial_sync_returned_max_date: '2026-07-31',
-    initial_sync_lookback_days: 365,
-    ...overrides,
-  }
-}
-
-const NEW_ACCOUNTS: StoredAccount[] = [
-  { uid: 'uid-new', iban: 'SE4550000000058398257466', currency: 'SEK' },
-]
-
-describe('supersedeSiblingConnections', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-    eventBus.clear()
-    mockCountLiveSiblings.mockResolvedValue(0)
-    mockDeleteSession.mockResolvedValue(undefined)
+describe('checked atomic sibling supersession', () => {
+  it('commits the complete transition before one guarded revoke per released consent and returns committed accounts', async () => {
+    const { client, rpc, calls } = setup()
+    const emit = vi.spyOn(eventBus, 'emit')
+    mockDeleteSession.mockImplementation(async () => { calls.push('provider') })
+    const result = await supersedeSiblingConnections(client, input)
+    expect(result).toEqual({ supersededIds: ['old-1','old-2'], accounts })
+    expect(rpc).toHaveBeenNthCalledWith(2, 'supersede_bank_connections', {
+      p_company_id: 'company-1', p_user_id: 'user-1', p_connection_id: 'new-1', p_expected_token: 'snapshot-token',
+      p_expected_session_id: 'new-session', p_preserve_scope_uids: ['new-uid'],
+    })
+    expect(mockDeleteSession).toHaveBeenCalledExactlyOnceWith('old-session')
+    expect(calls).toEqual(['read_bank_configuration','supersede_bank_connections',
+      'claim_bank_session_revocation','provider','finish_bank_session_revocation'])
+    expect(emit).toHaveBeenCalledTimes(2)
+    expect(emit).toHaveBeenCalledWith({ type: 'bank_connection.superseded', payload: {
+      connectionId: 'old-1', supersededById: 'new-1', bankName: 'Test bank', userId: 'user-1', companyId: 'company-1',
+    } })
   })
 
-  it('supersedes an IBAN-overlapping sibling: revoked + superseded_by, transactions re-pointed, claims released', async () => {
-    const emitSpy = vi.spyOn(eventBus, 'emit')
-
-    const siblingSelect = makeChain({ data: [makeSibling()] })
-    const revokeUpdate = makeChain({})
-    const txSelect = makeChain({ data: [{ id: 't1' }, { id: 't2' }] })
-    const txUpdate = makeChain({})
-    const cashDemote = makeChain({})
-    const newRowSelect = makeChain({ data: { last_synced_at: null, initial_sync_completed_at: null } })
-    const carryUpdate = makeChain({})
-
-    const { client } = makeSupabase([
-      { table: 'bank_connections', chain: siblingSelect },
-      { table: 'bank_connections', chain: revokeUpdate },
-      { table: 'transactions', chain: txSelect },
-      { table: 'transactions', chain: txUpdate },
-      { table: 'cash_accounts', chain: cashDemote },
-      { table: 'bank_connections', chain: newRowSelect },
-      { table: 'bank_connections', chain: carryUpdate },
-    ])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: NEW_ACCOUNTS,
-    })
-
-    expect(result.supersededIds).toEqual(['old-1'])
-    // The explicit dedup scope travels, keyed by normalized IBAN.
-    expect(result.dedupScopeByIban.get('SE4550000000058398257466')).toBe('legacy-scope')
-
-    // The dead consent is revoked at EB (nobody else shares it).
-    expect(mockDeleteSession).toHaveBeenCalledWith('sess-old')
-
-    // The row is parked, not deleted: revoked + superseded_by disambiguates
-    // a supersede from a user disconnect.
-    const parked = updatePayload(revokeUpdate)
-    expect(parked.status).toBe('revoked')
-    expect(parked.session_id).toBeNull()
-    expect(parked.superseded_by).toBe('new-1')
-    expect(typeof parked.superseded_at).toBe('string')
-
-    // Feed rows follow the survivor, batch-scoped by the selected ids.
-    expect(updatePayload(txUpdate)).toEqual({ bank_connection_id: 'new-1' })
-    const inCall = txUpdate._calls.find((c) => c.method === 'in')
-    expect(inCall?.args).toEqual(['id', ['t1', 't2']])
-
-    // Leftover ledger claims are demoted to manual, mirroring /disconnect.
-    expect(updatePayload(cashDemote)).toEqual({ bank_connection_id: null })
-
-    // Sync state is carried onto the survivor so neither the cron's
-    // first-sync backfill nor the picker treats the renewal as a first connect.
-    const carried = updatePayload(carryUpdate)
-    expect(carried.last_synced_at).toBe('2026-08-01T00:00:00Z')
-    expect(carried.initial_sync_completed_at).toBe('2026-06-01T00:00:00Z')
-    expect(carried.initial_sync_requested_from).toBe('2026-01-01')
-    expect(carried.initial_sync_lookback_days).toBe(365)
-
-    expect(emitSpy).toHaveBeenCalledWith({
-      type: 'bank_connection.superseded',
-      payload: {
-        connectionId: 'old-1',
-        supersededById: 'new-1',
-        bankName: 'TestBank',
-        userId: 'user-1',
-        companyId: 'company-1',
-      },
-    })
+  it.each([
+    ['stale topology', { code: 'PT409', message: 'BANK_CONFIGURATION_CHANGED' }],
+    ['late database failure', { code: 'XX000', message: 'carry failed' }],
+    ['actor denial', { code: '42501', message: 'BANK_SUPERSEDE_ACTOR_DENIED' }],
+  ])('propagates %s without provider work or events', async (_label, error) => {
+    const { client, calls } = setup({ error }); const emit = vi.spyOn(eventBus, 'emit')
+    await expect(supersedeSiblingConnections(client, input)).rejects.toMatchObject(error)
+    expect(calls).toEqual(['read_bank_configuration','supersede_bank_connections'])
+    expect(mockDeleteSession).not.toHaveBeenCalled(); expect(emit).not.toHaveBeenCalled()
   })
 
-  it('parks the sibling row BEFORE revoking its session at Enable Banking', async () => {
-    // Revoking first and then failing to park would leave a live-looking row
-    // whose session is already dead at the bank: the park update must come
-    // first, in call order.
-    const sequence: string[] = []
-    mockDeleteSession.mockImplementation(async () => {
-      sequence.push('deleteSession')
-    })
-
-    const siblingSelect = makeChain({ data: [makeSibling()] })
-    const revokeUpdate = makeChain({})
-    const originalUpdate = revokeUpdate.update as ReturnType<typeof vi.fn>
-    revokeUpdate.update = vi.fn((...args: unknown[]) => {
-      sequence.push('parkUpdate')
-      return originalUpdate(...args)
-    })
-    const txSelect = makeChain({ data: [] })
-    const cashDemote = makeChain({})
-    const newRowSelect = makeChain({ data: { last_synced_at: null, initial_sync_completed_at: null } })
-    const carryUpdate = makeChain({})
-
-    const { client } = makeSupabase([
-      { table: 'bank_connections', chain: siblingSelect },
-      { table: 'bank_connections', chain: revokeUpdate },
-      { table: 'transactions', chain: txSelect },
-      { table: 'cash_accounts', chain: cashDemote },
-      { table: 'bank_connections', chain: newRowSelect },
-      { table: 'bank_connections', chain: carryUpdate },
-    ])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: NEW_ACCOUNTS,
-    })
-
-    expect(result.supersededIds).toEqual(['old-1'])
-    expect(sequence).toEqual(['parkUpdate', 'deleteSession'])
+  it('propagates a failed snapshot read', async () => {
+    const { client, rpc } = setup({ readError: { code: 'XX000', message: 'read failed' } })
+    await expect(supersedeSiblingConnections(client, input)).rejects.toMatchObject({ code: 'XX000' })
+    expect(rpc).toHaveBeenCalledOnce(); expect(mockDeleteSession).not.toHaveBeenCalled()
   })
 
-  it('skips the EB session revoke entirely when the park update fails', async () => {
-    const siblingSelect = makeChain({ data: [makeSibling()] })
-    const failedPark = makeChain({ error: { message: 'update refused' } })
-
-    // Only the lookup and the failed park run: no revoke, no re-point, no
-    // demote, no sync-state carry.
-    const { client, from } = makeSupabase([
-      { table: 'bank_connections', chain: siblingSelect },
-      { table: 'bank_connections', chain: failedPark },
-    ])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: NEW_ACCOUNTS,
-    })
-
-    expect(result.supersededIds).toEqual([])
-    expect(mockDeleteSession).not.toHaveBeenCalled()
-    expect(from).toHaveBeenCalledTimes(2)
-  })
-
-  it('never supersedes an ACTIVE sibling without IBAN overlap (separate login at the same bank)', async () => {
-    const siblingSelect = makeChain({
-      data: [
-        makeSibling({
-          id: 'other-login',
-          status: 'active',
-          accounts_data: [{ uid: 'uid-x', iban: 'SE9999999999999999999999', currency: 'SEK' }],
-        }),
-      ],
-    })
-    const { client, from } = makeSupabase([{ table: 'bank_connections', chain: siblingSelect }])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: NEW_ACCOUNTS,
-    })
-
-    expect(result.supersededIds).toEqual([])
-    // Only the sibling lookup ran: nothing was updated, revoked, or re-pointed.
-    expect(from).toHaveBeenCalledTimes(1)
+  it('does not treat a missing receipt as committed success', async () => {
+    const { client } = setup({ missing: true })
+    await expect(supersedeSiblingConnections(client, input)).rejects.toThrow('receipt missing')
     expect(mockDeleteSession).not.toHaveBeenCalled()
   })
 
-  it('parks the row but keeps the EB session when other connections still share it', async () => {
-    mockCountLiveSiblings.mockResolvedValue(2)
-
-    const siblingSelect = makeChain({ data: [makeSibling()] })
-    const revokeUpdate = makeChain({})
-    const txSelect = makeChain({ data: [] })
-    const cashDemote = makeChain({})
-    const newRowSelect = makeChain({ data: { last_synced_at: null, initial_sync_completed_at: null } })
-    const carryUpdate = makeChain({})
-
-    const { client } = makeSupabase([
-      { table: 'bank_connections', chain: siblingSelect },
-      { table: 'bank_connections', chain: revokeUpdate },
-      { table: 'transactions', chain: txSelect },
-      { table: 'cash_accounts', chain: cashDemote },
-      { table: 'bank_connections', chain: newRowSelect },
-      { table: 'bank_connections', chain: carryUpdate },
-    ])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: NEW_ACCOUNTS,
-    })
-
-    expect(result.supersededIds).toEqual(['old-1'])
-    // A shared consent is never revoked upstream; the row is still parked.
+  it('retains a consent still held in another company', async () => {
+    const { client } = setup({ shared: true })
+    expect((await supersedeSiblingConnections(client, input)).supersededIds).toHaveLength(2)
     expect(mockDeleteSession).not.toHaveBeenCalled()
-    expect(updatePayload(revokeUpdate).status).toBe('revoked')
   })
 
-  it('matches a DEAD sibling on bank identity alone only when neither side has IBANs', async () => {
-    const siblingSelect = makeChain({
-      data: [
-        makeSibling({
-          session_id: null,
-          accounts_data: [{ uid: 'uid-old', currency: 'SEK' }],
-          initial_sync_completed_at: null,
-          last_synced_at: null,
-        }),
-      ],
+  it('keeps the committed receipt if upstream revocation fails', async () => {
+    const { client, rpc } = setup(); mockDeleteSession.mockRejectedValue(new Error('provider unavailable'))
+    expect((await supersedeSiblingConnections(client, input)).supersededIds).toHaveLength(2)
+    expect(rpc).toHaveBeenLastCalledWith('finish_bank_session_revocation', {
+      p_provider: 'enablebanking', p_session_id: 'old-session', p_claim_token: 'claim-token', p_succeeded: false,
     })
-    const revokeUpdate = makeChain({})
-    const txSelect = makeChain({ data: [] })
-    const cashDemote = makeChain({})
-    const newRowSelect = makeChain({ data: { last_synced_at: null, initial_sync_completed_at: null } })
-
-    const { client } = makeSupabase([
-      { table: 'bank_connections', chain: siblingSelect },
-      { table: 'bank_connections', chain: revokeUpdate },
-      { table: 'transactions', chain: txSelect },
-      { table: 'cash_accounts', chain: cashDemote },
-      { table: 'bank_connections', chain: newRowSelect },
-    ])
-
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      newAccounts: [{ uid: 'uid-new', currency: 'SEK' }],
-    })
-
-    expect(result.supersededIds).toEqual(['old-1'])
-    expect(updatePayload(revokeUpdate).superseded_by).toBe('new-1')
   })
 
-  it('does nothing without a bank name', async () => {
-    const { client, from } = makeSupabase([])
-    const result = await supersedeSiblingConnections(client, {
-      ...BASE_INPUT,
-      bankName: null,
-      newAccounts: NEW_ACCOUNTS,
-    })
-    expect(result.supersededIds).toEqual([])
-    expect(from).not.toHaveBeenCalled()
+  it('does no upstream work for an idempotent repeat', async () => {
+    const { client, calls } = setup({ noSiblings: true })
+    expect(await supersedeSiblingConnections(client, input)).toEqual({ supersededIds: [], accounts })
+    expect(calls).toEqual(['read_bank_configuration','supersede_bank_connections'])
   })
 })

@@ -64,6 +64,8 @@ interface MatchPreview {
   accounting_method: 'accrual' | 'cash'
   is_fully_paid: boolean
   fx_conversion?: FxConversion
+  /** Supplier match only: SEK of a bank fee drawn on top of the invoice, booked on 6570. */
+  bank_fee_sek?: number
 }
 
 // String-typed working copy of a line. The amount is a single value plus a
@@ -575,6 +577,11 @@ export default function InvoiceMatchDialog({
               const isOreRounding =
                 sameCurrency && transaction.currency === 'SEK' && diff >= 0.01 && diff < 1.0
 
+              // Supplier row that paid more than the invoice (card or transfer
+              // fee on top): the preview books the excess on 6570 and settles
+              // the invoice in full, so this is not a difference to resolve.
+              const bankFeeSek = isSupplierInvoice ? (preview?.bank_fee_sek ?? 0) : 0
+
               if (amountsMatch) {
                 return (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
@@ -597,6 +604,19 @@ export default function InvoiceMatchDialog({
                 )
               }
 
+              if (bankFeeSek > 0) {
+                return (
+                  <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 text-success">
+                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm font-medium">
+                      {t('bank_fee_note', {
+                        amount: formatCurrency(diff, transaction.currency),
+                      })}
+                    </p>
+                  </div>
+                )
+              }
+
               return (
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
@@ -611,7 +631,8 @@ export default function InvoiceMatchDialog({
                               transaction.currency,
                             ),
                           })}
-                          {isSupplierInvoice && t('partial_payment_note')}
+                          {isSupplierInvoice &&
+                            t(txAbs > invRemaining ? 'overpayment_note' : 'partial_payment_note')}
                         </>
                       ) : (
                         t('different_currencies')
@@ -897,11 +918,10 @@ export default function InvoiceMatchDialog({
                         />
                         <Button
                           variant="ghost"
-                          size="icon"
+                          size="icon-sm"
                           onClick={() => removeEditLine(i)}
                           disabled={editLines.length <= 2}
                           aria-label={t('booking_remove_line')}
-                          className="h-8 w-8"
                         >
                           <Trash2 className="h-3 w-3" />
                         </Button>

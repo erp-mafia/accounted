@@ -53,9 +53,6 @@ function markPrereqSeen(): void {
   }
 }
 
-const pillClass =
-  'inline-flex h-6 shrink-0 items-center gap-2 rounded-full bg-primary px-3 text-[11.5px] text-primary-foreground transition-colors duration-150 hover:bg-primary/85 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
-
 /**
  * "Kvittojakten": one click opens the connected AI client with the prompt
  * already typed in. The agent then loads the skill written for that client
@@ -66,18 +63,17 @@ const pillClass =
  * prompt names a skill and nothing else, so it may travel in the chat URL
  * (see aiPrefilledChatLink). Renders nothing while no client is connected.
  *
- * `pill` sits on an Att göra row; `button` sits in a page header.
+ * The same outline button as HandoffButton, on an Att göra row and in a
+ * page header alike, so the two AI actions never look like different things.
  */
 export function KvittojaktenButton({
   clients,
   preferredClient,
-  variant = 'pill',
   onOpen,
   disabled = false,
 }: {
   clients: AiClient[]
   preferredClient?: AiClient
-  variant?: 'pill' | 'button'
   onOpen?: () => void
   disabled?: boolean
 }) {
@@ -117,42 +113,23 @@ export function KvittojaktenButton({
   return (
     <>
     <span className="inline-flex items-center gap-1">
-      {variant === 'pill' ? (
-        <button
-          type="button"
-          className={pillClass}
-          onClick={() => open(primary.id)}
-          disabled={disabled}
-          title={t('ai_kvittojakten_hint', { client: primary.name })}
-        >
-          {logo(primary.logo, 'h-3 w-3 rounded-full')}
-          {t('ai_kvittojakten')}
-        </button>
-      ) : (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          onClick={() => open(primary.id)}
-          disabled={disabled}
-          title={t('ai_kvittojakten_hint', { client: primary.name })}
-        >
-          {logo(primary.logo, 'mr-1.5 h-3.5 w-3.5 rounded-full')}
-          {t('ai_kvittojakten')}
-        </Button>
-      )}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => open(primary.id)}
+        disabled={disabled}
+        title={t('ai_kvittojakten_hint', { client: primary.name })}
+      >
+        {logo(primary.logo, 'mr-1.5 h-3.5 w-3.5 rounded-full')}
+        {t('ai_kvittojakten')}
+      </Button>
       {others.length > 0 && (
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {variant === 'pill' ? (
-              <button type="button" className={`${pillClass} px-2`} disabled={disabled} aria-label={t('ai_fix_first_other')}>
-                <ChevronDown className="h-3 w-3" aria-hidden />
-              </button>
-            ) : (
-              <Button type="button" variant="ghost" size="sm" className="px-2" disabled={disabled} aria-label={t('ai_fix_first_other')}>
-                <ChevronDown className="h-3.5 w-3.5" aria-hidden />
-              </Button>
-            )}
+            <Button type="button" variant="outline" size="icon-sm" disabled={disabled} aria-label={t('ai_fix_first_other')}>
+              <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+            </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             {others.map((c) => (

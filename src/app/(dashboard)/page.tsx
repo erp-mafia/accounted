@@ -171,7 +171,11 @@ export default async function DashboardPage() {
       <HemNoticesSection companyId={companyId} userId={user.id} now={now} />
     </Suspense>
   )
-  const checklist = (
+  // A completed or dismissed setup renders no checklist (NewUserChecklist
+  // returns null from its initial state), so the section is skipped outright:
+  // otherwise every onboarded user saw a bordered skeleton box flash in and
+  // collapse on each visit, and paid for nine count queries nobody reads.
+  const checklist = setupOpen ? (
     <Suspense fallback={<ChecklistSkeleton />}>
       <HemChecklistSection
         companyId={companyId}
@@ -183,7 +187,7 @@ export default async function DashboardPage() {
         momsPeriod={settings.moms_period ?? null}
       />
     </Suspense>
-  )
+  ) : null
 
   // Hem: greeting, notice line, setup checklist, then the Att göra and
   // Fortsätt panes side by side. The content runs under the Att göra top

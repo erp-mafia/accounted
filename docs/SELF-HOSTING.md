@@ -67,7 +67,7 @@ These are all available on Supabase hosted. `pg_cron` requires a paid plan: if y
 ```bash
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-./setup.sh
+./docker/setup.sh
 ```
 
 The script checks prerequisites, prompts for your Supabase credentials, auto-generates `CRON_SECRET`, and writes everything to `.env`.
@@ -77,7 +77,7 @@ The script checks prerequisites, prompts for your Supabase credentials, auto-gen
 ```bash
 git clone https://github.com/erp-mafia/accounted.git
 cd accounted
-cp .env.docker.example .env
+cp docker/.env.example .env
 ```
 
 Edit `.env` with your values:
@@ -151,7 +151,7 @@ curl http://localhost:3000/api/health
 To build the Docker image locally instead of pulling from GHCR:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker/compose.build.yml up --build
 ```
 
 The locally-built image runs **unprivileged** (`USER nextjs`): the entrypoint
@@ -627,7 +627,7 @@ resource controls or a local Compose override. Existing deployments that
 relied on the previous two-CPU cap must reapply it before restarting with the
 new base file. Command-line deployments on Docker Compose 2.20.2 or newer and
 Docker Engine 25.0 or newer can use the version-controlled
-`docker-compose.resources.yml` overlay to restore both the cap and faster
+`docker/compose.resources.yml` overlay to restore both the cap and faster
 startup health checks; older NAS container stacks should keep using the
 portable base file alone.
 

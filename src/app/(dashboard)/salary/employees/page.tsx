@@ -67,7 +67,7 @@ export default function EmployeesPage() {
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         {canWrite && (
-          <Button onClick={openNewEmployee}>
+          <Button size="sm" onClick={openNewEmployee}>
             <Plus className="mr-2 h-4 w-4" />
             {t('new_employee')}
           </Button>

@@ -330,13 +330,8 @@ export function CompanyMigrationResetDialog({
             {t('danger_cancel')}
           </Button>
           {eligibility?.eligible ? (
-            <Button variant="destructive" onClick={handleReset} disabled={!canReset}>
-              {isResetting ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('reset_resetting')}
-                </>
-              ) : t('reset_submit')}
+            <Button variant="destructive" onClick={handleReset} disabled={!canReset} loading={isResetting}>
+              {isResetting ? t('reset_resetting') : t('reset_submit')}
             </Button>
           ) : null}
         </DialogFooter>

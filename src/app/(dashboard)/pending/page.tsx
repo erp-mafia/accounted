@@ -10,7 +10,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { CHECKBOX_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useRangeSelect } from '@/lib/hooks/use-range-select'
 import {
   SlideOver,
@@ -41,7 +41,6 @@ import {
   Bot,
   Check,
   ChevronRight,
-  Info,
   Loader2,
   Lock,
   MessageSquare,
@@ -108,14 +107,12 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
 
 // Concept gact buttons (scene 11): tinted outline pills under the op text.
 // The tint is sanctioned here by the concept spec: approve reads sage,
-// reject terracotta, details neutral.
+// reject terracotta. Details has no pill: the whole row opens them.
 const GACT_CLASS =
   'inline-flex items-center gap-1.5 rounded-full border px-3.5 py-[5px] text-xs transition-colors duration-150 disabled:pointer-events-none disabled:opacity-50'
 const GACT_OK_CLASS = 'border-success/40 text-success hover:bg-success/10'
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
 const GACT_NO_CLASS = 'border-destructive/40 text-destructive hover:bg-destructive/10'
-const GACT_NEUTRAL_CLASS =
-  'border-border text-muted-foreground hover:bg-secondary/40 hover:text-foreground'
 
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
@@ -704,6 +701,7 @@ export default function PendingOperationsPage() {
     return [
       operationLabel(op.operation_type, t),
       isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
+      op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: op.agent_metadata.skills_loaded.join(', ') }) : null,
       formatRelativeTime(op.created_at),
     ]
       .filter(Boolean)
@@ -729,7 +727,7 @@ export default function PendingOperationsPage() {
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         {activeTab === 'pending' && bulkEligible.length > 0 && (
-          <Button
+          <Button size="sm"
             disabled={isBulkCommitting || isRejecting}
             onClick={() => {
               setSelectedIds(new Set(bulkEligibleIds))
@@ -754,7 +752,6 @@ export default function PendingOperationsPage() {
           <Button
             size="sm"
             variant="ghost"
-            className="h-7 px-2 text-xs"
             onClick={() => {
               setConversationFilter(null)
               if (typeof window !== 'undefined') {
@@ -785,7 +782,7 @@ export default function PendingOperationsPage() {
           <Button
             size="sm"
             variant="ghost"
-            className="h-8 gap-1.5 px-2 text-xs text-muted-foreground"
+            className="gap-1.5 text-muted-foreground"
             onClick={toggleSortOrder}
             aria-pressed={sortOrder === 'asc'}
             title={sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
@@ -940,28 +937,30 @@ export default function PendingOperationsPage() {
                     >
                       {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
                     </span>
-                    <Badge
-                      variant={
-                        isAutoExpired(op)
-                          ? 'secondary'
-                          : op.status === 'committed'
-                            ? 'success'
+                    {/* Chips mark exceptions: an approved operation is the
+                        normal outcome and reads as muted text. */}
+                    {op.status === 'committed' && !isAutoExpired(op) ? (
+                      <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">{t('badge_approved')}</span>
+                    ) : (
+                      <Badge
+                        variant={
+                          isAutoExpired(op)
+                            ? 'secondary'
                             : op.status === 'failed_partial'
                               ? 'warning'
                               : 'destructive'
-                      }
-                      className="mt-0.5 shrink-0 font-normal"
-                    >
-                      {isAutoExpired(op)
-                        ? t('badge_auto_expired')
-                        : op.status === 'committed'
-                          ? t('badge_approved')
+                        }
+                        className="mt-0.5 shrink-0 font-normal"
+                      >
+                        {isAutoExpired(op)
+                          ? t('badge_auto_expired')
                           : op.status === 'failed_partial'
                             ? t('badge_failed_partial')
                             : t('badge_rejected')}
-                    </Badge>
+                      </Badge>
+                    )}
                     <div className="min-w-0 flex-1">
-                      <div className="text-[13.5px] leading-snug">{op.title}</div>
+                      <div className="text-[13px] leading-snug">{op.title}</div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
                         {sub}
                         {op.status === 'rejected' && op.rejection_reason
@@ -979,8 +978,8 @@ export default function PendingOperationsPage() {
                     </div>
                     <ChevronRight
                       className={cn(
-                        'mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-all duration-200',
-                        detailOpId === op.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+                        'mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-opacity',
+                        detailOpId === op.id ? 'opacity-100' : HOVER_REVEAL_CLASS,
                       )}
                     />
                   </div>
@@ -1040,7 +1039,7 @@ export default function PendingOperationsPage() {
                     <div className="pt-0.5 text-[11px] uppercase tracking-[0.07em] text-muted-foreground">
                       {sourceLine(op)}
                     </div>
-                    <div className="mt-1 text-[13.5px] leading-snug">{op.title}</div>
+                    <div className="mt-1 text-[13px] leading-snug">{op.title}</div>
                     {showHighRiskWarning && (
                       <p className="mt-1 flex items-start gap-1 text-xs text-destructive">
                         <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -1085,30 +1084,18 @@ export default function PendingOperationsPage() {
                         <X className="h-3.5 w-3.5" />
                         {t('reject')}
                       </button>
-                      <button
-                        type="button"
-                        className={cn(GACT_CLASS, GACT_NEUTRAL_CLASS)}
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setDetailOpId(op.id)
-                        }}
-                      >
-                        <Info className="h-3.5 w-3.5" />
-                        {t('details_btn')}
-                      </button>
                     </div>
                   </div>
-                  {/* Risk chip (concept op-risk) */}
-                  <Badge
-                    variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
-                    className="mt-1 shrink-0 font-normal"
-                  >
-                    {op.risk_level === 'high'
-                      ? t('badge_high_risk')
-                      : op.risk_level === 'medium'
-                        ? t('badge_medium_risk')
-                        : t('badge_low_risk')}
-                  </Badge>
+                  {/* Risk chip (concept op-risk), exceptions only: low risk is
+                      the normal case and a chip on every row said nothing. */}
+                  {op.risk_level !== 'low' && (
+                    <Badge
+                      variant={op.risk_level === 'high' ? 'destructive' : 'outline'}
+                      className="mt-1 shrink-0 font-normal"
+                    >
+                      {op.risk_level === 'high' ? t('badge_high_risk') : t('badge_medium_risk')}
+                    </Badge>
+                  )}
                 </div>
               )
             })}
@@ -1321,10 +1308,8 @@ export default function PendingOperationsPage() {
             <Button variant="outline" onClick={() => setRejectTarget(null)} disabled={isRejecting}>
               Avbryt
             </Button>
-            <Button variant="destructive" onClick={handleReject} disabled={isRejecting}>
-              {isRejecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : rejectTarget === 'bulk' ? (
+            <Button variant="destructive" onClick={handleReject} loading={isRejecting}>
+              {rejectTarget === 'bulk' ? (
                 t('reject_count', { count: selectedCount })
               ) : (
                 'Avvisa'

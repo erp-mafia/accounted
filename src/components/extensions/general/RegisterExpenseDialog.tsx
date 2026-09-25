@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -300,8 +299,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             {t('expense_cancel')}
           </Button>
-          <Button onClick={handleSubmit} disabled={!canSubmit}>
-            {isSubmitting && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          <Button onClick={handleSubmit} disabled={!canSubmit} loading={isSubmitting}>
             {t('expense_confirm')}
           </Button>
         </DialogFooter>

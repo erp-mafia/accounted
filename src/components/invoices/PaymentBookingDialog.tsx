@@ -24,7 +24,8 @@ import { proposePaymentLines, resolveInvoicePaymentSourceType } from '@/lib/book
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
-import { Plus, Trash2, Loader2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
@@ -381,11 +382,11 @@ export default function PaymentBookingDialog({
             </div>
             <ul className="space-y-2">
               {duplicateCandidates.map((c) => {
-                const reasonVariant: 'success' | 'secondary' | 'outline' | 'warning' =
+                const reasonVariant: 'muted' | 'secondary' | 'outline' | 'warning' =
                   c.match_reason === 'already_booked'
                     ? 'warning'
                     : c.match_reason === 'ocr_exact' || c.match_reason === 'aggregate_exact'
-                      ? 'success'
+                      ? 'muted'
                       : c.match_reason === 'name_amount_fuzzy'
                         ? 'secondary'
                         : 'outline'
@@ -401,7 +402,11 @@ export default function PaymentBookingDialog({
                   >
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant={reasonVariant}>{MATCH_REASON_LABEL[c.match_reason]}</Badge>
+                        {reasonVariant === 'muted' ? (
+                          <span className="text-xs text-muted-foreground">{MATCH_REASON_LABEL[c.match_reason]}</span>
+                        ) : (
+                          <Badge variant={reasonVariant}>{MATCH_REASON_LABEL[c.match_reason]}</Badge>
+                        )}
                         <span className="text-sm tabular-nums text-muted-foreground">
                           {formatDate(c.date)}
                         </span>
@@ -470,8 +475,11 @@ export default function PaymentBookingDialog({
             </TabsContent>
             <TabsContent value="new" className="mt-4">
               {!isInitialized ? (
-                <div className="flex items-center justify-center py-12">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <div className="space-y-3 py-2">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-1/2" />
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -504,8 +512,8 @@ export default function PaymentBookingDialog({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="sm"
-                      className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                      size="icon-sm"
+                      className="shrink-0 -mr-1 -mt-1"
                       onClick={() => removeLine(index)}
                       disabled={lines.length <= 2}
                     >
@@ -589,8 +597,8 @@ export default function PaymentBookingDialog({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                    size="icon-sm"
+                    className="text-muted-foreground hover:text-destructive"
                     onClick={() => removeLine(index)}
                     disabled={lines.length <= 2}
                   >
@@ -616,9 +624,9 @@ export default function PaymentBookingDialog({
             <div className="flex items-center justify-between border-t pt-3">
               <div className="flex items-center gap-2">
                 {isBalanced ? (
-                  <Badge variant="success">
+                  <span className="text-xs text-muted-foreground">
                     {t('balanced_badge')}
-                  </Badge>
+                  </span>
                 ) : (
                   <Badge variant="destructive">
                     {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
@@ -637,25 +645,23 @@ export default function PaymentBookingDialog({
 
         {(duplicateCandidates && duplicateCandidates.length > 0) || tab === 'new' ? (
           <DialogFooter>
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting} className="w-full sm:w-auto min-h-11">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
               {t('cancel')}
             </Button>
             {duplicateCandidates && duplicateCandidates.length > 0 ? (
               <Button
                 onClick={handleForceSubmit}
-                disabled={!isBalanced || isSubmitting}
-                className="w-full sm:w-auto min-h-11"
+                disabled={!isBalanced}
+                loading={isSubmitting}
               >
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('book_anyway')}
               </Button>
             ) : (
               <Button
                 onClick={handleSubmit}
-                disabled={!isBalanced || isSubmitting || !isInitialized}
-                className="w-full sm:w-auto min-h-11"
+                disabled={!isBalanced || !isInitialized}
+                loading={isSubmitting}
               >
-                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {t('confirm_and_book')}
               </Button>
             )}

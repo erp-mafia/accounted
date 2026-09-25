@@ -253,7 +253,7 @@ export async function detectSkvDisconnected(
       severity: 'error',
       messageKey: 'skv_disconnected',
       actionKey: 'skv_disconnected_action',
-      actionHref: '/settings/tax',
+      actionHref: '/settings/skatteverket',
     }
   } catch (err) {
     return logAndNull(

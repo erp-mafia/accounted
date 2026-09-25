@@ -239,8 +239,9 @@ export function SkattekontoMatchDialog({
                       )}
                     </TableCell>
                     <TableCell>
+                      {/* Chips mark exceptions: posted is the normal case. */}
                       {c.status === 'posted' ? (
-                        <Badge variant="secondary">{t('status_posted')}</Badge>
+                        <span className="text-muted-foreground">{t('status_posted')}</span>
                       ) : c.status === 'draft' ? (
                         <Badge variant="outline">{t('status_draft')}</Badge>
                       ) : (

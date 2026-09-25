@@ -15,7 +15,6 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -297,8 +296,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Avbryt
           </Button>
-          <Button onClick={submit} disabled={isSubmitting || !category || bookable.length === 0}>
-            {isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+          <Button onClick={submit} disabled={!category || bookable.length === 0} loading={isSubmitting}>
             Bokför {bookable.length} underlag
           </Button>
         </DialogFooter>

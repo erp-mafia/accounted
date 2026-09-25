@@ -56,6 +56,8 @@ interface EntryHead {
   entry_date: string
   description: string | null
   source_type: string | null
+  reverses_id: string | null
+  reversed_by_id: string | null
 }
 
 interface LedgerLineRow {
@@ -151,7 +153,7 @@ async function fetchEntryHeads(
   for (const part of chunk(Array.from(new Set(ids)), ENTRY_ID_CHUNK)) {
     const { data, error } = await supabase
       .from('journal_entries')
-      .select('id, status, voucher_number, voucher_series, entry_date, description, source_type')
+      .select('id, status, voucher_number, voucher_series, entry_date, description, source_type, reverses_id, reversed_by_id')
       .eq('company_id', companyId)
       .in('id', part)
     if (error) throw new Error(`Kunde inte läsa verifikat: ${error.message}`)
@@ -173,7 +175,7 @@ async function fetchLedgerEntries(
 ): Promise<Map<string, { head: EntryHead; amount: number }>> {
   const lines = await fetchEntryLines<LedgerLineRow>({
     supabase,
-    entryColumns: 'id, status, voucher_number, voucher_series, entry_date, description, source_type',
+    entryColumns: 'id, status, voucher_number, voucher_series, entry_date, description, source_type, reverses_id, reversed_by_id',
     lineColumns: 'debit_amount, credit_amount',
     filterEntries: (q: EntryLinesQuery) => {
       let query = q
@@ -476,14 +478,35 @@ export async function getSkattekontoReconciliationStatus(
     }
   }
 
-  // Ledger entries in the comparable history that no live link settles.
+  // A complete, unlinked storno pair settles itself. Keep both entries in
+  // the ledger balance, but do not ask for two external events that never
+  // happened. Requiring both sides inside the comparable history preserves
+  // outstanding movement at its date boundaries; a live external link or
+  // a nonzero pair must still be explained.
+  const settledStornoIds = new Set<string>()
+  for (const { head, amount } of ledgerEntries.values()) {
+    if (head.status !== 'reversed' || !head.reversed_by_id || liveLinkedEntryIds.has(head.id)) continue
+    const reversal = ledgerEntries.get(head.reversed_by_id)
+    if (
+      !reversal ||
+      reversal.head.status !== 'posted' ||
+      reversal.head.source_type !== 'storno' ||
+      reversal.head.reverses_id !== head.id ||
+      liveLinkedEntryIds.has(reversal.head.id) ||
+      roundOre(amount + reversal.amount) !== 0
+    ) continue
+    settledStornoIds.add(head.id)
+    settledStornoIds.add(reversal.head.id)
+  }
+
+  // Ledger entries in the comparable history that no live link or storno settles.
   let unlinkedLedgerTotal = 0
   const awaitingFrom = addDaysIso(cutoffDate, -AWAITING_EXTERNAL_DAYS)
   const sortedLedger = Array.from(ledgerEntries.values()).sort((a, b) =>
     a.head.entry_date < b.head.entry_date ? -1 : a.head.entry_date > b.head.entry_date ? 1 : 0,
   )
   for (const { head, amount } of sortedLedger) {
-    if (liveLinkedEntryIds.has(head.id)) continue
+    if (liveLinkedEntryIds.has(head.id) || settledStornoIds.has(head.id)) continue
     if (amount === 0) continue
     unlinkedLedgerTotal = roundOre(unlinkedLedgerTotal + amount)
     counts.unmatched_ledger++

@@ -31,7 +31,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildExistingTransactionMaps, type DescBucket } from '@/lib/transactions/ingest'
+import { buildExistingTransactionMaps, consumeByExternalId, type DescBucket } from '@/lib/transactions/ingest'
 import {
   contentBucketKey,
   descriptionsBridge,
@@ -87,6 +87,10 @@ export async function previewDuplicates(
       .eq('company_id', companyId)
       .in('external_id', chunk)
     data?.forEach((r) => existingExternalIds.add(r.external_id))
+  }
+  // Reserve every stored row an incoming id names before the loop, as ingest does.
+  for (const raw of raws) {
+    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
   }
 
   const flag = (index: number, reason: 'external_id' | 'content_bridge') => {

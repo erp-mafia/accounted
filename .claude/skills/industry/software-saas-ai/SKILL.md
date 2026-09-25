@@ -113,7 +113,7 @@ Verifierat mot BAS 2025 officiell kontoplan (bas.se/kontoplaner). Avvikelser fr�
 
 **Avskrivningstid.** ÅRL 4 kap 4 § 2 st: om nyttjandeperiod inte kan fastställas tillförlitligt antas 5 år. I praktiken används 3-5 år för mjukvara.
 
-**Strategiskt K2 vs K3-val.** Bolag med betydande utvecklingsutgifter och optionsprogram bör välja K3 från start. **Kritisk förändring 2026:** Nya K2 1.1A g (BFNAR 2025:1, ikraft för räkenskapsår som inleds efter 2025-12-31) förbjuder K2 för bolag som förvärvat varor/tjänster mot aktierelaterade ersättningar under räkenskapsåret. SaaS-startups med personaloptioner kan inte längre välja K2.
+**Strategiskt K2 vs K3-val.** Bolag med betydande utvecklingsutgifter och optionsprogram bör välja K3 från start. **Kritisk förändring 2026:** Nya K2 1.1A g (BFNAR 2025:2, ikraft för räkenskapsår som inleds efter 2025-12-31) förbjuder K2 för bolag som förvärvat varor/tjänster mot aktierelaterade ersättningar under räkenskapsåret. SaaS-startups med personaloptioner kan inte längre välja K2.
 
 **Stoppregel K3 35.16/35.25.** Kostnadsförda utvecklingsutgifter i tidigare räkenskapsår får aldrig retroaktivt aktiveras vid modellbyte.
 
@@ -191,7 +191,7 @@ Effekt: skatte- och socialavgiftsbefrielse vid förvärv och utnyttjande; vinst 
 - Sociala avgifter på samma sätt som ersättningen (26.20).
 - Värderingsmodell (Black-Scholes, binomial) ej föreskriven i K3 men praxis.
 
-**K2 (BFNAR 2016:10) saknar regler för aktierelaterade ersättningar.** Nuvarande K2: tolkning utifrån grundprinciper, typiskt ingen kostnad vid equity-settled. **Nya K2 (BFNAR 2025:1) ikraft för räkenskapsår som inleds efter 2025-12-31, p 1.1A g: bolag som under räkenskapsåret förvärvat varor/tjänster mot aktierelaterade ersättningar får inte tillämpa K2.** Byte till K3 obligatoriskt.
+**K2 (BFNAR 2016:10) saknar regler för aktierelaterade ersättningar.** Nuvarande K2: tolkning utifrån grundprinciper, typiskt ingen kostnad vid equity-settled. **Nya K2 (BFNAR 2025:2) ikraft för räkenskapsår som inleds efter 2025-12-31, p 1.1A g: bolag som under räkenskapsåret förvärvat varor/tjänster mot aktierelaterade ersättningar får inte tillämpa K2.** Byte till K3 obligatoriskt.
 
 Skatteverket: https://www4.skatteverket.se/rattsligvagledning/edition/2024.3/399929.html (KPO); https://www4.skatteverket.se/rattsligvagledning/edition/2024.3/324733.html (aktierelaterade ersättningar).
 
@@ -360,7 +360,7 @@ Månadsvis 2026-01-31, 02-28, ..., 2026-12-31 (12 ggr × 10 000):
 
 **Åtgärd.** Byte till K3 (BFNAR 2012:1) krävs för aktivering. Då tillämpas K3 18.12 (sex aktiveringskriterier), 18.8 (forskningsfas vs utvecklingsfas), och ÅRL 4 kap 2 §: motsvarande belopp överförs från fritt EK till **fond för utvecklingsutgifter** (konto 2089). Stoppregel K3 35.16/35.25: kostnadsförda utvecklingsutgifter i tidigare räkenskapsår får aldrig retroaktivt aktiveras.
 
-**Bonusvarning från 2026.** Nya K2 1.1A g (BFNAR 2025:1) tvingar redan bolag med personaloptionsprogram över till K3. SaaS-startups med både utvecklingskostnader och optioner bör därför inte starta i K2.
+**Bonusvarning från 2026.** Nya K2 1.1A g (BFNAR 2025:2) tvingar redan bolag med personaloptionsprogram över till K3. SaaS-startups med både utvecklingskostnader och optioner bör därför inte starta i K2.
 
 ## 6. Öppna frågor
 

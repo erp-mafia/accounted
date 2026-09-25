@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateCustomerSchema } from '@/lib/api/schemas'
 import { validateVatNumber, vatValidationColumns } from '@/lib/vat/vies-client'
+import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { encryptCustomerPersonalNumber, maskCustomerRow } from '@/lib/customers/protect-personal-number'
@@ -250,6 +251,10 @@ export const PATCH = withRouteContext(
         opLog.warn('auto-VIES validation failed on customer update', err as Error)
       }
     }
+
+    // Type, country, VAT number or its validation may have changed: open
+    // drafts to this customer re-derive their VAT header from it.
+    await syncDraftVatHeadersForCustomer(supabase, companyId, id)
 
     return NextResponse.json({ data: maskCustomerRow(data) })
   },

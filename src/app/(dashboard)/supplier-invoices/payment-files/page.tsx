@@ -24,7 +24,7 @@ import {
   SlideOverFooter,
   SlideOverHeader,
 } from '@/components/ui/slide-over'
-import { FileText, Loader2 } from 'lucide-react'
+import { FileText } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { downloadFile } from '@/lib/browser/download-file'
@@ -337,7 +337,7 @@ export default function PaymentFilesPage() {
                     return (
                       <div
                         key={item.id}
-                        className="flex items-center gap-3 border-b border-border/60 py-2.5 text-[13px]"
+                        className="flex items-center gap-3 border-b border-border py-2.5 text-[13px]"
                       >
                         <div className="min-w-0 flex-1">
                           <Link
@@ -390,8 +390,7 @@ export default function PaymentFilesPage() {
                     </Button>
                   )}
                   {detail.status === 'created' && canWrite && detailUnsettled > 0 && (
-                    <Button onClick={handleMarkAllPaid} disabled={markingAll}>
-                      {markingAll && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                    <Button onClick={handleMarkAllPaid} loading={markingAll}>
                       {t('mark_all_paid', { count: detailUnsettled })}
                     </Button>
                   )}
@@ -428,8 +427,7 @@ export default function PaymentFilesPage() {
             >
               {t('cancel_confirm_abort')}
             </Button>
-            <Button variant="destructive" onClick={handleCancel} disabled={cancelling}>
-              {cancelling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button variant="destructive" onClick={handleCancel} loading={cancelling}>
               {t('cancel_confirm_action')}
             </Button>
           </DialogFooter>

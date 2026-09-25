@@ -880,7 +880,7 @@ export default function InvoicesPage() {
             // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
             // belopp) has its own page; the file dialog still opens from
             // ?rot-rut=1 here for existing links and the Att göra rows.
-            <Button
+            <Button size="sm"
               type="button"
               variant="outline"
               onClick={() => router.push('/invoices/rot-rut')}
@@ -891,7 +891,7 @@ export default function InvoicesPage() {
           )}
           {isQuotesList ? (
             // One way to make a quote, so a plain button: no modes to remember.
-            <Button
+            <Button size="sm"
               type="button"
               onClick={openNewQuote}
               disabled={!canWrite}
@@ -974,8 +974,8 @@ export default function InvoicesPage() {
             <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon"
-                className={cn('h-8 w-8 text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
+                size="icon-sm"
+                className={cn('text-muted-foreground hover:text-foreground', groupMode !== 'none' && 'text-foreground')}
                 aria-label={t('group_picker_aria')}
                 title={t('group_by')}
               >

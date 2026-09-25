@@ -247,6 +247,59 @@ export function getVatRules(
   }
 }
 
+/** The invoice header columns that follow from the customer and the line rates. */
+export interface InvoiceVatHeader {
+  vat_treatment: VatTreatment
+  moms_ruta: string | null
+  reverse_charge_text: string | null
+}
+
+/**
+ * The one derivation of an invoice's VAT header (treatment, ruta, statutory
+ * notice) from the customer as it is now and the rates on the priced lines.
+ * The invoice builder writes it on every create and draft edit, and an open
+ * draft is re-derived with it when its customer changes (a VIES check that
+ * finally passes), so the two paths can never disagree.
+ *
+ * Reverse charge / export notation must describe what the invoice actually
+ * does. With a taxed-where-performed line permitted, an invoice to a foreign
+ * business can carry only Swedish VAT: that supply is neither reverse-charged
+ * nor exported, so the header must not claim it is. "Omvänd
+ * betalningsskyldighet" (ML 17 kap 24 § p.11) next to charged Swedish VAT is
+ * a false statement: it tells the buyer to self-assess tax the seller already
+ * collected, and the buyer then cannot deduct it either.
+ *
+ * A mixed invoice (0% consulting + 12% hotel) keeps the notation: its
+ * zero-rated lines genuinely ARE reverse-charged, and the notation is required
+ * whenever the buyer is liable for any part. The per-rate booking splits them
+ * correctly on its own (generatePerRateLines only applies the invoice-level
+ * treatment to rate-0 lines), so 3308 and 3002/2621 both land in the right
+ * ruta. No priced lines at all (text-only document) charges nothing either
+ * way: keep the customer's treatment rather than restamping it as domestic.
+ *
+ * A non-momsregistrerad seller books every sale as momsfri ('exempt').
+ */
+export function deriveInvoiceVatHeader(
+  /** getVatRules() for the customer as it is now. */
+  vatRules: VatRule,
+  lineVatRates: number[],
+  options: { vatRegistered: boolean },
+): InvoiceVatHeader {
+  if (!options.vatRegistered) {
+    return { vat_treatment: 'exempt', moms_ruta: null, reverse_charge_text: null }
+  }
+  const isSpecialTreatment =
+    vatRules.treatment === 'reverse_charge' || vatRules.treatment === 'export'
+  const hasZeroRatedLine = lineVatRates.length === 0 || lineVatRates.includes(0)
+  const headerRules =
+    !isSpecialTreatment || hasZeroRatedLine ? vatRules : getVatRules('swedish_business')
+  return {
+    vat_treatment: headerRules.treatment,
+    moms_ruta: headerRules.momsRuta,
+    reverse_charge_text: headerRules.reverseChargeText || null,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Why the treatment is what it is
 // ---------------------------------------------------------------------------

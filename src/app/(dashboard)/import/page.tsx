@@ -12,11 +12,11 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SegmentedControl } from '@/components/ui/segmented-control'
+import { EmptyState } from '@/components/ui/empty-state'
 import {
   Dialog,
   DialogContent,
@@ -2299,7 +2299,7 @@ function CSVDataImportWizard() {
                   'relative h-9 rounded-lg border px-4 text-sm font-medium transition-colors',
                   selected
                     ? 'border-foreground bg-foreground text-background'
-                    : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-muted',
+                    : 'border-border bg-card text-foreground hover:border-foreground/30 hover:bg-secondary/60',
                 )}
               >
                 {opt.label}
@@ -2467,6 +2467,7 @@ export default function ImportPage() {
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
+            <p className="mt-2">{t('pgnote')}</p>
           </HelpPopover>
         }
       />
@@ -2494,7 +2495,7 @@ export default function ImportPage() {
                     sub={t('psd2_description')}
                     chip={
                       hasBankSync ? (
-                        <Badge variant="success" className="font-normal">{t('psd2_recommended')}</Badge>
+                        <span className="text-xs text-muted-foreground">{t('psd2_recommended')}</span>
                       ) : (
                         <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium leading-none text-muted-foreground">
                           {t('psd2_requires_subscription')}
@@ -2613,7 +2614,6 @@ export default function ImportPage() {
                   <BankFileImportHistory />
                 </div>
               )}
-              <p className="mt-4 px-1 text-xs leading-5 text-muted-foreground">{t('pgnote')}</p>
             </div>
           ) : (
             <div>
@@ -2726,79 +2726,59 @@ export default function ImportPage() {
         hasBankingExtension && BankingPanel ? (
           <BankingPanel />
         ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <Landmark className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <p className="mb-1 font-medium">Bankintegration (PSD2) är inte aktiverad</p>
-              <p className="mb-4 max-w-md text-sm text-muted-foreground">
-                Aktivera tillägget Enable Banking för att koppla ditt bankkonto, eller importera
-                transaktioner manuellt via bankfil.
-              </p>
-              <Button variant="outline" onClick={() => setMode('bank')}>
-                Importera bankfil istället
-              </Button>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={Landmark}
+            title={t('psd2_not_enabled_title')}
+            description={t('psd2_not_enabled_description')}
+          >
+            <Button variant="outline" onClick={() => setMode('bank')}>
+              {t('psd2_not_enabled_cta')}
+            </Button>
+          </EmptyState>
         )
       )}
       {mode === 'stripe' && (
         hasStripeExtension && StripePanel ? (
           <StripePanel />
         ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <CreditCard className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <p className="mb-1 font-medium">{t('stripe_not_enabled_title')}</p>
-              <p className="max-w-md text-sm text-muted-foreground">
-                {t('stripe_not_enabled_description')}
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={CreditCard}
+            title={t('stripe_not_enabled_title')}
+            description={t('stripe_not_enabled_description')}
+          />
         )
       )}
       {mode === 'woocommerce' && (
         hasWooCommerceExtension && WooCommercePanel ? (
           <WooCommercePanel />
         ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <ShoppingCart className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <p className="mb-1 font-medium">{t('woocommerce_not_enabled_title')}</p>
-              <p className="max-w-md text-sm text-muted-foreground">
-                {t('woocommerce_not_enabled_description')}
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={ShoppingCart}
+            title={t('woocommerce_not_enabled_title')}
+            description={t('woocommerce_not_enabled_description')}
+          />
         )
       )}
       {mode === 'shopify' && (
         hasShopifyExtension && ShopifyPanel ? (
           <ShopifyPanel />
         ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <ShoppingBag className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <p className="mb-1 font-medium">{t('shopify_not_enabled_title')}</p>
-              <p className="max-w-md text-sm text-muted-foreground">
-                {t('shopify_not_enabled_description')}
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={ShoppingBag}
+            title={t('shopify_not_enabled_title')}
+            description={t('shopify_not_enabled_description')}
+          />
         )
       )}
       {mode === 'zettle' && (
         hasZettleExtension && ZettlePanel ? (
           <ZettlePanel />
         ) : (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12 text-center">
-              <ShoppingBag className="mb-4 h-10 w-10 text-muted-foreground/40" />
-              <p className="mb-1 font-medium">{t('zettle_not_enabled_title')}</p>
-              <p className="max-w-md text-sm text-muted-foreground">
-                {t('zettle_not_enabled_description')}
-              </p>
-            </CardContent>
-          </Card>
+          <EmptyState
+            icon={ShoppingBag}
+            title={t('zettle_not_enabled_title')}
+            description={t('zettle_not_enabled_description')}
+          />
         )
       )}
       {mode === 'bank' && <BankFileImportWizard />}
@@ -2875,7 +2855,7 @@ function ImportRow({
 // so "Beta" reads identically wherever it appears.
 function BetaChip({ label }: { label: string }) {
   return (
-    <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">
+    <span className="rounded-full bg-muted/60 px-1.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground/70">
       {label}
     </span>
   )

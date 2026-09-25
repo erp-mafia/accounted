@@ -13,7 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, FileText, Inbox, Loader2, X } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
@@ -201,8 +201,8 @@ export default function TransactionAttachDocumentDialog({
               )}
               <Button
                 variant="ghost"
-                size="sm"
-                className="h-6 w-6 p-0 shrink-0"
+                size="icon-sm"
+                className="shrink-0"
                 aria-label={t('selected_remove')}
                 onClick={() => setPickedDoc(null)}
               >
@@ -227,15 +227,8 @@ export default function TransactionAttachDocumentDialog({
           <Button variant="outline" disabled={isAttaching} onClick={() => onOpenChange(false)}>
             {t('cancel')}
           </Button>
-          <Button disabled={!selectedDocumentId || isAttaching} onClick={handleAttach}>
-            {isAttaching ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('attaching')}
-              </>
-            ) : (
-              t('confirm')
-            )}
+          <Button disabled={!selectedDocumentId} loading={isAttaching} onClick={handleAttach}>
+            {isAttaching ? t('attaching') : t('confirm')}
           </Button>
         </DialogFooter>
 

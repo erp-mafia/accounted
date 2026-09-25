@@ -36,7 +36,7 @@ export function DetailPageSkeleton({ cards = 2, className }: DetailPageSkeletonP
           <div key={i} className="space-y-0">
             <Skeleton className="mb-3 h-3 w-24" />
             {[0, 1, 2].map((j) => (
-              <div key={j} className="flex items-center gap-8 border-b border-border/60 py-3">
+              <div key={j} className="flex items-center gap-8 border-b border-border py-3">
                 <Skeleton className="h-3.5 w-32" />
                 <Skeleton className="h-3.5 w-48" />
               </div>

@@ -24,11 +24,11 @@ beforeEach(() => {
   reset()
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'http://localhost'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'key'
-  process.env.ARKIV_COMPANY_IDS = 'co-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1'
 })
 
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
 })
 
 describe('GET /api/arkiv/derive/cron', () => {

@@ -234,7 +234,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
       // data-agent-ui: opening the assistant must not dismiss an open
       // non-modal dialog (DialogContent treats this as inside).
       data-agent-ui=""
-      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-lg bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
+      className={`fixed right-4 z-[45] ${visibilityClass} h-12 max-w-[calc(100vw-2rem)] items-stretch rounded-full bg-foreground text-background shadow-[var(--shadow-md)] bottom-[calc(var(--bottom-nav-h)+1rem)] md:bottom-4 md:[body[data-page-bottom-bar]_&]:bottom-20`}
     >
       <button
         onClick={handleClick}

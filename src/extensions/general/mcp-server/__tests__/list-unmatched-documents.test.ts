@@ -151,6 +151,26 @@ describe('gnubok_list_unmatched_documents', () => {
     expect(result.items[0].pages).toBeNull()
   })
 
+  it('marks a document a waiting link proposal already holds, so it is not proposed twice', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'inbox-4', document_id: 'doc-4', source: 'email', email_from: null, email_subject: null, email_received_at: null, created_at: '2026-08-22T00:00:00Z', document_attachments: { file_name: 'standup.pdf' }, extracted_data: null },
+        { id: 'inbox-5', document_id: 'doc-5', source: 'email', email_from: null, email_subject: null, email_received_at: null, created_at: '2026-08-21T00:00:00Z', document_attachments: { file_name: 'other.pdf' }, extracted_data: null },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // no document pinned to a transaction yet
+    enqueue({ data: [{ id: 'op-9d32', params: { document_id: 'doc-4', transaction_id: 'tx-first' } }], error: null }) // waiting links
+    enqueue({ data: [], error: null }) // attached transactions
+
+    const result = (await tool.execute({ limit: 20 }, 'company-1', 'user-1', supabase as never)) as {
+      items: Array<{ document_id: string; pending_link: unknown }>
+    }
+    expect(result.items.find((i) => i.document_id === 'doc-4')?.pending_link).toEqual({ operation_id: 'op-9d32', transaction_id: 'tx-first', journal_entry_id: null })
+    expect(result.items.find((i) => i.document_id === 'doc-5')?.pending_link).toBeNull()
+  })
+
   it('returns an empty result when the inbox query has nothing pending', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [], error: null })

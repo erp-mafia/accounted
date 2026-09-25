@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, CheckCircle, XCircle, Lock } from 'lucide-react'
+import { CheckCircle, XCircle, Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -406,11 +406,10 @@ export default function CustomerForm({
                     type="button"
                     variant="outline"
                     onClick={handleValidateVat}
-                    disabled={!vatNumber || isValidatingVat}
+                    disabled={!vatNumber}
+                    loading={isValidatingVat}
                   >
-                    {isValidatingVat ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : vatValidationResult?.valid ? (
+                    {isValidatingVat ? null : vatValidationResult?.valid ? (
                       <CheckCircle className="h-4 w-4 text-success" />
                     ) : vatValidationResult?.valid === false ? (
                       <XCircle className="h-4 w-4 text-destructive" />
@@ -649,14 +648,12 @@ export default function CustomerForm({
       <div className="flex justify-end gap-2">
         <Button
           type="submit"
-          disabled={isLoading || !canWrite}
+          disabled={!canWrite}
+          loading={isLoading}
           title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
         >
           {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              {t('submit_saving')}
-            </>
+            t('submit_saving')
           ) : !canWrite ? (
             <>
               <Lock className="mr-2 h-4 w-4" />

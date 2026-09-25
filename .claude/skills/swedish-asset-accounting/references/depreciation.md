@@ -1,5 +1,14 @@
 # Depreciation Methods & Tax Rules
 
+<!-- toc -->
+**Contents**
+
+- [Planenlig avskrivning (Book Depreciation)](#planenlig-avskrivning-book-depreciation)
+- [Överavskrivning (Excess Tax Depreciation)](#överavskrivning-excess-tax-depreciation)
+- [Skattemässig avskrivning (Tax Depreciation)](#skattemässig-avskrivning-tax-depreciation)
+
+<!-- /toc -->
+
 ## Planenlig avskrivning (Book Depreciation)
 
 ÅRL 4 kap. 4 § requires systematic depreciation of all fixed assets with limited useful life.
@@ -26,7 +35,7 @@
 ### Depreciation Start
 
 - **K2 (10.23):** From year asset is *put into use* (tas i bruk). Full annual amount regardless of partial year.
-- **K3 (17.19):** From when asset *can* be used (available for use). Buildings under K2 depreciate even before use.
+- **K3 (17.18):** From when asset *can* be used (available for use). Buildings under K2 depreciate even before use.
 
 ### Component Depreciation (Komponentavskrivning)
 
@@ -52,7 +61,7 @@ When a component is replaced under K3 (17.21-17.22): derecognize old component's
 
 - 7810: Avskrivningar immateriella tillgångar
 - 7820: Avskrivningar byggnader/markanläggningar (7821 byggnader, 7824 markanläggningar)
-- 7830: Avskrivningar maskiner/inventarier (7831-7835 specific types)
+- 7830: Avskrivningar maskiner/inventarier (BAS 2025: 7831-7835 specific types, 7835 = datorer; BAS 2026: only 7831 maskiner och andra tekniska anläggningar and 7832 inventarier, verktyg och installationer, 7833-7835 removed)
 - 7836: Avskrivningar leasade tillgångar
 - 7840: Avskrivningar förbättringsutgifter annans fastighet
 

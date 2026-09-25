@@ -11,7 +11,6 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Loader2 } from 'lucide-react'
 import type { TransactionWithInvoice } from './transaction-types'
 
 interface ExpensePayoutMatchDialogProps {
@@ -79,8 +78,7 @@ export default function ExpensePayoutMatchDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isConfirming}>
             {t('cancel')}
           </Button>
-          <Button onClick={onConfirm} disabled={isConfirming || !match}>
-            {isConfirming && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          <Button onClick={onConfirm} disabled={!match} loading={isConfirming}>
             {t('confirm')}
           </Button>
         </DialogFooter>

@@ -17,7 +17,7 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { CheckCircle2, ExternalLink, Loader2, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
+import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert } from 'lucide-react'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 
@@ -203,14 +203,14 @@ function SkatteverketPersonalConnectionCard() {
     // settings page never navigates, so browser history stays clean and
     // closing the settings afterwards cannot walk Back into the consumed
     // OAuth chain (the "redirected to Skatteverket again" bug).
-    const returnTo = encodeURIComponent('/settings/tax')
+    const returnTo = encodeURIComponent('/settings/skatteverket')
     const url = `/api/extensions/ext/skatteverket/authorize?return_to=${returnTo}`
     const tab = window.open(url, '_blank')
     popupRef.current = tab
     if (!tab) {
       // Tab blocked: fall back to the full-page flow. The callback then
-      // lands on /settings/tax?skv_connected=true, handled by
-      // TaxSettingsContent's query-param effect.
+      // lands on /settings/skatteverket?skv_connected=true, handled by
+      // SkatteverketSettingsContent's query-param effect.
       window.location.href = url
       return
     }
@@ -356,10 +356,10 @@ function SkatteverketPersonalConnectionCard() {
         {status.expired ? (
           <Badge variant="warning">{t('expired')}</Badge>
         ) : (
-          <Badge variant="success">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5" />
             {t('connected')}
-          </Badge>
+          </span>
         )}
         <EnvironmentBadge environment={status.environment} disabled={status.disabled} />
         <SettingsRowEnd>
@@ -552,10 +552,10 @@ function SkatteverketSystemConnectionCard() {
     switch (status) {
       case 'granted':
         return (
-          <Badge variant="success">
-            <CheckCircle2 className="mr-1 h-3 w-3" />
+          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+            <CheckCircle2 className="h-3.5 w-3.5" />
             {t('system_status_granted')}
-          </Badge>
+          </span>
         )
       case 'denied':
         return <Badge variant="destructive">{t('system_status_denied')}</Badge>
@@ -588,8 +588,8 @@ function SkatteverketSystemConnectionCard() {
       )}
 
       <div className="flex flex-wrap items-center gap-4 px-1 py-3">
-        <Button size="sm" variant="outline" onClick={openDeepLink} disabled={linking} title={t('system_deeplink_hint', { appName })}>
-          {linking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ExternalLink className="mr-2 h-4 w-4" />}
+        <Button size="sm" variant="outline" onClick={openDeepLink} loading={linking} title={t('system_deeplink_hint', { appName })}>
+          {!linking && <ExternalLink className="mr-2 h-4 w-4" />}
           {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
         </Button>
         {state.grant_url && (
@@ -603,8 +603,7 @@ function SkatteverketSystemConnectionCard() {
             {t('system_open_ombud')}
           </a>
         )}
-        <Button size="sm" onClick={verify} disabled={verifying}>
-          {verifying && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button size="sm" onClick={verify} loading={verifying}>
           {verifying ? t('system_verifying') : t('system_verify')}
         </Button>
       </div>
@@ -632,9 +631,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   }
   if (environment === 'prod') {
     return (
-      <Badge variant="success">
-        {t('env_prod')}
-      </Badge>
+      <span className="text-xs text-muted-foreground">{t('env_prod')}</span>
     )
   }
   return null

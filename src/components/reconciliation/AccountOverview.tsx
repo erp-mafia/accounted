@@ -450,7 +450,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             <Skeleton className="ml-auto h-3 w-16" />
           </div>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-6 border-b border-border/60 py-3.5">
+            <div key={i} className="flex items-center gap-6 border-b border-border py-3.5">
               <Skeleton className="h-3.5 w-20" />
               <Skeleton className="h-3.5 w-48" />
               <Skeleton className="ml-auto h-3.5 w-20" />
@@ -632,7 +632,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               </div>
               <div
                 className={cn(
-                  'mt-1 text-[20px] font-semibold leading-tight tabular-nums',
+                  'mt-1 text-xl font-semibold leading-tight tabular-nums',
                   tile.tone === 'ok' && 'text-success',
                   tile.tone === 'attn' && 'text-warning',
                 )}
@@ -640,11 +640,11 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
               >
                 {tile.value}
               </div>
-              {tile.sub && <div className="mt-0.5 truncate text-[11.5px] text-muted-foreground">{tile.sub}</div>}
+              {tile.sub && <div className="mt-0.5 truncate text-[11px] text-muted-foreground">{tile.sub}</div>}
             </div>
           ))}
         </div>
-        <p className={cn('text-[13.5px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+        <p className={cn('text-[13px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
           {verdictUnexplained && <span className="ml-1 text-warning">{verdictUnexplained}</span>}
           <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, 'ml-3 text-[12.5px]')}>
@@ -781,7 +781,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
                             <button
                               type="button"
                               onClick={toggle}
-                              className="normal-case tracking-normal text-[12px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                              className="normal-case tracking-normal text-[12.5px] font-normal text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
                             >
                               {folded ? t('show_all', { count: rows.length }) : t('hide')}
                             </button>
@@ -815,7 +815,7 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             </tbody>
           </table>
           {items.has_more && (
-            <p className="px-4 pt-3 text-[12px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
+            <p className="px-4 pt-3 text-[12.5px] text-muted-foreground">{t('truncated', { count: ITEMS_LIMIT })}</p>
           )}
         </div>
       )}

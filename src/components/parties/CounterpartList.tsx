@@ -93,7 +93,7 @@ export function CounterpartList({
                 <tr>
                   <th colSpan={7} scope="colgroup" className="px-4 pb-2 pt-9 text-left font-normal">
                     <p className="text-[13px] font-semibold text-foreground">{t('cp_group_new', { count: rows.length - confirmedCount })}</p>
-                    <p className="mt-0.5 text-[12px] text-muted-foreground">{t('cp_group_new_desc')}</p>
+                    <p className="mt-0.5 text-[12.5px] text-muted-foreground">{t('cp_group_new_desc')}</p>
                   </th>
                 </tr>
               ) : null}
@@ -128,7 +128,7 @@ export function CounterpartList({
                           </span>
                         ) : null}
                       </div>
-                      {detail ? <div className="truncate text-[12px] text-muted-foreground">{detail}</div> : null}
+                      {detail ? <div className="truncate text-[12.5px] text-muted-foreground">{detail}</div> : null}
                     </div>
                   </div>
                 </td>
@@ -143,7 +143,7 @@ export function CounterpartList({
                   {canWrite ? (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className={cn('h-7 w-7', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
+                        <Button variant="ghost" size="icon-sm" className={cn(HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
                           <MoreHorizontal className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>

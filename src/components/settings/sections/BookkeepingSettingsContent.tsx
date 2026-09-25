@@ -7,7 +7,6 @@ import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { PeriodLockingSettings } from '@/components/settings/PeriodLockingSettings'
-import { FiscalYearsManager } from '@/components/settings/FiscalYearsManager'
 import { VoucherSeriesManager } from '@/components/settings/VoucherSeriesManager'
 import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSeriesPerSourceTypeForm'
 import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
@@ -18,6 +17,7 @@ import { SalesOrdersToggle } from '@/components/settings/SalesOrdersToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import {
   SettingsGroup,
+  SettingsReveal,
   SettingsRow,
   SettingsSectionHeader,
   SettingsSelect,
@@ -42,6 +42,10 @@ export function BookkeepingSettingsContent() {
   const [framework, setFramework] = useState<AccountingFramework>(
     company?.accounting_framework ?? 'k2',
   )
+  // The method picked in the form (null until changed): "Bokföring av
+  // fakturor" only applies to faktureringsmetoden, so it folds away under
+  // kontantmetoden instead of offering a choice that does nothing.
+  const [pickedMethod, setPickedMethod] = useState<string | null>(null)
 
   if (isLoading) return <SettingsLoadingSkeleton />
   if (!settings) return <SettingsLoadError onRetry={refetch} />
@@ -120,27 +124,31 @@ export function BookkeepingSettingsContent() {
               id="accounting_method"
               name="accounting_method"
               defaultValue={settings.accounting_method || 'accrual'}
+              onChange={(e) => setPickedMethod(e.target.value)}
             >
               <option value="accrual">{t('method_accrual')}</option>
               <option value="cash">{t('method_cash')}</option>
             </SettingsSelect>
           </SettingsRow>
           {/* #967: register/send without booking; ekonomi books in a separate
-              explicit step. Only meaningful under faktureringsmetoden. */}
-          <SettingsRow
-            label={t('defer_booking_label')}
-            htmlFor="defer_invoice_booking"
-            help={t('defer_booking_help')}
-          >
-            <SettingsSelect
-              id="defer_invoice_booking"
-              name="defer_invoice_booking"
-              defaultValue={settings.defer_invoice_booking ? 'true' : 'false'}
+              explicit step. Only meaningful under faktureringsmetoden, so it
+              sits indented under the method and folds away under kontant. */}
+          <SettingsReveal open={(pickedMethod ?? settings.accounting_method ?? 'accrual') === 'accrual'}>
+            <SettingsRow
+              label={t('defer_booking_label')}
+              htmlFor="defer_invoice_booking"
+              help={t('defer_booking_help')}
             >
-              <option value="false">{t('defer_booking_off')}</option>
-              <option value="true">{t('defer_booking_on')}</option>
-            </SettingsSelect>
-          </SettingsRow>
+              <SettingsSelect
+                id="defer_invoice_booking"
+                name="defer_invoice_booking"
+                defaultValue={settings.defer_invoice_booking ? 'true' : 'false'}
+              >
+                <option value="false">{t('defer_booking_off')}</option>
+                <option value="true">{t('defer_booking_on')}</option>
+              </SettingsSelect>
+            </SettingsRow>
+          </SettingsReveal>
           <SettingsRow
             label={t('series_label')}
             htmlFor="default_voucher_series"
@@ -167,8 +175,6 @@ export function BookkeepingSettingsContent() {
 
         <PeriodLockingSettings settings={settings} />
       </SettingsFormWrapper>
-
-      <FiscalYearsManager />
 
       <VoucherSeriesPerSourceTypeForm
         settings={settings}

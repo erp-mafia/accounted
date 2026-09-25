@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Moms för holdingbolag: utvidgad referens
 
 Ladda när uppgiften rör avdragsrätt för ingående moms i holdingbolag, M&A-kostnader, försäljning av dotter, mervärdesskattegrupp, eller omvärdering av management fee.

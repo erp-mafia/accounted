@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react'
+import { ArrowRight, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { DepreciationPanel } from './DepreciationPanel'
@@ -336,17 +336,17 @@ export function DispositionsStep({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <CardTitle className="text-base">{completed.label}</CardTitle>
-                <Badge
-                  variant={completed.status === 'booked' ? 'success' : 'warning'}
-                  className="mt-2 gap-1"
-                >
-                  {completed.status === 'booked' ? (
+                {completed.status === 'booked' ? (
+                  <span className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                  ) : (
+                    Redan bokförd
+                  </span>
+                ) : (
+                  <Badge variant="warning" className="mt-2 gap-1">
                     <AlertTriangle className="h-3.5 w-3.5" />
-                  )}
-                  {completed.status === 'booked' ? 'Redan bokförd' : 'Behöver rättas'}
-                </Badge>
+                    Behöver rättas
+                  </Badge>
+                )}
               </div>
               <p className="font-display text-2xl tabular-nums shrink-0">
                 {formatCurrency(completed.amount)}
@@ -415,7 +415,8 @@ export function DispositionsStep({
         </Button>
         <Button
           onClick={handleCommit}
-          disabled={posting || hasCorrectionRequired || taxDepreciationDirty}
+          disabled={hasCorrectionRequired || taxDepreciationDirty}
+          loading={posting}
           title={
             taxDepreciationDirty
               ? 'Spara ändringarna i skattemässig avskrivning innan du fortsätter.'
@@ -423,9 +424,7 @@ export function DispositionsStep({
           }
         >
           {posting ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Bokför…
-            </>
+            'Bokför…'
           ) : (
             <>
               Bokför valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
@@ -564,8 +563,7 @@ function TaxAdjustmentsCard({
         )}
 
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <Button type="button" variant="outline" onClick={onSave} disabled={saving}>
-          {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="button" variant="outline" onClick={onSave} loading={saving}>
           Spara och räkna om
         </Button>
       </CardContent>

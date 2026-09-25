@@ -37,6 +37,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: mockDetectExplaining,
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 // An honoured force override is written to behandlingshistorik after the RPC
 // succeeds (issue #2294). Mocked so it never touches a service client here.
 const { mockAppendProcessingHistory } = vi.hoisted(() => ({ mockAppendProcessingHistory: vi.fn() }))
@@ -271,6 +282,50 @@ describe('POST /api/transactions/[id]/match-batch', () => {
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_INVOICE_NOT_INVOICE_TYPE')
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses unbooked invoices under kontantmetoden before the RPC can clear 1510', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_UUID, invoice_number: '231' }],
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; details?: { invoices: Array<{ id: string }> } }
+    }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+    expect(body.error.details?.invoices[0].id).toBe(INV_UUID)
+    expect(mockFindCashUnbooked).toHaveBeenCalledWith(mockSupabase, 'company-1', [
+      { kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 },
+    ])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the kontantmetoden check cannot run', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }], error: null })
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: false,
+      error: { message: 'connection reset', code: '08006' },
+    })
+
+    const request = createMockRequest(`/api/transactions/${TX_UUID}/match-batch`, {
+      method: 'POST',
+      body: {
+        allocations: [{ kind: 'customer_invoice', invoice_id: INV_UUID, amount: 1000 }],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: TX_UUID }))
+    expect(response.status).toBeGreaterThanOrEqual(500)
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
   })
 })

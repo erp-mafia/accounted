@@ -432,12 +432,9 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
           <div className="flex shrink-0 items-center gap-2">
             {status.connected ? (
               <>
-                <Button variant="outline" onClick={handleSync} disabled={isSyncing}>
+                <Button variant="outline" onClick={handleSync} loading={isSyncing}>
                   {isSyncing ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('ext_cloud_backup_syncing')}
-                    </>
+                    t('ext_cloud_backup_syncing')
                   ) : (
                     <>
                       <RefreshCw className="mr-2 h-4 w-4" />
@@ -445,12 +442,9 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                     </>
                   )}
                 </Button>
-                <Button variant="ghost" onClick={handleDisconnect} disabled={isDisconnecting}>
+                <Button variant="ghost" onClick={handleDisconnect} loading={isDisconnecting}>
                   {isDisconnecting ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('ext_cloud_backup_disconnecting')}
-                    </>
+                    t('ext_cloud_backup_disconnecting')
                   ) : (
                     <>
                       <Unplug className="mr-2 h-4 w-4" />
@@ -460,12 +454,9 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                 </Button>
               </>
             ) : (
-              <Button onClick={handleConnect} disabled={isConnecting}>
+              <Button onClick={handleConnect} loading={isConnecting}>
                 {isConnecting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {t('ext_cloud_backup_redirecting')}
-                  </>
+                  t('ext_cloud_backup_redirecting')
                 ) : (
                   t('ext_cloud_backup_connect', { provider })
                 )}
@@ -710,7 +701,7 @@ function ScheduleSection({
         <p className="px-1 text-xs text-muted-foreground">
           {t('ext_cloud_backup_last_auto_sync')} {formatDateTime(schedule.last_auto_sync_at)}{' '}
           {schedule.last_auto_sync_status === 'success' ? (
-            <span className="text-success">· {t('ext_cloud_backup_auto_sync_success')}</span>
+            <span>· {t('ext_cloud_backup_auto_sync_success')}</span>
           ) : schedule.last_auto_sync_status === 'error' ? (
             <span className="text-destructive">
               · {t('ext_cloud_backup_auto_sync_error')}

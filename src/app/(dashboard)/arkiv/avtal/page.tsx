@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getDashboardCompanyId } from '../../request-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { ArkivAgreements } from '@/components/arkiv/ArkivAgreements'
 
 /**
@@ -10,6 +10,6 @@ import { ArkivAgreements } from '@/components/arkiv/ArkivAgreements'
  */
 export default async function ArkivAgreementsPage() {
   const companyId = await getDashboardCompanyId()
-  if (!companyId || !isArkivEnabled(companyId)) notFound()
+  if (!companyId || !isArkivBrainEnabled(companyId)) notFound()
   return <ArkivAgreements />
 }

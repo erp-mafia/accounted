@@ -6,7 +6,6 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
@@ -27,6 +26,15 @@ import { formatOrgNumber } from '@/lib/utils'
 // Supplier invoices carry their own currency; "kr" is only correct for SEK.
 function amountWithCurrency(amount: number, currency?: string | null): string {
   return `${formatAmount(amount)} ${!currency || currency === 'SEK' ? 'kr' : currency}`
+}
+
+// Chips mark exceptions (design.md convention 5), the same states as the
+// supplier-invoice list: approved and paid render as muted text.
+const EXCEPTION_STATUS_VARIANTS: Record<string, 'outline' | 'secondary' | 'warning' | 'destructive'> = {
+  registered: 'outline',
+  partially_paid: 'warning',
+  overdue: 'destructive',
+  credited: 'secondary',
 }
 
 interface SupplierCurrencyStats {
@@ -174,15 +182,6 @@ export default function SupplierDetailPage() {
     )
   }
 
-  const statusVariants: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive'> = {
-    registered: 'secondary',
-    approved: 'default',
-    paid: 'success',
-    partially_paid: 'warning',
-    overdue: 'destructive',
-    credited: 'secondary',
-  }
-
   const statusLabels: Record<string, string> = {
     registered: t('status_registered'),
     approved: t('status_approved'),
@@ -216,7 +215,7 @@ export default function SupplierDetailPage() {
               variant="ghost"
               size="sm"
               onClick={() => setIsEditOpen(true)}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -227,7 +226,7 @@ export default function SupplierDetailPage() {
               variant="ghost"
               size="sm"
               onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
+              className="text-muted-foreground hover:text-destructive"
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -368,69 +367,49 @@ export default function SupplierDetailPage() {
               {t('no_invoices')}
             </p>
           ) : (
-            <>
-            {/* Desktop table */}
-            <div className="hidden sm:block">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t('col_arrival')}</TableHead>
-                    <TableHead>{t('col_invoice_number')}</TableHead>
-                    <TableHead>{t('col_date')}</TableHead>
-                    <TableHead>{t('col_due')}</TableHead>
-                    <TableHead className="text-right">{t('col_amount')}</TableHead>
-                    <TableHead className="text-right">{t('col_remaining')}</TableHead>
-                    <TableHead>{t('col_status')}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {invoices.map((inv) => (
-                    <TableRow key={inv.id}>
-                      <TableCell className="font-mono tabular-nums">{inv.arrival_number}</TableCell>
-                      <TableCell>
-                        <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline">
-                          {inv.supplier_invoice_number}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.invoice_date)}</TableCell>
-                      <TableCell className="tabular-nums">{formatDate(inv.due_date)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{amountWithCurrency(inv.total, inv.currency)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{amountWithCurrency(inv.remaining_amount, inv.currency)}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                          {statusLabels[inv.status] || inv.status}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+            /* One line per invoice, the customer-detail shape: the side
+               column is too narrow for a seven-column table, and arrival
+               number and invoice date live on the invoice itself.
+               Chips mark exceptions: paid and approved render as muted text. */
+            <div className="divide-y divide-border">
+              {invoices.map((inv) => {
+                const exceptionVariant = EXCEPTION_STATUS_VARIANTS[inv.status]
+                const label = statusLabels[inv.status] || inv.status
+                return (
+                  <Link
+                    key={inv.id}
+                    href={`/supplier-invoices/${inv.id}`}
+                    className="flex items-center gap-3 py-3 text-sm transition-colors duration-150 hover:bg-secondary/35"
+                  >
+                    <span className="min-w-0 truncate">{inv.supplier_invoice_number}</span>
+                    <span className="hidden shrink-0 text-muted-foreground tabular-nums sm:inline">
+                      {formatDate(inv.due_date)}
+                    </span>
+                    <span className="ml-auto shrink-0 tabular-nums">
+                      {amountWithCurrency(inv.total, inv.currency)}
+                    </span>
+                    {/* A partial payment keeps its outstanding balance visible. */}
+                    {Number(inv.remaining_amount) > 0 &&
+                      Number(inv.remaining_amount) !== Number(inv.total) && (
+                        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                          {t('remaining_inline', {
+                            amount: amountWithCurrency(inv.remaining_amount, inv.currency),
+                          })}
+                        </span>
+                      )}
+                    {exceptionVariant ? (
+                      <Badge variant={exceptionVariant} className="shrink-0 font-normal">
+                        {label}
+                      </Badge>
+                    ) : (
+                      <span className="min-w-14 shrink-0 text-right text-xs text-muted-foreground">
+                        {label}
+                      </span>
+                    )}
+                  </Link>
+                )
+              })}
             </div>
-            {/* Mobile cards */}
-            <div className="sm:hidden space-y-3">
-              {invoices.map((inv) => (
-                <div key={inv.id} className="border rounded-lg p-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Link href={`/supplier-invoices/${inv.id}`} className="text-primary hover:underline font-medium text-sm">
-                      {inv.supplier_invoice_number}
-                    </Link>
-                    <Badge variant={statusVariants[inv.status] || 'secondary'}>
-                      {statusLabels[inv.status] || inv.status}
-                    </Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground tabular-nums">{formatDate(inv.invoice_date)} → {formatDate(inv.due_date)}</span>
-                    <span className="font-mono">{amountWithCurrency(inv.total, inv.currency)}</span>
-                  </div>
-                  {Number(inv.remaining_amount) > 0 && Number(inv.remaining_amount) !== Number(inv.total) && (
-                    <div className="text-xs text-muted-foreground text-right">
-                      {t('remaining_inline', { amount: amountWithCurrency(inv.remaining_amount, inv.currency) })}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-            </>
           )}
       </DetailSection>
       </div>

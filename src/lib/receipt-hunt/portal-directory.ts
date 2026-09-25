@@ -104,7 +104,8 @@ export const PORTAL_DIRECTORY: PortalEntry[] = [
   {
     vendor: 'OpenAI',
     aliases: ['openai', 'chatgpt'],
-    url: 'https://platform.openai.com/settings/organization/billing/history',
+    url: 'https://platform.openai.com/settings/organization/billing',
+    note: 'Fakturor under Settings, Billing.',
   },
   {
     vendor: 'Microsoft 365',

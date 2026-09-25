@@ -8,7 +8,7 @@ Interimsposter booked at year-end must be reversed on day 1 of new fiscal year. 
 ### 2. Incorrect periodiseringsfond calculations
 - Wrong percentage: 25% for AB, 30% for EF
 - Missing mandatory 6-year reversal
-- Forgetting **gross-up rule** for funds created before 2019 (at old 22% rate, requiring 103-106% uppräkning on reversal)
+- Forgetting the **gross-up rule** for juridiska personer (SFS 2018:1206, övergångsbestämmelser p. 5): funds from beskattningsår beginning before 2019 (22% rate) were reversed at 103% in beskattningsår beginning 2019-2020 and 106% thereafter; funds from beskattningsår beginning 2019-2020 are reversed at 104% in beskattningsår beginning after 2020; funds from 2021 onward at 100%
 
 ### 3. Missing schablonintäkt on periodiseringsfonder
 Affects AB companies. SLR × total funds at year-start. Is a skattemässig justering, NEVER booked. Many systems incorrectly try to record it as journal entry.
@@ -70,8 +70,10 @@ For enskild firma: periodiseringsfond, expansionsfond, räntefördelning, egenav
 | Periodiseringsfond EF max | 30% of result | 30% |
 | Arbetsgivaravgifter (standard) | 31.42% | 31.42% |
 | Prisbasbelopp | 58,800 SEK | 59,200 SEK |
-| K2 accrual threshold | 5,000 SEK/item | 5,000 SEK/item |
+| K2 accrual threshold (2.4/2.4A, per invoice) | 5,000 SEK/item | 7,000 SEK/item (FY beginning after 2025-12-31) |
 | Inkuransavdrag (inventory) | 3% (97% rule) | 3% (97% rule) |
 | Kontrollbalansräkning trigger | <50% of aktiekapital | <50% |
 | Neg. räntefördelning threshold | -500,000 SEK | -500,000 SEK |
 | Revisor opt-out thresholds | >3 emp, >1.5M BS, >3M rev (2/3) | Same |
+
+The K2 accrual threshold is separate from the 7.9 recurring-cost rule (not personnel costs, at most 20% variation, no amount limit); see `k2-vs-k3.md`. PBB 2027: 59,600 SEK calculated by SCB, not yet formally set. ÅRL size thresholds and revisionsplikt limits are unchanged; the ÅRL company-categories inquiry (Ju 2025:11) reports by 2026-09-29.

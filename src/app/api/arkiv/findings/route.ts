@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import type { FindingKind, FindingSeverity, FindingSubjectKind } from '@/lib/arkiv/lint/checks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -22,7 +22,7 @@ export interface FindingView {
 }
 
 export const GET = withRouteContext('arkiv.findings', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { data, error } = await ctx.supabase
     .from('arkiv_findings')
     .select('id, kind, key, severity, subject_kind, subject_id, detail, first_seen_at, last_seen_at')

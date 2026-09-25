@@ -71,8 +71,8 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-8 w-8 shrink-0"
+            size="icon-sm"
+            className="shrink-0"
             aria-label={t('vat_rate_presets_aria')}
           >
             <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />

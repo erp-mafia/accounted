@@ -17,6 +17,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 import { tools } from '../server'
 
 const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!
@@ -111,6 +122,36 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
       { account_number: '1930', description: 'Utbetalning 2026-08-05', debit: 0, credit: 1250 },
     ])
     expect(result.preview.expected_lines_balanced).toBe(true)
+  })
+
+  it('refuses to stage unbooked invoices under kontantmetoden and names the per-invoice route', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_A, invoice_number: '231' }],
+    })
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: { id: TX_ID, description: 'BGGIRERING', merchant_name: null, amount: 62500, currency: 'SEK', amount_sek: null, exchange_rate: null, cash_account_id: 'ca-1', date: '2026-07-31', journal_entry_id: null },
+      error: null,
+    })
+    enqueue({
+      data: [{ id: INV_A, document_type: 'invoice', currency: 'SEK', exchange_rate: null, remaining_amount: 62500, total: 62500 }],
+      error: null,
+    })
+
+    await expect(
+      allocate.execute(
+        { transaction_id: TX_ID, allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 62500 }] },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' } as never,
+      ),
+    ).rejects.toMatchObject({
+      code: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+      message: expect.stringContaining('gnubok_match_transaction_to_invoice'),
+    })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('keeps the tool description inside the catalog budget', () => {

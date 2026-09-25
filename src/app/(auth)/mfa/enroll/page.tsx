@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
+import { ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
 import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
@@ -214,15 +214,12 @@ function MfaEnrollContent() {
                 </p>
               </div>
               <Button
-                className="w-full h-11"
+                size="lg" className="w-full"
                 onClick={handleEnroll}
-                disabled={isEnrolling}
+                loading={isEnrolling}
               >
                 {isEnrolling ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Förbereder...
-                  </>
+                  'Förbereder...'
                 ) : (
                   'Fortsätt'
                 )}
@@ -284,7 +281,7 @@ function MfaEnrollContent() {
                 onClick={copySecret}
               >
                 {copied ? (
-                  <Check className="h-4 w-4 text-green-600" />
+                  <Check className="h-4 w-4 text-foreground" />
                 ) : (
                   <Copy className="h-4 w-4" />
                 )}
@@ -314,14 +311,12 @@ function MfaEnrollContent() {
             </div>
             <Button
               type="submit"
-              className="w-full h-11"
-              disabled={isVerifying || code.length !== 6}
+              size="lg" className="w-full"
+              loading={isVerifying}
+              disabled={code.length !== 6}
             >
               {isVerifying ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Verifierar...
-                </>
+                'Verifierar...'
               ) : (
                 'Aktivera 2FA'
               )}

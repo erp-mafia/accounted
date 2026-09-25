@@ -3,6 +3,7 @@
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
@@ -14,7 +15,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Loader2, Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
+import { Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
 import { convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { GROUP_LABEL_KEYS, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -195,14 +196,10 @@ export function BookingTemplatesPanel() {
               variant="outline"
               size="sm"
               onClick={handleExport}
-              disabled={isExporting}
+              loading={isExporting}
               className="text-muted-foreground hover:text-foreground"
             >
-              {isExporting ? (
-                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-              )}
+              {!isExporting && <Download className="mr-1.5 h-3.5 w-3.5" />}
               {t('export')}
             </Button>
             <Button
@@ -248,8 +245,10 @@ export function BookingTemplatesPanel() {
       </div>
 
       {isLoading ? (
-        <div className="flex items-center justify-center py-12">
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <div aria-busy className="space-y-3 py-3">
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-4 w-full" />
+          ))}
         </div>
       ) : templates.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">
@@ -313,18 +312,14 @@ export function BookingTemplatesPanel() {
                     {canWrite && (
                       <Button
                         variant="ghost"
-                        size="icon"
+                        size="icon-sm"
                         onClick={() => handleToggleHidden(tt.id, false)}
-                        disabled={hidingId === tt.id}
+                        loading={hidingId === tt.id}
                         aria-label={t('unhide')}
                         title={t('unhide')}
-                        className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                        className="shrink-0 text-muted-foreground hover:text-foreground"
                       >
-                        {hidingId === tt.id ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Eye className="h-3.5 w-3.5" />
-                        )}
+                        {hidingId !== tt.id && <Eye className="h-3.5 w-3.5" />}
                       </Button>
                     )}
                   </div>
@@ -467,7 +462,7 @@ function TemplateSection({
                       {tt.entity_type !== 'all' && ` · ${entityLabels[tt.entity_type]}`}
                     </span>
                     {!isConvertible && (
-                      <Badge variant="warning" className="px-1.5 py-0 text-[10px]">
+                      <Badge variant="warning" className="px-1.5 py-0 text-[11px]">
                         {t('unconvertible_badge')}
                       </Badge>
                     )}
@@ -476,11 +471,11 @@ function TemplateSection({
                 {canCustomize && onCustomize && (
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => onCustomize(tt)}
                     aria-label={t('customize')}
                     title={t('customize')}
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Copy className="h-3.5 w-3.5" />
                   </Button>
@@ -488,28 +483,24 @@ function TemplateSection({
                 {canHide && onHide && (
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => onHide(tt)}
-                    disabled={hidingId === tt.id}
+                    loading={hidingId === tt.id}
                     aria-label={t('hide')}
                     title={t('hide')}
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    {hidingId === tt.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <EyeOff className="h-3.5 w-3.5" />
-                    )}
+                    {hidingId !== tt.id && <EyeOff className="h-3.5 w-3.5" />}
                   </Button>
                 )}
                 {canEdit && onEdit && (
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => onEdit(tt)}
                     aria-label={t('edit')}
                     title={t('edit')}
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-foreground"
+                    className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
@@ -517,18 +508,14 @@ function TemplateSection({
                 {canDelete && (
                   <Button
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     onClick={() => onDelete(tt.id)}
-                    disabled={deletingId === tt.id}
+                    loading={deletingId === tt.id}
                     aria-label={tCommon('delete')}
                     title={tCommon('delete')}
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
                   >
-                    {deletingId === tt.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-3.5 w-3.5" />
-                    )}
+                    {deletingId !== tt.id && <Trash2 className="h-3.5 w-3.5" />}
                   </Button>
                 )}
               </div>

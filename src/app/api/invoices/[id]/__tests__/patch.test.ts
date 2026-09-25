@@ -33,6 +33,7 @@ vi.mock('@/lib/invoices/vat-rules', async () => {
   const actual = await vi.importActual<typeof import('@/lib/invoices/vat-rules')>('@/lib/invoices/vat-rules')
   return {
     getVatRules: (...args: unknown[]) => mockGetVatRules(...args),
+    deriveInvoiceVatHeader: actual.deriveInvoiceVatHeader,
     getAvailableVatRates: (...args: unknown[]) => mockGetAvailableVatRates(...args),
     // The builder gates on the permitted set (taxed-where-performed exceptions);
     // these route tests only care that the gate reads the stubbed rates.

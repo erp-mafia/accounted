@@ -1,6 +1,7 @@
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
 import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
+import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
 import {
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS_SV,
@@ -185,6 +186,12 @@ import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
+import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
+import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
+import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
+import { loadDocumentClaims, sharedDocumentWarning } from '@/lib/receipt-hunt/document-claims'
+import { SkillBodySchema } from '@/lib/agent-skills/validation'
+import { recordCommunityFeedback } from '@/lib/agent-skills/community'
 import type { SkillTier } from './skills'
 import {
   RECOMMENDED_WORKFLOW_LOADOUTS,
@@ -271,6 +278,7 @@ import {
   resolveMcpCompanyContext,
 } from './company-routing'
 import { findUnknownArgKeys, listArgKeys, shortestExampleFor } from './arg-guard'
+import { decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
   matchSupplierByIdentity,
@@ -303,6 +311,7 @@ import { resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope
 import { findMatchingInvoices } from '@/lib/invoices/invoice-matching'
 import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recipient-statuses'
 import { listRotRutCandidates, createRotRutPayoutRequest } from '@/lib/invoices/rot-rut-service'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-reclaim'
 import {
@@ -361,6 +370,7 @@ import {
   type AlreadyExplainedOutcome,
   type DuplicateCandidateOutcome,
 } from '@/lib/invoices/already-explained-guard'
+import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
 import {
   buildBatchAllocationPreview,
   type BatchAllocationPreviewInvoice,
@@ -393,8 +403,8 @@ import { readAgiSubmissionStatus } from '@/extensions/general/skatteverket/lib/a
 import { buildMomsuppgift, resolveRedovisare, resolveRedovisningsperiod } from '@/extensions/general/skatteverket/lib/declaration-prep'
 import { writeSkatteverketAudit } from '@/extensions/general/skatteverket/lib/audit'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
-import { findCompanyTokenUser, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
-import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
+import { getSkvConnectionHealth, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
+import { suggestToolNames } from './tool-suggest'
 // Stage-time preview for book_skattekonto_row(s): same deterministic rule
 // matcher the skattekonto list page and the booking commit path use. The
 // actual booking runs in the extension's registry-resolved commit service on
@@ -599,6 +609,20 @@ export interface McpToolAnnotations {
 // shared frozen object emits exactly the JSON an inline literal did; nothing
 // mutates a tool's annotations after registration. Tools whose hints need
 // a per-tool explanation keep an inline block with comments.
+const CreateSkillArgsSchema = z.object({
+  // What the user makes: a flow is steps, knowledge and an analysis are text.
+  kind: z.enum(['workflow', 'rules', 'analysis']).default('workflow'),
+  name: z.string().min(1).max(120),
+  description: z.string().min(1).max(500),
+  steps: z.array(z.string().min(1).max(200)).max(12).default([]),
+  text: z.string().max(20000).default(''),
+  rules: z.array(z.string().min(1).max(200)).max(10).default([]),
+  told: z.string().max(4000).default(''),
+  language: z.enum(['sv', 'en']).default('sv'),
+}).strict().refine((input) => input.kind === 'workflow' ? input.steps.length > 0 : input.text.trim().length > 0, {
+  message: 'A workflow needs steps; knowledge and an analysis need text',
+})
+
 const ANNOTATIONS_READ_ONLY = {
   readOnlyHint: true,
   destructiveHint: false,
@@ -1241,6 +1265,7 @@ async function stagePendingOperation(
       actor_type: actor.type,
       actor_id: actor.id ?? null,
       actor_label: actor.label ?? null,
+      agent_metadata: await loadSkillProvenance(supabase, companyId, userId, actor),
       risk_level: riskLevel,
     })
     .select('*')
@@ -2179,8 +2204,12 @@ const SKV_VAT_STATUS_OUTPUT_SCHEMA = {
   properties: {
     redovisare: { type: 'string', description: '12-digit redovisare' },
     redovisningsperiod: { type: 'string', description: 'YYYYMM' },
-    submitted: { type: ['object', 'null'], description: 'Inlämnad deklaration, or null if none on file' },
-    decided: { type: ['object', 'null'], description: 'Beslutad deklaration, or null if not yet decided' },
+    // Skatteverket answers inlämnat with a LIST (every submission for the
+    // period), and clients that validate structuredContent refused the whole
+    // result when the schema said object (feedback seq 694132). Passed through
+    // as Skatteverket sends it, so both shapes are allowed.
+    submitted: { type: ['object', 'array', 'null'], description: 'Inlämnad deklaration as Skatteverket returns it (a list of submissions, or one object), or null if none on file' },
+    decided: { type: ['object', 'array', 'null'], description: 'Beslutad deklaration as Skatteverket returns it, or null if not yet decided' },
   },
   required: ['redovisare', 'redovisningsperiod', 'submitted', 'decided'],
 } as const
@@ -3823,6 +3852,14 @@ const ASSET_WRITE_PROPERTIES = {
       required: ['name', 'cost', 'useful_life_months'],
     },
   },
+  opening_accumulated_depreciation: {
+    type: 'number',
+    description: 'Accumulated depreciation for this asset from the previous asset register, SEK, 0 to acquisition_cost - salvage_value. No voucher or automatic reconciliation: manually reconcile register totals with the imported ledger before depreciation or disposal. Manual ledger postings do not lock opening edits; depreciation posted through Accounted\'s asset register or disposal does. Component opening balances are unsupported; keep the component breakdown.',
+  },
+  opening_depreciation_date: {
+    type: ['string', 'null'],
+    description: 'yyyy-MM-dd the opening amount is stated per; required when the amount is above 0, between acquisition_date and today (Europe/Stockholm). Zero amount clears the date.',
+  },
   notes: { type: 'string' },
 } as const
 
@@ -4723,7 +4760,8 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         available: { type: 'boolean' },
-        connected: { type: 'boolean' },
+        connected: { type: 'boolean', description: 'true only when Skatteverket calls will work now' },
+        status: { type: 'string', enum: ['connected', 'needs_reconsent', 'not_connected', 'unavailable'] },
         token_expires_at: { type: ['string', 'null'] },
         connect_url: { type: ['string', 'null'] },
         instructions: { type: 'string' },
@@ -4743,18 +4781,26 @@ export const tools: McpTool[] = [
         .maybeSingle()
       if (error) throw error
       const token = data as { expires_at: string } | null
-      const connected = Boolean(token)
+      // A token row is not a working connection: one flagged needs_reconsent
+      // used to answer connected: true (feedback seq 604946) while the
+      // briefing said the opposite. Same health check as the briefing now.
+      const health = await getSkvConnectionHealth(supabase, companyId)
+      const needsReconsent = health?.status === 'needs_reconsent'
+      const connected = health?.status === 'active'
       const connectUrl = `${connectLinkBaseUrl()}/api/extensions/ext/skatteverket/authorize?return_to=%2F`
       return {
         available: enabled,
         connected,
+        status: !enabled ? 'unavailable' : connected ? 'connected' : needsReconsent ? 'needs_reconsent' : 'not_connected',
         token_expires_at: token?.expires_at ?? null,
         connect_url: enabled ? connectUrl : null,
         instructions: !enabled
           ? 'The Skatteverket integration is not enabled on this installation. Declarations can still be downloaded as files and filed manually at skatteverket.se.'
           : connected
             ? 'Skatteverket is connected. Skattekonto syncs automatically; momsdeklaration and AGI can be filed from here (each filing stages for approval).'
-            : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there; Skatteverket asks them to identify with BankID as firmatecknare and approve the access, then they land back in Accounted. Tell them to come back here when done.',
+            : needsReconsent
+              ? `The Skatteverket session has expired (the personal login lasts about an hour, so this is normal). Only a person can renew it: give the user the connect_url and ask them to sign in again with BankID, then continue. Do not call Skatteverket tools until they confirm. ${SKV_NEEDS_RECONSENT_MESSAGE}`
+              : 'On claude.ai/Claude Desktop a connect card with an open-in-browser button is rendered with this result; on other clients give the user the connect_url as a link. They must be logged in to Accounted there; Skatteverket asks them to identify with BankID as firmatecknare and approve the access, then they land back in Accounted. Tell them to come back here when done.',
       }
     },
   },
@@ -5063,22 +5109,54 @@ export const tools: McpTool[] = [
   },
 
   {
+    name: 'gnubok_get_task',
+    title: 'Get Accounting Task',
+    description: 'Start a handoff task: its instructions and the skills to load.',
+    inputSchema: ACCOUNTING_TASK_INPUT_SCHEMA,
+    outputSchema: {
+      type: 'object',
+      properties: {
+        company_id: { type: 'string' },
+        kind: { type: 'string' },
+        goal: { type: 'string' },
+        scope: { type: 'object' },
+        skills: { type: 'array', items: { type: 'string' } },
+        instructions: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['company_id', 'kind', 'goal', 'scope', 'skills', 'instructions'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    async execute(args, companyId, userId, supabase, actor) {
+      const task = await getAccountingTask(args, companyId, supabase)
+      // An agent run delivers its workflow and knowledge bodies here instead of
+      // load_skill: record them the same way so provenance and run counts hold.
+      if (actor && 'workflow' in task) {
+        await emitSkillLoaded({ slug: task.workflow.slug, tier: 'workflow', bodyHash: skillBodyHash(task.workflow.body), version: task.workflow.version ?? undefined, actor, userId, companyId })
+        for (const k of task.knowledge) {
+          await emitSkillLoaded({ slug: k.id, tier: 'horizontal', bodyHash: skillBodyHash(k.body), version: k.version ?? undefined, actor, userId, companyId })
+        }
+      }
+      return task
+    },
+  },
+
+  {
     name: 'gnubok_list_skills',
     title: 'List Domain Skills',
-    description: 'List domain-knowledge skills for this company (entity type, VAT, payroll). Workflow guides + loaded specialty atoms. Pass include_all=true to see hidden skills. Call gnubok_load_skill(slug) for any body.',
+    description: 'List applicable workflows and company skills. include_all reveals unselected/inapplicable skills. Load bodies with gnubok_load_skill.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        tag: { type: 'string', description: 'Optional filter by tag (e.g. "vat", "monthly", "yearly", "payroll", or the tier name "workflow"/"horizontal"/"vertical"/"modifier").' },
+        tag: { type: 'string', description: 'Filter by tag, e.g. vat or monthly.' },
         tier: {
           type: 'string',
-          enum: ['workflow', 'horizontal', 'vertical', 'modifier'],
-          description: 'Optional filter by tier. workflow = static guides, horizontal = regulatory atoms (Swedish VAT/payroll/…), vertical = industry atoms (konsult-IT, e-handel…), modifier = cross-cutting atoms (holding-AB…).',
+          enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'],
+          description: 'Filter by tier: workflows, regulatory, industry, cross-cutting, community, or private.',
         },
         include_all: {
           type: 'boolean',
-          description: 'When true, ignore the company-context filter (entity_type, employees, vat_registered) and return all skills. Default false.',
+          description: 'Include unselected and inapplicable catalog skills. Default false.',
         },
       },
     },
@@ -5094,17 +5172,17 @@ export const tools: McpTool[] = [
               name: { type: 'string' },
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
-              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
+              tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
             },
             required: ['slug', 'name', 'summary', 'tier'],
           },
         },
         count: { type: 'number' },
-        hidden_count: { type: 'number', description: 'Skills hidden by company-context filter. Re-call with include_all=true to see them.' },
+        hidden_count: { type: 'number', description: 'Inapplicable skills hidden.' },
         company_context: {
           type: 'object',
           additionalProperties: false,
-          description: 'Snapshot of the filter inputs used to compute the list: useful when debugging "why isn\'t skill X showing up?".',
+          description: 'Applicability filter inputs.',
           properties: {
             entity_type: { type: ['string', 'null'] },
             has_employees: { type: 'boolean' },
@@ -5143,7 +5221,8 @@ export const tools: McpTool[] = [
       const vatRegistered = Boolean(settings.data?.vat_registered)
       const hasEmployees = (employeeCount.count ?? 0) > 0
 
-      const all = await loadAllSkills(supabase)
+      const skillCompanyId = hasScope((args.__keyScopes ?? []) as ApiKeyScope[], 'agent:read') ? companyId : undefined
+      const all = await loadAllSkills(supabase, skillCompanyId, includeAll)
 
       // First pass: tier + tag filter (unchanged).
       const tagFiltered = all.filter((s) => {
@@ -5188,12 +5267,12 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_load_skill',
     title: 'Load Domain Skill',
-    description: 'Load a skill body by slug. Workflow slugs are flat (e.g. "month-end-close"); atom slugs match registry ids (e.g. "vertical/konsult-it", "modifier/holding-ab"). Call gnubok_list_skills to find slugs.',
+    description: 'Read the current Markdown for a skill from list_skills or get_task. Private own/<uuid> skills require company access.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
-        slug: { type: 'string', description: 'Skill slug: workflow slug ("month-end-close", "quarterly-vat-review", "year-end-close", "invoicing-rules", "payroll-monthly") or atom id ("vertical/konsult-it", "modifier/holding-ab", "horizontal/swedish-vat", …).' },
+        slug: { type: 'string', description: 'Slug returned by list_skills or get_task. own/<uuid> requires company access.' },
       },
       required: ['slug'],
     },
@@ -5204,7 +5283,7 @@ export const tools: McpTool[] = [
         name: { type: 'string' },
         summary: { type: 'string' },
         tags: { type: 'array', items: { type: 'string' } },
-        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier'] },
+        tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
         body: { type: 'string', description: 'Full skill content as Markdown' },
       },
       required: ['slug', 'name', 'body', 'tier'],
@@ -5213,7 +5292,7 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
       if (!slug) throw new Error('slug is required')
-      const skill = await findSkill(slug, supabase)
+      const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
         const all = await loadAllSkills(supabase)
         const available = all.map((s) => s.slug).join(', ')
@@ -5223,7 +5302,7 @@ export const tools: McpTool[] = [
       // actually pull (mcp.skill_loaded). Without this, "which atom was
       // loaded" is unanswerable and atom effectiveness can't be measured.
       if (actor) {
-        emitSkillLoaded({ slug: skill.slug, tier: skill.tier, actor, userId, companyId })
+        await emitSkillLoaded({ slug: skill.slug, tier: skill.tier, bodyHash: skillBodyHash(skill.body), version: skill.version, actor, userId, companyId })
       }
       // Workflow-tier skills are the closed-form processes (month-end-close,
       // year-end-close, payroll-monthly). Loading one is a strong signal the
@@ -5240,6 +5319,55 @@ export const tools: McpTool[] = [
         tier: skill.tier,
         body: skill.body,
       }
+    },
+  },
+
+  {
+    name: 'gnubok_create_skill',
+    title: 'Create Own Item',
+    description: 'Save a confirmed item as a draft.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        kind: { type: 'string', enum: ['workflow', 'rules', 'analysis'] },
+        name: { type: 'string' },
+        description: { type: 'string' },
+        steps: { type: 'array', items: { type: 'string' } },
+        text: { type: 'string' },
+        rules: { type: 'array', items: { type: 'string' } },
+        told: { type: 'string' },
+        language: { type: 'string', enum: ['sv', 'en'] },
+      },
+      required: ['name', 'description'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        company_skill_id: { type: 'string' },
+        slug: { type: 'string' },
+      },
+      required: ['company_skill_id', 'slug'],
+    },
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase) {
+      const input = CreateSkillArgsSchema.parse(args)
+      const skill = input.kind === 'workflow'
+        ? buildOwnSkill(
+          { kind: 'summary', name: input.name, lede: input.description, steps: input.steps, rules: input.rules, facts: [] },
+          { description: input.told, turns: [], extra: [] },
+          OWN_SKILL_COPY[input.language],
+        )
+        : buildOwnText(input.name, input.description, input.text)
+      if (!skill.name || !skill.description) throw new Error('name and description are required')
+      SkillBodySchema.parse(skill.body)
+      const { data, error } = await supabase
+        .from('company_skills')
+        .insert({ company_id: companyId, team_id: null, created_by: userId, atom_id: null, kind: input.kind, name: skill.name, description: skill.description, body: skill.body, draft: true })
+        .select('id')
+        .single()
+      if (error) throw error
+      return { company_skill_id: data.id, slug: `own/${data.id}` }
     },
   },
 
@@ -5402,24 +5530,28 @@ export const tools: McpTool[] = [
       properties: {
         context: {
           type: 'string',
-          description: 'What you were trying to do and what blocked you, or what worked well. Free text, max 2000 chars.',
+          description: 'What you tried and what blocked you or worked well. Max 2000 chars.',
         },
         sentiment: {
           type: 'string',
           enum: ['positive', 'negative', 'neutral'],
-          description: 'Direction of the feedback. Default: negative.',
+          description: 'Default: negative.',
         },
         suggestion: {
           type: 'string',
-          description: 'Optional concrete suggestion (e.g. "add a tool for X", "rename Y arg").',
+          description: 'Optional concrete suggestion, e.g. "add a tool for X".',
         },
         tool_name: {
           type: 'string',
-          description: 'Optional specific tool the feedback concerns.',
+          description: 'Tool it concerns.',
         },
         skill_slug: {
           type: 'string',
-          description: 'Optional specific skill the feedback concerns.',
+          description: 'Skill it concerns.',
+        },
+        upvote: {
+          type: 'boolean',
+          description: 'true: the user said the community/ skill_slug worked.',
         },
       },
       required: ['context'],
@@ -5441,7 +5573,7 @@ export const tools: McpTool[] = [
       idempotentHint: false,
       openWorldHint: false,
     },
-    async execute(args, companyId, userId, _supabase, actor) {
+    async execute(args, companyId, userId, supabase, actor) {
       const context = (args.context as string | undefined)?.trim()
       if (!context) throw new Error('context is required')
       if (context.length > 2000) throw new Error('context is too long (max 2000 chars)')
@@ -5451,6 +5583,17 @@ export const tools: McpTool[] = [
       const toolName = (args.tool_name as string | undefined)?.trim() || null
       const skillSlug = (args.skill_slug as string | undefined)?.trim() || null
 
+      // "Fungerade det?" at the end of a community flow: a yes is the user's
+      // upvote, saved like the one on the Agentinstruktioner page, before the
+      // telemetry rate limit (the upsert is idempotent, and the vote must not
+      // be lost to it). A no records nothing: there is no "does not work" score.
+      const upvote = args.upvote === true
+      if (upvote) {
+        if (!skillSlug?.startsWith('community/')) throw codedError('VALIDATION_ERROR', 'upvote needs the community/ skill_slug it is for')
+        const saved = await recordCommunityFeedback(supabase, { companyId, userId, slug: skillSlug, vote: true })
+        if (!saved) throw codedError('NOT_FOUND', `Community skill not found: ${skillSlug}`)
+      }
+
       // Rate-limit per API key (or per user when no key id). 1 per 60 s.
       // In-memory + single-process: leaky bucket would be cleaner but the
       // signal here is product-team triage, not security; over-counting is
@@ -5459,6 +5602,7 @@ export const tools: McpTool[] = [
       const now = Date.now()
       const last = feedbackRateLimit.get(rateKey)
       if (last && now - last < FEEDBACK_RATE_LIMIT_MS) {
+        if (upvote) return { recorded: true, message: 'The user\'s upvote is saved on the community skill.' }
         const waitSec = Math.ceil((FEEDBACK_RATE_LIMIT_MS - (now - last)) / 1000)
         throw new Error(`gnubok_feedback is rate-limited. Try again in ${waitSec}s.`)
       }
@@ -5493,7 +5637,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_agent_briefing',
     title: 'Get Agent Briefing',
-    description: 'Bootstrap this company\'s accountant context in one call: user_name, profile_summary, atoms (gnubok_load_skill for bodies), top-30 memories, dimensions, and recommended_tools: per-workflow loadouts to batch-load in one ToolSearch select:a,b,c call. Call once at session start.',
+    description: 'Start a company session: identity, accounting method, skills, memories, dimensions and recommended_tools. Fetch skill bodies with gnubok_load_skill; batch-load tool loadouts with ToolSearch select:a,b,c.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -5524,22 +5668,22 @@ export const tools: McpTool[] = [
         user_name: {
           type: ['string', 'null'],
           description:
-            'Name of the person you are assisting: address them by it (their tilltalsnamn), not the owner in profile_summary. Null if unset.',
+            'The assisted person\'s first name, not necessarily the company owner.',
         },
         profile_summary: {
           type: ['string', 'null'],
-          description: 'Composer-generated one-paragraph summary of the company. Null if no agent profile exists yet (composer has not run).',
+          description: 'Company summary; null before profile creation.',
         },
         atoms: {
           type: 'array',
-          description: 'Atoms (horizontal/vertical/modifier skills) loaded for this company. Metadata only: call gnubok_load_skill(id) for the body.',
+          description: 'Active company skills. Fetch bodies with gnubok_load_skill(atom_id).',
           items: {
             type: 'object',
             additionalProperties: false,
             properties: {
               id: { type: 'string', description: 'Deprecated: read atom_id instead.' },
-              atom_id: { type: 'string', description: 'Atom id (e.g. "horizontal/swedish-vat", "vertical/konsult-it", "modifier/holding-ab"). Use as gnubok_load_skill slug.' },
-              tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier'] },
+              atom_id: { type: 'string', description: 'Loadable skill slug.' },
+              tier: { type: 'string', enum: ['horizontal', 'vertical', 'modifier', 'community', 'own'] },
               title: { type: 'string' },
               description: { type: 'string' },
             },
@@ -5565,18 +5709,18 @@ export const tools: McpTool[] = [
         dimensions: {
           type: 'object',
           description:
-            'Dimension registry snapshot (kostnadsställe/projekt): an enabled flag plus the registered dimensions with their codes, counts and top values. OMITTED when the company has none registered; presence means lines can be tagged via the dims bag on gnubok_create_voucher, and enabled=true means dims-bag values are validated against the registry.',
+            'Registered kostnadsställe/projekt codes and values; omitted if none. Tag voucher lines with dims. When enabled, values are registry-validated.',
         },
         ledger_context: {
           type: 'object',
           description:
-            'Digest of how this company books things: top-5 counterparty + top-3 supplier patterns, each with an evidence block (seen_12m, agree, share, last_booked) and the rolling window it was computed over. Evidence is historical frequency, NOT permission to auto-book: weigh seen count AND recency, never a ratio alone. OMITTED when not computable. Field-by-field detail, plus account usage, explicit rules, VAT profile and conventions, is in the Accounted://ledger/context resource.',
+            'Top counterparty/supplier patterns with evidence and rolling window. Historical frequency is NOT permission to auto-book: weigh count and recency. Omitted if unavailable. Full rules and evidence: Accounted://ledger/context.',
         },
         recommended_tools: {
           type: 'array',
           items: { type: 'object' },
           description:
-            'Per-workflow tool loadouts, ordered by call sequence: each entry names a workflow, describes it, and lists its tools as {name, callable, blocked_by?, note?}: callable=false names the missing scope or a write no bridge carries; note names the bridge for an unlisted tool. Batch-load the callable names in one call (ToolSearch select:a,b,c).',
+            'Ordered workflow loadouts: {name, callable, blocked_by?, note?}. callable=false explains a missing scope or search-only write. Batch-load callable names with ToolSearch select:a,b,c.',
         },
         feedback_channel: {
           type: 'object',
@@ -5605,7 +5749,7 @@ export const tools: McpTool[] = [
         skatteverket_connection: {
           type: 'object',
           description:
-            'Present only when a Skatteverket connection exists. Carries status ("active" or "needs_reconsent") and the grant detail behind it. needs_reconsent: only a person can fix it (BankID under Inställningar → Skatteverket); warn the user before starting SKV work.',
+            'Connection status and grant detail, if connected. needs_reconsent requires a person using BankID in Settings > Skatteverket; warn before SKV work.',
         },
       },
       required: ['company', 'user_name', 'profile_summary', 'atoms', 'memory', 'recommended_tools'],
@@ -5704,7 +5848,7 @@ export const tools: McpTool[] = [
             agreements: agreements.count ?? 0,
             facts: facts.count ?? 0,
             instructions:
-              'Arkiv holds every document as a record with page citations. Read the resource Accounted://arkiv/map first: what the archive holds, running agreements, registered facts, what waits. For anything about a contract, registration, decision or what a document says: gnubok_search_records, then gnubok_get_record on the record_ref; gnubok_ask_document answers one question from the text with page and quote (journal_entry:<id> returns every attachment of a verifikat as a record). Cite the page you read from; gnubok_get_source shows the page text. Facts carry validity and belief windows: gnubok_get_fact_history when values changed. Never state a value the record does not hold; propose a correction with gnubok_propose_fact and let a person approve it. Accounted://arkiv/missing lists documents the books expect but the archive lacks, with evidence and the intake address to forward to; gather them with the person and close each with gnubok_resolve_missing. Accounted://arkiv/graph is the whole company as one graph with record references and evidence on every link; gnubok_get_neighbourhood (via gnubok_call_tool) walks the hops around one node.',
+              'Arkiv holds every document the company has sent in, with its type and the text of every page. To gather documents of a kind or period, page through gnubok_list_records (complete; duplicate_of marks a later copy of the same text, count it once); to find what a document says, gnubok_search_records. Read the text with gnubok_read_document (up to 20 pages per call) or gnubok_get_source (one page plus a link to the file). Answer only from text you read and cite file and page: nothing is pre-extracted, dates and amounts are in the text. gnubok_ask_document answers one question about one document with page and a verified quote. Search covers only documents already read: when it reports unread documents, list them and open them with gnubok_read_document. Accounted://arkiv/map gives counts by type and the latest documents. Where the company brain is switched on, the map also lists agreements and registered facts, gnubok_get_fact_history shows when a value held, gnubok_propose_fact stages a correction for a person to approve, and Accounted://arkiv/missing and Accounted://arkiv/graph add what the books expect and how records connect.',
             anchors: [
               { record_ref: `company:${companyId}`, title: 'Bolagets fakta (subject_ref för gnubok_get_fact_history)' },
               ...((anchors.data ?? []) as Array<{ id: string; title: string }>).map((a) => ({ record_ref: `agreement:${a.id}`, title: a.title })),
@@ -5719,44 +5863,7 @@ export const tools: McpTool[] = [
       // session start instead of discovering a dead session mid-task.
       // Best-effort and emitted only when a connection (or verified system
       // grant) exists: never-connected companies pay no payload for it.
-      // The system-before-user priority mirrors resolveReadAuth
-      // (skatteverket/lib/resolve-auth.ts); not reused directly because the
-      // briefing needs token metadata (createdAt, reconsent status) that
-      // resolveReadAuth deliberately collapses into an auth result.
-      const safeSkvConnection = (async (): Promise<
-        | {
-            status: 'active' | 'needs_reconsent'
-            source: 'user' | 'system'
-            connected_at?: string | null
-            message?: string
-          }
-        | null
-      > => {
-        try {
-          if (process.env.SKATTEVERKET_ENABLED !== 'true') return null
-          if (
-            getSystemAuthMode() === 'on' &&
-            isSystemAuthConfigured() &&
-            (await hasVerifiedGrant(companyId, 'lasombud'))
-          ) {
-            return { status: 'active', source: 'system' }
-          }
-          const token = await findCompanyTokenUser(supabase, companyId)
-          if (!token) return null
-          if (token.needsReconsent) {
-            return {
-              status: 'needs_reconsent',
-              source: 'user',
-              connected_at: token.createdAt,
-              message:
-                'Skatteverket-sessionen har gått ut. Skatteverkets personliga inloggning gäller bara ca 1 timme, så detta är normalt. Be användaren ansluta igen med BankID under Inställningar → Skatteverket; bara en person kan göra det, så försök inte med Skatteverket-verktyg förrän användaren bekräftat.',
-            }
-          }
-          return { status: 'active', source: 'user', connected_at: token.createdAt }
-        } catch {
-          return null
-        }
-      })()
+      const safeSkvConnection = getSkvConnectionHealth(supabase, companyId)
 
       const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes] = await Promise.all([
         supabase
@@ -5793,7 +5900,7 @@ export const tools: McpTool[] = [
           .maybeSingle(),
         supabase
           .from('company_settings')
-          .select('accounting_method, dimensions_enabled')
+          .select('accounting_method, dimensions_enabled, company_name')
           .eq('company_id', companyId)
           .maybeSingle(),
         safeDimensionsRead,
@@ -5833,12 +5940,15 @@ export const tools: McpTool[] = [
         | { name: string | null; org_number: string | null; entity_type: string | null }
         | null
       const settingsRow = settingsRes.data as
-        | { accounting_method: string | null; dimensions_enabled?: boolean | null }
+        | { accounting_method: string | null; dimensions_enabled?: boolean | null; company_name?: string | null }
         | null
       const company = {
         id: companyId,
         company_id: companyId,
-        name: companyRow?.name ?? null,
+        // The name the owner edits in Inställningar, as gnubok_list_companies
+        // shows it; companies.name is the onboarding snapshot and goes stale on
+        // a rename (feedback seq 580571, 670221: two names for one company).
+        name: settingsRow?.company_name || companyRow?.name || null,
         org_number: companyRow?.org_number ?? null,
         entity_type: companyRow?.entity_type ?? null,
         accounting_method: settingsRow?.accounting_method ?? null,
@@ -5919,11 +6029,13 @@ export const tools: McpTool[] = [
         }
       }
 
-      const atomIds = [
+      const companySkills = await loadCompanySkillRows(supabase, companyId)
+      const atomIds = [...new Set([
         ...(profile?.horizontal_atoms ?? []),
         ...(profile?.vertical_atoms ?? []),
         ...(profile?.modifier_atoms ?? []),
-      ]
+        ...companySkills.flatMap((row) => row.atom_id ? [row.atom_id] : []),
+      ])]
 
       let atoms: Array<{ id: string; atom_id: string; tier: string; title: string; description: string }> = []
       if (atomIds.length > 0) {
@@ -5932,6 +6044,7 @@ export const tools: McpTool[] = [
           .select('id, tier, title, description')
           .in('id', atomIds)
           .eq('is_active', true)
+          .eq('mcp_exposed', true)
         if (atomErr) throw new Error(`Failed to load atom metadata: ${atomErr.message}`)
         atoms = ((atomRows ?? []) as Array<{
           id: string
@@ -5949,6 +6062,10 @@ export const tools: McpTool[] = [
         }))
       }
 
+      atoms.push(...companySkills.flatMap((row) => {
+        const skill = ownSkill(row)
+        return skill ? [{ id: skill.slug, atom_id: skill.slug, tier: skill.tier, title: skill.name, description: skill.summary }] : []
+      }))
       const ledgerDigest = await safeLedgerDigest
       const skvConnection = await safeSkvConnection
       const arkivDigest = await safeArkivDigest
@@ -6402,7 +6519,7 @@ export const tools: McpTool[] = [
     catalogVisibility: 'search',
     keywords: ['kvittojakten', 'kvitto', 'underlag', 'saknar underlag', 'mail'],
     title: 'Kvittojakten Worklist',
-    description: 'What lacks an underlag, shaped for a mail search: posted verifikat and unbooked purchases, largest first, with counterparty, amount, date window, portal hint, the inbox address to forward to and a next step per item. Load skill kvittojakten first.',
+    description: 'What lacks an underlag, shaped for a mail search: unbooked purchases first, then posted verifikat, largest first within each, with counterparty, amount, date window, portal hint, the inbox address to forward to and a next step per item. Load skill kvittojakten first.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -11978,6 +12095,22 @@ export const tools: McpTool[] = [
         throw registryError('BATCH_TX_EXPLAINED_CHECK_FAILED')
       }
 
+      // Kontantmetoden: the RPC only clears 1510/2440, so a never-booked
+      // invoice would lose its revenue/cost + moms. Refuse at stage time with
+      // the per-invoice route spelled out (the commit executor re-checks).
+      const cashCheck = await findCashMethodUnbookedAllocations(supabase, companyId, allocations)
+      if (!cashCheck.ok) {
+        throw new Error('Kontantmetodskontrollen kunde inte köras. Försök igen.')
+      }
+      if (cashCheck.unbooked.length > 0) {
+        const numbers = cashCheck.unbooked.map((u) => u.invoice_number ?? u.id).join(', ')
+        const err = registryError('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+        err.message +=
+          ` Obokförda fakturor: ${numbers}. En faktura som ensam motsvarar beloppet: gnubok_match_transaction_to_invoice.` +
+          ' Flera fakturor: markera varje faktura som betald (kundfakturor: gnubok_mark_invoice_as_paid), sedan gnubok_reconcile_match för att koppla transaktionen till verifikaten.'
+        throw err
+      }
+
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       // Swedish plurals: kundfaktura → kundfakturor (not kundfakturaor).
       // Same for leverantörsfaktura → leverantörsfakturor.
@@ -14959,9 +15092,13 @@ export const tools: McpTool[] = [
       if (txError) throw dbError(txError)
       const matchedDocIds = new Set((txMatches || []).map((t) => t.document_id))
 
-      const unmatched = inboxRows
+      const unmatchedRows = inboxRows
         .filter((r) => r.document_id && !matchedDocIds.has(r.document_id))
         .slice(0, limit)
+      // A link waiting for approval already holds some of these: say so, so
+      // an agent does not propose the same underlag for a second purchase.
+      const claims = await loadDocumentClaims(supabase, companyId, unmatchedRows.map((r) => r.document_id as string))
+      const unmatched = unmatchedRows
         .map((item) => {
           const extracted = item.extracted_data as Record<string, unknown> | null
           let vendorName: string | null = null
@@ -15025,6 +15162,10 @@ export const tools: McpTool[] = [
             invoice_date: invoiceDate,
             payment_reference: paymentReference,
             pages,
+            pending_link: (() => {
+              const claim = claims.get(item.document_id as string)?.find((c) => c.operation_id)
+              return claim ? { operation_id: claim.operation_id, transaction_id: claim.transaction_id, journal_entry_id: claim.journal_entry_id } : null
+            })(),
           }
         })
 
@@ -15200,6 +15341,10 @@ export const tools: McpTool[] = [
         docInvoiceDate = (invoice?.invoiceDate as string) || null
       }
 
+      const sharedNote = sharedDocumentWarning(
+        (await loadDocumentClaims(supabase, companyId, [documentId])).get(documentId) ?? [],
+        { transaction_id: transactionId },
+      )
       return stagePendingOperation(
         supabase, companyId, userId, 'attach_document_to_transaction',
         `Koppla bilaga: ${doc.file_name} → ${tx.merchant_name || tx.description || transactionId}`,
@@ -15235,6 +15380,7 @@ export const tools: McpTool[] = [
           // becomes part of the verifikation underlag once categorize
           // propagates it (BFL 5 kap 6 § rättelse-räkenskapsinformation).
           dateForPeriodCheck: typeof tx.date === 'string' ? tx.date : undefined,
+          ...(sharedNote ? { complianceNote: sharedNote } : {}),
         }
       )
     },
@@ -15298,6 +15444,10 @@ export const tools: McpTool[] = [
 
       const currentlyLinkedToSameJe = doc.journal_entry_id === journalEntryId
       const currentlyLinkedToOther = !!doc.journal_entry_id && !currentlyLinkedToSameJe
+      const sharedNote = sharedDocumentWarning(
+        (await loadDocumentClaims(supabase, companyId, [documentId])).get(documentId) ?? [],
+        { journal_entry_id: journalEntryId },
+      )
 
       return stagePendingOperation(
         supabase, companyId, userId, 'link_document_to_voucher',
@@ -15321,6 +15471,7 @@ export const tools: McpTool[] = [
           idempotencyKey: typeof args.idempotency_key === 'string' ? args.idempotency_key : undefined,
           dryRun: args.dry_run === true,
           dateForPeriodCheck: je.entry_date,
+          ...(sharedNote ? { complianceNote: sharedNote } : {}),
         }
       )
     },
@@ -18574,6 +18725,18 @@ export const tools: McpTool[] = [
       const txDesc = transaction.merchant_name || transaction.description || transactionId
       // Booking order: largest first, as the matcher offers them.
       const ordered = [...requests].sort((a, b) => expectedRotRutPayoutAmount(b) - expectedRotRutPayoutAmount(a))
+      // A fully paid begäran also clears the öre its invoices carry on 1513
+      // beyond the requested kronor (3740). Preview only: the commit
+      // recomputes it at booking.
+      const oreRoundings = await Promise.all(
+        ordered.map((r) => {
+          const payout = expectedRotRutPayoutAmount(r)
+          return payout >= Number(r.requested_total)
+            ? getPayoutOreRounding(supabase, companyId, r, payout).then((x) => x.rounding)
+            : 0
+        }),
+      )
+      const oreRoundingTotal = roundOre(oreRoundings.reduce((sum, x) => sum + x, 0))
 
       return stagePendingOperation(supabase, companyId, userId, 'settle_rot_rut_payout',
         `ROT/RUT-utbetalning: ${txDesc} → ${ordered.map((r) => r.name).join(', ')}`,
@@ -18584,20 +18747,114 @@ export const tools: McpTool[] = [
           transaction_currency: transaction.currency,
           transaction_date: transaction.date,
           expected_total: expectedTotal,
-          requests: ordered.map((r) => ({
+          requests: ordered.map((r, i) => ({
             request_id: r.id,
             name: r.name,
             deduction_type: r.deduction_type,
+            status: r.status,
+            expected_payout: expectedRotRutPayoutAmount(r),
+            ore_rounding: oreRoundings[i],
+          })),
+          ore_rounding_total: oreRoundingTotal,
+        },
+        actor,
+        {
+          description: `After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran)${oreRoundingTotal > 0 ? `, plus debit 3740 Öresavrundning ${oreRoundingTotal} kr so 1513 clears the öre the whole-kronor begäran left` : ''}, every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.`,
+          tool: 'gnubok_list_rot_rut_payout_requests',
+        },
+        { dateForPeriodCheck: transaction.date },
+      )
+    },
+  },
+
+  {
+    name: 'gnubok_link_rot_rut_payout_voucher',
+    keywords: ['rotavdrag', 'rutavdrag', 'utbetalning skatteverket', '1513', 'koppla verifikat', 'öresavrundning'],
+    title: 'Link Existing Rot/Rut Payout Voucher',
+    catalogVisibility: 'search',
+    description:
+      'Link ROT/RUT begäran to a payout voucher already booked by hand (credits 1513; öre rounding allowed). Books nothing, marks the begäran settled. For an unbooked bank row use gnubok_settle_rot_rut_payout instead. Stages.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        journal_entry_id: { type: 'string', description: 'The posted payout voucher (debit 19xx / credit 1513)' },
+        request_ids: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 10 },
+      },
+      required: ['journal_entry_id', 'request_ids'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_STAGED_WRITE,
+    async execute(args, companyId, userId, supabase, actor) {
+      const journalEntryId = args.journal_entry_id as string
+      const rawIds = Array.isArray(args.request_ids) ? (args.request_ids as unknown[]) : []
+      const requestIds = [...new Set(rawIds.filter((id): id is string => typeof id === 'string' && id.length > 0))]
+      if (!journalEntryId || requestIds.length === 0) {
+        throw codedError('VALIDATION_ERROR', 'journal_entry_id and request_ids are required')
+      }
+      if (requestIds.length > 10) {
+        throw codedError('VALIDATION_ERROR', 'request_ids: at most 10 begäran per voucher')
+      }
+
+      // Plain reads only: a staging tool writes nothing but the pending row,
+      // so the link_rot_rut_payout_voucher RPC (which locks and writes) runs at
+      // approval and makes the final call on every rule. This only refuses
+      // what can never pass and shows the approver the numbers.
+      const [{ data: voucher, error: voucherError }, { data: requestRows, error: reqError }] = await Promise.all([
+        supabase
+          .from('journal_entries')
+          .select('id, entry_date, voucher_series, voucher_number, description, status, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+          .eq('company_id', companyId)
+          .eq('id', journalEntryId)
+          .maybeSingle(),
+        supabase
+          .from('rot_rut_payout_requests')
+          .select('id, name, deduction_type, status, requested_total, decided_total, settlement_journal_entry_id')
+          .eq('company_id', companyId)
+          .in('id', requestIds),
+      ])
+      if (voucherError) throw dbError(voucherError)
+      if (reqError) throw dbError(reqError)
+      if (!voucher) throw registryError('ROT_RUT_LINK_VOUCHER_NOT_FOUND')
+      if (voucher.status !== 'posted') throw registryError('ROT_RUT_LINK_VOUCHER_NOT_ELIGIBLE')
+      const requests = (requestRows ?? []) as Array<RotRutPayoutRequestCandidate & { name: string }>
+      if (requests.length !== requestIds.length) throw registryError('ROT_RUT_REQUEST_NOT_FOUND')
+      const other = requests.find((r) => r.settlement_journal_entry_id && r.settlement_journal_entry_id !== journalEntryId)
+      if (other) throw registryError('ROT_RUT_LINK_ALREADY_SETTLED')
+
+      let bankAmount = 0
+      let receivableCredit = 0
+      for (const line of (voucher.lines ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) {
+        const net = Number(line.debit_amount) - Number(line.credit_amount)
+        if (line.account_number === '1513') receivableCredit -= net
+        else if (line.account_number.startsWith('19')) bankAmount += net
+      }
+      const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
+      const voucherLabel = `${voucher.voucher_series}${voucher.voucher_number}`
+
+      return stagePendingOperation(supabase, companyId, userId, 'link_rot_rut_payout_voucher',
+        `ROT/RUT-utbetalning: koppla ${voucherLabel} till ${requests.map((r) => r.name).join(', ')}`,
+        { journal_entry_id: journalEntryId, request_ids: requestIds },
+        {
+          journal_entry_id: journalEntryId,
+          voucher_number: voucherLabel,
+          entry_date: voucher.entry_date,
+          bank_amount: roundOre(bankAmount),
+          voucher_1513_credit: roundOre(receivableCredit),
+          expected_total: expectedTotal,
+          rounding: roundOre(receivableCredit - expectedTotal),
+          requests: requests.map((r) => ({
+            request_id: r.id,
+            name: r.name,
             status: r.status,
             expected_payout: expectedRotRutPayoutAmount(r),
           })),
         },
         actor,
         {
-          description: 'After approval the transfer is booked debit 19xx / credit 1513 (one leg per begäran), every begäran is marked paid and the row is linked. Verify with gnubok_list_rot_rut_payout_requests.',
+          description: 'After approval every begäran points at the voucher and reads paid (or partially paid); no new voucher is booked. Verify with gnubok_list_rot_rut_payout_requests.',
           tool: 'gnubok_list_rot_rut_payout_requests',
         },
-        { dateForPeriodCheck: transaction.date },
       )
     },
   },
@@ -21915,10 +22172,19 @@ export const tools: McpTool[] = [
       if (gate) throw new AssetGateError(gate)
       const accounts = await resolveCreateAccounts(supabase, companyId, body)
       const cost = roundOre(body.acquisition_cost)
+      // Normalize the opening fields once so the staged params and the
+      // preview the approver sees carry the same values.
+      const openingAmount = roundOre(body.opening_accumulated_depreciation ?? 0)
+      const openingDate = openingAmount > 0 ? body.opening_depreciation_date ?? null : null
+      const params = {
+        ...body,
+        opening_accumulated_depreciation: openingAmount,
+        opening_depreciation_date: openingDate,
+      }
       return stagePendingOperation(
         supabase, companyId, userId, 'create_asset',
         `Ny anläggningstillgång: ${body.name}, ${cost} SEK`,
-        body as Record<string, unknown>,
+        params as Record<string, unknown>,
         {
           name: body.name,
           category: body.category,
@@ -21929,7 +22195,9 @@ export const tools: McpTool[] = [
           depreciation_method: body.depreciation_method ?? 'linear',
           accounts,
           k3_component_count: body.k3_components?.length ?? 0,
-          will: 'add the asset to the anläggningsregister; no voucher is posted (the purchase is already booked)',
+          opening_accumulated_depreciation: openingAmount,
+          opening_depreciation_date: openingDate,
+          will: 'add the asset to the anläggningsregister; no voucher is posted (the purchase and any opening accumulated depreciation are already booked)',
         },
         actor,
         undefined,
@@ -23709,26 +23977,31 @@ function checkAndEmitNextHintFollowed(
 }
 
 /**
- * Fire-and-forget telemetry for every successful gnubok_load_skill, all tiers.
+ * Await retrieval telemetry before returning a skill, so the next staged
+ * operation can observe it even on another serverless instance.
  * Unlike mcp.workflow_started (workflow tier only), this records WHICH skill
  * or atom body the agent pulled: the denominator for correlating a loaded
  * atom with downstream tool-error rates.
  */
-function emitSkillLoaded(payload: {
+async function emitSkillLoaded(payload: {
   slug: string
-  tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier'
+  tier: SkillTier
+  bodyHash: string
+  version?: number
   actor: ActorContext
   userId: string
   companyId: string | null
-}): void {
+}): Promise<void> {
   if (!payload.companyId) return
   const companyId = payload.companyId
-  emitAfterResponse(() => eventBus
+  await eventBus
     .emit({
       type: 'mcp.skill_loaded',
       payload: {
         slug: payload.slug,
         tier: payload.tier,
+        bodyHash: payload.bodyHash,
+        version: payload.version,
         sessionId: payload.actor.sessionId ?? null,
         actorType: payload.actor.type,
         actorId: payload.actor.id ?? null,
@@ -23737,7 +24010,7 @@ function emitSkillLoaded(payload: {
         companyId,
       },
     })
-    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err)))
+    .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
 }
 
 /** Fire-and-forget telemetry for workflow lifecycle. */
@@ -23888,6 +24161,17 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     if (!rl.ok) return rl.response!
   }
   const supabase = createServiceClientNoCookies()
+  // Keep the OAuth key's classification name stable: onboarding depends on it.
+  // Display identity comes from the server-stored provider, never a client header.
+  if (apiKeyId && apiKeyName === 'MCP-klient (OAuth)') {
+    const { data: key } = await supabase.from('api_keys').select('client').eq('id', apiKeyId).maybeSingle()
+    apiKeyName = oauthActorLabel(key?.client, apiKeyName)
+    if (typeof key?.client === 'string' && /^registered:[0-9a-f-]{36}$/i.test(key.client)) {
+      const { data: registration } = await supabase.from('oauth_client_registrations')
+        .select('client_name').eq('id', key.client.slice('registered:'.length)).maybeSingle()
+      if (registration?.client_name) apiKeyName = `${registration.client_name} (registered client)`
+    }
+  }
   // The Mcp-Session-Id header (introduced in spec 2025-06-18) is the canonical
   // way for an agent to keep a stable identifier across tools/call invocations
   // in one conversation. We use it to correlate telemetry + drive the next-hint
@@ -24163,9 +24447,24 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           : ''
         : outerToolName
       const toolName = toCanonicalToolName(requestedToolName)
-      const rawToolArgs = viaBridge
+      const innerToolArgs = viaBridge
         ? ((outerToolArgs.arguments ?? {}) as Record<string, unknown>)
         : outerToolArgs
+      // tools/list advertises company_id on the bridges themselves (every
+      // company-dependent tool gets it), so agents send it NEXT TO `tool`.
+      // Dropping it there silently ran the inner tool on the key's default
+      // company and returned another company's data (feedback seq 561118,
+      // 694132). Carry it into the inner arguments; two different ids is an
+      // ambiguity the caller has to resolve, never a guess.
+      const bridgeCompanyConflict =
+        viaBridge &&
+        outerToolArgs.company_id !== undefined &&
+        innerToolArgs.company_id !== undefined &&
+        outerToolArgs.company_id !== innerToolArgs.company_id
+      const rawToolArgs =
+        viaBridge && outerToolArgs.company_id !== undefined && innerToolArgs.company_id === undefined
+          ? { ...innerToolArgs, company_id: outerToolArgs.company_id }
+          : innerToolArgs
 
       const tool = tools.find((t) => t.name === toolName)
 
@@ -24181,6 +24480,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // that, because all three public tools are in the default catalog and
       // an anonymous caller never needs the bridge to name them.
       if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
+      if (isAnonymous && toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')) return unauthorized()
 
       // Which targets each bridge may name lives in bridgeRefusalReason:
       // gnubok_call_tool carries reads, gnubok_stage_tool carries unlisted
@@ -24188,7 +24488,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // below still runs against the real target. An unknown-but-named target
       // falls through to the unknown-tool handler below, which lists what
       // exists.
-      const refusal = bridge ? bridgeRefusalReason(bridge, requestedToolName, tool) : null
+      const refusal = bridgeCompanyConflict
+        ? `company_id is given twice with different values (${String(outerToolArgs.company_id)} next to "tool", ${String(innerToolArgs.company_id)} inside "arguments"). Send it once.`
+        : bridge
+          ? bridgeRefusalReason(bridge, requestedToolName, tool)
+          : null
       if (refusal) {
         const bridgeError = toToolError(codedError('VALIDATION_ERROR', refusal), {
           toolName: outerCanonicalName,
@@ -24241,17 +24545,42 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const available = tools
           .map((t) => toPublicToolName(t.name, toolNamespace))
           .join(', ')
+        // Closest real tools first, each with how to reach it, so a guessed
+        // name (get_journal_entry, list_bank_accounts) turns into the right
+        // call instead of a scan of the whole catalog. Only tools this key may
+        // call are suggested, as gnubok_search_tools filters.
+        const suggestions = suggestToolNames(
+          requestedToolName,
+          tools.filter((t) => {
+            const required = TOOL_SCOPE_MAP[t.name]
+            return !required || hasScope(keyScopes, required)
+          }),
+        )
+        const didYouMean =
+          suggestions.length > 0
+            ? ` Did you mean: ${suggestions
+                .map((t) => {
+                  const via = toolCallableVia(t, isStagingTool(t))
+                  const name = toPublicToolName(t.name, toolNamespace)
+                  return via === 'call_tool' || via === 'stage_tool'
+                    ? `${name} (via ${toPublicToolName(`gnubok_${via}`, toolNamespace)})`
+                    : name
+                })
+                .join(', ')}? Or search with ${toPublicToolName('gnubok_search_tools', toolNamespace)}.`
+            : ` Search with ${toPublicToolName('gnubok_search_tools', toolNamespace)}.`
         return NextResponse.json(
           jsonRpcError(
             id ?? null,
             -32602,
-            `Unknown tool: "${requestedToolName}". Available tools: ${available}`
+            `Unknown tool: "${requestedToolName}".${didYouMean} Available tools: ${available}`
           )
         )
       }
 
       // Enforce scope: surface structured error so the agent can dispatch.
-      const requiredScope = TOOL_SCOPE_MAP[toolName]
+      const requiredScope = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
+        ? 'agent:read'
+        : TOOL_SCOPE_MAP[toolName]
       if (requiredScope && !hasScope(keyScopes, requiredScope)) {
         const scopeError = toToolError(
           new Error(`Insufficient scope: this API key does not have the "${requiredScope}" scope`),
@@ -24289,7 +24618,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const companyRoutingStartedAt = Date.now()
       try {
         const extracted = extractRequestedCompany(rawToolArgs)
-        toolArgs = extracted.toolArgs
+        // An agent that double-escapes åäö sends a literal "\u00f6"; decode
+        // it here, once for every tool, before it can be stored as verifikat
+        // text that only a logged rättelse can change (unicode-escape-guard.ts).
+        toolArgs = decodeToolArgs(extracted.toolArgs)
 
         // Hosts do not reliably enforce inputSchema, so a misspelled
         // parameter used to be dropped silently (see arg-guard.ts). Thrown
@@ -24541,7 +24873,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // scopes: search filters to what the API key can actually invoke, the
         // briefing flags each recommended tool as callable or not. Inject
         // privately via __keyScopes.
-        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing') {
+        if (toolName === 'gnubok_search_tools' || toolName === 'gnubok_get_agent_briefing' || toolName === 'gnubok_list_skills') {
           (toolArgs as Record<string, unknown>).__keyScopes = keyScopes
         }
         if (toolName === 'gnubok_search_tools') {

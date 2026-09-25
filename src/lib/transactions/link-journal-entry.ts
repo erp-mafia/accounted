@@ -22,6 +22,7 @@ import { logMatchEvent } from '@/lib/invoices/match-log'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { createLogger } from '@/lib/logger'
+import { conflictCode } from '@/lib/errors/structured-errors'
 import type { Invoice, Transaction } from '@/types'
 
 const log = createLogger('transactions/link-journal-entry')
@@ -33,6 +34,7 @@ const log = createLogger('transactions/link-journal-entry')
 // rather than a link-specific one: it predates this route and is the
 // canonical "bank tx not found in this company" envelope.
 export type LinkTransactionJournalEntryErrorCode =
+  | ReturnType<typeof conflictCode>
   | 'TX_CATEGORIZE_TX_NOT_FOUND'
   | 'LINK_TX_TX_ALREADY_LINKED'
   | 'LINK_TX_JE_NOT_FOUND'
@@ -315,7 +317,7 @@ export async function linkTransactionToJournalEntry(
   ).select('id')
 
   if (updateTxError) {
-    return { ok: false, code: 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
+    return { ok: false, code: updateTxError.code === 'PT409' ? conflictCode(updateTxError.message) : 'LINK_TX_DB_ERROR', details: { reason: updateTxError.message } }
   }
   // CAS lost: a concurrent linker changed the pointer between the liveness
   // check and this write, so 0 rows matched. Fail BEFORE any invoice side

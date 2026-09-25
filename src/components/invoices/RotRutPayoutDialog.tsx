@@ -9,7 +9,6 @@ import {
   Download,
   ExternalLink,
   FileDown,
-  Loader2,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -93,11 +92,11 @@ const SKATTEVERKET_SERVICE_URL =
 
 const STATUS_VARIANT: Record<
   RequestStatus,
-  'secondary' | 'outline' | 'success' | 'warning' | 'destructive'
+  'secondary' | 'outline' | 'muted' | 'warning' | 'destructive'
 > = {
   generated: 'warning',
   submitted: 'outline',
-  paid: 'success',
+  paid: 'muted',
   partially_paid: 'warning',
   rejected: 'destructive',
   cancelled: 'secondary',
@@ -477,14 +476,11 @@ export default function RotRutPayoutDialog({
                 <Button
                   type="button"
                   onClick={generateFile}
-                  disabled={!canWrite || generating || selectedIds.size === 0}
+                  disabled={!canWrite || selectedIds.size === 0}
+                  loading={generating}
                   title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                 >
-                  {generating ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <FileDown className="mr-2 h-4 w-4" />
-                  )}
+                  {!generating && <FileDown className="mr-2 h-4 w-4" />}
                   {t(generating ? 'rot_rut_generating_file' : 'rot_rut_generate_file')}
                 </Button>
               </div>
@@ -538,9 +534,17 @@ export default function RotRutPayoutDialog({
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="truncate text-sm font-medium">{request.name}</span>
-                              <Badge variant={STATUS_VARIANT[request.status]} className="font-normal">
-                                {t(`rot_rut_status_${request.status}`)}
-                              </Badge>
+                              {(() => {
+                                const variant = STATUS_VARIANT[request.status]
+                                const label = t(`rot_rut_status_${request.status}`)
+                                return variant === 'muted' ? (
+                                  <span className="text-xs text-muted-foreground">{label}</span>
+                                ) : (
+                                  <Badge variant={variant} className="font-normal">
+                                    {label}
+                                  </Badge>
+                                )
+                              })()}
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
                               {t('rot_rut_history_meta', {
@@ -556,14 +560,10 @@ export default function RotRutPayoutDialog({
                                 type="button"
                                 size="sm"
                                 variant="ghost"
-                                disabled={isDownloading}
+                                loading={isDownloading}
                                 onClick={() => void downloadArchivedFile(request)}
                               >
-                                {isDownloading ? (
-                                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Download className="mr-1.5 h-3.5 w-3.5" />
-                                )}
+                                {!isDownloading && <Download className="mr-1.5 h-3.5 w-3.5" />}
                                 {t('rot_rut_download_again')}
                               </Button>
                             )}
@@ -581,14 +581,10 @@ export default function RotRutPayoutDialog({
                                 <Button
                                   type="button"
                                   size="sm"
-                                  disabled={isUpdating}
+                                  loading={isUpdating}
                                   onClick={() => void updateRequest(request.id, 'submitted')}
                                 >
-                                  {isUpdating ? (
-                                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />
-                                  )}
+                                  {!isUpdating && <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
                                   {t('rot_rut_mark_uploaded')}
                                 </Button>
                               </>

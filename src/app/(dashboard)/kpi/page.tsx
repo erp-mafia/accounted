@@ -166,7 +166,7 @@ export default function KpiPage() {
                 // complete draft, so while the stored layout is unknown the
                 // control that opens it must not exist: a save from here would
                 // overwrite the row with a layout the user never chose.
-                <Button
+                <Button size="sm"
                   variant="outline"
                   className="gap-1.5"
                   disabled

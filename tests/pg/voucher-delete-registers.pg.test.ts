@@ -361,6 +361,10 @@ describe('delete_last_voucher: ordinary supplier payment vouchers', () => {
       voucherNumber: 1,
       sourceType: 'supplier_invoice_paid',
       sourceId: invoiceId,
+      lines: [
+        { accountNumber: '2440', debitAmount: 1500, creditAmount: 0 },
+        { accountNumber: '1930', debitAmount: 0, creditAmount: 1500 },
+      ],
     })
     await getPool().query(`UPDATE public.supplier_invoices SET payment_journal_entry_id = $1 WHERE id = $2`, [entryId, invoiceId])
     const transactionId = await insertTransaction({ ...seed, amount: -1500, journalEntryId: entryId })

@@ -30,7 +30,7 @@ export default function NewClientCompanyButton() {
 
   return (
     <>
-      <Button onClick={() => setOpen(true)}>
+      <Button size="sm" onClick={() => setOpen(true)}>
         <Plus className="mr-2 h-4 w-4" />
         {t('new_client_company')}
       </Button>

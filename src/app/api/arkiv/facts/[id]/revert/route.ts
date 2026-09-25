@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { revertFact } from '@/lib/arkiv/facts/store'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -15,7 +15,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 const bodySchema = z.object({ reason: z.string().trim().min(1).max(500) })
 
 export const POST = withRouteContext('arkiv.fact.revert', async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const { id } = await params
   const parsed = await validateBody(request, bodySchema)
   if (!parsed.success) return parsed.response

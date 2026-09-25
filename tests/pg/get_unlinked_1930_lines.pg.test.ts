@@ -11,6 +11,8 @@ import { describe, it, expect } from 'vitest'
 import { getPool } from './setup'
 import {
   insertAuthUser,
+  insertTransaction,
+  insertPostedBankJournalEntry,
   insertCompany,
   insertFiscalPeriod,
   insertPostedJournalEntry as insertAtomicPostedJournalEntry,
@@ -32,7 +34,7 @@ async function insertPostedJournalEntry(params: {
   // Balanced pair on 1930 + 2091 (balanserad vinst/förlust, the realistic
   // carried-forward counterpart for an IB on a bank account; harmless for the
   // other source_types where the test only cares about the 1930 side).
-  return insertAtomicPostedJournalEntry({
+  const entry = {
     userId: params.userId,
     companyId: params.companyId,
     fiscalPeriodId: params.fiscalPeriodId,
@@ -44,7 +46,12 @@ async function insertPostedJournalEntry(params: {
       { accountNumber: '1930', debitAmount: amount, creditAmount: 0 },
       { accountNumber: '2091', debitAmount: 0, creditAmount: amount },
     ],
-  })
+  }
+  if (params.sourceType === 'bank_transaction') {
+    const transactionId = await insertTransaction({ ...params, date: params.entryDate, amount })
+    return insertPostedBankJournalEntry({ ...entry, transactionId })
+  }
+  return insertAtomicPostedJournalEntry(entry)
 }
 
 describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
@@ -96,7 +103,7 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     expect(rows.find((r) => r.source_type === 'opening_balance')).toBeUndefined()
   })
 
-  it('excludes storno and correction vouchers from the unmatched-1930 set', async () => {
+  it('excludes storno vouchers but offers an unlinked correction voucher (20260923150000)', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     const fiscalPeriodId = await insertFiscalPeriod({
@@ -107,14 +114,15 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     })
 
     // A storno and a correction voucher on 1930 (the products of the correctEntry
-    // flow), plus a normal bank voucher. Stornos/corrections are book-only
-    // reversals with no bank-feed counterpart: they must be EXCLUDED so a
-    // reconciled period doesn't show them as omatchade verifikationer.
+    // flow), plus a normal bank voucher. The storno cancels its reversed
+    // original and has no bank-feed counterpart: EXCLUDED. The correction is the
+    // live rebooking of the bank movement; unlinked, it is a real unmatched
+    // voucher and must be offered (a linked one drops out via the link check).
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'storno', voucherNumber: 20, amount: 25000,
     })
-    await insertPostedJournalEntry({
+    const correctionId = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 21, amount: 25000,
     })
@@ -131,7 +139,7 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     const returnedIds = new Set(rows.map((r) => r.journal_entry_id))
     expect(returnedIds.has(bankEntryId)).toBe(true)
     expect(rows.find((r) => r.source_type === 'storno')).toBeUndefined()
-    expect(rows.find((r) => r.source_type === 'correction')).toBeUndefined()
+    expect(returnedIds.has(correctionId)).toBe(true)
   })
 
   it('still applies date_from / date_to filtering', async () => {
@@ -160,14 +168,14 @@ describe('get_unlinked_gl_lines RPC: opening_balance exclusion', () => {
     // Window covers only the second voucher. Use named notation so we don't have
     // to repeat the '1930' default just to reach the date params.
     const { rows } = await getPool().query(
-      `SELECT entry_date FROM public.get_unlinked_gl_lines(
+      `SELECT entry_date::text AS entry_date FROM public.get_unlinked_gl_lines(
          p_company_id => $1, p_date_from => $2, p_date_to => $3
        ) ORDER BY entry_date`,
       [companyId, '2026-07-01', '2026-12-31'],
     )
 
     expect(rows).toHaveLength(1)
-    expect(rows[0].entry_date.toISOString().slice(0, 10)).toBe('2026-08-01')
+    expect(rows[0].entry_date).toBe('2026-08-01')
   })
 
   it('scopes to the requested company only', async () => {

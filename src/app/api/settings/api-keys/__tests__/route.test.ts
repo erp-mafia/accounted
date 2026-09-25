@@ -25,7 +25,7 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWritePermissionMock(...args),
 }))
 
-import { POST } from '../route'
+import { GET, POST } from '../route'
 
 const mockUser = { id: 'user-1', email: 'test@test.se' }
 
@@ -242,5 +242,52 @@ describe('POST /api/settings/api-keys', () => {
     // Test keys are simulation-only: they bind to the active company (the v1
     // wrapper forces dry-run so they never persist).
     expect(payload.company_id).toBe('company-1')
+  })
+})
+
+describe('GET /api/settings/api-keys', () => {
+  function setupList(result: { data?: unknown; error?: unknown }) {
+    const eqSpy = vi.fn()
+    const chain: Record<string, unknown> = {
+      select: () => chain,
+      eq: (...args: unknown[]) => {
+        eqSpy(...args)
+        return chain
+      },
+      order: () => Promise.resolve({ data: result.data ?? null, error: result.error ?? null }),
+    }
+    mockSupabase.from.mockImplementation(() => chain)
+    return { eqSpy }
+  }
+
+  it('returns 401 when not authenticated', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), { params: Promise.resolve({}) })
+    expect(res.status).toBe(401)
+  })
+
+  it('marks OAuth-minted keys as sign-ins and keeps their client', async () => {
+    const { eqSpy } = setupList({
+      data: [
+        { id: 'k1', name: 'MCP-klient (OAuth)', client: 'chatgpt', key_prefix: 'gnubok_sk_a', revoked_at: null },
+        { id: 'k2', name: 'Bokslutsskript', client: null, key_prefix: 'gnubok_sk_b', revoked_at: null },
+      ],
+    })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{
+      data: { id: string; source: string; client: string | null }[]
+    }>(res)
+    expect(status).toBe(200)
+    expect(eqSpy).toHaveBeenCalledWith('company_id', 'company-1')
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'k1', source: 'signin', client: 'chatgpt' }),
+      expect.objectContaining({ id: 'k2', source: 'manual', client: null }),
+    ])
+  })
+
+  it('returns 500 when the list read fails', async () => {
+    setupList({ error: { message: 'boom', code: 'XX000' } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), { params: Promise.resolve({}) })
+    expect(res.status).toBe(500)
   })
 })

@@ -30,6 +30,8 @@ type Head = {
   entry_date: string
   description: string
   source_type: string | null
+  reverses_id: string | null
+  reversed_by_id: string | null
 }
 
 function head(id: string, entry_date: string, overrides: Partial<Head> = {}): Head {
@@ -41,6 +43,8 @@ function head(id: string, entry_date: string, overrides: Partial<Head> = {}): He
     entry_date,
     description: `Verifikat ${id}`,
     source_type: 'manual',
+    reverses_id: null,
+    reversed_by_id: null,
     ...overrides,
   }
 }
@@ -216,8 +220,8 @@ describe('getSkattekontoReconciliationStatus', () => {
 
   it('treats a link to a reversed entry as a dead link, and the storno pair nets out of the residual', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    const E1 = head('E1', '2026-08-01', { status: 'reversed' })
-    const E2 = head('E2', '2026-08-02', { source_type: 'storno' })
+    const E1 = head('E1', '2026-08-01', { status: 'reversed', reversed_by_id: 'E2' })
+    const E2 = head('E2', '2026-08-02', { source_type: 'storno', reverses_id: 'E1' })
     enqueueBase(enqueue, {
       saldo: 1000,
       rows: [row('r1', '2026-08-01', 1000, { journal_entry_id: 'E1' })],
@@ -232,9 +236,91 @@ describe('getSkattekontoReconciliationStatus', () => {
     expect(s.counts.unmatched_external).toBe(1)
     expect(s.items.unmatched_external[0]).toMatchObject({ item_id: 'r1', link_problem: 'entry_reversed' })
     expect(s.items.unmatched_external[0].actions).toContain('unmatch')
-    expect(s.counts.unmatched_ledger).toBe(2)
+    expect(s.counts.unmatched_ledger).toBe(0)
     expect(s.unexplained_difference).toBe(0)
     expect(s.difference).toBe(1000)
+    expect(s.is_reconciled).toBe(false)
+  })
+
+  it('settles a complete storno pair without inventing external matches or older work', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const original = head('E1', '2026-08-01', { status: 'reversed', reversed_by_id: 'E2' })
+    const reversal = head('E2', '2026-08-10', { source_type: 'storno', reverses_id: 'E1' })
+    const correct = head('E3', '2026-08-01')
+    enqueueBase(enqueue, {
+      saldo: 1000,
+      rows: [row('r1', '2026-08-01', 1000, { journal_entry_id: 'E3' })],
+      heads: [correct],
+    })
+    ledger([
+      ledgerLine(original, 600), ledgerLine(original, 400),
+      ledgerLine(reversal, -1000), ledgerLine(correct, 1000),
+    ], { cutoff: 1000, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, {
+      today: TODAY, windowFrom: '2026-08-05',
+    })
+    expect(s?.counts).toEqual({ proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 1, ignored: 0 })
+    expect(s?.items.unmatched_ledger).toEqual([])
+    expect(s?.older_unmatched_count).toBe(0)
+    expect(s?.ledger_balance).toBe(1000)
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(true)
+  })
+
+  it.each([
+    ['unrelated equal and opposite entries', {}, {}, -1000],
+    ['a mismatched reversal amount', { status: 'reversed', reversed_by_id: 'E2' }, { source_type: 'storno', reverses_id: 'E1' }, -999.99],
+    ['a broken reciprocal link', { status: 'reversed', reversed_by_id: 'E2' }, { source_type: 'storno', reverses_id: 'other' }, -1000],
+    ['an original still posted', { reversed_by_id: 'E2' }, { source_type: 'storno', reverses_id: 'E1' }, -1000],
+    ['a correction that is not a storno', { status: 'reversed', reversed_by_id: 'E2' }, { reverses_id: 'E1' }, -1000],
+  ] as const)('keeps %s visible', async (_name, originalOverrides, reversalOverrides, amount) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 0, rows: [] })
+    ledger([
+      ledgerLine(head('E1', '2026-08-01', originalOverrides), 1000),
+      ledgerLine(head('E2', '2026-08-02', reversalOverrides), amount),
+    ], { cutoff: roundOre(1000 + amount), before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.counts.unmatched_ledger).toBe(2)
+    expect(s?.items.unmatched_ledger).toHaveLength(2)
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(false)
+  })
+
+  it.each([
+    head('E1', '2026-08-01', { status: 'reversed', reversed_by_id: 'E2' }),
+    head('E2', '2026-08-01', { source_type: 'storno', reverses_id: 'E1' }),
+  ])('keeps $id visible when its counterpart is outside the comparable ledger history', async (remaining) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueBase(enqueue, { saldo: 0, rows: [] })
+    const amount = remaining.id === 'E1' ? 1000 : -1000
+    ledger([ledgerLine(remaining, amount)], { cutoff: amount, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.items.unmatched_ledger.map(i => i.item_id)).toEqual([remaining.id])
+    expect(s?.counts.unmatched_ledger).toBe(1)
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(false)
+  })
+
+  it('does not suppress an unmatched original when the reversal has a live external link', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const original = head('E1', '2026-08-01', { status: 'reversed', reversed_by_id: 'E2' })
+    const reversal = head('E2', '2026-08-02', { source_type: 'storno', reverses_id: 'E1' })
+    enqueueBase(enqueue, {
+      saldo: -1000,
+      rows: [row('r1', '2026-08-02', -1000, { journal_entry_id: 'E2' })],
+      heads: [reversal],
+    })
+    ledger([ledgerLine(original, 1000), ledgerLine(reversal, -1000)], { cutoff: 0, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.items.unmatched_ledger.map(i => i.item_id)).toEqual(['E1'])
+    expect(s?.counts.matched).toBe(1)
+    expect(s?.unexplained_difference).toBe(0)
+    expect(s?.is_reconciled).toBe(false)
   })
 
   it('marks a stale snapshot and never claims reconciled on one', async () => {

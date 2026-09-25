@@ -590,11 +590,11 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button onClick={resumePolling} variant="default" className="h-11 gap-2">
+            <Button onClick={resumePolling} variant="default" size="lg" className="gap-2">
               <BankIdIcon className="invert dark:invert-0" />
               {t('bankid_resume_continue')}
             </Button>
-            <Button onClick={handleCancel} variant="outline" className="h-11">
+            <Button onClick={handleCancel} variant="outline" size="lg">
               {t('bankid_resume_restart')}
             </Button>
           </div>
@@ -623,7 +623,8 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
       <Button
         onClick={startSession}
         variant={hero ? 'default' : 'outline'}
-        className={hero ? 'h-11 w-full gap-2' : 'w-full gap-2 border-[1.5px] py-6 text-base'}
+        size="lg"
+        className={hero ? 'w-full gap-2' : 'w-full gap-2 border-[1.5px] text-base'}
       >
         {/* On the filled pill the logo must counter-invert: primary is dark in
             light mode (white logo) and light in dark mode (black logo). */}
@@ -653,7 +654,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               onClick={startSession}
               variant="ghost"
               size="sm"
-              className="mt-1 h-auto px-0 py-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              className="mt-1 h-auto px-0 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
             >
               Försök med BankID igen
             </Button>

@@ -29,7 +29,12 @@ function makeSupabase(byTable: Record<string, TableResult>) {
     )
     return chain
   }
-  return { from: (t: string) => chainFor(t) }
+  // getCompanyEntitlements reads its grant rows through this RPC.
+  const rpc = (fn: string) => {
+    const result = fn === 'company_capability_grant_rows' ? byTable.capability_grants : undefined
+    return Promise.resolve({ data: result?.data ?? null, error: result?.error ?? null })
+  }
+  return { from: (t: string) => chainFor(t), rpc }
 }
 
 const requireAuthMock = vi.fn()
@@ -315,5 +320,29 @@ describe('GET /api/billing/status agreement coverage', () => {
     const { body } = await parseJsonResponse<StatusBody>(await GET())
     expect(body.isPaying).toBe(true)
     expect(body.coverage).toEqual({ kind: 'subscription', coveredUntil: null })
+  })
+})
+
+describe('GET /api/billing/status subscription interval', () => {
+  it('returns the paying company\'s interval so the plan card shows its price', async () => {
+    authAs({
+      company_subscriptions: { data: { status: 'active', plan: 'monthly' } },
+      capability_grants: { data: null },
+    })
+
+    const { body } = await parseJsonResponse<StatusBody & { subscriptionPlan?: string }>(await GET())
+    expect(body.isPaying).toBe(true)
+    expect(body.subscriptionPlan).toBe('monthly')
+  })
+
+  it('omits the interval for a company that is not paying', async () => {
+    authAs({
+      company_subscriptions: { data: null },
+      capability_grants: { data: TRIAL_LIVE },
+    })
+    serviceByTable = { companies: { data: { team_id: null } } }
+
+    const { body } = await parseJsonResponse<StatusBody & { subscriptionPlan?: string }>(await GET())
+    expect('subscriptionPlan' in (body as object)).toBe(false)
   })
 })

@@ -449,6 +449,16 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
+  // The route composes the message with the account and the amount; this is
+  // the fallback for an envelope without one.
+  TRANSACTION_BOOK_BANK_LINE_DIRECTION: {
+    httpStatus: 400,
+    message_sv:
+      'Bankkontot står på fel sida i verifikationen. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The bank ledger is on the wrong side of the voucher: a withdrawal must credit the bank ledger, a deposit must debit it.',
+    thrown_message_sv: true,
+  },
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
@@ -1023,6 +1033,35 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       'Begäran hann redan bokföras som utbetald av en annan åtgärd. Verifikationen som skapades kan inte kopplas: kontrollera bokföringen på konto 1513.',
     message_en:
       'The request was already settled by another action. The voucher that was created could not be attached: check the bookkeeping on account 1513.',
+  },
+  ROT_RUT_LINK_VOUCHER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Verifikatet hittades inte i det här företaget.',
+    message_en: 'The voucher was not found in this company.',
+  },
+  ROT_RUT_LINK_VOUCHER_NOT_ELIGIBLE: {
+    httpStatus: 400,
+    message_sv:
+      'Verifikatet kan inte kopplas: det måste vara bokfört och får inte vara makulerat, en rättelse eller en ingående balans.',
+    message_en:
+      'The voucher cannot be linked: it must be posted and not reversed, a storno or an opening balance.',
+  },
+  ROT_RUT_LINK_ALREADY_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Begäran är redan kopplad till ett annat utbetalningsverifikat.',
+    message_en: 'The request is already linked to another payout voucher.',
+  },
+  ROT_RUT_LINK_VOUCHER_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Verifikatet är redan kopplat till en annan begäran.',
+    message_en: 'The voucher is already linked to another request.',
+  },
+  ROT_RUT_LINK_AMOUNT_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet på konto 1513 i verifikatet stämmer inte med begäran. Välj verifikatet för just den här utbetalningen, eller alla begäran det betalade.',
+    message_en:
+      'The account 1513 amount on the voucher does not match the request. Pick the voucher for this payout, or every request it paid.',
   },
   ROT_RUT_MATCH_NOT_INCOME: {
     httpStatus: 400,
@@ -2260,6 +2299,11 @@ const FX: Record<string, StructuredErrorEntry> = {
 }
 
 const REPORT: Record<string, StructuredErrorEntry> = {
+  CASH_FLOW_TAX_ALLOCATION_REQUIRED: {
+    httpStatus: 422,
+    message_sv: 'Kassaflödesanalysen kan inte beräkna betald inkomstskatt säkert från periodens skattebokningar. Inkomstskatt behöver skiljas från övriga skatter i rapportunderlaget. Bokföringen behöver inte ändras.',
+    message_en: 'The cash flow statement cannot reliably calculate income tax paid from this period\'s tax postings. Income tax must be separated from other taxes in the report working papers. No bookkeeping changes are required.',
+  },
   REPORT_PERIOD_REQUIRED: {
     httpStatus: 400,
     message_sv: 'period_id krävs.',
@@ -3011,8 +3055,8 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
   // on, instead of the generic "Något gick fel" that invites a retry.
   ARKIV_NOT_ENABLED: {
     httpStatus: 403,
-    message_sv: 'Arkiv är inte aktiverat för det här företaget ännu.',
-    message_en: 'Arkiv is not enabled for this company yet.',
+    message_sv: 'Företagshjärnan är inte aktiverad för det här företaget ännu. Arkivet fungerar som vanligt.',
+    message_en: 'The company brain is not switched on for this company yet. The archive works as usual.',
     retryable: false,
   },
   // Signed-URL (direct-to-storage) upload: completion found no object under
@@ -4283,6 +4327,13 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'A single transaction cannot allocate to both customer and supplier invoices in one batch.',
   },
+  BATCH_CASH_METHOD_UNBOOKED_INVOICE: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget använder kontantmetoden och minst en av fakturorna är inte bokförd än: intäkt eller kostnad och moms ska bokföras vid betalningen. En samlingsmatchning kvittar bara mot kundfordringar eller leverantörsskulder och skulle hoppa över det. Matcha fakturan direkt mot transaktionen om den ensam motsvarar beloppet, annars markera varje faktura som betald och koppla sedan transaktionen till verifikaten.',
+    message_en:
+      'The company uses the cash method and at least one of the invoices is not booked yet: revenue or cost and VAT must be booked at payment. A batch match only clears receivables or payables and would skip that. Match the invoice directly to the transaction if it alone covers the amount; otherwise mark each invoice as paid and then link the transaction to those vouchers.',
+  },
   BATCH_DIRECTION_MISMATCH: {
     httpStatus: 400,
     message_sv:
@@ -4744,12 +4795,29 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
     message_en:
       'Acquisition date, cost and category cannot be changed once the asset has been disposed or depreciation has been posted. Reverse (storno) first, or use the disposal flow.',
   },
+  ASSET_OPENING_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Tillgångens ingående avskrivning har ändrats. Beräkna avskrivningsförslaget på nytt innan du bokför.',
+    message_en:
+      'The asset opening depreciation has changed. Recalculate the depreciation proposal before posting.',
+  },
   ASSET_DELETE_BLOCKED: {
     httpStatus: 409,
     message_sv:
       'Tillgången kan inte tas bort eftersom den har nått bokföringen: avskrivningar är bokförda eller tillgången är avyttrad. Registerraden är då räkenskapsinformation (BFL 7 kap.). Använd avyttring, eller återför verifikatet med storno först.',
     message_en:
       'The asset cannot be deleted because it has reached the books: depreciation is posted or the asset is disposed. The register row is then accounting information (BFL ch. 7). Dispose it, or reverse the voucher with storno first.',
+  },
+  INVALID_OPENING_DEPRECIATION: {
+    httpStatus: 400,
+    // The thrower (AssetOpeningDepreciationInvalidError) names the failed rule
+    // in Swedish; message_sv is the fallback that lists every rule.
+    thrown_message_sv: true,
+    message_sv:
+      'Redan avskrivet belopp är ogiltigt: det måste vara mellan 0 och anskaffningsvärdet minus restvärdet, ha ett datum som inte är senare än i dag eller före anskaffningsdatumet, och kan inte kombineras med komponentuppdelning.',
+    message_en:
+      'The opening accumulated depreciation is invalid: it must be between 0 and the acquisition cost less the residual value, carry a date that is not after today or before the acquisition date, and cannot be combined with a component breakdown.',
   },
   K3_REQUIRED_FOR_COMPONENTS: {
     httpStatus: 422,
@@ -5120,11 +5188,63 @@ const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Database refusals raised by name with SQLSTATE PT409
+// ─────────────────────────────────────────────────────────────────
+
+// The bank-booking guards raise `RAISE EXCEPTION '<NAME>' USING ERRCODE =
+// 'PT409'`. The name is the only part that says what went wrong, so a
+// registered name becomes the response code (see conflictCode) instead of
+// the catch-all CONFLICT, whose "reload the page" advice fits only some.
+const DB_CONFLICTS = {
+  BANK_BOOKING_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll. Ett uttag ska stå i kredit på bankkontot och en insättning i debet. Har bankkontots inställningar nyss ändrats, ladda om sidan och försök igen.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction: a withdrawal must credit the bank ledger, a deposit must debit it. If the bank account settings just changed, reload and try again.',
+  },
+  BANK_BOOKING_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.',
+    message_en: 'The transaction changed after the booking was prepared. Reload it and book again.',
+  },
+  BANK_ANCHOR_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll, så transaktionen kan inte kopplas till den. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction, so the transaction cannot be linked to it: a withdrawal must credit the bank ledger, a deposit must debit it.',
+  },
+  BANK_ANCHOR_CASH_ACCOUNT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionens bankkonto har ändrats eller tagits bort. Ladda om sidan och försök igen.',
+    message_en: 'The bank account of the transaction was changed or removed. Reload and try again.',
+  },
+  CASH_ACCOUNT_OPERATION_BUSY: {
+    httpStatus: 409,
+    message_sv: 'En annan ändring av bankkontona pågår just nu. Vänta en stund och försök igen.',
+    message_en: 'Another change to the bank accounts is in progress. Wait a moment and retry.',
+    retryable: true,
+  },
+} satisfies Record<string, StructuredErrorEntry>
+
+/**
+ * The response code for a PT409 database refusal: its own code when the
+ * raised name is registered above, else the generic CONFLICT.
+ */
+export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'CONFLICT' {
+  return typeof dbMessage === 'string' && Object.hasOwn(DB_CONFLICTS, dbMessage)
+    ? (dbMessage as keyof typeof DB_CONFLICTS)
+    : 'CONFLICT'
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
+  ...DB_CONFLICTS,
   ...BOOKKEEPING,
   ...TRANSACTIONS,
   ...MATCH_INVOICE,

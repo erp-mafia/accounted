@@ -11,7 +11,15 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import type { ApiKeyMode, ApiKeyScope } from '@/lib/auth/api-keys'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
-/** GET /api/settings/api-keys: list the company's API keys (key value never returned). */
+/**
+ * GET /api/settings/api-keys: list the company's API keys (key value never returned).
+ *
+ * Each row carries `source`: 'signin' for a key the MCP OAuth token route
+ * minted (an AI client that signed in: claude.ai, ChatGPT, Cursor, ...),
+ * 'manual' for one created here. `client` names the built-in client behind a
+ * sign-in (null for older rows, registered clients and manual keys). The
+ * reserved OAuth key name is the marker, the same one the Hem checklist reads.
+ */
 export const GET = withRouteContext(
   'api_key.list',
   async (_request, ctx) => {
@@ -21,7 +29,7 @@ export const GET = withRouteContext(
     // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at')
+      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
@@ -30,7 +38,12 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    return NextResponse.json({ data })
+    const rows = (data ?? []).map((row) => ({
+      ...row,
+      source: row.name === OAUTH_MCP_KEY_NAME ? ('signin' as const) : ('manual' as const),
+    }))
+
+    return NextResponse.json({ data: rows })
   },
 )
 

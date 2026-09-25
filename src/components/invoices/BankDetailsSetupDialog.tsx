@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { Loader2, ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -310,8 +310,7 @@ export function BankDetailsSetupDialog({ open, onOpenChange, onComplete }: BankD
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <Button type="submit" disabled={isSaving}>
-              {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="submit" loading={isSaving}>
               {t('save_and_continue')}
             </Button>
           </div>

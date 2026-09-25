@@ -129,6 +129,18 @@ describe('voucher number atomicity', () => {
     expect(supabase.from).toHaveBeenCalledWith('journal_entries')
   })
 
+  it('preserves a bank source conflict so REST and MCP can request refreshed inputs', async () => {
+    const supabase = {
+      from: vi.fn(),
+      rpc: vi.fn().mockResolvedValue({ data: null, error: { code: 'PT409', message: 'BANK_BOOKING_SOURCE_CHANGED' } }),
+    }
+    await expect(commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')).rejects.toMatchObject({
+      code: 'BANK_BOOKING_SOURCE_CHANGED', pgCode: 'PT409', operation: 'commit_entry',
+    })
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.from).not.toHaveBeenCalledWith('journal_entries')
+  })
+
   /**
    * Actor attribution (migration 20260619120000): commitEntry forwards the
    * surrounding runWithActor() scope to the RPC so the immutable layer can

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
 
 /**
@@ -25,11 +25,14 @@ export function BillingActions({
   configured,
   plan = 'yearly',
   firstChargeDeferred = false,
+  className,
 }: {
   isPaying: boolean
   configured: boolean
   plan?: BillingPlan
   firstChargeDeferred?: boolean
+  /** Width for the checkout button (e.g. full width inside a plan card). */
+  className?: string
 }) {
   const t = useTranslations('settings_billing')
   const { toast } = useToast()
@@ -70,7 +73,7 @@ export function BillingActions({
 
   if (!configured) {
     return (
-      <Button size="lg" disabled className="w-full sm:w-auto">
+      <Button size="lg" disabled className={cn('w-full sm:w-auto', className)}>
         {t('cta_coming_soon')}
       </Button>
     )
@@ -87,7 +90,7 @@ export function BillingActions({
       size="lg"
       onClick={() => go('/api/billing/checkout', { plan })}
       disabled={loading}
-      className="w-full sm:w-auto"
+      className={cn('w-full sm:w-auto', className)}
     >
       {label}
       {!loading && <ChevronRight className="h-4 w-4" />}

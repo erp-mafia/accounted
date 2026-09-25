@@ -72,6 +72,12 @@ function makeContext(connection: Record<string, unknown>, updateSpy: Mock): Exte
     extensionId: 'enable-banking',
     requestId: 'req_test',
     supabase: {
+      rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+        updateSpy(name === 'persist_bank_sync_result'
+          ? { p_completed_at: args.p_completed_at, p_accounts: args.p_accounts, p_session_id: args.p_session_id }
+          : { p_status: args.p_status, p_message: args.p_message, p_session_id: args.p_session_id })
+        return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
+      }),
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: 'user-1' } }, error: null }) },
       from: vi.fn(() => chain),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -225,7 +231,7 @@ describe('POST /sync (enable-banking): bank rate limit', () => {
 
     expect(res.status).toBe(200)
     expect(syncAccountTransactions).toHaveBeenCalledTimes(1)
-    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ last_synced_at: expect.any(String) }))
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ p_completed_at: expect.any(String) }))
   })
 
   it('an expired session still follows the reconnect flow', async () => {
@@ -238,7 +244,7 @@ describe('POST /sync (enable-banking): bank rate limit', () => {
 
     expect(res.status).toBe(409)
     expect(body).toMatchObject({ code: 'SESSION_EXPIRED', reauth_required: true })
-    expect(updateSpy).toHaveBeenCalledWith({ status: 'expired', error_message: REAUTH_REQUIRED_MESSAGE })
+    expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ p_status: 'expired', p_message: REAUTH_REQUIRED_MESSAGE, p_session_id: 'sess-shared' }))
     expect(serviceWrites).toHaveLength(0)
   })
 

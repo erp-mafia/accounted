@@ -257,6 +257,16 @@ describe('TIC lookup route', () => {
     expect(data.isCeased).toBe(true)
   })
 
+  // A sole trader who restarts under a registration struck off years ago:
+  // Lens keeps the stale isCeased next to an active current state.
+  it('treats a firm as active when activityStatus is isActive despite a stale isCeased', async () => {
+    mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isActive' })
+
+    const res = await lookupHandler(makeRequest('556036-0793'))
+    const { data } = await res.json()
+    expect(data.isCeased).toBe(false)
+  })
+
   it('returns 503 when TIC is not configured', async () => {
     mockSearch.mockRejectedValue(
       new TICAPIError('TIC_API_PROXY_URL is not configured', undefined, 'NOT_CONFIGURED')

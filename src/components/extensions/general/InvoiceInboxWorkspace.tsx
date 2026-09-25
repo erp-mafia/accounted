@@ -445,6 +445,8 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
   // from "the list is empty": with no list at all we know nothing about the
   // inbox and must not render an authoritative "Inkorgen är tom".
   const [routedToArkiv, setRoutedToArkiv] = useState<InboxItem[]>([])
+  // The Dokument section is not open for every company yet; without it the routed line has no link.
+  const [arkivSection, setArkivSection] = useState(false)
   // The questions Arkiv has about documents in this queue (phase 9d): asked in the
   // rail with one tap, so a person never has to go to Granska for them. Empty
   // outside the Arkiv rollout (the route is 404 there).
@@ -547,6 +549,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         return
       }
       const allItems: InboxItem[] = json.data?.items ?? []
+      setArkivSection(json.data?.arkiv_section === true)
       setRoutedToArkiv(allItems.filter((it) => it.routed_to_arkiv_at))
       const serverItems = allItems.filter((it) => !it.routed_to_arkiv_at)
       // Preserve optimistic upload placeholders that haven't resolved to a
@@ -1368,7 +1371,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               variant="ghost"
               size="sm"
               onClick={() => setSourcesOpen((v) => !v)}
-              className="h-7 px-2 text-xs font-normal shrink-0 text-muted-foreground"
+              className="font-normal shrink-0 text-muted-foreground"
               aria-expanded={sourcesOpen}
             >
               {`${sourceCount} ${sourceCount === 1 ? 'källa' : 'källor'}`}
@@ -1389,14 +1392,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               variant="outline"
               size="sm"
               onClick={handleRotateAddress}
-              disabled={isRotating}
-              className="ml-2 shrink-0 h-7 text-xs"
+              loading={isRotating}
+              className="ml-2 shrink-0"
             >
-              {isRotating ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-              ) : (
-                <Mail className="h-3.5 w-3.5 mr-1.5" />
-              )}
+              {!isRotating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
               Aktivera inkorgsadress
             </Button>
           )}
@@ -1415,19 +1414,15 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             onChange={handleFileInputChange}
           />
           {agentHandoff && (agentHandoff.count > 0 || purchases.length > 0) && (
-            <KvittojaktenButton clients={agentHandoff.clients} variant="button" />
+            <KvittojaktenButton clients={agentHandoff.clients} />
           )}
           <Button
             variant="outline"
             size="sm"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isUploading}
+            loading={isUploading}
           >
-            {isUploading ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Plus className="h-3.5 w-3.5 mr-1.5" />
-            )}
+            {!isUploading && <Plus className="h-3.5 w-3.5 mr-1.5" />}
             {uploadQueue
               ? `Laddar ${Math.min(uploadQueue.done + 1, uploadQueue.total)} av ${uploadQueue.total}…`
               : isUploading
@@ -1439,7 +1434,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
       {routedToArkiv.length > 0 && (
         <div className="mx-4 mt-3">
-          <AttnLine action={{ label: tArkiv('underlag_routed_open'), href: '/arkiv' }}>
+          <AttnLine action={arkivSection ? { label: tArkiv('underlag_routed_open'), href: '/arkiv' } : undefined}>
             {tArkiv('underlag_routed_line', {
               count: routedToArkiv.length,
               types: [...new Set(routedToArkiv.map((it) => it.routed_doc_type).filter((x): x is string => !!x))]
@@ -1502,7 +1497,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 }
               }}
             >
-              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <Inbox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">{t('inbound_mail_title')}</span>
                 {inboundMails !== null && (
@@ -1547,7 +1542,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
 
           {whatsapp?.linked && (
             <details className="group border-b border-border">
-              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/40">
+              <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">WhatsApp</span>
                 <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
@@ -1601,7 +1596,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Button
                 variant="default"
                 size="sm"
-                className="h-8 w-full text-xs"
+                className="w-full"
                 onClick={() => setBulkBookOpen(true)}
                 disabled={isBulkDeleting || bookableSelectedCount === 0}
                 title={
@@ -1619,7 +1614,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <Button
                     variant="outline"
                     size="sm"
-                    className="h-8 flex-1 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    className="flex-1 px-2 text-muted-foreground hover:text-foreground"
                     onClick={() =>
                       openAgentSheet({
                         intentId: 'inbox.bulk-book',
@@ -1637,17 +1632,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   variant="outline"
                   size="sm"
                   className={cn(
-                    'h-8 px-2 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/40',
+                    'px-2 text-muted-foreground hover:text-destructive hover:border-destructive/40',
                     identity.isVerified ? 'flex-none' : 'flex-1'
                   )}
                   onClick={handleBulkDelete}
-                  disabled={isBulkDeleting}
+                  loading={isBulkDeleting}
                 >
-                  {isBulkDeleting ? (
-                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-                  )}
+                  {!isBulkDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
                   Ta bort
                 </Button>
               </div>
@@ -1662,7 +1653,6 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <Button
                 variant="outline"
                 size="sm"
-                className="h-7 text-xs"
                 onClick={() => { void fetchItems() }}
               >
                 {t('retry')}
@@ -2400,7 +2390,7 @@ export function DocumentPreview({
         <AlertTriangle className="h-5 w-5 text-attn" />
         <span>{t('document_load_failed')}</span>
         {onRetry && (
-          <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onRetry}>
+          <Button variant="outline" size="sm" onClick={onRetry}>
             {t('retry')}
           </Button>
         )}
@@ -2477,12 +2467,8 @@ function EmptyPreview({
       </div>
       <div className="flex gap-2">
         {onActivateInbox && (
-          <Button size="sm" onClick={onActivateInbox} disabled={isActivating}>
-            {isActivating ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-            ) : (
-              <Mail className="h-3.5 w-3.5 mr-1.5" />
-            )}
+          <Button size="sm" onClick={onActivateInbox} loading={isActivating}>
+            {!isActivating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
             Aktivera inkorgsadress
           </Button>
         )}
@@ -2550,7 +2536,7 @@ function PurchaseRow({
           {/* A chip only when the row deviates: here, when we can actually
               tell the user where to go. */}
           {purchase.portal && (
-            <Badge data-ph-mask="" variant="outline" className="text-[10px] font-normal">
+            <Badge data-ph-mask="" variant="outline" className="text-[11px] font-normal">
               {purchase.portal.vendor}
             </Badge>
           )}
@@ -2745,7 +2731,7 @@ function ProposedBooking({
 
       <table className="w-full border-collapse text-xs">
         <thead>
-          <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
+          <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
             <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
               Konto
             </th>
@@ -2755,7 +2741,7 @@ function ProposedBooking({
         </thead>
         <tbody>
           {data.lines.map((l, i) => (
-            <tr key={`${l.account_number}-${i}`} className="border-b border-border/40 last:border-0">
+            <tr key={`${l.account_number}-${i}`} className="border-b border-border last:border-0">
               <td className="py-1 pr-2 tabular-nums text-muted-foreground w-10">{l.account_number}</td>
               <td className="py-1 pr-2 truncate" title={l.description}>
                 {l.description}
@@ -3097,15 +3083,11 @@ function FieldsRail({
             <Button
               variant="outline"
               size="sm"
-              className="w-full h-7 text-xs"
+              className="w-full"
               onClick={handleRetry}
-              disabled={isRetrying}
+              loading={isRetrying}
             >
-              {isRetrying ? (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3 w-3 mr-1.5" />
-              )}
+              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
               Försök igen
             </Button>
           )}
@@ -3181,15 +3163,11 @@ function FieldsRail({
             <Button
               variant="outline"
               size="sm"
-              className="w-full h-7 text-xs"
+              className="w-full"
               onClick={handleRetry}
-              disabled={isRetrying}
+              loading={isRetrying}
             >
-              {isRetrying ? (
-                <Loader2 className="h-3 w-3 mr-1.5 animate-spin" />
-              ) : (
-                <RotateCcw className="h-3 w-3 mr-1.5" />
-              )}
+              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
               {t('retry_extraction')}
             </Button>
           </div>
@@ -3397,7 +3375,8 @@ function FieldsRail({
           size="sm"
           className="w-full"
           onClick={onDelete}
-          disabled={isDeleting || isResolved}
+          disabled={isResolved}
+          loading={isDeleting}
           title={
             isProcessed
               ? 'Kopplad till leverantörsfaktura, kan inte tas bort'
@@ -3408,21 +3387,17 @@ function FieldsRail({
                   : undefined
           }
         >
-          {isDeleting ? (
-            <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
-          ) : (
-            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
-          )}
+          {!isDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
           Ta bort
         </Button>
         {isProcessed && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
+          <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
             Bearbetad
           </Badge>
         )}
         {isBookedDirectly && (
-          <Badge variant="secondary" className="w-full justify-center text-[10px]">
+          <Badge variant="secondary" className="w-full justify-center text-[11px]">
             <Check className="h-2.5 w-2.5 mr-1" />
             Bokförd
           </Badge>
@@ -3435,14 +3410,14 @@ function FieldsRail({
             >
               <Badge
                 variant="secondary"
-                className="w-full justify-center text-[10px] hover:bg-secondary/80"
+                className="w-full justify-center text-[11px] hover:bg-secondary/60"
               >
                 <Link2 className="h-2.5 w-2.5 mr-1" />
                 Kopplad till transaktion
               </Badge>
             </Link>
           ) : (
-            <Badge variant="secondary" className="w-full justify-center text-[10px]">
+            <Badge variant="secondary" className="w-full justify-center text-[11px]">
               <Link2 className="h-2.5 w-2.5 mr-1" />
               Kopplad till transaktion
             </Badge>
@@ -3777,7 +3752,7 @@ export function EditableFieldsList({
               htmlFor={`field-${variant}-${f.key}`}
               className={cn(
                 'uppercase tracking-wide text-muted-foreground/80',
-                variant === 'expanded' ? 'text-xs' : 'text-[10px]'
+                variant === 'expanded' ? 'text-xs' : 'text-[11px]'
               )}
             >
               {f.label}
@@ -3819,7 +3794,7 @@ export function EditableFieldsList({
       )}
       {vatRows.length > 0 && (
         <div className={cn('pt-2 border-t mt-3', variant === 'expanded' && 'sm:col-span-2 mt-1')}>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground/80 mb-1.5">
             Momsfördelning
           </p>
           <div className="space-y-1">
@@ -3838,7 +3813,7 @@ export function EditableFieldsList({
       {disabled && (
         <p
           className={cn(
-            'text-[10px] text-muted-foreground/70 pt-2',
+            'text-[11px] text-muted-foreground/70 pt-2',
             variant === 'expanded' && 'sm:col-span-2 text-xs'
           )}
         >

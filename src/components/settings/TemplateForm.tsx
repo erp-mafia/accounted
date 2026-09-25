@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Trash2, Plus } from 'lucide-react'
+import { Trash2, Plus } from 'lucide-react'
 import { convertLibraryToBookingTemplate, applyTemplate } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
@@ -245,10 +245,10 @@ export function TemplateForm({
                 <Button
                   type="button"
                   variant="outline"
-                  size="sm"
+                  size="icon-sm"
                   onClick={() => removeLine(i)}
                   disabled={lines.length <= 2}
-                  className="h-8 w-8 p-0 shrink-0"
+                  className="shrink-0"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
@@ -366,8 +366,7 @@ export function TemplateForm({
         </div>
       )}
 
-      <Button type="submit" disabled={isSubmitting} className="w-full">
-        {isSubmitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+      <Button type="submit" loading={isSubmitting} className="w-full">
         {mode === 'create' ? t('create_button') : t('save_button')}
       </Button>
     </form>

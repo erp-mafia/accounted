@@ -19,6 +19,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
 
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
+
 import { tools } from '../server'
 
 const allocate = tools.find((t) => t.name === 'gnubok_match_batch_allocate')!

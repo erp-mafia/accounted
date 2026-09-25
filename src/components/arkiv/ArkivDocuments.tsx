@@ -8,11 +8,12 @@ import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ToolbarSearch } from '@/components/ui/toolbar-search'
+import { TOOLBAR_FIELD_CLASS, ToolbarSearch } from '@/components/ui/toolbar-search'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
 import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 /** Type dropdown values: a group name the API understands, or one doc_type. */
 const FILTERS: Array<{ value: string; labelKey: string }> = [
@@ -26,7 +27,7 @@ const FILTERS: Array<{ value: string; labelKey: string }> = [
   { value: 'other', labelKey: 'filter_other' },
 ]
 
-const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]'
+const PICKER_CLASS = cn(TOOLBAR_FIELD_CLASS, 'w-auto gap-1.5')
 
 /**
  * The Arkiv table (canvas artboard Arkiv): the type picker and the search
@@ -82,18 +83,18 @@ export function ArkivDocuments({ fixedType, refreshKey = 0, searchable = true }:
   const amountLabel = (row: ArkivDocumentRow) => {
     if (row.amount == null) return ''
     const period = row.period && row.period !== 'one_time' ? t(`period_short_${row.period}` as never) : ''
-    return `${formatCurrency(row.amount, row.currency)}${period}`
+    // Document amounts are money as printed: always two decimals ("4 002,90 kr", never "4 002,9 kr").
+    return `${formatCurrency(row.amount, row.currency, { minimumFractionDigits: 2 })}${period}`
   }
-  const linked = (row: ArkivDocumentRow) => {
+  // The type column asks its own question: what the document is, or whether it belongs here at all.
+  const typeCell = (row: ArkivDocumentRow) => {
     if (row.linked.held) return <Badge variant="warning">{t('graph_waiting_held')}</Badge>
     if (row.linked.unclassified) return <Badge variant="warning">{t('linked_say_what')}</Badge>
-    const parts: string[] = []
-    if (row.linked.voucher) parts.push(t('record_verifikat', { voucher: row.linked.voucher }))
-    else if (row.linked.journal_entry_id) parts.push(t('linked_verifikat'))
-    if (row.linked.expected > 0) parts.push(t('linked_expected', { count: row.linked.expected }))
-    if (row.linked.facts > 0) parts.push(t('linked_facts', { count: row.linked.facts }))
-    return parts.join(' · ')
+    if (row.linked.reading && !row.linked.voucher && !row.linked.journal_entry_id) return <span className="text-muted-foreground">{t('linked_reading')}</span>
+    return typeLabel(row.doc_type)
   }
+  // Kopplat till is the verifikat and nothing else.
+  const linked = (row: ArkivDocumentRow) => (row.linked.voucher ? t('record_verifikat', { voucher: row.linked.voucher }) : row.linked.journal_entry_id ? t('linked_verifikat') : '')
 
   return (
     <div className="space-y-3">
@@ -167,9 +168,8 @@ export function ArkivDocuments({ fixedType, refreshKey = 0, searchable = true }:
                     <Link href={row.href} className={`${QUIET_LINK_CLASS} text-[13px] text-foreground`} title={row.file_name}>
                       {row.title}
                     </Link>
-                    {row.title !== row.file_name && !row.file_name.startsWith(row.title) ? <div className="truncate text-[11px] text-muted-foreground">{row.file_name}</div> : null}
                   </td>
-                  <td className={`${TD_CLASS} truncate text-muted-foreground`}>{typeLabel(row.doc_type)}</td>
+                  <td className={`${TD_CLASS} truncate text-muted-foreground`}>{typeCell(row)}</td>
                   <td className={`${TD_CLASS} truncate text-muted-foreground`} title={row.counterparty ?? undefined}>
                     {row.counterparty ?? ''}
                   </td>

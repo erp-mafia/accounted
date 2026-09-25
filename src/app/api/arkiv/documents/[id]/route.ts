@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { documentTitle } from '@/lib/arkiv/documents/title'
+import { documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import type { FactRow } from '@/lib/arkiv/facts/store'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { Payload } from '@/lib/documents/extract/fields'
@@ -46,7 +46,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const { id } = await params
   const { data: doc, error } = await ctx.supabase
     .from('document_attachments')
-    .select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id, journal_entry_line_id, pages_read_at, read_error, extracted_data')
+    .select('id, file_name, created_at, page_count, doc_type, admission_state, journal_entry_id, journal_entry_line_id, pages_read_at, read_error, extracted_data, mime_type')
     .eq('id', id)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -63,15 +63,20 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
     journal_entry_line_id: string | null
     pages_read_at: string | null
     read_error: string | null
+    mime_type?: string | null
     extracted_data: {
       lineItems?: Array<{ description?: string | null; quantity?: number | null; unitPrice?: number | null; lineTotal?: number | null; vatRate?: number | null }>
     } | null
   }
 
+  // The reading, the facts, the links and the agreement are the brain's: outside it the record is the document, its type and its verifikat.
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  const none = Promise.resolve({ data: null, error: null })
+  const noneList = Promise.resolve({ data: [], error: null })
   const [classification, extraction, facts, links, agreement, entry] = await Promise.all([
     ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals').eq('document_id', id).eq('is_current', true).maybeSingle(),
-    ctx.supabase.from('document_extractions').select('id, schema_type, pass, payload, review_fields').eq('document_id', id).eq('is_current', true).maybeSingle(),
-    ctx.supabase
+    brain ? ctx.supabase.from('document_extractions').select('id, schema_type, pass, payload, review_fields').eq('document_id', id).eq('is_current', true).maybeSingle() : none,
+    brain ? ctx.supabase
       .from('company_facts')
       .select(
         'id, company_id, subject_kind, subject_id, predicate, value, value_text, single_valued, valid_from, valid_to, sys_from, sys_to, rank, deprecation_reason, supersedes_id, status, source_kind, source_document_id, source_extraction_id, sources, confidence, rationale, approved_by_user_id, created_at',
@@ -80,12 +85,10 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
       .eq('source_document_id', id)
       .neq('rank', 'deprecated')
       .order('sys_from', { ascending: false })
-      .limit(200),
-    ctx.supabase.from('document_links').select('id, target_kind, target_id, party_id, agreement_id, asset_id, basis, method').eq('document_id', id).is('retired_at', null),
-    ctx.supabase.from('agreements').select('id, title').eq('source_document_id', id).maybeSingle(),
-    d.journal_entry_id
-      ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').eq('id', d.journal_entry_id).maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
+      .limit(200) : noneList,
+    brain ? ctx.supabase.from('document_links').select('id, target_kind, target_id, party_id, agreement_id, asset_id, basis, method').eq('document_id', id).is('retired_at', null) : noneList,
+    brain ? ctx.supabase.from('agreements').select('id, title').eq('source_document_id', id).maybeSingle() : none,
+    d.journal_entry_id ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').eq('id', d.journal_entry_id).maybeSingle() : none,
   ])
   for (const r of [classification, extraction, facts, links, agreement, entry]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
 
@@ -114,7 +117,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
     title: documentTitle({
       docType: d.doc_type,
       fileName: d.file_name,
-      payload: ext?.payload ?? null,
+      payload: ext?.payload ?? underlagPayload(d.extracted_data as Record<string, unknown> | null, d.doc_type),
       agreementTitle: (agreement.data as { title: string } | null)?.title ?? null,
     }),
     created_at: d.created_at,

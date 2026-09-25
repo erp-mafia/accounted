@@ -21,7 +21,6 @@ import {
   FileSpreadsheet,
   AlertTriangle,
   CheckCircle2,
-  Loader2,
 } from 'lucide-react'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
@@ -176,13 +175,10 @@ export function KassaflodesanalysClient() {
           <Button
             variant="outline"
             onClick={handleDownloadPdf}
-            disabled={!report || isLoadingReport || isDownloadingPdf}
+            disabled={!report || isLoadingReport}
+            loading={isDownloadingPdf}
           >
-            {isDownloadingPdf ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
+            {!isDownloadingPdf && <Download className="mr-2 h-4 w-4" />}
             Ladda ner PDF
           </Button>
             <Tooltip>

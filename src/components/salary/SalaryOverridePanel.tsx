@@ -12,7 +12,6 @@ import {
   SettingsRowNote,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { Loader2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -221,8 +220,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
           </SettingsRow>
 
           <div className="flex flex-wrap gap-2 pt-3">
-            <Button size="sm" onClick={handleSave} disabled={fieldDisabled}>
-              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button size="sm" onClick={handleSave} disabled={fieldDisabled} loading={saving}>
               {t('save')}
             </Button>
             {hasOverride && (

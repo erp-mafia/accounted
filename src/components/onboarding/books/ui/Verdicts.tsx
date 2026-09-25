@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 
 export interface Verdict {
   tone: 'ok' | 'warn' | 'info'
@@ -14,8 +15,10 @@ export function VerdictList({ verdicts, loading, base = 200, narrow }: { verdict
   const cls = `bks-verdicts${narrow ? ' is-narrow' : ''}`
   if (loading) {
     return (
-      <div className={cls} role="status">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+      <div className={cls} role="status" aria-busy="true">
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-4 w-2/3" />
+        <Skeleton className="h-4 w-1/2" />
       </div>
     )
   }
@@ -72,7 +75,7 @@ export function Facts({ facts }: { facts: { text: string; warn?: boolean }[] }) 
 export function Wait({ text, height }: { text: string; height?: number }) {
   return (
     <div className="bank-wait" role="status" style={height ? { height } : undefined}>
-      <span className="spin" aria-hidden="true" />
+      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
       <span>{text}</span>
     </div>
   )

@@ -7,7 +7,7 @@ vi.mock('@/lib/ai', () => ({
   getAiStatus: vi.fn(() => ({ configured: true })),
 }))
 
-import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash } from '../classify'
+import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash, kindFromInbox } from '../classify'
 import { getAiStatus } from '@/lib/ai'
 
 type Row = Record<string, unknown>
@@ -103,6 +103,36 @@ describe('classifyDocument', () => {
     expect(typed.writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload.signals).toEqual([])
   })
 
+  it('lets the inbox reading decide the direction when the model calls an invoice addressed to the company a customer invoice', async () => {
+    generateStructured.mockResolvedValue(answer({ doc_type: 'customer_invoice', addressed_to: 'Exempelbolaget AB', summary: 'Faktura från Expisoft AB till Exempelbolaget AB.' }))
+    const { supabase, writes } = makeSupabase({
+      document: { ...doc, admission_state: 'admitted', extracted_data: { documentKind: 'supplier_invoice', supplier: { name: 'Expisoft AB' } } },
+      pages: [{ page_no: 1, text: 'Kundfaktura 10863. Fakturamottagare: Exempelbolaget AB. Säljare: Expisoft AB.', reader: 'pdf_text', has_text_layer: true }],
+    })
+    const out = await classifyDocument(supabase, 'doc-1', company)
+    expect(out.status).toBe('classified')
+    const inserted = writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload
+    expect(inserted).toMatchObject({ doc_type: 'supplier_invoice', signals: ['inbox_kind'] })
+    expect(writes.find((w) => w.table === 'document_attachments' && w.op === 'update')!.payload).toMatchObject({ doc_type: 'supplier_invoice' })
+
+    // A receipt read by the inbox, and a model answer that is not customer_invoice, are left as the model said.
+    expect(kindFromInbox({ documentKind: 'receipt' })).toBe('receipt')
+    expect(kindFromInbox({ documentKind: 'invoice' })).toBe('supplier_invoice')
+    expect(kindFromInbox({ documentKind: 'other' })).toBeNull()
+    expect(kindFromInbox(null)).toBeNull()
+    generateStructured.mockResolvedValue(answer({ doc_type: 'agreement.subscription' }))
+    const untouched = makeSupabase({ document: { ...doc, extracted_data: { documentKind: 'supplier_invoice' } }, pages: [{ page_no: 1, text: 'Terms of service', reader: 'pdf_text', has_text_layer: true }] })
+    await classifyDocument(untouched.supabase, 'doc-1', company)
+    expect(untouched.writes.find((w) => w.table === 'document_classifications' && w.op === 'insert')!.payload).toMatchObject({ doc_type: 'agreement.subscription', signals: [] })
+  })
+
+  it('tells the model that who issued an invoice decides its direction, whatever the heading says', () => {
+    const system = buildClassifySystem(company)
+    expect(system).toContain('who issued it decides the type')
+    expect(system).toContain('headed "Faktura" or "Kundfaktura"')
+    expect(system).toContain('neither issuer nor recipient')
+  })
+
   it('holds a document the model cannot tie to the company', async () => {
     generateStructured.mockResolvedValue(answer({ doc_type: 'receipt', relevance: 'ask', relevance_reason: 'Ingen koppling till bolaget syns.' }))
     const { supabase, writes } = makeSupabase({ document: { ...doc, admission_state: 'held' }, pages: [{ page_no: 1, text: 'Kvitto' }] })
@@ -144,6 +174,14 @@ describe('classifyDocument', () => {
     expect(system).toContain('formerly named Startplattan 990650 AB')
     expect(system).toContain('- agreement.loan:')
     expect(system).toContain('- decision.skatteverket:')
+  })
+
+  it('tells the model that a bill from an authority is a supplier invoice and a credit note is never other', () => {
+    const system = buildClassifySystem(company)
+    // Prod 2026-09-25: congestion-tax bills were typed as Skatteverket decisions and Cursor credit notes as other.
+    expect(system).toMatch(/trängselskatt[\s\S]*supplier_invoice|supplier_invoice[\s\S]*trängselskatt/)
+    expect(system).toMatch(/credit note is credit_note, never other/)
+    expect(system).toMatch(/decision\.skatteverket: .*nothing to pay/)
   })
 
   it('tells the model that a bill for an agreement is not the agreement', () => {

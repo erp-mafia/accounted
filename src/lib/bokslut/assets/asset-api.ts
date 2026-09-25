@@ -25,6 +25,7 @@ import {
   assetDeleteBlockReason,
 } from './asset-service'
 import { validateComponents } from './k3-components'
+import { validateOpeningDepreciation } from './opening-depreciation'
 import { findK2ExcludedAccount, k2ExcludedAccountMessages } from './k2-account-guard'
 import type {
   AccountingFramework,
@@ -136,6 +137,11 @@ function validateBasOverrides(
   }
 }
 
+const OPENING_AMOUNT_DESCRIPTION =
+  'Accumulated depreciation for this asset from the previous asset register, SEK, 0 to acquisition_cost - salvage_value. No voucher or automatic reconciliation: manually reconcile register totals with the imported ledger before depreciation or disposal. Manual ledger postings do not lock opening edits; depreciation posted through Accounted\'s asset register or disposal does. The engine plans the remaining value over the remaining useful life. A positive amount cannot be combined with non-empty k3_components. Component opening balances are unsupported; keep the component breakdown.'
+const OPENING_DATE_DESCRIPTION =
+  'yyyy-MM-dd the opening accumulated depreciation is stated per. Required when the amount is above 0; not after today, not before acquisition_date.'
+
 export const CreateAssetSchema = z
   .object({
     name: z.string().min(1).describe('Asset name as it appears in the register.'),
@@ -157,11 +163,17 @@ export const CreateAssetSchema = z
     // dispatches to per-component linear depreciation instead of the
     // asset-level depreciation_method.
     k3_components: z.array(K3ComponentSchema).nullable().optional().describe('K3 component breakdown; K3 companies only. Components must sum to acquisition_cost.'),
+    // Migration from another system: depreciation already booked there.
+    opening_accumulated_depreciation: z.number().nonnegative().optional().describe(OPENING_AMOUNT_DESCRIPTION),
+    opening_depreciation_date: z.string().regex(ISO_DATE).nullable().optional().describe(OPENING_DATE_DESCRIPTION),
     notes: z.string().optional(),
   })
   .superRefine((value, ctx) => {
     validateBasOverrides(value, ctx)
     validateK3Components(value, ctx)
+    for (const issue of validateOpeningDepreciation(value)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [issue.path], message: issue.message })
+    }
   })
 
 export type CreateAssetBody = z.infer<typeof CreateAssetSchema>
@@ -188,6 +200,13 @@ export const UpdateAssetSchema = z.object({
   // The cross-sum check needs the asset's acquisition_cost so it runs in
   // checkUpdateAssetGates(), which can read the existing row.
   k3_components: z.array(K3ComponentSchema).nullable().optional(),
+  // Opening accumulated depreciation. Cross-field rules (against cost,
+  // acquisition date and components) need the stored row, so updateAsset()
+  // judges them on the row as it will end up (400 INVALID_OPENING_DEPRECIATION).
+  // Part of the depreciation basis: refused once Accounted has posted
+  // depreciation for the asset (409 ASSET_CORRECTION_BLOCKED).
+  opening_accumulated_depreciation: z.number().nonnegative().optional().describe(OPENING_AMOUNT_DESCRIPTION),
+  opening_depreciation_date: z.string().regex(ISO_DATE).nullable().optional().describe(OPENING_DATE_DESCRIPTION),
 })
 
 export type UpdateAssetBody = z.infer<typeof UpdateAssetSchema>
@@ -437,6 +456,8 @@ export function assetView(asset: Asset, hasPostedDepreciation: boolean) {
     bas_accumulated_account: asset.bas_accumulated_account,
     bas_expense_account: asset.bas_expense_account,
     k3_components: asset.k3_components ?? null,
+    opening_accumulated_depreciation: roundOre(Number(asset.opening_accumulated_depreciation ?? 0) || 0),
+    opening_depreciation_date: asset.opening_depreciation_date ?? null,
     notes: asset.notes ?? null,
     disposed_at: asset.disposed_at ?? null,
     disposal_type: asset.disposal_type ?? null,
@@ -507,6 +528,8 @@ export const AssetViewSchema = z.object({
   bas_accumulated_account: z.string(),
   bas_expense_account: z.string(),
   k3_components: z.array(K3ComponentSchema).nullable(),
+  opening_accumulated_depreciation: z.number().describe('Ackumulerad avskrivning booked in a previous system before the asset entered Accounted; 0 when none. Never posted by Accounted.'),
+  opening_depreciation_date: z.string().nullable(),
   notes: z.string().nullable(),
   disposed_at: z.string().nullable(),
   disposal_type: z.enum(ASSET_DISPOSAL_TYPES).nullable(),

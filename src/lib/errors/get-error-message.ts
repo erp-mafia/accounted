@@ -24,7 +24,7 @@ import {
   describeMissingInvoicePaymentAccount,
   isInvoicePaymentAccountCurrency,
 } from '@/lib/invoices/payment-accounts'
-import { getErrorEntry, hasErrorEntry } from './structured-errors'
+import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
 type ErrorContext =
@@ -85,6 +85,7 @@ const POSTGRES_ERROR_MAP: Record<string, Bilingual> = {
   '42P01': { sv: 'Resursen kunde inte hittas.', en: 'The resource could not be found.' },
   '23514': { sv: 'Värdet uppfyller inte de tillåtna kraven.', en: 'The value does not meet the allowed constraints.' },
   '40001': { sv: 'En annan ändring pågick samtidigt. Försök igen.', en: 'A concurrent change was in progress. Please try again.' },
+  'PT409': { sv: 'En konflikt uppstod. Ladda om sidan och försök igen.', en: 'A conflict occurred. Reload the page and try again.' },
   '40P01': { sv: 'En konflikt uppstod. Försök igen.', en: 'A conflict occurred. Please try again.' },
   '22P02': { sv: 'Ogiltigt värde angavs.', en: 'Invalid value supplied.' },
   '22003': { sv: 'Värdet är utanför tillåtet intervall.', en: 'Value is out of allowed range.' },
@@ -200,6 +201,13 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     'E-postmeddelandet kunde inte skickas av autentiseringstjänsten. Kontrollera installationens SMTP-inställningar och försök igen.',
   ],
 ]
+
+/** A PT409 refusal the database raised by a registered name speaks for itself. */
+function conflictMessage(dbMessage: unknown, locale: ErrorLocale): string {
+  const code = conflictCode(dbMessage)
+  const entry = code === 'CONFLICT' ? undefined : getErrorEntry(code)
+  return entry ? pick({ sv: entry.message_sv, en: entry.message_en }, locale) : pick(POSTGRES_ERROR_MAP.PT409, locale)
+}
 
 /**
  * Check if a message matches a known error pattern and return the Swedish translation.
@@ -426,6 +434,7 @@ export function getErrorMessage(
     // same { code, message } shape and would be returned verbatim from there.
     const foreignKeyRefusal = matchForeignKeyRefusal(obj, locale)
     if (foreignKeyRefusal) return foreignKeyRefusal
+    if (obj.code === 'PT409') return conflictMessage(obj.message, locale)
 
     // Bare envelope inner-error shape: { code, message, message_en?, ... }.
     // Happens when a caller forwards `result.error` (the inner object) instead
@@ -479,6 +488,7 @@ export function getErrorMessage(
         account_numbers?: unknown
         details?: unknown
       }
+      if (structured.code === 'PT409') return conflictMessage(structured.message, locale)
 
       // The canonical envelope keeps Zod issues under error.details. Read
       // them before the generic VALIDATION_ERROR registry message in either locale.

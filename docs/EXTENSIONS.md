@@ -36,7 +36,7 @@ src/lib/extensions/_generated/                         written by npm run setup:
 
 ## Enabling extensions
 
-1. Add the id to `extensions.config.json`: `{ "$schema": "./extensions.schema.json", "extensions": ["email", "calendar"] }`.
+1. Add the id to `extensions.config.json`: `{ "$schema": "./src/extensions/extensions.schema.json", "extensions": ["email", "calendar"] }`.
 2. Run `npm run setup:extensions`. `npm run dev` and `npm run build` also run it first, through `predev` and `prebuild`.
 3. Set the env vars listed in each enabled `manifest.json` under `requiredEnvVars`.
 
@@ -52,7 +52,7 @@ src/lib/extensions/_generated/                         written by npm run setup:
 Validation is limited to what the generator itself checks:
 
 - **Env vars:** a missing `requiredEnvVars` entry only prints a warning, and the extension still loads. `optionalEnvVars` and `npmDependencies` are documentation; the generator ignores them. Any real dependency goes in `package.json`.
-- **The schema:** the generator never reads `extensions.schema.json`. The `$schema` key only gives editors autocompletion and validation, and the schema's enum is maintained by hand (plus `scripts/create-extension.ts`), so it can drift from the manifests.
+- **The schema:** the generator never reads `src/extensions/extensions.schema.json`. The `$schema` key only gives editors autocompletion and validation, and the schema's enum is maintained by hand (plus `scripts/create-extension.ts`), so it can drift from the manifests.
 
 Enablement is per deployment, decided at build time. There is no per-company toggle. The Docker image copies `docker/extensions.<EXTENSIONS_PRESET>.json` over the config before building (default preset `self-hosted`). For everything else about self-hosting, see [SELF-HOSTING.md](SELF-HOSTING.md) and [DOCKER.md](DOCKER.md).
 
@@ -70,7 +70,7 @@ All four flags are required. `--name` must be kebab-case. `--category` is one of
 - `index.ts`, exporting `<camelCaseName>Extension` (for example `myExtensionExtension`) with `apiRoutes` wired up
 - an empty `api-routes.ts`
 
-It also appends the id to the enum in `extensions.schema.json`. Then add the id to `extensions.config.json` and run `npm run setup:extensions`.
+It also appends the id to the enum in `src/extensions/extensions.schema.json`. Then add the id to `extensions.config.json` and run `npm run setup:extensions`.
 
 The script lags the code in three places:
 

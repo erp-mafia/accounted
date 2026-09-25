@@ -531,31 +531,6 @@ export async function generateAgiDeclaration(
   const totalAvgifterAmount = declared.totalAmount
   const totalAvgifterBasis = declared.totalUnderlag
 
-  // FK499 sjuklönekostnad: the sjuklön actually paid across all employees:
-  // 80 % of the lost pay for days 1-14 (the sick_day2_14 row covers day one
-  // too since SjLL 6 § 2019) less the karensavdrag rows. Day 15+ is
-  // Försäkringskassan.
-  const calcParams = ((run.calculation_params as Record<string, unknown>) ?? {}) as {
-    sjuklonRate?: number
-    sjuklon_rate?: number
-  }
-  const sjuklonRate = calcParams.sjuklonRate ?? calcParams.sjuklon_rate ?? 0.8
-  let totalSjuklonekostnad = 0
-  for (const sre of activeEmployees) {
-    const monthly = sre.monthly_salary ?? 0
-    if (!monthly) continue
-    const dailyRate = monthly / 21
-    const lineItems = (sre.line_items ?? []) as Array<{ item_type: string; amount?: number | null; quantity?: number | null }>
-    for (const li of lineItems) {
-      if (li.item_type === 'sick_day2_14') {
-        const days = li.quantity ?? 0
-        totalSjuklonekostnad += dailyRate * sjuklonRate * days
-      } else if (li.item_type === 'sick_karens') {
-        totalSjuklonekostnad -= Math.abs(li.amount ?? 0)
-      }
-    }
-  }
-
   // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
   // run.total_tax, which includes removed rows). Same for FK487.
   // Coalesce override → computed so manual jämkning/FoU adjustments flow
@@ -575,7 +550,6 @@ export async function generateAgiDeclaration(
     totalTax,
     totalAvgifterBasis,
     totalAvgifterAmount,
-    totalSjuklonekostnad: truncateToWholeKronor(totalSjuklonekostnad),
     avgifterByCategory,
   }
 

@@ -56,7 +56,7 @@ If properly reported, filing deadline extends to **9 months**.
 
 ## 3. Förseningsavgifter
 
-Legal reference: ÅRL 8:5-6 §§. Three fees at escalating intervals.
+Legal reference: ÅRL 8:6-6 a §§. Three fees at escalating intervals.
 
 ### FY beginning 2025-01-01 or later (current regime)
 
@@ -85,7 +85,7 @@ Timeline from FY end:
 | 9 months | Förseningsavgift 2 |
 | 11 months | Förseningsavgift 3 AND Bolagsverket can issue **föreläggande om likvidation** (ABL 25:11 §) |
 | After föreläggande | Company must rectify within set deadline or Bolagsverket decides on **tvångslikvidation** and appoints likvidator |
-| 15 months | Board members and VD risk **personligt betalningsansvar** for company debts |
+| 15 months | If årsredovisning/revisionsberättelse still not filed: board members and VD become jointly **personally liable** for company obligations arising from then on (ÅRL 8:12 §). Not liable if the failure was not due to their negligence; no liability for obligations arising after the documents reach Bolagsverket. |
 
 Additionally:
 - Failure to prepare årsredovisning within 6 months can constitute **bokföringsbrott** (BrB) regardless of filing
@@ -111,8 +111,9 @@ Currently supported only for **aktiebolag using K2 or K3**. Not yet available fo
 
 ### Taxonomy
 Developed by BFN, Skatteverket, Finansinspektionen, SCB, Bolagsverket, FAR. Published at **taxonomier.se**.
-- K2 taxonomy: BFNAR 2016:10 K2 ÅR (published 2017-09-30)
-- K3 taxonomy: BFNAR 2012:1 K3 (updated 2021-10-31)
+- K2 taxonomies (aktiebolag, ekonomiska föreningar, handels- och kommanditbolag, filialer): current FINAL version **2024-09-12**
+- K3 taxonomies (årsredovisning and koncernredovisning, aktiebolag): current FINAL version **2021-10-31**
+- Taxonomier.se announced updates to the latest års- and koncernredovisning taxonomies on 2026-09-09. Check taxonomier.se for the version to use for a given FY.
 
 ### Filing process
 1. Software generates iXBRL file and uploads to Bolagsverket's "Eget utrymme"
@@ -137,7 +138,7 @@ Opt-out must be registered in bolagsordning. For parent companies, assessed at G
 ### Always-audited entities
 Publika AB, börsnoterade, banks, insurance companies, SVB-bolag, advokataktiebolag, municipally owned AB.
 
-Thresholds unchanged since 2010. SOU 2021:60 recommended raising them but no legislative change as of April 2026.
+Thresholds unchanged since 2010. SOU 2021:60 recommended raising them but there is no legislative change as of September 2026; the ÅRL size thresholds (ÅRL 1:3) are also unchanged. The inquiry on company categories in ÅRL (Ju 2025:11, dir. 2025:49) is due to report by 2026-09-29.
 
 ---
 

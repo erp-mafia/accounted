@@ -121,14 +121,14 @@ export function TransactionDrawer({
     <aside
       role="dialog"
       aria-label={transaction.description}
-      className="fixed bottom-[calc(var(--bottom-nav-h)+0.625rem)] right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[0_12px_32px_rgba(0,0,0,0.10)] animate-fade-in"
+      className="fixed bottom-[calc(var(--bottom-nav-h)+0.625rem)] right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[var(--shadow-lg)] animate-fade-in"
     >
-      <div className="flex items-start gap-3 border-b border-border/70 px-5 pb-3 pt-4">
+      <div className="flex items-start gap-3 border-b border-border px-5 pb-3 pt-4">
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[14px] font-medium" data-ph-mask title={transaction.description}>
+          <p className="truncate text-[13px] font-medium" data-ph-mask title={transaction.description}>
             {transaction.description}
           </p>
-          <p className={cn('mt-0.5 text-[20px] tabular-nums tracking-tight', isIncome && 'text-success')} data-ph-mask>
+          <p className={cn('mt-0.5 text-xl tabular-nums tracking-tight', isIncome && 'text-success')} data-ph-mask>
             {isIncome ? '+' : ''}
             {formatCurrency(transaction.amount, transaction.currency)}
           </p>
@@ -139,15 +139,15 @@ export function TransactionDrawer({
             {booked ? t('drawer_state_booked') : t('drawer_state_unbooked')}
           </p>
         </div>
-        <Button variant="ghost" size="icon" className="-mr-2 -mt-1 h-7 w-7 shrink-0 text-muted-foreground" onClick={onClose} aria-label={t('drawer_close')}>
+        <Button variant="ghost" size="icon-sm" className="-mr-2 -mt-1 shrink-0 text-muted-foreground" onClick={onClose} aria-label={t('drawer_close')}>
           <X className="h-4 w-4" />
         </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!booked && (
-          <div className="border-b border-border/70 px-5 py-3">
-            <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_category')}</p>
+          <div className="border-b border-border px-5 py-3">
+            <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_category')}</p>
             <button
               type="button"
               className={cn(
@@ -161,15 +161,15 @@ export function TransactionDrawer({
               <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
             </button>
             {categoryLabel && proposalWhy && (
-              <p className="mt-1.5 text-[11.5px] text-muted-foreground">{t('drawer_rec', { why: proposalWhy })}</p>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">{t('drawer_rec', { why: proposalWhy })}</p>
             )}
           </div>
         )}
 
-        <div className="border-b border-border/70 px-5 py-3">
-          <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_actions')}</p>
+        <div className="border-b border-border px-5 py-3">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_actions')}</p>
           <div className="flex flex-col items-start gap-1.5">
-            <Button size="sm" className="h-8" onClick={(e) => onPrimary(e.currentTarget)} disabled={processing}>
+            <Button size="sm" onClick={(e) => onPrimary(e.currentTarget)} disabled={processing}>
               {primaryLabel}
             </Button>
             <div className="flex flex-col items-start gap-1 pt-1">
@@ -189,8 +189,8 @@ export function TransactionDrawer({
           </div>
         </div>
 
-        <div className="border-b border-border/70 px-5 py-3">
-          <p className="mb-1.5 flex items-center justify-between text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        <div className="border-b border-border px-5 py-3">
+          <p className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <span>{t('underlag_heading')}</span>
             {underlag?.source && (
               <span className="font-normal normal-case tracking-normal">{t(`underlag_source_${underlag.source}`)}</span>
@@ -255,7 +255,7 @@ export function TransactionDrawer({
             something missing. */}
         {(accountLabel || originalName || transaction.original_description || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
         <div className="px-5 py-3">
-          <p className="mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
             {fact(
               t('drawer_account'),
@@ -292,7 +292,7 @@ export function TransactionDrawer({
               : null}
             {skvCounterpartDate ? fact(t('skv_counterpart_label'), t('skv_counterpart_body', { date: skvCounterpartDate })) : null}
           </dl>
-          {isPreMigration && <p className="mt-3 text-[12px] text-muted-foreground">{t('pre_migration_foldout')}</p>}
+          {isPreMigration && <p className="mt-3 text-[12.5px] text-muted-foreground">{t('pre_migration_foldout')}</p>}
           {extra ? <div className="mt-3">{extra}</div> : null}
         </div>
         )}

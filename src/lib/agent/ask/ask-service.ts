@@ -150,6 +150,7 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
 
   const result = await getAiService().generateText({
     tier: req.tier ?? 'assistant',
+    meter: { feature: 'assistant_ask', companyId: req.companyId },
     system: systemPrompt(tools.length > 0),
     prompt: promptParts.join('\n'),
     ...(req.history && req.history.length > 0 ? { history: req.history } : {}),

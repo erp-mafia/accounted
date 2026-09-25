@@ -40,7 +40,6 @@ const AgiTotals = z.object({
   totalTax: z.number(),
   totalAvgifterBasis: z.number(),
   totalAvgifterAmount: z.number(),
-  totalSjuklonekostnad: z.number(),
   avgifterByCategory: z.record(z.string(), AvgifterCategory),
 })
 
@@ -85,7 +84,6 @@ registerEndpoint({
           totalTax: 28500,
           totalAvgifterBasis: 105000,
           totalAvgifterAmount: 32991,
-          totalSjuklonekostnad: 0,
           avgifterByCategory: { standard: { basis: 105000, amount: 32991 } },
         },
         xml: '<?xml version="1.0" encoding="UTF-8"?><Skatteverket omrade="Arbetsgivardeklaration">…</Skatteverket>',

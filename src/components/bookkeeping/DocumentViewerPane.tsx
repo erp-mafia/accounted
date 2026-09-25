@@ -47,6 +47,8 @@ interface DocumentViewerPaneProps {
   downloadUrl?: string | null
   /** Optional filename: used for mime sniffing on legacy/octet-stream files. */
   fileName?: string | null
+  /** Open a PDF at this page (1-based): the browser plugin honours #page=N. */
+  page?: number | null
   className?: string
 }
 
@@ -55,6 +57,7 @@ export default function DocumentViewerPane({
   mime: mimeProp = null,
   downloadUrl: downloadUrlProp = null,
   fileName = null,
+  page = null,
   className,
 }: DocumentViewerPaneProps) {
   const t = useTranslations('document_viewer')
@@ -110,7 +113,7 @@ export default function DocumentViewerPane({
     )
   }
 
-  const inlineSrc = `/api/documents/${documentId}/inline`
+  const inlineSrc = `/api/documents/${documentId}/inline${page && page > 1 ? `#page=${page}` : ''}`
   const newTabHref = downloadUrl ?? inlineSrc
   const showAsImage = isImageType(mime, fileName)
   const showAsPdf = isPdfType(mime, fileName)

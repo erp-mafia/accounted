@@ -14,12 +14,14 @@
  * The executor functions previously lived in the commit route. They are kept
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { commitArkivProposeFact } from '@/lib/arkiv/facts/propose'
 import { parseEntityType, resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { eventBus } from '@/lib/events'
 import { bulkBookMatchedInboxItems, categorizeMatchedTransaction } from '@/lib/transactions/categorize-core'
 import { explainVatTreatment, getVatRules, getPermittedVatRates } from '@/lib/invoices/vat-rules'
+import { syncDraftVatHeadersForCustomer } from '@/lib/invoices/sync-draft-vat-headers'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -128,6 +130,10 @@ import {
   type LinkSupplierInvoiceToVoucherResult,
 } from '@/lib/invoices/supplier-voucher-matching'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
+import {
+  findCashMethodUnbookedAllocations,
+  type BatchAllocationRef,
+} from '@/lib/invoices/batch-cash-method-guard'
 import { recordInvoicePaymentRow, removeInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import {
@@ -136,6 +142,7 @@ import {
 } from '@/lib/invoices/clear-settled-batch-allocations'
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
+import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
 import {
   completeInboxItemsForBookedTransaction,
   resolveVoucherLinkedEntryIds,
@@ -483,6 +490,56 @@ async function commitSettleRotRutPayout(
   }
 }
 
+/**
+ * link_rot_rut_payout_voucher (gnubok_link_rot_rut_payout_voucher): attach a
+ * payout verifikat that already exists to its begäran. Books nothing; the
+ * RPC re-runs every check the stage previewed, under its own locks.
+ */
+async function commitLinkRotRutPayoutVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const journalEntryId = params.journal_entry_id as string | undefined
+  const requestIds = Array.isArray(params.request_ids)
+    ? (params.request_ids as unknown[]).filter((id): id is string => typeof id === 'string')
+    : []
+  if (!journalEntryId || requestIds.length === 0) {
+    return { error: 'journal_entry_id and request_ids are required', status: 400 }
+  }
+
+  const outcome = await linkRotRutPayoutVoucher(supabase, companyId, { requestIds, journalEntryId })
+  if (!outcome.ok) {
+    if (outcome.kind === 'code') {
+      const entry = getErrorEntry(outcome.code)
+      return {
+        error: entry?.message_en ?? outcome.code,
+        errorCode: outcome.code,
+        status: entry?.httpStatus ?? 500,
+        data: outcome.details,
+      }
+    }
+    const message = outcome.error instanceof Error ? outcome.error.message : 'rot/rut payout voucher link failed'
+    return { error: message, status: 500 }
+  }
+
+  log.info('link_rot_rut_payout_voucher committed', {
+    companyId,
+    operationType: 'link_rot_rut_payout_voucher',
+    journalEntryId,
+    requestCount: requestIds.length,
+  })
+
+  return {
+    data: {
+      journal_entry_id: journalEntryId,
+      request_ids: requestIds,
+      already_linked: outcome.result.already_linked,
+      rounding: outcome.result.rounding ?? 0,
+    },
+  }
+}
+
 async function commitCategorizeTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -771,6 +828,9 @@ async function commitUpdateCustomer(
     return { error: error.message, status: 500 }
   }
   if (!data) return { error: 'Customer not found', status: 404 }
+
+  // Open drafts to this customer re-derive their VAT header from it.
+  await syncDraftVatHeadersForCustomer(supabase, companyId, customerId)
 
   return {
     data: {
@@ -3615,7 +3675,7 @@ async function commitMatchTransactionInvoice(
     if (useCashEntry) {
       const je = await createInvoiceCashEntry(
         supabase, companyId, userId, invoice as Invoice, transaction.date, entityType, invoice.customer?.name,
-        paymentAccount,
+        paymentAccount, transaction,
       )
       journalEntryId = je?.id ?? null
     } else {
@@ -3669,6 +3729,7 @@ async function commitMatchTransactionInvoice(
           description: desc,
           source_type: 'invoice_paid',
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: clearingLines,
         })
         journalEntryId = je?.id ?? null
@@ -7092,6 +7153,28 @@ async function commitMatchBatchAllocate(
     }
   }
 
+  // Kontantmetoden: the RPC only clears 1510/2440, so an invoice with no
+  // booking yet would never get its revenue/cost + moms on the ledger. Same
+  // guard as the dashboard route (lib/invoices/batch-cash-method-guard.ts);
+  // the refusal auto-rejects the op and names the invoices.
+  const cashCheck = await findCashMethodUnbookedAllocations(
+    supabase,
+    companyId,
+    allocations as BatchAllocationRef[],
+  )
+  if (!cashCheck.ok) {
+    return { error: 'Kontantmetodskontrollen kunde inte köras. Försök igen.', status: 500 }
+  }
+  if (cashCheck.unbooked.length > 0) {
+    const entry = getErrorEntry('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+    return {
+      error: entry?.message_sv ?? 'Kontantmetoden: obokförda fakturor kan inte samlingsmatchas.',
+      errorCode: 'BATCH_CASH_METHOD_UNBOOKED_INVOICE',
+      status: 400,
+      data: { invoices: cashCheck.unbooked } as unknown as Record<string, unknown>,
+    }
+  }
+
   const { data, error } = await supabase.rpc('match_batch_allocate', {
     p_tx_id: txId,
     p_allocations: allocations,
@@ -7713,6 +7796,9 @@ async function commitPendingOperationInner(
         break
       case 'settle_rot_rut_payout':
         result = await commitSettleRotRutPayout(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'link_rot_rut_payout_voucher':
+        result = await commitLinkRotRutPayoutVoucher(supabase, companyId, pendingOp.params)
         break
       case 'link_invoice_voucher':
         result = await commitLinkInvoiceVoucher(supabase, userId, companyId, pendingOp.params)

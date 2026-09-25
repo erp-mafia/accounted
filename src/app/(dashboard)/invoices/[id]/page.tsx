@@ -1710,7 +1710,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     invoice.status !== 'credited' &&
     (!invoice.credited_invoice_id || invoice.status === 'draft') &&
     (isProforma || isQuote || invoice.status === 'draft')
+  // Skapa order is the alternative to the header's next step (Skapa
+  // faktura / Konvertera), so it lives in the menu with the other
+  // alternatives instead of adding a fourth header button.
+  const canCreateOrder = (isProforma && invoice.status !== 'cancelled') || canConvertQuote
   const hasMenu =
+    canCreateOrder ||
     !isSelfBilled ||
     (isCopyable && canWrite) ||
     showManualSendAlternative ||
@@ -1793,7 +1798,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             className="shrink-0"
           />
           {isEditableDraft && canWrite && (
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
                 <Pencil className="mr-2 h-4 w-4" />
                 {t('edit_draft')}
@@ -1802,20 +1807,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {/* Review in the browser (#1190); the download lives in the menu. */}
           {!isSelfBilled && (
-            <Button variant="outline" onClick={() => previewPDF()}>
+            <Button size="sm" variant="outline" onClick={() => previewPDF()}>
               <Eye className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
           )}
           {isProforma && invoice.status !== 'cancelled' && (
-            <Button
+            <Button size="sm"
               onClick={convertToInvoice}
-              disabled={isConverting || !canWrite}
+              disabled={!canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
+              {isConverting ? null : !canWrite ? (
                 <Lock className="mr-2 h-4 w-4" />
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
@@ -1824,29 +1828,25 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {canDecideQuote && quoteStatus !== 'accepted' && (
-            <Button
+            <Button size="sm"
               variant="outline"
               onClick={acceptQuote}
-              disabled={isDeciding || isConverting || !canWrite}
+              disabled={isConverting || !canWrite}
+              loading={isDeciding}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isDeciding ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="mr-2 h-4 w-4" />
-              )}
+              {!isDeciding && <CheckCircle className="mr-2 h-4 w-4" />}
               {t('quote_accept')}
             </Button>
           )}
           {canConvertQuote && (
-            <Button
+            <Button size="sm"
               onClick={startQuoteConvert}
-              disabled={isConverting || isDeciding || !canWrite}
+              disabled={isDeciding || !canWrite}
+              loading={isConverting}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isConverting ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
+              {isConverting ? null : !canWrite ? (
                 <Lock className="mr-2 h-4 w-4" />
               ) : (
                 <FileText className="mr-2 h-4 w-4" />
@@ -1854,25 +1854,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('quote_create_invoice')}
             </Button>
           )}
-          {((isProforma && invoice.status !== 'cancelled') || canConvertQuote) && (
-            <Button
-              variant="outline"
-              onClick={isQuote ? startQuoteOrder : convertToOrder}
-              disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isCreatingOrder ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
-              ) : (
-                <ClipboardList className="mr-2 h-4 w-4" />
-              )}
-              {t('create_order')}
-            </Button>
-          )}
           {isUnnumberedDraft && (
-            <Button
+            <Button size="sm"
               onClick={openFinalizeDialog}
               disabled={isFinalizing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1883,7 +1866,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           )}
           {invoice.status === 'draft' && !isDeliveryNote && invoice.invoice_number && (
             preferredSendMode === 'email' ? (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('email')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1892,7 +1875,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
-              <Button
+              <Button size="sm"
                 onClick={() => openSendDialog('manual')}
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1903,7 +1886,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             )
           )}
           {creditNoteNeedsRepair && (
-            <Button
+            <Button size="sm"
               onClick={() => openSendDialog('manual')}
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1913,14 +1896,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           )}
           {isDeliveryNote && invoice.status === 'draft' && (
-            <Button
+            <Button size="sm"
               onClick={() => updateStatus('sent')}
-              disabled={isUpdating || !canWrite}
+              disabled={!canWrite}
+              loading={isUpdating}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {isUpdating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : canWrite ? (
+              {isUpdating ? null : canWrite ? (
                 <Send className="mr-2 h-4 w-4" />
               ) : (
                 <Lock className="mr-2 h-4 w-4" />
@@ -1931,7 +1913,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* partially_paid included (#1717): completes a stuck partial, e.g.
               a sub-krona öresavrundning remaining, via the same dialog. */}
           {(invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'partially_paid') && isRealInvoice && !isCreditNote && (
-            <Button
+            <Button size="sm"
               onClick={() => setShowPaymentDialog(true)}
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
@@ -1944,15 +1926,30 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={tCommon('more_options')}>
-                  {isDownloading || isDownloadingPeppol || isPreparingPeppol ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={tCommon('more_options')}
+                  loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder}
+                >
+                  {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder ? null : (
                     <MoreHorizontal className="h-4 w-4" />
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {canCreateOrder && (
+                  <>
+                    <DropdownMenuItem
+                      onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
+                      disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
+                    >
+                      <ClipboardList className="h-4 w-4" />
+                      {t('create_order')}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                  </>
+                )}
                 {!isSelfBilled && (
                   <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
                     <Download className="h-4 w-4" />
@@ -2261,8 +2258,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <span className="flex flex-wrap items-center gap-3">
                 <span className="text-muted-foreground">{t('not_booked_yet')}</span>
                 {canWrite && (
-                  <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} disabled={isUpdating}>
-                    {isUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Button size="sm" variant="outline" className="-my-1" onClick={openBookConfirm} loading={isUpdating}>
                     {t('book_action')}
                   </Button>
                 )}
@@ -2710,8 +2706,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {t('delete_dialog_cancel')}
             </Button>
-            <Button onClick={() => void sendViaPeppol()} disabled={isSendingPeppol}>
-              {isSendingPeppol && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={() => void sendViaPeppol()} loading={isSendingPeppol}>
               {isSendingPeppol ? t('peppol_sending') : t('peppol_send_confirm_action')}
             </Button>
           </DialogFooter>
@@ -2752,8 +2747,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)} disabled={isDeleting}>
               {t('delete_dialog_cancel')}
             </Button>
-            <Button variant="destructive" onClick={deleteInvoice} disabled={isDeleting}>
-              {isDeleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button variant="destructive" onClick={deleteInvoice} loading={isDeleting}>
               {isCreditNote
                 ? t('remove_credit_dialog_confirm')
                 : invoice.invoice_number
@@ -2782,8 +2776,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" onClick={() => setShowFinalizeDialog(false)} disabled={isFinalizing}>
               {t('finalize_dialog_cancel')}
             </Button>
-            <Button onClick={finalizeInvoice} disabled={isFinalizing}>
-              {isFinalizing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={finalizeInvoice} loading={isFinalizing}>
               {t('finalize_dialog_confirm')}
             </Button>
           </DialogFooter>
@@ -2886,8 +2879,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 ? t('pdf_archive_issue_rerender_preview')
                 : t('pdf_archive_issue_rerender')}
             </Button>
-            <Button onClick={retryArchivedDownload} disabled={isDownloading}>
-              {isDownloading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button onClick={retryArchivedDownload} loading={isDownloading}>
               {t('pdf_archive_issue_retry')}
             </Button>
           </DialogFooter>

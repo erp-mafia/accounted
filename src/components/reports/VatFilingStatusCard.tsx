@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { CheckCircle2, Loader2 } from 'lucide-react'
+import { CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -151,8 +151,7 @@ export function VatFilingStatusCard({
           )}
           {record.source === 'manual' && canWrite && (
             <div className="pt-1">
-              <Button variant="ghost" size="sm" onClick={unmark} disabled={busy}>
-                {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+              <Button variant="ghost" size="sm" onClick={unmark} loading={busy}>
                 {t('vat_filing_unmark')}
               </Button>
             </div>
@@ -212,8 +211,7 @@ export function VatFilingStatusCard({
             <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>
               {tCommon('cancel')}
             </Button>
-            <Button onClick={mark} disabled={busy || filedOn.length !== 10}>
-              {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+            <Button onClick={mark} disabled={filedOn.length !== 10} loading={busy}>
               {t('vat_filing_mark')}
             </Button>
           </DialogFooter>

@@ -101,7 +101,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
     <Dialog open={open} onOpenChange={handleOpen}>
       <DialogTrigger asChild>
         {/* Same height as the year picker beside it (founder review 2026-09-07). */}
-        <Button variant="outline" className="gap-1.5">
+        <Button variant="outline" size="sm" className="gap-1.5">
           <Settings2 className="h-3.5 w-3.5" />
           {t('customize')}
         </Button>
@@ -192,14 +192,14 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                           placeholder={def.defaultAccounts.join(', ')}
                           className="w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs font-mono tabular-nums placeholder:text-muted-foreground/50"
                         />
-                        <p className="mt-1 text-[10px] text-muted-foreground/70">
+                        <p className="mt-1 text-[11px] text-muted-foreground/70">
                           {t('settings_account_hint', { example: def.defaultAccounts.slice(0, 3).join(', ') })}
                         </p>
                         {hasOverride && (
                           <button
                             type="button"
                             onClick={() => clearAccountOverride(def.id)}
-                            className="mt-1 text-[10px] text-primary hover:underline"
+                            className="mt-1 text-[11px] text-primary hover:underline"
                           >
                             {t('settings_reset_field')}
                           </button>

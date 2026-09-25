@@ -52,9 +52,11 @@ export { INK2R_ACCOUNT_MAPPINGS, isAccountInMapping }
  *     INK2S 7650/7651 and the taxable result. INK2 is always filed after
  *     bokslut, so that is the normal state, not an edge case.
  *
- * excludeFinalClosingEntry drops only fiscal_periods.closing_entry_id: tax,
- * depreciation and bokslutsdispositioner also carry source_type 'year_end' and
- * must stay on the form (7525, 7528).
+ * excludeFinalClosingEntry drops only the result transfer into equity
+ * (result_closing_entry_ids: the linked closing entry, or a resultatavslut
+ * booked in the previous system or by hand): tax, depreciation and
+ * bokslutsdispositioner also carry source_type 'year_end' and must stay on
+ * the form (7525, 7528).
  */
 
 /** One mapping per SRU code: pinned by a test in __tests__/ink2-engine.test.ts. */
@@ -193,25 +195,19 @@ function applySignReclassifications(
 }
 
 /**
- * Whether the resultatavslut has already moved årets resultat into 2099.
- *
- * Mirrors the predicate generateTrialBalance uses to drop the closing entry: a
- * reversed closing entry nets to zero against its storno and has therefore not
- * moved anything.
+ * The result still sitting on the result accounts (BAS class 3-8, 899x
+ * included), credit-positive: profit is positive. In the closed books this
+ * is the part of årets resultat that no resultatavslut has moved into
+ * equity yet.
  */
-async function isResultClosedIntoEquity(
-  supabase: SupabaseClient,
-  companyId: string,
-  closingEntryId: string | null | undefined,
-): Promise<boolean> {
-  if (!closingEntryId) return false
-  const { data } = await supabase
-    .from('journal_entries')
-    .select('status')
-    .eq('id', closingEntryId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  return (data as { status?: string } | null)?.status === 'posted'
+function resultOnResultAccounts(rows: TrialBalanceRow[]): number {
+  let net = 0
+  for (const row of rows) {
+    if (row.account_number >= '3' && row.account_number < '9') {
+      net += (Number(row.closing_credit) || 0) - (Number(row.closing_debit) || 0)
+    }
+  }
+  return Math.round(net * 100) / 100
 }
 
 /**
@@ -260,18 +256,35 @@ export async function generateINK2Declaration(
 
   // The balance sheet reads the closed books, the income statement the
   // pre-closing books. See the module docblock for why the two differ.
-  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance, resultClosedIntoEquity] =
+  const [taxAdjustments, closedTrialBalance, preClosingTrialBalance] =
     await Promise.all([
       loadTaxAdjustmentSnapshot(supabase, companyId, fiscalPeriodId),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
       generateTrialBalance(supabase, companyId, fiscalPeriodId, {
         closingEntry: 'exclude-final',
       }),
-      isResultClosedIntoEquity(supabase, companyId, period.closing_entry_id as string | null),
     ])
 
   const balanceSheetBalances = toSignedBalances(closedTrialBalance.rows)
   const incomeBalances = toSignedBalances(preClosingTrialBalance.rows)
+
+  // How much of årets resultat the books have already moved into equity. The
+  // two views differ by exactly the result transfers (ours, or one booked in
+  // the previous system or by hand), so what is still on the result accounts
+  // in the closed view is the part not yet in 2099. Read as an amount, not a
+  // closed/open flag: a partial transfer (an öresutjämning against 2099 in an
+  // open year) then moves exactly its own amount instead of switching the
+  // whole add-back off.
+  const unclosedResult = resultOnResultAccounts(closedTrialBalance.rows)
+  const resultTransferred =
+    Math.abs(resultOnResultAccounts(preClosingTrialBalance.rows) - unclosedResult) >= 0.01
+  // Fully closed: nothing left on the result accounts, and either a transfer
+  // was found or our own year-end run linked one. The link keeps the
+  // declared-versus-2099 alarm below alive when the pre-closing view fails to
+  // strip our closing (the two views are then identical).
+  const resultClosedIntoEquity =
+    Math.abs(unclosedResult) <= ROUNDING_TOLERANCE_KR
+    && (resultTransferred || Boolean(period.closing_entry_id))
 
   const accountNameMap = new Map<string, string>()
   for (const row of [...closedTrialBalance.rows, ...preClosingTrialBalance.rows]) {
@@ -412,10 +425,11 @@ export async function generateINK2Declaration(
 
   // During an open fiscal year 2099 has no balance yet: the result exists only
   // as the net of the income statement accounts, so add it to make the balance
-  // sheet tie out. Once the resultatavslut is posted, 7302 already carries it
-  // via 2099 and adding it again would double-count årets resultat.
-  const adjustedEquityLiabilities = resultClosedIntoEquity
-    ? totalEquityLiabilities
+  // sheet tie out. Once a resultatavslut is posted, 7302 already carries what
+  // it moved via 2099; only the remainder still on the result accounts (zero
+  // after a full closing) is added, so årets resultat is never counted twice.
+  const adjustedEquityLiabilities = resultTransferred
+    ? totalEquityLiabilities + truncateToWholeKronor(unclosedResult)
     : totalEquityLiabilities + aretsResultat
 
   // Fiscal year dates as YYYYMMDD
@@ -464,6 +478,13 @@ export async function generateINK2Declaration(
   // Add warnings
   if (!(period as FiscalPeriod).is_closed) {
     warnings.push('Räkenskapsåret är inte stängt; deklarationen kan genereras, men siffrorna kan ändras om fler bokföringar görs.')
+  } else if (resultTransferred && Math.abs(unclosedResult) > ROUNDING_TOLERANCE_KR) {
+    // A closed year whose resultatavslut (typically one imported from the
+    // previous system) moved only part of the result into equity. The
+    // add-back above keeps the balance sheet tied, so say it out loud.
+    warnings.push(
+      `Räkenskapsåret är stängt men ${truncateToWholeKronor(unclosedResult)} kr av årets resultat finns kvar på resultatkontona och har inte förts över till eget kapital. Kontrollera bokslutsverifikationen innan deklarationen lämnas in.`,
+    )
   }
 
   if (totalAssets === 0 && totalEquityLiabilities === 0 && ink2r['7410'] === 0) {

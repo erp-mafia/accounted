@@ -9,6 +9,8 @@ import {
   makeJournalEntry,
 } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
+import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
@@ -29,6 +31,11 @@ vi.mock('@/lib/company/context', () => ({
 const requireWriteMock = vi.fn()
 vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
+}))
+
+const mockResolveSettlementAccount = vi.fn().mockResolvedValue('1930')
+vi.mock('@/lib/bookkeeping/settlement-account', () => ({
+  resolveSettlementAccount: (...args: unknown[]) => mockResolveSettlementAccount(...args),
 }))
 
 const mockCreateJournalEntry = vi.fn()
@@ -77,6 +84,7 @@ describe('POST /api/transactions/[id]/book', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockResolveSettlementAccount.mockResolvedValue('1930')
     reset()
     eventBus.clear()
     requireAuthMock.mockResolvedValue({ user: mockUser, supabase: mockSupabase })
@@ -189,6 +197,66 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(body.error).not.toContain('not balanced')
   })
 
+  it('refuses a withdrawal that debits the bank ledger before any draft, naming the account and side', async () => {
+    // A transfer in from a savings account booked against a -25 000 row on
+    // 1930: the commit trigger would refuse it with a bare name.
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -25000, journal_entry_id: null }), error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '1930', debit_amount: 25000, credit_amount: 0 },
+          { account_number: '1933', debit_amount: 0, credit_amount: 25000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_BANK_LINE_DIRECTION')
+    expect(body.error.message).toMatch(/uttag på 25\s000/)
+    expect(body.error.message).toContain('konto 1930 ska stå i kredit')
+    expect(body.error.details).toEqual({ settlement_account: '1930', required_side: 'credit' })
+    expect(getErrorMessage(body)).toBe(body.error.message)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a deposit that credits the bank ledger', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null }), error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_BANK_LINE_DIRECTION')
+    expect(body.error.message).toContain('konto 1930 ska stå i debet')
+    expect(body.error.details).toEqual({ settlement_account: '1930', required_side: 'debit' })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('answers a named database refusal at commit with its own code and message, not the generic conflict', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null }), error: null })
+    mockCreateJournalEntry.mockRejectedValue(
+      new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'),
+    )
+
+    const request = createMockRequest('/api/transactions/tx-1/book', { method: 'POST', body: validBody })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('BANK_BOOKING_SOURCE_CHANGED')
+    expect(getErrorMessage(body)).toBe('Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.')
+  })
+
   it('creates journal entry and links to transaction (happy path)', async () => {
     const tx = makeTransaction({
       id: 'tx-1',
@@ -229,6 +297,8 @@ describe('POST /api/transactions/[id]/book', () => {
       description: 'Test booking',
       source_type: 'bank_transaction',
       source_id: 'tx-1',
+      bank_booking_context: [{ transaction_id: tx.id, cash_account_id: null, settlement_account: '1930',
+        date: tx.date, amount: tx.amount, currency: tx.currency }],
       lines: validBody.lines,
     })
 
@@ -370,6 +440,7 @@ describe('POST /api/transactions/[id]/book', () => {
     mockCreateJournalEntry.mockResolvedValue(makeJournalEntry({ id: 'je-new' }))
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // link update
 
+    mockResolveSettlementAccount.mockResolvedValue('1940')
     const request = createMockRequest('/api/transactions/tx-1/book', {
       method: 'POST',
       body: {
@@ -382,6 +453,10 @@ describe('POST /api/transactions/[id]/book', () => {
     })
     const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
 
+    expect(mockCreateJournalEntry.mock.calls[0][3].bank_booking_context).toEqual([{
+      transaction_id: tx.id, cash_account_id: 'ca-orphan', target_cash_account_id: 'ca-live',
+      settlement_account: '1940', date: tx.date, amount: tx.amount, currency: tx.currency,
+    }])
     expect(response.status).toBe(200)
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
     expect(findCalls('transactions', 'update')).toContainEqual([
@@ -723,7 +798,8 @@ describe('POST /api/transactions/[id]/book', () => {
   })
 
   it('books a voucher-keyed duplicate when force=true binds the expected journal_entry_id', async () => {
-    const tx = makeTransaction({ id: 'tx-1', amount: 98565, journal_entry_id: null })
+    // A withdrawal: validBody credits the bank ledger.
+    const tx = makeTransaction({ id: 'tx-1', amount: -98565, journal_entry_id: null })
     const je = makeJournalEntry({ id: 'je-new' })
     enqueue({ data: tx, error: null }) // fetch
     enqueue({ data: [{ id: 'tx-1' }], error: null }) // update
@@ -733,7 +809,7 @@ describe('POST /api/transactions/[id]/book', () => {
       voucher_label: 'A2',
       entry_date: '2026-03-30',
       description: null,
-      amount: 98565,
+      amount: -98565,
     })
     mockCreateJournalEntry.mockResolvedValue(je)
 

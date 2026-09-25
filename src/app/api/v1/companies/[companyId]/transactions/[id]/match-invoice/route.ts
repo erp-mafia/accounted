@@ -22,6 +22,7 @@
  * run is reserved for endpoints where the caller benefits from a fully
  * resolved preview before commit. Skip the flag here; document it.
  */
+import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { z } from 'zod'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { ok } from '@/lib/api/v1/response'
@@ -537,6 +538,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           description: desc,
           source_type: sourceType,
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: customLines,
         })
         journalEntryId = je?.id ?? null
@@ -550,6 +552,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           entityType,
           invoice.customer?.name,
           paymentAccount,
+          transaction,
         )
         journalEntryId = je?.id ?? null
       } else {
@@ -609,6 +612,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           description: desc,
           source_type: 'invoice_paid',
           source_id: invoice.id,
+          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
           lines: clearingLines,
         })
         journalEntryId = je?.id ?? null

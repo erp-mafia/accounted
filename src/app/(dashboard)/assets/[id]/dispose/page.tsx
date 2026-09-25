@@ -5,7 +5,7 @@ import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Loader2, Lock } from 'lucide-react'
+import { ArrowLeft, Lock } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -494,11 +494,11 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         <Link href="/assets"><Button variant="secondary" disabled={submitting}>{t('cancel')}</Button></Link>
         <Button
           onClick={handleSubmit}
-          disabled={!canWrite || submitting || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
+          loading={submitting}
+          disabled={!canWrite || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
           title={!canWrite ? t('write_required') : undefined}
         >
           {!canWrite && <Lock className="mr-1 h-4 w-4" />}
-          {submitting && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
           {t('submit')}
         </Button>
       </div>

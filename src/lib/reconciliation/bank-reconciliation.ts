@@ -202,12 +202,14 @@ export interface ReconciliationStatus {
    * voucher carries several lines on this account, or when a ledger line the
    * candidate RPC hides has no bank counterpart. That last cause dominates:
    * `get_account_gl_lines_for_matching` returns only `status='posted'` entries
-   * and excludes storno / correction outright, so an unlinked storno moves this
-   * account's movement while staying invisible in "Omatchade verifikationer".
+   * and excludes storno outright, so an unlinked storno moves this account's
+   * movement while staying invisible in "Omatchade verifikationer".
    * Measured on prod 2026-08-20 over the 206 single-1930-account companies with
    * >=10 transactions: 136 reconcile to exactly 0,00, 63 land >=100 kr out, and
    * the unlinked-hidden-line buckets behind that are posted/storno (127
-   * companies), reversed/bank_transaction (66) and posted/correction (49).
+   * companies), reversed/bank_transaction (66) and posted/correction (49). The
+   * correction bucket is gone since 20260923150000: an unlinked rättelse is the
+   * live booking of a bank movement and is now listed (and matchable).
    *
    * A non-zero residual is therefore a real finding but usually NOT user error,
    * so the UI states it factually rather than in destructive red.
@@ -958,8 +960,9 @@ export async function getReconciliationStatus(
     0
   )
 
-  // Unmatched GL lines count (RPC excludes opening_balance, storno and correction
-  // since 20260601120000_unlinked_gl_lines_exclude_storno_correction.sql).
+  // Unmatched GL lines count (RPC excludes opening_balance and storno; posted
+  // correction vouchers are candidates again since 20260923150000, a linked one
+  // drops out through its link like any other voucher).
   // Account-scoped since 20260723160000: a voucher whose links all sit on another
   // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
   // number in agreement with the "Omatchade verifikationer" table the

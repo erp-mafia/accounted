@@ -307,10 +307,14 @@ async function fetchVerifikatContext(
 }
 
 /**
- * The agent's worklist, largest amount first: the biggest gaps in the
- * räkenskapsinformation are the ones worth a mail search first, and the
- * built-in hunt drains its queue in the same order.
+ * The agent's worklist: unbooked bank purchases first, then posted verifikat,
+ * largest amount first within each. A receipt found before booking lets the
+ * purchase be booked from it; a posted verifikat only gains a link. Within a
+ * kind the biggest gaps in the räkenskapsinformation are worth a mail search
+ * first, the order the built-in hunt drains its queue in.
  */
+const kindRank = (kind: AgentWorklistKind) => (kind === 'transaction' ? 0 : 1)
+
 export async function resolveAgentWorklist(
   supabase: SupabaseClient,
   companyId: string,
@@ -393,7 +397,7 @@ export async function resolveAgentWorklist(
     })
   }
 
-  ranked.sort((a, b) => b.sek - a.sek)
+  ranked.sort((a, b) => kindRank(a.item.kind) - kindRank(b.item.kind) || b.sek - a.sek)
   return {
     items: ranked.slice(0, limit).map((r) => r.item),
     // The verifikat total comes from the RPC (it may exceed the page fetched

@@ -8,7 +8,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Download, Loader2, CheckCircle2, ExternalLink } from 'lucide-react'
+import { Download, CheckCircle2, ExternalLink } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { postAction } from '@/lib/browser/post-action'
@@ -234,21 +234,18 @@ export function TaxPaymentPanel({
 
       {!readOnly && (
         <div className="mt-3 flex flex-wrap justify-end gap-2">
-          <Button onClick={handleDownload} disabled={downloading || marking}>
-            {downloading ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Download className="mr-2 h-4 w-4" />
-            )}
+          <Button onClick={handleDownload} disabled={marking} loading={downloading}>
+            {!downloading && <Download className="mr-2 h-4 w-4" />}
             {t('tax_download_button')}
           </Button>
           {!taxPaidAt && (
             <Button
               variant="outline"
               onClick={handleMarkPaid}
-              disabled={downloading || marking}
+              disabled={downloading}
+              loading={marking}
             >
-              {marking ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              {!marking && <CheckCircle2 className="mr-2 h-4 w-4" />}
               {t('tax_mark_paid_button')}
             </Button>
           )}

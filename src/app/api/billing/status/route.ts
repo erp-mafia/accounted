@@ -12,8 +12,8 @@ import {
 } from '@/lib/entitlements/has-capability'
 
 /**
- * Billing status for the client-rendered billing section (which lives inside the
- * settings modal Dialog and can't read the DB server-side). Returns whether the
+ * Billing status for the client-rendered billing section (Settings →
+ * Abonnemang, a client component). Returns whether the
  * company is paying, whether Stripe checkout is configured, and the trial expiry
  * (for the days-left urgency banner). Read-only.
  *
@@ -51,6 +51,8 @@ export async function GET() {
   let entitlementState: EntitlementState = 'none'
   let coverage: EntitlementCoverage | null = null
   let teamAgreement: TeamAgreement | null = null
+  // The paying company's interval, so the plan card shows the price it pays.
+  let subscriptionPlan: 'monthly' | 'yearly' | null = null
   if (companyId) {
     const entitlements = await getCompanyEntitlements(supabase, companyId)
     entitlementState = entitlements.entitlementState
@@ -69,6 +71,16 @@ export async function GET() {
     // from the user's session.
     if (!isPaying) {
       teamAgreement = await getTeamAgreement(createServiceClient(), companyId)
+    } else {
+      // The user's own client: company members read their company's
+      // subscription row (the entitlement check above does the same).
+      const { data: subscription } = await supabase
+        .from('company_subscriptions')
+        .select('plan')
+        .eq('company_id', companyId)
+        .maybeSingle()
+      const plan = subscription?.plan
+      subscriptionPlan = plan === 'monthly' || plan === 'yearly' ? plan : null
     }
   }
 
@@ -80,5 +92,6 @@ export async function GET() {
     entitlementState,
     coverage,
     ...(teamAgreement ? { teamAgreement } : {}),
+    ...(subscriptionPlan ? { subscriptionPlan } : {}),
   })
 }

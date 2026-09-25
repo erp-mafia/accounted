@@ -113,12 +113,12 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
                 {report.accounts.map((a) => {
                   const files = a.attachments.filter((f) => !f.removed_at).length
                   return (
-                    <tr key={a.account_key} className="border-b border-border/60 last:border-b-0 align-top">
+                    <tr key={a.account_key} className="border-b border-border last:border-b-0 align-top">
                       <td className={cn(TD_CLASS, 'max-w-0')}>
                         <Link href={`/reconciliation?account=${encodeURIComponent(a.account_key)}`} className={QUIET_LINK_CLASS} data-ph-mask>
                           <span className="tabular-nums">{a.account_number}</span> {a.name}
                         </Link>
-                        <div className="truncate text-[11.5px] text-muted-foreground">{externalLabel(a)}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">{externalLabel(a)}</div>
                       </td>
                       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
                         {money(a.closing_balance)}

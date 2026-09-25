@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Calculator, Loader2 } from 'lucide-react'
+import { Calculator } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 
 export interface EntryPreviewLine {
@@ -64,12 +64,8 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating }: Run
       kicker={preview.booked ? t('journal_booked_title') : t('journal_preview_title')}
       aside={
         onRecalculate ? (
-          <Button variant="outline" size="sm" onClick={onRecalculate} disabled={recalculating} className="-my-1">
-            {recalculating ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Calculator className="mr-2 h-4 w-4" />
-            )}
+          <Button variant="outline" size="sm" onClick={onRecalculate} loading={recalculating} className="-my-1">
+            {!recalculating && <Calculator className="mr-2 h-4 w-4" />}
             {t('action_recalculate')}
           </Button>
         ) : undefined

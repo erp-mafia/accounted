@@ -3,7 +3,7 @@
 import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,9 +37,9 @@ import { CURRENCIES, type Article, type SalesOrder, type SalesOrderItem, type Sa
 // Dense-row cell controls: same vocabulary as the invoice editor's line grid
 // (rounded-sm leaves inside the table surface, hairline-free until focus).
 const CELL_INPUT_CLASS =
-  'h-8 rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/40 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
+  'h-8 rounded-sm border border-transparent bg-transparent px-2 py-1 text-[13px] transition-colors duration-150 hover:bg-secondary/60 focus-visible:bg-background focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring placeholder:text-muted-foreground/60'
 const CELL_SELECT_TRIGGER_CLASS =
-  'h-8 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/40 tabular-nums'
+  'h-8 w-auto gap-1 rounded-sm border-transparent bg-transparent px-2 py-1 text-[13px] shadow-none hover:bg-secondary/60 tabular-nums'
 
 interface LineState {
   key: string
@@ -604,8 +604,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
         <Button type="button" variant="ghost" onClick={() => router.back()} disabled={isSubmitting}>
           {tCommon('cancel')}
         </Button>
-        <Button type="submit" disabled={isSubmitting}>
-          {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+        <Button type="submit" loading={isSubmitting}>
           {mode === 'edit' ? t('submit_edit') : t('submit_create')}
         </Button>
       </div>

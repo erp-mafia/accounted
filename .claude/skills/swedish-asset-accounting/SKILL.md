@@ -54,7 +54,10 @@ Is the asset below half prisbasbelopp (29,600 kr 2026) or useful life ≤ 3 year
 
 ## 2026 Regulatory Change
 
-From fiscal years starting after 2025-12-31, entities with buildings generating ≥75% of net revenue (fastighetsbolag, BRF:er) must use K3. This forces component depreciation adoption. BFN published updated BFNAR 2016:10 and 2012:1 effective for these fiscal years.
+From fiscal years starting after 2025-12-31 (BFNAR 2025:2 amending K2; BFNAR 2025:3 amending K3):
+- **Bostadsrättsföreningar and bostadsföreningar** may not use K2 regardless of size (K2 1.1A e) and apply K3, with its new chapter 38. This forces component depreciation.
+- **Companies whose buildings generate ≥75% of net revenue**, or with a material uppskjuten skatteskuld, may not use K2 (1.1B), unless they exceed at most one of >3 employees, >1.5 MSEK balance sheet total, >3 MSEK net revenue (1.1C), or applied K2 the previous year and are not normally covered by 1.1B.
+- Also excluded from K2: foreign filialer, aktierelaterade ersättningar, issued convertible or similar sammansatta finansiella instrument, kryptotillgångar (1.1A f-i).
 
 ## Prisbasbelopp Reference (Half PBB = förbrukningsinventarie threshold)
 
@@ -63,3 +66,4 @@ From fiscal years starting after 2025-12-31, entities with buildings generating 
 | 2024 | 57,300 | 28,650 |
 | 2025 | 58,800 | 29,400 |
 | 2026 | 59,200 | 29,600 |
+| 2027 | 59,600 | 29,800 (calculated by SCB, not yet formally set) |

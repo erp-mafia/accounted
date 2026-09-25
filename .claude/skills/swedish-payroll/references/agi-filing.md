@@ -24,14 +24,20 @@ Exceptions:
 | FK570 | Specifikationsnummer (unique per employee per period, must stay consistent for corrections) |
 | Ruta 011 | Kontant bruttolön (gross cash salary) |
 | Ruta 001 | Avdragen skatt (withheld preliminary tax) |
-| Rutor 012-019 | Benefit values by type (bil, bostad, kost, drivmedel, etc.) |
-| Ruta 020 | Underlag för arbetsgivaravgifter |
-| Ruta 131 | Payments to F-skatt holders not subject to social charges |
+| Ruta 012 | Övriga skattepliktiga förmåner (all benefits except bil and drivmedel, e.g. kost, bostad) |
+| Ruta 013 | Skattepliktig bilförmån (excluding drivmedel) |
+| Ruta 018 | Drivmedel vid bilförmån |
+| Ruta 019 | Avdrag för utgifter i arbetet (part of gross pay that covers work expenses) |
+| Ruta 020 | Övriga kostnadsersättningar (other than bilersättning and traktamente) |
+| Rutor 041/043 | Bostadsförmån småhus / ej småhus (checkboxes; the value goes in 012) |
+| Ruta 131 | Kontant ersättning för arbete som inte är underlag för socialavgifter (e.g. employee covered by another country's social insurance, under 1,000 SEK per person per year) |
 | FK821-FK827 | Absence reporting fields (from 2025) |
 
 ## XML schema and electronic submission
 
-Skatteverket publishes a Teknisk beskrivning (currently v1.1.18.1) defining the XML file structure, validation rules, and field codes.
+Skatteverket publishes a Teknisk beskrivning (currently v1.1.18.2) defining the XML file structure, validation rules, and field codes.
+
+FK499 TotalSjuklonekostnad (HU) is retired. It fed högkostnadsskyddet för sjuklönekostnader, abolished 2024-07-01, and Skatteverket rejects the whole file when the field appears in any redovisningsperiod after 202406. Never emit it: sjuklön is not reported through AGI at all (per-employee sick days go to Försäkringskassan).
 
 Three submission paths:
 1. Manual entry in Skatteverket's e-tjänst
@@ -48,7 +54,9 @@ Corrections require resubmitting a complete AGI for the same period with the sam
 
 | Situation | Förseningsavgift |
 |---|---|
-| First late filing | 625 SEK |
-| After föreläggande, or late ≥1 of last 3 periods | 1,250 SEK |
+| Late filing | 625 SEK |
+| Declaration to be filed after a föreläggande | 1,250 SEK |
+
+Amounts per SFL 48:6.
 
 Persistent non-filing triggers skönsbeskattning (estimated assessment) and potential F-skatt revocation. Penalties are not tax-deductible (book to account 6992).

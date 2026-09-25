@@ -1,17 +1,25 @@
+---
+audience: developer
+---
+
 # Implementation Patterns for Project Accounting
 
-## Table of contents
 
-1. Data model
-2. Project lifecycle state machine
-3. WIP calculation logic
-4. Overhead allocation engine
-5. Profitability reporting
-6. Time tracking integration
-7. Payroll distribution
-8. Asset register integration
-9. Period-end procedures
-10. Validation and error detection
+<!-- toc -->
+**Contents**
+
+- [1. Data model](#1-data-model)
+- [2. Project lifecycle state machine](#2-project-lifecycle-state-machine)
+- [3. WIP calculation logic](#3-wip-calculation-logic)
+- [4. Overhead allocation engine](#4-overhead-allocation-engine)
+- [5. Profitability reporting](#5-profitability-reporting)
+- [6. Time tracking integration](#6-time-tracking-integration)
+- [7. Payroll distribution](#7-payroll-distribution)
+- [8. Asset register integration](#8-asset-register-integration)
+- [9. Period-end procedures](#9-period-end-procedures)
+- [10. Validation and error detection](#10-validation-and-error-detection)
+
+<!-- /toc -->
 
 ---
 
@@ -258,7 +266,7 @@ def calculate_wip_lopande(project, period_date):
     
     wip_balance = upparbetad - fakturerat
     
-    # Tax basis: only invoiced amounts (HFD 2011 ref. 20)
+    # Tax basis: invoiced amounts (IL 17:26; industries per IL 17:23)
     tax_revenue = fakturerat
     accounting_revenue = upparbetad
     
@@ -518,3 +526,13 @@ Before generating SIE4 export:
 3. Multi-year projects carry correct #OIB/#OUB balances
 4. Dimension 6 is declared if any project objects exist
 5. No transaction line references both a project and a cost center from different organizational units (if hierarchy enforced)
+
+### Common error patterns
+
+1. **Incorrect färdigställandegrad**: over/under-recognition of revenue. Flag projects where completion % diverges >20% from time-elapsed or budget-consumed ratios.
+2. **Missing project tags**: orphaned costs. Enforce MANDATORY project code on accounts flagged in dimension settings.
+3. **Mixing recognition methods**: without disclosure violates consistency. Lock method per project type at company config level.
+4. **Unrecognized befarade förluster**: automatic detection required per K3 23.24 (23.32 under färdigställandemetoden) and K2 6.19/6.23.
+5. **Incomplete project closings**: residual balances on 1620/2450/1470. Enforce zero-balance check before CLOSED status.
+6. **Missing garantiavsättningar**: common audit finding for construction. Prompt at project close.
+7. **VAT-revenue timing mismatch**: booking 1620 entries with moms, or failing to report moms on advance invoices.

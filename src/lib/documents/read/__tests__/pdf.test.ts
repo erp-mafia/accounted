@@ -44,6 +44,28 @@ describe('readPdfTextLayer', () => {
     expect(out.pagesNeedingVision).toEqual([2, 3])
   })
 
+  // pdf.js walks a page's drawing operations with ArrayBuffer.transferToFixedLength (Node 21+). Production runs Node 24;
+  // CI's Node 20 cannot, and there pdf.js skips the walk, so no page is flagged and every page keeps its text.
+  const canWalkOperators = typeof (ArrayBuffer.prototype as { transferToFixedLength?: unknown }).transferToFixedLength === 'function'
+  it.skipIf(!canWalkOperators)('marks a text page that is mostly a picture for the model, and leaves a text page with a logo alone', async () => {
+    // A 1x1 PNG: enough to put a paint-image operation on the page.
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
+    const doc = await PDFDocument.create()
+    const font = await doc.embedFont(StandardFonts.Helvetica)
+    const image = await doc.embedPng(png)
+    const table = doc.addPage([595, 842])
+    table.drawText('Schedule 1.2 - Cap Table', { x: 72, y: 780, size: 12, font })
+    table.drawImage(image, { x: 72, y: 300, width: 450, height: 400 })
+    const prose = doc.addPage([595, 842])
+    prose.drawImage(image, { x: 72, y: 790, width: 20, height: 20 })
+    Array.from({ length: 20 }, (_, i) => prose.drawText(`Clause ${i + 1}: the parties agree that the shares shall be held as set out below.`, { x: 72, y: 760 - i * 20, size: 10, font }))
+    const out = await readPdfTextLayer(Buffer.from(await doc.save()))
+    expect(out.pagesNeedingVision).toEqual([])
+    expect(out.pagesWithImages).toEqual([1])
+    // Both pages keep their text layer until the model has read the picture page.
+    expect(out.pages.map((p) => p.pageNo)).toEqual([1, 2])
+  })
+
   it('leaves the caller its bytes (pdf.js takes ownership of what it is given)', async () => {
     const pdf = await makePdf([['Avtal']])
     const before = pdf.length

@@ -11,8 +11,8 @@ export const TH_CLASS =
   'px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border whitespace-nowrap'
 export const TD_CLASS = 'px-4 py-[11px] border-b border-border align-top'
 export const VTH_CLASS =
-  'py-2 pr-4 text-left text-[10.5px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
-export const VTD_CLASS = 'py-[7px] pr-4 border-b border-border/60 align-top'
+  'py-2 pr-4 text-left text-[11px] font-medium uppercase tracking-[0.07em] text-muted-foreground border-b border-border'
+export const VTD_CLASS = 'py-[7px] pr-4 border-b border-border align-top'
 export const QUIET_LINK_CLASS =
   'text-[12.5px] text-muted-foreground underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-foreground'
 

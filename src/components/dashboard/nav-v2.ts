@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet } from 'lucide-react'
+import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { EntityType } from '@/types'
 
@@ -21,12 +21,15 @@ export interface NavGateFlags {
   requiresExpenses?: boolean
   // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
   requiresArkiv?: boolean
+  /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
+  requiresAgents?: boolean
   requiredCapability?: CapabilityKey
   entityOnly?: EntityType
   byraOnly?: boolean
   hidden?: boolean
   comingSoon?: boolean
   betaBadge?: boolean
+  newBadge?: boolean
 }
 
 /**
@@ -56,6 +59,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     icon: Sparkles,
     sub: [{ href: '/agent-knowledge', labelKey: 'agent_knowledge' }],
   },
+  { href: '/skills', labelKey: 'skills', icon: Workflow, newBadge: true, requiresAgents: true },
 ]
 
 export const NAV_V2_COMPANY: NavV2Item[] = [
@@ -125,8 +129,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     requiresArkiv: true,
     sub: [
       { href: '/arkiv', labelKey: 'arkiv_all' },
-      { href: '/arkiv/avtal', labelKey: 'arkiv_agreements' },
-      { href: '/arkiv/myndighet', labelKey: 'arkiv_authority' },
+      { href: '/arkiv/historik', labelKey: 'arkiv_history' },
     ],
   },
   {
