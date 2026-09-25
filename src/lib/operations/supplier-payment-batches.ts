@@ -136,6 +136,13 @@ const EXAMPLE_SUMMARY = {
 // preview
 // ─────────────────────────────────────────────────────────────────
 
+/** Country and check digits plus the last four: enough to recognise the account. */
+export function maskIban(iban: string): string {
+  const compact = iban.replace(/\s/g, '')
+  if (compact.length < 8) return compact ? '****' : ''
+  return `${compact.slice(0, 4)} **** ${compact.slice(-4)}`
+}
+
 export const supplierPaymentBatchesPreview = defineOperation({
   id: 'supplier-payment-batches.preview',
   kind: 'read',
@@ -505,7 +512,7 @@ export const supplierPaymentBatchesGet = defineOperation({
       response: {
         data: {
           ...EXAMPLE_SUMMARY,
-          debtor: { name: 'Testbolaget AB', iban: 'SE3550000000054910000003', bic: 'ESSESESS' },
+          debtor: { name: 'Testbolaget AB', iban: 'SE35 **** 0003', bic: 'ESSESESS' },
           items: [
             {
               supplier_payment_batch_item_id: '71c4…',
@@ -535,7 +542,11 @@ export const supplierPaymentBatchesGet = defineOperation({
   },
   input: z.object({ supplier_payment_batch_id: BATCH_ID }),
   output: BatchSummary.extend({
-    debtor: z.object({ name: z.string(), iban: z.string(), bic: z.string() }),
+    debtor: z.object({
+      name: z.string(),
+      iban: z.string().describe('The company account the batch pays from, masked to country, check digits and the last four.'),
+      bic: z.string(),
+    }),
     items: z.array(BatchItemOut),
     file: z.object({
       filename: z.string(),
@@ -585,7 +596,9 @@ export const supplierPaymentBatchesGet = defineOperation({
         ...toSummary(batch, settledCount, items.map((item) => item.supplier_invoice_id)),
         debtor: {
           name: batch.debtor_snapshot?.name ?? '',
-          iban: batch.debtor_snapshot?.iban ?? '',
+          // Masked: the read is suppliers:read, a default scope. The file (a
+          // suppliers:write download) carries the full debtor account.
+          iban: maskIban(batch.debtor_snapshot?.iban ?? ''),
           bic: batch.debtor_snapshot?.bic ?? '',
         },
         items: outItems,
