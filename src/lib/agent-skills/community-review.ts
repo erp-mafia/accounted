@@ -146,10 +146,12 @@ export async function approvePendingItem(service: SupabaseClient, slug: string, 
   const atom = row as { id: string; body: string | null; trigger_signals: Record<string, unknown> | null } | null
   if (!atom?.body || communityBodySha(atom.body) !== sha) return false
   const now = new Date().toISOString()
-  const { error: updateError } = await service.from('agent_atom_registry')
+  // Compare-and-set on the body: a sync that stored a newer text since the read must not be exposed by this approval.
+  const { data: exposed, error: updateError } = await service.from('agent_atom_registry')
     .update({ mcp_exposed: true, reviewed_at: now, updated_at: now, trigger_signals: { ...(atom.trigger_signals ?? {}), approved_sha: sha } })
-    .eq('id', id)
+    .eq('id', id).eq('body', atom.body).eq('mcp_exposed', false).select('id')
   if (updateError) throw new Error(`Failed to publish ${id}: ${updateError.message}`)
+  if ((exposed ?? []).length === 0) return false
   const submission = atom.trigger_signals?.submission
   if (typeof submission === 'string') {
     const { error: linkError } = await service.from('company_skills')

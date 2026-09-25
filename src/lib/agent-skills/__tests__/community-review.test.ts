@@ -57,7 +57,11 @@ describe('community review', () => {
     expect(await approvePendingItem(supabase as never, 'x', 'f'.repeat(64))).toBe(false)
     expect(findCall('agent_atom_registry', 'update')).toBeUndefined()
     enqueue({ data: atom })
-    enqueue({ data: null }) // expose
+    enqueue({ data: [] }) // a sync replaced the body in between: nothing exposed
+    expect(await approvePendingItem(supabase as never, 'x', communityBodySha('# X'))).toBe(false)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+    enqueue({ data: atom })
+    enqueue({ data: [{ id: 'community/x' }] }) // expose
     enqueue({ data: null }) // link submission
     expect(await approvePendingItem(supabase as never, 'x', communityBodySha('# X'))).toBe(true)
     expect(findCall('agent_atom_registry', 'update')?.[0]).toMatchObject({ mcp_exposed: true, trigger_signals: { approved_sha: communityBodySha('# X'), submission: 'sub-1' } })
