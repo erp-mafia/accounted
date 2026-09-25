@@ -535,6 +535,37 @@ describe('generateAgiDeclaration: utlägg repaid with the salary (#2331)', () =>
   })
 })
 
+describe('generateAgiDeclaration: sjuklön never reaches the HU', () => {
+  // FK499 TotalSjuklonekostnad fed högkostnadsskyddet för sjuklönekostnader,
+  // abolished 2024-07-01. Skatteverket's schema only allows the field up to
+  // period 202406 and rejects the whole file for any later period, so a run
+  // with sick pay must declare exactly like one without it.
+  it('omits FK499 for a run with sjuklön days and a karensavdrag', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    const withSjuklon = {
+      ...REGULAR_ROW,
+      line_items: [
+        { item_type: 'monthly_salary', amount: 40000, is_taxable: true, is_avgift_basis: true },
+        { item_type: 'sick_karens', amount: -1523, quantity: 1, is_taxable: true, is_avgift_basis: true },
+        { item_type: 'sick_day2_14', amount: -1904.76, quantity: 5, is_taxable: true, is_avgift_basis: true },
+      ],
+    }
+    enqueueHappyPath(enqueueMany, [withSjuklon])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    expect(result.xml).not.toContain('faltkod="499"')
+    expect(result.xml).not.toContain('TotalSjuklonekostnad')
+    expect(result.totals).not.toHaveProperty('totalSjuklonekostnad')
+    // The other HU totals are untouched by the sick rows.
+    expect(result.xml).toContain('faltkod="497">12000<')
+    expect(result.xml).toContain('faltkod="487">12568<')
+  })
+})
+
 describe('generateAgiDeclaration: an employee payment for a benefit reduces the declared förmånsvärde', () => {
   // swedish-payroll skill, deductions-lonevaxling.md: a nettolöneavdrag "DOES
   // reduce the taxable förmånsvärde if the deduction constitutes payment for a

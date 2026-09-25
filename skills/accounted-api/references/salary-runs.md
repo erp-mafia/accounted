@@ -1186,7 +1186,7 @@ Response `200`:
     period_month: number,
     employee_count: number,
     is_correction: boolean,
-    totals: { totalTax: number, totalAvgifterBasis: number, totalAvgifterAmount: number, totalSjuklonekostnad: number, avgifterByCategory: Record<string, { basis: number, amount: number }> },
+    totals: { totalTax: number, totalAvgifterBasis: number, totalAvgifterAmount: number, avgifterByCategory: Record<string, { basis: number, amount: number }> },
     xml: string,
     xml_filename: string
   },
@@ -1215,7 +1215,6 @@ Example response `200`:
       "totalTax": 28500,
       "totalAvgifterBasis": 105000,
       "totalAvgifterAmount": 32991,
-      "totalSjuklonekostnad": 0,
       "avgifterByCategory": {
         "standard": {
           "basis": 105000,

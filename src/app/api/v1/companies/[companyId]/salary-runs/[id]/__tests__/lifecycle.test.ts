@@ -716,7 +716,6 @@ describe('POST /salary-runs/:id/generate-agi', () => {
         totalTax: 28500,
         totalAvgifterBasis: 105000,
         totalAvgifterAmount: 32991,
-        totalSjuklonekostnad: 0,
         avgifterByCategory: {},
       },
       orgNumber: '5566778899',

@@ -37,6 +37,8 @@ Exceptions:
 
 Skatteverket publishes a Teknisk beskrivning (currently v1.1.18.2) defining the XML file structure, validation rules, and field codes.
 
+FK499 TotalSjuklonekostnad (HU) is retired. It fed högkostnadsskyddet för sjuklönekostnader, abolished 2024-07-01, and Skatteverket rejects the whole file when the field appears in any redovisningsperiod after 202406. Never emit it: sjuklön is not reported through AGI at all (per-employee sick days go to Försäkringskassan).
+
 Three submission paths:
 1. Manual entry in Skatteverket's e-tjänst
 2. XML file upload via the same portal
