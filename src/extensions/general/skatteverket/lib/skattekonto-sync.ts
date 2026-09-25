@@ -8,6 +8,7 @@ import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-serv
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { settleAgiTaxPayments } from './agi-tax-settlement'
 import { refreshSkattekontoProposals } from './skattekonto-proposals'
+import { archiveLinkedSkattekontoUnderlag } from '@/lib/skatteverket/skattekonto-underlag'
 import { getSkattekontoReconciliationStatus } from '@/lib/reconciliation/skattekonto-reconciliation'
 import {
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
@@ -605,6 +606,22 @@ export async function syncSkattekonto(
         userId: ctx.userId,
         companyId: ctx.companyId,
       },
+    })
+  }
+
+  // Preserve API-sourced evidence for already-linked vouchers, including
+  // historical manual bookings. A failed archive never undoes a sync or a
+  // posted entry; the next sync retries the missing document.
+  try {
+    const underlag = await archiveLinkedSkattekontoUnderlag(
+      ctx.supabase, ctx.companyId, ctx.userId,
+    )
+    if (underlag.archived > 0 || underlag.failed > 0) {
+      log.info('skattekonto underlag archive pass', { companyId: ctx.companyId, ...underlag })
+    }
+  } catch (err) {
+    log.error('skattekonto underlag archive pass failed', err as Error, {
+      companyId: ctx.companyId,
     })
   }
 

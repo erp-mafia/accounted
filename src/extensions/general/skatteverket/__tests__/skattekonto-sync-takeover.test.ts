@@ -11,6 +11,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { computeDedupKey } from '@/lib/skatteverket/skattekonto-dedup'
 
+const { archiveLinkedSkattekontoUnderlagMock } = vi.hoisted(() => ({
+  archiveLinkedSkattekontoUnderlagMock: vi.fn(),
+}))
+vi.mock('@/lib/skatteverket/skattekonto-underlag', () => ({
+  archiveLinkedSkattekontoUnderlag: archiveLinkedSkattekontoUnderlagMock,
+}))
+
 const { supabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 const getSaldoMock = vi.fn()
@@ -74,6 +81,7 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     vi.clearAllMocks()
     reset()
     getSaldoMock.mockResolvedValue(makeSaldo())
+    archiveLinkedSkattekontoUnderlagMock.mockResolvedValue({ archived: 0, failed: 0 })
   })
 
   it('adopts a matching hash-keyed row in place instead of duplicating it', async () => {
@@ -101,6 +109,10 @@ describe('syncSkattekonto: takeover of file-imported rows', () => {
     enqueue({ data: null }) // upsert
 
     await syncSkattekonto(makeCtx())
+
+    expect(archiveLinkedSkattekontoUnderlagMock).toHaveBeenCalledWith(
+      supabase, 'company-1', 'user-1',
+    )
 
     const updates = findCalls('skattekonto_transactions', 'update')
     expect(updates).toHaveLength(1)
