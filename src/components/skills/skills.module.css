@@ -460,12 +460,6 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .empty p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
 
 /* ── sharing an own agent ── */
-.share { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--background)); }
-.share p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
-.share label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
-.share input[type='text'] { height: 34px; padding: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font: inherit; font-weight: 400; }
-.share .check { flex-direction: row; align-items: flex-start; gap: 8px; font-weight: 400; color: hsl(var(--muted-foreground)); }
-.share .check input { margin-top: 3px; }
 .shareStatus { display: inline-flex; align-items: center; gap: 8px; width: fit-content; font-size: 13px; }
 
 .who { display: flex; flex-direction: column; min-width: 0; }
@@ -894,7 +888,7 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .routinePreview { max-height: none; padding: 12px 14px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground) / 0.8); white-space: pre-wrap; }
 
 /* Starta i Claude with a choice of where (ClaudeStart.tsx) */
-.splitStart { display: inline-flex; align-items: center; gap: 4px; }
+.splitStart { display: inline-flex; align-items: stretch; }
 .routineCreate { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid hsl(var(--border)); }
 .routineSwitch { align-self: center; }
 /* Accounted's review list (ReviewQueue.tsx) */
@@ -903,3 +897,18 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .reviewHead b { display: block; font-size: 15px; font-weight: 500; }
 .reviewAlert { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: hsl(var(--destructive) / 0.08); color: hsl(var(--destructive)); font-size: 13px; line-height: 19px; }
 .reviewFile { max-height: 360px; overflow: auto; padding: 14px 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; font-size: 12.5px; line-height: 18px; white-space: pre-wrap; }
+/* "Dela": the card as others will see it, the name it will carry, one confirmation (ShareBox in AgentDetail.tsx) */
+.shareForm { display: flex; flex-direction: column; gap: 14px; }
+.shareForm > small { margin-top: -6px; font-size: 12px; }
+.sharePreview { display: flex; pointer-events: none; }
+.sharePreview > * { flex: 1; }
+.shareBy { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
+.shareField { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+.shareInput { display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font-weight: 400; color: hsl(var(--muted-foreground)); transition: border-color 150ms var(--ease-out); }
+.shareInput:focus-within { border-color: hsl(var(--ring)); }
+.shareInput[data-invalid] { border-color: hsl(var(--destructive)); }
+.shareInput input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 14px; color: hsl(var(--foreground)); outline: none; }
+.shareInput input::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
+.shareHint { font-size: 12px; font-weight: 400; color: hsl(var(--destructive)); }
+.shareCheck { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground)); }
+.shareCheck input { margin-top: 3px; accent-color: hsl(var(--foreground)); }
