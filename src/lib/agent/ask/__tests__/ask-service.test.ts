@@ -14,6 +14,10 @@ vi.mock('../ledger-tools', () => ({
 vi.mock('../snapshot', () => ({
   buildAssistantSnapshot: (...a: unknown[]) => buildAssistantSnapshot(...a),
 }))
+const buildUiGrounding = vi.fn()
+vi.mock('../ui-map', () => ({
+  buildUiGrounding: (...a: unknown[]) => buildUiGrounding(...a),
+}))
 
 import { answerAssistantQuestion } from '../ask-service'
 import { EmptyModelAnswerError } from '../errors'
@@ -32,6 +36,7 @@ beforeEach(() => {
   generateText.mockResolvedValue({ text: 'Svar', model: 'qwen3.8', usage: {} })
   buildLedgerTools.mockReturnValue([])
   buildAssistantSnapshot.mockResolvedValue('')
+  buildUiGrounding.mockResolvedValue('')
 })
 
 describe('answerAssistantQuestion', () => {
@@ -155,6 +160,49 @@ describe('answerAssistantQuestion', () => {
   it('sends no history key at all for a fresh thread or a one-off ask', async () => {
     await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?', history: [] })
     expect('history' in generateText.mock.calls[0][0]).toBe(false)
+  })
+
+  // Production report: in Underlag and Bokföring the assistant named buttons
+  // and menus that do not exist. It was told to "point the user to the right
+  // page" but was never told which page they were on or what pages exist.
+  describe('UI grounding (the assistant names only UI that exists)', () => {
+    const GROUNDING =
+      'Användaren är på sidan: Inköp → Underlag (/e/general/invoice-inbox).\n\nAppens meny för det här bolaget ...'
+
+    it('grounds the answer in the page the user asked from and the real menu', async () => {
+      buildUiGrounding.mockResolvedValue(GROUNDING)
+      const supabase = supabaseWith(null)
+      await answerAssistantQuestion({
+        supabase,
+        companyId: 'company-1',
+        userId: 'u1',
+        question: 'Var bokför jag det här kvittot?',
+        route: '/e/general/invoice-inbox',
+        locale: 'sv',
+      })
+      expect(buildUiGrounding).toHaveBeenCalledWith(supabase, 'company-1', {
+        route: '/e/general/invoice-inbox',
+        locale: 'sv',
+      })
+      const call = generateText.mock.calls[0][0]
+      expect(call.prompt).toContain(GROUNDING)
+      // Grounding comes before the question, as data the answer builds on.
+      expect(call.prompt.indexOf(GROUNDING)).toBeLessThan(call.prompt.indexOf('Fråga:'))
+    })
+
+    it('tells the model to name only menu entries it was given and never invent buttons', async () => {
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+      const system = generateText.mock.calls[0][0].system
+      expect(system).toContain('"Appens meny"')
+      expect(system).toContain('Hitta ALDRIG på knappar')
+      expect(system).toContain('säg det rakt ut i stället för att gissa')
+    })
+
+    it('still answers when no grounding could be built', async () => {
+      buildUiGrounding.mockResolvedValue('')
+      await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+      expect(generateText.mock.calls[0][0].prompt).toBe('Fråga: Hej?')
+    })
   })
 
   it('honours a custom maxSteps', async () => {

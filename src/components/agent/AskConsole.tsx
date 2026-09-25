@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
+import { usePathname } from 'next/navigation'
+import { useLocale } from 'next-intl'
 import { AlertTriangle, MessageSquare, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
@@ -118,6 +120,11 @@ export default function AskConsole({
   scrollerClassName,
 }: AskConsoleProps) {
   const hasAi = useCapability(CAPABILITY.ai)
+  // The page the user is looking at when they ask (the panel docks beside it
+  // and survives navigation, so read it per send, not per thread) and the
+  // locale its labels render in: the answer is grounded in both.
+  const pathname = usePathname()
+  const locale = useLocale()
   const [messages, setMessages] = useState<AskConsoleMessage[]>(initialMessages ?? [])
   const [input, setInput] = useState('')
   const [pending, setPending] = useState(false)
@@ -157,6 +164,8 @@ export default function AskConsole({
             conversation_id: conversationIdRef.current,
             // context_ref only binds a FRESH thread; a resumed one already has it.
             context_ref: conversationIdRef.current ? undefined : (contextRef ?? undefined),
+            route: pathname ?? undefined,
+            locale,
           }),
         })
 
@@ -200,7 +209,7 @@ export default function AskConsole({
         setPending(false)
       }
     },
-    [pending, contextRef, onConversationCreated],
+    [pending, contextRef, onConversationCreated, pathname, locale],
   )
 
   // Auto-fire a seeded question exactly once (a suggestion chip the user
