@@ -253,7 +253,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                   <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
                 )}
                 {COMMUNITY_OPEN && mine?.installations[0] && !mine.draft && (
-                  <div className={styles.alist}><ShareBox status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
+                  <div className={styles.alist}><ShareBox preview={{ title: item.name, desc: item.desc, kind: item.kind, hue, symbolKey: item.key }} status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
                 )}
                 {mine?.installations[0] && (mine.shareStatus ?? 'private') === 'private' && (
                   <div className={styles.alist}><DeleteOwn kind={item.kind} canWrite={canWrite} onDelete={deleteMine} /></div>

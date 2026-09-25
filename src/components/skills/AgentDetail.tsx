@@ -19,6 +19,8 @@ import { formatDateLong } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { AgentCard } from './AgentCard'
 import { FlowSymbol } from './FlowSymbol'
 import { CopyIcon } from './CopyIcon'
 import { itemHue, seedOf, type ItemKind } from './hues'
@@ -276,7 +278,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
                   <Button variant="outline" size="sm" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
                 </ActionRow>
               )}
-              {COMMUNITY_OPEN && own && !own.draft && <ShareBox status={own.shareStatus ?? 'private'} publishedUrl={own.publishedUrl} reviewNote={own.reviewNote} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
+              {COMMUNITY_OPEN && own && !own.draft && <ShareBox preview={{ title: name, desc: own.summary ?? '', kind: 'workflow', hue, symbolKey: agentId }} status={own.shareStatus ?? 'private'} publishedUrl={own.publishedUrl} reviewNote={own.reviewNote} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
               </div>
               {own && (own.shareStatus ?? 'private') === 'private' && <div className={styles.alist}><DeleteOwn canWrite={canWrite} onDelete={deleteOwn} /></div>}
             </SubView>
@@ -455,12 +457,14 @@ const HANDLE = /^[a-z0-9][a-z0-9-]{0,38}$/
 
 /** Share an own agent with the community: it waits for Accounted's review before anyone else sees it. */
 /** Share an own item: Accounted reviews it, and a published one is open to everyone under MIT on accounted.se. */
-export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote }: {
+export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, preview }: {
   status: NonNullable<SkillSummary['shareStatus']>
   canWrite: boolean
   onShare: (share: { author_handle: string } | 'withdraw') => Promise<boolean>
   publishedUrl?: string | null
   reviewNote?: string | null
+  /** The item as its card will look to others, so the name being chosen is seen where it will stand. */
+  preview: { title: string; desc: string; kind: ItemKind; hue: number; symbolKey: string }
 }) {
   const t = useTranslations('skills_registry')
   const [open, setOpen] = useState(false)
@@ -469,9 +473,12 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote }
   const [state, setState] = useState<'idle' | 'sending' | 'failed'>('idle')
   async function send(share: { author_handle: string } | 'withdraw') {
     setState('sending')
-    setState((await onShare(share)) ? 'idle' : 'failed')
+    const ok = await onShare(share)
+    setState(ok ? 'idle' : 'failed')
+    if (ok) setOpen(false)
   }
   const failed = state === 'failed' ? t('share_failed') : undefined
+  const handleOk = HANDLE.test(handle)
   if (status === 'submitted' || status === 'published') {
     return (
       <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed} below={status === 'published' && publishedUrl ? <a className={styles.catLink} href={publishedUrl} target="_blank" rel="noreferrer">{t('share_published_link')}</a> : undefined}>
@@ -481,26 +488,41 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote }
   }
   if (status === 'withdrawn') return <ActionRow title={t('adv_share_title')} desc={t('share_status_withdrawn')} />
   return (
-    <ActionRow title={t('adv_share_title')} desc={reviewNote ? t('share_returned', { note: reviewNote }) : t('adv_share_desc')} below={open && (
-    <form className={`${styles.share} ${styles.fadeIn}`} onSubmit={(e) => { e.preventDefault(); if (HANDLE.test(handle) && confirmed) void send({ author_handle: handle }) }}>
-      <p>{t('share_body')}</p>
-      <label htmlFor="agent-share-handle">
-        {t('share_handle')}
-        <input id="agent-share-handle" type="text" value={handle} autoComplete="off" spellCheck={false} maxLength={39} onChange={(e) => setHandle(e.target.value.toLowerCase())} aria-describedby="agent-share-handle-hint" />
-        <small id="agent-share-handle-hint" className={styles.partNote}>{t('share_handle_hint')}</small>
-      </label>
-      <label className={styles.check} htmlFor="agent-share-confirm">
-        <input id="agent-share-confirm" type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
-        {t('share_confirm')}
-      </label>
-      <div className="flex flex-wrap gap-2">
-        <Button type="submit" size="sm" disabled={!canWrite || !confirmed || !HANDLE.test(handle)} loading={state === 'sending'}>{t('share_submit')}</Button>
-        <Button variant="outline" size="sm" onClick={() => setOpen(false)}>{t('cancel')}</Button>
-      </div>
-      {failed && <p role="alert">{failed}</p>}
-    </form>
-    )}>
-      {!open && <Button variant="outline" size="sm" disabled={!canWrite} onClick={() => setOpen(true)}>{t('adv_share')}</Button>}
+    <ActionRow title={t('adv_share_title')} desc={reviewNote ? t('share_returned', { note: reviewNote }) : t('adv_share_desc')}>
+      <Button variant="outline" size="sm" disabled={!canWrite} onClick={() => { setState('idle'); setOpen(true) }}>{t('adv_share')}</Button>
+      <Dialog open={open} onOpenChange={(next) => state !== 'sending' && setOpen(next)}>
+        <DialogContent className="sm:max-w-[480px]">
+          <DialogHeader>
+            <DialogTitle className="font-display text-lg tracking-tight">{t('share_title')}</DialogTitle>
+            <DialogDescription className="text-[13px] leading-relaxed">{t('share_body')}</DialogDescription>
+          </DialogHeader>
+          <form id="share-form" className={styles.shareForm} onSubmit={(e) => { e.preventDefault(); if (handleOk && confirmed) void send({ author_handle: handle }) }}>
+            <div className={styles.sharePreview} aria-hidden>
+              <AgentCard title={preview.title} desc={preview.desc} kind={preview.kind} hue={preview.hue} symbolKey={preview.symbolKey} masked
+                foot={<span className={styles.shareBy}>{t('share_by', { handle: handle || t('share_handle_placeholder') })}</span>} />
+            </div>
+            <label className={styles.shareField} htmlFor="share-handle">
+              {t('share_handle')}
+              <span className={styles.shareInput} data-invalid={handle && !handleOk ? '' : undefined}>
+                <span aria-hidden>@</span>
+                <input id="share-handle" type="text" value={handle} placeholder={t('share_handle_placeholder')} autoComplete="off" spellCheck={false} maxLength={39}
+                  onChange={(e) => setHandle(e.target.value.toLowerCase())} aria-invalid={handle !== '' && !handleOk} aria-describedby={handle && !handleOk ? 'share-handle-hint' : undefined} />
+              </span>
+              {handle && !handleOk && <small id="share-handle-hint" className={styles.shareHint}>{t('share_handle_hint')}</small>}
+            </label>
+            <label className={styles.shareCheck} htmlFor="share-confirm">
+              <input id="share-confirm" type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+              {t('share_confirm')}
+            </label>
+            <small className={styles.muted}>{t('share_license')}</small>
+            {failed && <p role="alert" className={styles.shareHint}>{failed}</p>}
+          </form>
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>{t('cancel')}</Button>
+            <Button type="submit" form="share-form" size="sm" disabled={!canWrite || !confirmed || !handleOk} loading={state === 'sending'}>{t('share_submit')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </ActionRow>
   )
 }
