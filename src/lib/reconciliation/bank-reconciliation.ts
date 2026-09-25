@@ -747,11 +747,10 @@ export async function getReconciliationStatus(
     is_ignored: boolean | null
     cash_account_id: string | null
   }
-  const STATUS_TX_COLUMNS = 'id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id'
   const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
     let txQuery = supabase
       .from('transactions')
-      .select(STATUS_TX_COLUMNS)
+      .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
       .eq('company_id', companyId)
     txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
     if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
@@ -944,7 +943,7 @@ export async function getReconciliationStatus(
     readFrom: dateFrom ?? null,
     readTo: dateTo ?? null,
     knownEntryDates,
-    txColumns: STATUS_TX_COLUMNS,
+    columns: 'status',
     cashAccountId,
     currency,
     includeUnassigned,
@@ -2069,14 +2068,29 @@ export interface AlignLinkedTransactionsOptions<T extends WindowedTxRow> {
    *  entry_date, covering at least [from, to]. When omitted the helper reads
    *  them itself. */
   knownEntryDates?: Map<string, string>
-  /** Columns to select when pulling a row in; must yield a `T`. */
-  txColumns: string
+  /** Which caller's row shape to select when pulling a row in: 'status' is
+   *  getReconciliationStatus' row, 'items' is listAccountItems'. A closed
+   *  choice, not a column string, so each select stays a literal the typed
+   *  client and the phantom-column guard can resolve. */
+  columns: 'status' | 'items'
   cashAccountId?: string
   currency: string
   includeUnassigned: boolean
 }
 
 const LINK_WINDOW_CHUNK = 150
+
+/** The builder calls alignLinkedTransactionsToWindow makes on a transactions
+ *  read, as one structural type over its two literal selects. */
+type TxReadQuery<T> = {
+  eq(column: string, value: string): TxReadQuery<T>
+  or(filters: string): TxReadQuery<T>
+  in(column: string, values: readonly string[]): TxReadQuery<T>
+  lt(column: string, value: string): TxReadQuery<T>
+  gt(column: string, value: string): TxReadQuery<T>
+  order(column: string): TxReadQuery<T>
+  range(from: number, to: number): PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+}
 
 function chunkIds(ids: string[]): string[][] {
   const out: string[][] = []
@@ -2175,27 +2189,43 @@ export async function alignLinkedTransactionsToWindow<T extends WindowedTxRow>(
         pulled.push(row)
       }
     }
-    const txQuery = () =>
-      scopeTransactionsToAccount(
-        supabase.from('transactions').select(options.txColumns).eq('company_id', companyId),
-        options.cashAccountId,
-        options.currency,
-        options.includeUnassigned,
-      )
+    type Narrow = { entryIds: string[]; before?: string; after?: string } | { ids: string[] }
+    // One read per open side, so the date bound never shares an .or() with
+    // the cash-account scope.
+    const readTx = (n: Narrow): Promise<T[]> =>
+      fetchAllRows<T>(({ from: f, to: t }) => {
+        // Two literal selects (typed client, phantom-column guard), then one
+        // structural view of the builder for the shared filters.
+        const selected = (
+          options.columns === 'items'
+            ? supabase
+                .from('transactions')
+                .select(
+                  'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
+                )
+            : supabase
+                .from('transactions')
+                .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
+        ) as unknown as TxReadQuery<T>
+        let q = scopeTransactionsToAccount(
+          selected.eq('company_id', companyId),
+          options.cashAccountId,
+          options.currency,
+          options.includeUnassigned,
+        )
+        if ('ids' in n) {
+          q = q.in('id', n.ids)
+        } else {
+          q = q.in('journal_entry_id', n.entryIds)
+          if (n.before) q = q.lt('date', n.before)
+          if (n.after) q = q.gt('date', n.after)
+        }
+        return q.order('id').range(f, t)
+      })
     const junctionTxIds = new Set<string>()
     for (const part of chunkIds(windowEntryIds)) {
-      // One read per open side, so the date bound never shares an .or() with
-      // the cash-account scope.
-      if (readFrom) {
-        addRows(await fetchAllRows<T>(({ from: f, to: t }) =>
-          txQuery().in('journal_entry_id', part).lt('date', readFrom).order('id').range(f, t),
-        ))
-      }
-      if (readTo) {
-        addRows(await fetchAllRows<T>(({ from: f, to: t }) =>
-          txQuery().in('journal_entry_id', part).gt('date', readTo).order('id').range(f, t),
-        ))
-      }
+      if (readFrom) addRows(await readTx({ entryIds: part, before: readFrom }))
+      if (readTo) addRows(await readTx({ entryIds: part, after: readTo }))
       const links = await fetchAllRows<{ transaction_id: string }>(({ from: f, to: t }) =>
         supabase
           .from('transaction_voucher_links')
@@ -2210,9 +2240,7 @@ export async function alignLinkedTransactionsToWindow<T extends WindowedTxRow>(
       }
     }
     for (const part of chunkIds([...junctionTxIds])) {
-      addRows(await fetchAllRows<T>(({ from: f, to: t }) =>
-        txQuery().in('id', part).order('id').range(f, t),
-      ))
+      addRows(await readTx({ ids: part }))
     }
     const pulledIds = pulled.map((r) => r.id).filter((id): id is string => typeof id === 'string')
     if (pulledIds.length > 0) {

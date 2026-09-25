@@ -65,9 +65,6 @@ interface CashAccountRow {
   is_primary: boolean | null
 }
 
-const BANK_TX_COLUMNS =
-  'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method'
-
 interface BankTxRow {
   id: string
   date: string
@@ -179,7 +176,9 @@ export async function listAccountItems(
     if (wantsExternal) {
       let query = supabase
         .from('transactions')
-        .select(BANK_TX_COLUMNS)
+        .select(
+          'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
+        )
         .eq('company_id', companyId)
       query = scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
       if (options.windowFrom) query = query.gte('date', options.windowFrom)
@@ -211,7 +210,7 @@ export async function listAccountItems(
         to: options.windowTo ?? null,
         readFrom: options.windowFrom ?? null,
         readTo: options.windowTo ?? null,
-        txColumns: BANK_TX_COLUMNS,
+        columns: 'items',
         cashAccountId: account.id,
         currency,
         includeUnassigned: Boolean(account.is_primary),
