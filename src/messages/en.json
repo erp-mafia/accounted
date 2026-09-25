@@ -1777,6 +1777,11 @@
     "journey_ans_monthly": "Monthly",
     "journey_ans_yearly": "Yearly",
     "journey_dup_note": "You already have {name} in {appName}.",
+    "journey_dup_title": "You already have {name}",
+    "journey_dup_sub": "This company is already in your {appName} account. Open it and continue where you left off, instead of starting over in an empty copy.",
+    "journey_dup_open": "Open {name}",
+    "journey_dup_copy": "Create a separate copy anyway",
+    "journey_dup_open_failed": "Could not open the company. Try again.",
     "journey_pending_invite_note": "You have a pending invitation to a company. Open the link in the invitation email to join instead.",
     "journey_fact_vat": "VAT registered",
     "journey_fact_ceased": "Deregistered",
@@ -4195,7 +4200,7 @@
     "title": "Match against existing voucher",
     "searching": "Searching candidates…",
     "no_candidates_title": "No vouchers with a matching line on account 1630.",
-    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date, and must not already be linked to another skattekonto transaction. Use <strong>Post</strong> to create a new voucher instead.",
+    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date. Several events on the same day can be linked to one voucher when their sum exactly equals the 1630 line; for the employer declaration, vouchers dated in the declaration month also count. Vouchers reversed by an opposite voucher are not shown. Use <strong>Post</strong> to create a new voucher instead.",
     "th_date": "Date",
     "th_voucher": "Voucher",
     "th_description": "Description",
@@ -4205,7 +4210,10 @@
     "status_reversed": "Reversed",
     "linking": "Linking…",
     "link": "Link",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "combined_note": "Together with {count, plural, one {# event} other {# events}} on the same day, total {total} on 1630:",
+    "joins_linked_note": "Already linked to {count, plural, one {# event} other {# events}}; together they match the 1630 lines.",
+    "link_group": "Link {count} events"
   },
   "invoice_editor": {
     "amount_label": "Amount",

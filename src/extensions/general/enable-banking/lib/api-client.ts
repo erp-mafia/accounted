@@ -679,8 +679,9 @@ export async function startAuthorization(
   }
   // Credentials we already know (the company's organisationsnummer) go in
   // prefilled; Enable Banking's page still asks for the rest (the signer's
-  // personnummer). autosubmit stays off so the person sees and can correct
-  // the value before the bank flow starts.
+  // personnummer). autosubmit stays off so the person sees the value before
+  // the bank flow starts; the page locks a prefilled field, so only a value
+  // we know is right for this bank is ever sent.
   if (credentials && Object.keys(credentials).length > 0) {
     requestBody.credentials = credentials
     requestBody.credentials_autosubmit = false

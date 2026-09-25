@@ -199,6 +199,25 @@ describe('getSkattekontoReconciliationStatus', () => {
     expect(sum).toBe(27911)
   })
 
+  it('carries the whole group on a combined proposal (crm#128)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const A157 = head('A157', '2026-07-13')
+    const rows = [
+      row('r-tax', '2026-07-13', -4521, { suggested_journal_entry_id: 'A157' }),
+      row('r-fee', '2026-07-13', -7704, { suggested_journal_entry_id: 'A157' }),
+    ]
+    enqueueBase(enqueue, { saldo: -12225, rows, heads: [A157] })
+    ledger([ledgerLine(A157, -12225)], { cutoff: -12225, before: 0 })
+
+    const s = await getSkattekontoReconciliationStatus(supabase as never, COMPANY, { today: TODAY })
+    expect(s?.counts.proposed).toBe(2)
+    for (const item of s?.items.proposed ?? []) {
+      expect(item.proposal?.external_ids).toEqual(['r-tax', 'r-fee'])
+      expect(item.proposal?.confidence).toBe(0.9)
+      expect(item.proposal?.reasons[0]).toMatch(/summan av 2 händelser/)
+    }
+  })
+
   it('treats a link to a reversed entry as a dead link, and the storno pair nets out of the residual', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const E1 = head('E1', '2026-08-01', { status: 'reversed', reversed_by_id: 'E2' })

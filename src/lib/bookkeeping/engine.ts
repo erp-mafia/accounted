@@ -1773,6 +1773,32 @@ export async function reverseEntry(
     }
   }
 
+  // Same hazard in the asset register: a planenlig avskrivning posted from
+  // the register (commit_asset_depreciation) links its depreciation_schedules
+  // row to this voucher. Left in place, the row keeps reading as "posted"
+  // against a cancelled avskrivning: commit_asset_depreciation refuses to
+  // book the period again and the register, the årsredovisning asset note
+  // and disposal's accumulated depreciation all count an amount the ledger
+  // no longer holds. Releasing the link makes the row an unposted proposal
+  // again. enforce_depreciation_schedule_immutability permits exactly this
+  // change and only once the voucher is 'reversed' with the posted storno
+  // written above (migration 20260925194235), and the release is audited by
+  // audit_depreciation_schedule_release. Scoped to this entryId, so rows
+  // linked to any other voucher are untouched. Register-linked vouchers are
+  // always source_type 'year_end' (the RPC refuses anything else).
+  if (original.source_type === 'year_end') {
+    const { error: depreciationReleaseError } = await supabase
+      .from('depreciation_schedules')
+      .update({ journal_entry_id: null, posted_at: null })
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', entryId)
+    if (depreciationReleaseError) {
+      log.error('failed to release depreciation schedule from reversed entry', depreciationReleaseError, {
+        entryId,
+      })
+    }
+  }
+
   // If this was a payment entry, sync the linked invoice/supplier-invoice status.
   // Helper is shared with the DELETE journal entry route so both code paths leave
   // the invoice in a consistent state (BFL 5 kap 5§ requires GL reversal; this

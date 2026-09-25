@@ -1777,6 +1777,11 @@
     "journey_ans_monthly": "Månadsvis",
     "journey_ans_yearly": "Årsvis",
     "journey_dup_note": "Du har redan {name} i {appName}.",
+    "journey_dup_title": "Du har redan {name}",
+    "journey_dup_sub": "Företaget finns redan i ditt {appName}-konto. Öppna det och fortsätt där du var, i stället för att börja om i en tom kopia.",
+    "journey_dup_open": "Öppna {name}",
+    "journey_dup_copy": "Skapa en separat kopia ändå",
+    "journey_dup_open_failed": "Kunde inte öppna företaget. Försök igen.",
     "journey_pending_invite_note": "Du har en väntande inbjudan till ett företag. Öppna länken i inbjudningsmejlet för att gå med istället.",
     "journey_fact_vat": "Momsregistrerat",
     "journey_fact_ceased": "Avregistrerat",
@@ -4195,7 +4200,7 @@
     "title": "Matcha mot befintligt verifikat",
     "searching": "Söker kandidater…",
     "no_candidates_title": "Hittade inga verifikat med en matchande rad på konto 1630.",
-    "no_candidates_help": "Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar från transaktionsdatumet, och får inte redan vara kopplad till en annan skattekonto-transaktion. Använd <strong>Bokför</strong> för att skapa ett nytt verifikat istället.",
+    "no_candidates_help": "Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar från transaktionsdatumet. Flera händelser samma dag kan kopplas till ett verifikat när summan exakt motsvarar 1630-raden; för arbetsgivardeklarationen räknas även verifikat daterade i deklarationsmånaden. Verifikat som har återförts med ett motsatt verifikat visas inte. Använd <strong>Bokför</strong> för att skapa ett nytt verifikat istället.",
     "th_date": "Datum",
     "th_voucher": "Verifikat",
     "th_description": "Beskrivning",
@@ -4205,7 +4210,10 @@
     "status_reversed": "Makulerad",
     "linking": "Kopplar…",
     "link": "Koppla",
-    "cancel": "Avbryt"
+    "cancel": "Avbryt",
+    "combined_note": "Tillsammans med {count, plural, one {# händelse} other {# händelser}} samma dag, summa {total} på 1630:",
+    "joins_linked_note": "Redan kopplat till {count, plural, one {# händelse} other {# händelser}}; tillsammans motsvarar de raderna på 1630.",
+    "link_group": "Koppla {count} händelser"
   },
   "invoice_editor": {
     "amount_label": "Belopp",
