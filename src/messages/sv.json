@@ -6339,6 +6339,7 @@
     "ext_arcim_job_error_review": "Posten har motstridiga träffar och behöver granskas innan den kan slutföras.",
     "ext_arcim_job_error_lines": "Fakturarader saknas eller stämmer inte med fakturans totalbelopp.",
     "ext_arcim_job_error_size": "Fakturan överskrider gränsen för automatisk import och behöver granskas separat.",
+    "ext_arcim_job_error_exists": "En post med samma nummer finns redan i Accounted och kunde inte matchas säkert. Den har inte skrivits över och behöver granskas.",
     "ext_arcim_job_error_retry": "Posten kunde inte slutföras. Återuppta importen för att försöka igen.",
     "ext_arcim_job_reconnect": "Återanslut",
     "ext_arcim_job_latest": "Visa senaste importen",
