@@ -2083,6 +2083,13 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Leverantörsfakturan kunde inte bokföras.',
     message_en: 'Failed to book the supplier invoice.',
   },
+  SI_PAYMENT_BALANCE_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv:
+      'Fakturans återstående skuld kan inte fastställas från de kopplade verifikaten. Kontrollera fakturans bokförings- och betalningsverifikat innan du registrerar betalningen.',
+    message_en:
+      'The remaining invoice liability cannot be established from its linked vouchers. Review the invoice registration and payment vouchers before recording the payment.',
+  },
   // Raised by lib/bookkeeping/supplier-invoice-entries.ts when a
   // foreign-currency invoice reaches a booking path with no exchange rate.
   // Booking it 1:1 would balance but understate the fiktiv moms on 2614/2645

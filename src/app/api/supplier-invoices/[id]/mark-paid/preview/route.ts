@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { resolveSupplierInvoicePaymentSek } from '@/lib/bookkeeping/supplier-payment-amounts'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import {
   buildSupplierInvoiceCashLines,
@@ -134,7 +135,10 @@ export const GET = withRouteContext(
         throw err
       }
     } else {
-      const rounded = Math.round(amount * 100) / 100
+      const rounded = await resolveSupplierInvoicePaymentSek(supabase, companyId!, invoice, amount)
+      if (rounded == null) {
+        return errorResponseFromCode('SI_FX_RATE_MISSING', log, { requestId })
+      }
       lines.push({
         account_number: '2440',
         debit_amount: rounded,

@@ -34,6 +34,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { resolveSupplierInvoicePaymentSek } from '@/lib/bookkeeping/supplier-payment-amounts'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -179,7 +180,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         id, supplier_id, status, currency, exchange_rate, total, paid_amount, remaining_amount,
         supplier_invoice_number, arrival_number, invoice_date, vat_treatment, reverse_charge, payment_reference,
         subtotal, subtotal_sek, vat_amount, vat_amount_sek, total_sek, due_date, received_date,
-        is_credit_note, credited_invoice_id, payment_journal_entry_id, default_dimensions,
+        is_credit_note, credited_invoice_id, registration_journal_entry_id, payment_journal_entry_id, default_dimensions,
         supplier:suppliers(id, name, supplier_type),
         items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions)
       `)
@@ -387,6 +388,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const paymentAmountSek = useCashEntry || customLines ? null : await resolveSupplierInvoicePaymentSek(
+      ctx.supabase, ctx.companyId!, typed as unknown as SupplierInvoice, paymentAmount,
+    )
+    if (!useCashEntry && !customLines && paymentAmountSek == null) {
+      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, { requestId: ctx.requestId })
+    }
+
     if (ctx.dryRun) {
       // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
@@ -458,7 +466,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           typed as unknown as SupplierInvoice,
-          paymentAmount,
+          paymentAmountSek!,
           paymentDate,
           exchangeRateDifference,
           supplierRow?.name,

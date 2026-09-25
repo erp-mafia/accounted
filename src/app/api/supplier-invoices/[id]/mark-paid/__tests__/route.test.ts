@@ -729,10 +729,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid', () => {
       body: {},
     })
     const response = await POST(request, createMockRouteParams({ id: 'si-1' }))
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
   })
 
   it('EUR invoice: a 1 000 EUR bank row still matches in its own currency', async () => {

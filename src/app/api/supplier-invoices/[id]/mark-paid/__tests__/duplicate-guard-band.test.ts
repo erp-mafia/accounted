@@ -270,7 +270,7 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
             items: [],
           }),
         },
-        // The status flip after the guard lets the payment through.
+        // Must not be consumed: missing conversion data prevents the status update.
         { data: [{ id: 'si-1' }] },
       ],
       // The single EUR sweep returns a kronor row anyway (PostgREST `.or()`
@@ -282,10 +282,11 @@ describe('POST /api/supplier-invoices/[id]/mark-paid: duplicate-guard band units
     mockCreateSupplierInvoicePaymentEntry.mockResolvedValue({ id: 'je-1' })
 
     const response = await markPaid()
-    const { status, body } = await parseJsonResponse<{ success: boolean }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
-    expect(status).toBe(200)
-    expect(body.success).toBe(true)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('SI_FX_RATE_MISSING')
+    expect(mockCreateSupplierInvoicePaymentEntry).not.toHaveBeenCalled()
     expect(txQueries()).toHaveLength(1)
     expect(txQueries()[0].calls.or).toEqual([[
       'and(or(currency.eq.EUR),or(merchant_name.ilike.*leverantör*,description.ilike.*leverantör*))',

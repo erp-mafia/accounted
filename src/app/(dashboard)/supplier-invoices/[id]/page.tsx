@@ -1308,10 +1308,10 @@ export default function SupplierInvoiceDetailPage() {
                             <div className="font-medium">{line.account_number}</div>
                             <div className="text-muted-foreground truncate">{line.description}</div>
                             <div className="text-right">
-                              {line.debit_amount > 0 ? formatCurrency(line.debit_amount, invoice.currency) : ''}
+                              {line.debit_amount > 0 ? formatCurrency(line.debit_amount, 'SEK') : ''}
                             </div>
                             <div className="text-right">
-                              {line.credit_amount > 0 ? formatCurrency(line.credit_amount, invoice.currency) : ''}
+                              {line.credit_amount > 0 ? formatCurrency(line.credit_amount, 'SEK') : ''}
                             </div>
                           </div>
                         ))}
@@ -1384,16 +1384,16 @@ export default function SupplierInvoiceDetailPage() {
                             Lägg till rad
                           </Button>
                           <div className="text-xs tabular-nums text-muted-foreground">
-                            Debet {formatCurrency(editValidation.totalDebit, invoice.currency)}
+                            Debet {formatCurrency(editValidation.totalDebit, 'SEK')}
                             {' / '}
-                            Kredit {formatCurrency(editValidation.totalCredit, invoice.currency)}
+                            Kredit {formatCurrency(editValidation.totalCredit, 'SEK')}
                           </div>
                         </div>
 
                         {!editValidation.isBalanced && (
                           <p className="text-xs text-destructive">
                             Debet och kredit måste vara lika och större än noll. Differens:{' '}
-                            {formatCurrency(Math.abs(editValidation.diff), invoice.currency)}
+                            {formatCurrency(Math.abs(editValidation.diff), 'SEK')}
                           </p>
                         )}
                         {editValidation.accountInvalid && (
