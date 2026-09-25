@@ -5610,6 +5610,8 @@
     "reply": "Reply",
     "reply_failed": "Could not send the reply. Please try again.",
     "new_ticket": "New request",
+    "back_to_ticket": "Back to the request",
+    "other_open_hint": "This request is open, we reply here.",
     "earlier_tickets": "Earlier requests ({count})",
     "hide_earlier": "Hide earlier requests",
     "no_messages": "(no message)",
