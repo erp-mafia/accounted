@@ -4,6 +4,7 @@ import type { StoredAccount } from '../types'
 
 vi.mock('../lib/jwt', () => ({
   getAuthorizationHeader: () => 'Bearer test-token',
+  hasSigningCredentials: () => true,
 }))
 
 vi.mock('../lib/sync', () => ({

@@ -7,4 +7,4 @@
  * it here so its own imports and tests are unchanged. The re-import direction
  * (extension -> lib) is the allowed one.
  */
-export { getAuthorizationHeader, _resetTokenCache } from '@/lib/connect/upstreams/enable-banking-jwt'
+export { getAuthorizationHeader, hasSigningCredentials, _resetTokenCache } from '@/lib/connect/upstreams/enable-banking-jwt'

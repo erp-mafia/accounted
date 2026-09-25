@@ -39,6 +39,20 @@ import {
 import { sameBankWarning } from '../lib/connection-warning'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
+import { isSwedishUserMessage } from '@/lib/errors/get-error-message'
+
+/**
+ * What a failed bank call may say in a toast. The routes forward whatever
+ * they caught as `error`, which includes raw exception text (a self-host
+ * once read "ENABLE_BANKING_APP_ID environment variable is not set" here),
+ * so a message is shown only when isSwedishUserMessage says it was written
+ * for the user; anything else falls back to the caller's own Swedish line.
+ */
+function toastMessage(error: unknown, fallback: string): string {
+  const message =
+    error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  return message.trim() && isSwedishUserMessage(message) ? message : fallback
+}
 
 /** One "reuse an existing connection" offer, as returned by /reusable-sessions. */
 interface ReusableSessionOffer {
@@ -459,7 +473,7 @@ export default function BankingSettingsPanel() {
       })
       toast({
         title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte ansluta bank',
+        description: toastMessage(error, 'Kunde inte ansluta bank'),
         variant: 'destructive',
       })
       connectingRef.current = false
@@ -514,7 +528,7 @@ export default function BankingSettingsPanel() {
       })
       toast({
         title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte förnya anslutningen',
+        description: toastMessage(error, 'Kunde inte förnya anslutningen'),
         variant: 'destructive',
       })
       connectingRef.current = false
@@ -590,7 +604,7 @@ export default function BankingSettingsPanel() {
         })
         toast({
           title: 'Fel',
-          description: error instanceof Error ? error.message : 'Synkronisering misslyckades',
+          description: toastMessage(error, 'Synkronisering misslyckades'),
           variant: 'destructive',
         })
         setShowCsvFallback(true)
@@ -675,7 +689,7 @@ export default function BankingSettingsPanel() {
       })
       toast({
         title: 'Fel',
-        description: error instanceof Error ? error.message : 'Kunde inte koppla bort bank',
+        description: toastMessage(error, 'Kunde inte koppla bort bank'),
         variant: 'destructive',
       })
     }

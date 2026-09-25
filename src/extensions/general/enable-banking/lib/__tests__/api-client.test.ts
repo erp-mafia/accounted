@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock jwt module before importing api-client
 const mockGenerateJWT = vi.fn().mockReturnValue('test-jwt-token')
+const mockHasSigningCredentials = vi.fn().mockReturnValue(true)
 vi.mock('../jwt', () => ({
   generateJWT: (...args: unknown[]) => mockGenerateJWT(...args),
   getAuthorizationHeader: () => `Bearer ${mockGenerateJWT()}`,
+  hasSigningCredentials: () => mockHasSigningCredentials(),
   _resetTokenCache: vi.fn(),
 }))
 
@@ -26,8 +28,10 @@ import {
   probeSessionHealth,
   startAuthorization,
   createSession,
+  BANK_NOT_CONFIGURED_MESSAGE,
   type Transaction,
 } from '../api-client'
+import { isSwedishUserMessage } from '@/lib/errors/get-error-message'
 
 describe('api-client', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
@@ -794,6 +798,7 @@ describe('JWT cache', () => {
         jwtCallCount.count++
         return `Bearer cached-token`
       },
+      hasSigningCredentials: () => true,
       _resetTokenCache: vi.fn(),
     }))
 
@@ -1234,5 +1239,42 @@ describe('expected-condition log levels', () => {
       expect(parseRetryAfter('999999999', now)).toBeNull()
       expect(parseRetryAfter('Fri, 01 Jan 2100 00:00:00 GMT', now)).toBeNull()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// No route to Enable Banking at all (no connector key, no own client)
+// ---------------------------------------------------------------------------
+describe('unconfigured bank upstream', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.stubEnv('GNUBOK_CONNECTOR_KEY', '')
+    vi.stubEnv('GNUBOK_CONNECT_URL', '')
+    mockHasSigningCredentials.mockReturnValue(false)
+    fetchSpy = vi.spyOn(globalThis, 'fetch')
+  })
+
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    mockHasSigningCredentials.mockReturnValue(true)
+    vi.unstubAllEnvs()
+  })
+
+  it('refuses at the door with a Swedish message instead of signing', async () => {
+    await expect(startAuthorization('Nordea', 'SE', 'https://instance.test/cb', 'state-1'))
+      .rejects.toThrow(BANK_NOT_CONFIGURED_MESSAGE)
+    // Nothing left the process, and the signer was never asked for a token
+    // it cannot mint: that throw is what leaked the env var name to the UI.
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(mockGenerateJWT).not.toHaveBeenCalled()
+  })
+
+  it('names no environment variable: the message is what a user reads', () => {
+    expect(BANK_NOT_CONFIGURED_MESSAGE).not.toMatch(/ENABLE_BANKING|GNUBOK_|environment variable/)
+    // getErrorMessage passes a route's free-text error through only when it
+    // reads as Swedish written for the user; this one has to clear that bar.
+    expect(isSwedishUserMessage(BANK_NOT_CONFIGURED_MESSAGE)).toBe(true)
   })
 })

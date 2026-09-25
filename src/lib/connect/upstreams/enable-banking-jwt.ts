@@ -24,6 +24,24 @@ interface JWTPayload {
   exp: number
 }
 
+/**
+ * Whether this instance can sign Enable Banking calls itself: BOTH halves of
+ * an own client are present, the app id (the JWT `kid`) and the signing key.
+ *
+ * Callers use this to refuse at the door instead of letting generateJWT throw
+ * the name of a missing environment variable at a user. Half a set is a real
+ * state, not a theoretical one: setting any ONE of the four id/key variables
+ * switches the bank upstream out of connector mode (see
+ * lib/connect/instance/upstreams.ts), so a lone app id or a lone private key
+ * leaves the instance with neither the connector nor a working own client.
+ *
+ * Reads the same module constants the signer uses, so it answers the only
+ * question that matters: would generateJWT() succeed?
+ */
+export function hasSigningCredentials(): boolean {
+  return Boolean(APP_ID && PRIVATE_KEY_RAW)
+}
+
 function base64UrlEncode(data: Buffer | string): string {
   const str = typeof data === 'string' ? data : data.toString('base64')
   return str.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')

@@ -12,12 +12,25 @@
  * 6. GET /accounts/{uid}/transactions
  */
 
-import { getAuthorizationHeader } from './jwt'
+import { createLogger } from '@/lib/logger'
+import { getAuthorizationHeader, hasSigningCredentials } from './jwt'
 import { deriveTransactionLabel } from './transaction-label'
 import { FALLBACK_DESCRIPTION } from '@/lib/transactions/external-id'
 import { bankConnectorMode, CONNECTOR_COMPANY_HEADER } from '@/lib/connect/instance/upstreams'
 import { normalizeBankTransactionCode } from '@accounted/connect-contract'
 import { dateFromDaysBefore, historyWindowDays } from './history-window'
+
+const log = createLogger('enable-banking/api-client')
+
+/**
+ * Shown when the instance has no route to Enable Banking (no connector key
+ * and no own signing credentials). Swedish and user-facing on purpose: the
+ * routes forward a thrown message to the client as `error`, and
+ * getErrorMessage only passes a string through when it reads as Swedish
+ * written for the user.
+ */
+export const BANK_NOT_CONFIGURED_MESSAGE =
+  'Bankkoppling är inte konfigurerad i den här miljön. Importera kontoutdraget som fil så länge.'
 
 // Prefer _PRODUCTION variant; sandbox uses api.tilisy.com, production uses api.enablebanking.com
 const ENABLE_BANKING_API_URL =
@@ -437,6 +450,19 @@ async function authenticatedFetch(
   // this instance has its own EB credentials, or on hosted, bankConnectorMode()
   // returns null and the direct path below is byte-identical to before.
   const connector = bankConnectorMode()
+  // No connector and no complete own client: this instance cannot reach
+  // Enable Banking at all. Refuse here, at the one door every bank call goes
+  // through, so the user reads why instead of the name of an environment
+  // variable: generateJWT() throws "ENABLE_BANKING_APP_ID environment
+  // variable is not set", and the routes pass their error message straight
+  // to the UI. The technical detail belongs in the log, not in a toast.
+  if (!connector && !hasSigningCredentials()) {
+    log.error('bank upstream not configured', {
+      endpoint,
+      hint: 'set ENABLE_BANKING_APP_ID and ENABLE_BANKING_PRIVATE_KEY (or their _PRODUCTION variants), or GNUBOK_CONNECTOR_KEY + GNUBOK_CONNECT_URL',
+    })
+    throw new Error(BANK_NOT_CONFIGURED_MESSAGE)
+  }
   const url = connector ? `${connector.baseUrl}${endpoint}` : `${ENABLE_BANKING_API_URL}${endpoint}`
   const authorization = connector ? `Bearer ${connector.key}` : getAuthorizationHeader()
   const controller = new AbortController()
