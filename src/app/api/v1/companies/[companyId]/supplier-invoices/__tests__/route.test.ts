@@ -2187,4 +2187,44 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
     expect(res.status).toBe(201)
     expect(mockedReg).not.toHaveBeenCalled()
   })
+
+  // ML 8 kap. 1 §: representation moms is deductible on at most 300 kr per
+  // person. Every registration path books the full VAT, so every path warns,
+  // not only the privately paid one.
+  it('warns REPRESENTATION_VAT_CAP on an ordinary invoice booked on 6071', async () => {
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        suppliers: { data: SAMPLE_SUPPLIER, error: null },
+        company_settings: {
+          data: { accounting_method: 'accrual', defer_invoice_booking: true },
+          error: null,
+        },
+        fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
+        supplier_invoices: { data: SAMPLE_SI, error: null },
+        supplier_invoice_items: { data: null, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+
+    const res = await createSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices`, {
+        method: 'POST',
+        body: JSON.stringify({
+          supplier_id: SUPPLIER_ID,
+          supplier_invoice_number: '2026-1235',
+          invoice_date: '2026-05-10',
+          due_date: '2026-06-09',
+          items: [
+            { description: 'Kundlunch', amount: 2000, account_number: '6071', vat_rate: 0.12 },
+          ],
+        }),
+      }),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.meta.warnings?.map((w: { code: string }) => w.code)).toContain('REPRESENTATION_VAT_CAP')
+  })
 })

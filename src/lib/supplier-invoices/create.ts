@@ -534,11 +534,10 @@ export async function createSupplierInvoice(
   // Representation (BAS 6070-6079): ingående moms is only deductible up to
   // 300 SEK base/person per ML 8 kap. 1 §, and the income-tax deduction was
   // abolished in 2017 (IL 16 kap. 2 §). The engine debits 2641 for the full
-  // VAT; a non-blocking warning lets the user adjust. Emitted on the
-  // private-funds path only; other AP paths share the flaw and are tracked
-  // separately.
+  // VAT; a non-blocking warning lets the user adjust. Every registration
+  // path books that VAT, so every path warns.
   const warnings: SupplierInvoiceWarning[] = []
-  if (paidPrivately && items.some((i) => /^607\d$/.test(i.account_number))) {
+  if (!reverseCharge && items.some((i) => /^607\d$/.test(i.account_number) && i.vat_amount > 0)) {
     warnings.push({
       code: 'REPRESENTATION_VAT_CAP',
       message_sv:
@@ -584,8 +583,9 @@ export async function createSupplierInvoice(
       total_sek: totalSek,
       paid_amount: paidPrivately ? total : 0,
       remaining_amount: paidPrivately ? 0 : total,
-      // The out-of-pocket date when the caller gave one, else now.
-      paid_at: paidPrivately ? (body.payment_date ? `${body.payment_date}T12:00:00.000Z` : new Date().toISOString()) : null,
+      // The out-of-pocket date, else the invoice date: the same date the
+      // utlägg verifikat and the payment row carry (one affärshändelse).
+      paid_at: paidPrivately ? `${body.payment_date ?? body.invoice_date}T12:00:00.000Z` : null,
       notes: body.notes || null,
       // Display-only öresavrundning override; null = off.
       ore_rounding: body.ore_rounding ?? null,
