@@ -51,6 +51,7 @@ export const POST = withRouteContext(
         .join('\n')
       const result = await getAiService().generateStructured({
         tier: 'extraction',
+        meter: { feature: 'expense_template_suggest', companyId },
         system:
           'You classify Swedish business expenses onto booking templates. ' +
           'Pick the best matching template ids for the expense, most likely first. ' +

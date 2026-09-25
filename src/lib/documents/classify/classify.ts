@@ -146,6 +146,7 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
   try {
     const result = await getAiService().generateStructured({
       tier: 'cheap',
+      meter: { feature: 'arkiv_classify', companyId: row.company_id },
       system,
       prompt,
       maxTokens: 800,

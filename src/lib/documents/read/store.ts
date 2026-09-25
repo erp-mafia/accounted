@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AiTier } from '@/lib/ai/types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { getAiStatus } from '@/lib/ai'
+import { withAiMeter } from '@/lib/ai/meter'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
@@ -66,7 +67,9 @@ export async function readAndStoreDocument(
 
   let outcome: ReadOutcome
   try {
-    outcome = await readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) })
+    outcome = await withAiMeter({ feature: 'document_read', companyId: doc.company_id }, () =>
+      readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) }),
+    )
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
     if (err instanceof ReaderUnavailableError) {

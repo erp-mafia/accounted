@@ -4,6 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { getAiService, getAiStatus } from '@/lib/ai'
+import { withAiMeter } from '@/lib/ai/meter'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
@@ -39,7 +40,7 @@ export const POST = withRouteContext('skills.draft', async (request, { supabase,
   if (!rate.ok) return NextResponse.json({ error: { code: 'RATE_LIMITED', message: agentRateLimitResponseBody(rate).error, message_en: 'Too many requests, try again shortly.' } }, { status: 429 })
 
   try {
-    const step = await draftCreatorStep(getAiService(), validation.data)
+    const step = await withAiMeter({ feature: 'skills_draft', companyId }, () => draftCreatorStep(getAiService(), validation.data))
     return NextResponse.json({ data: step })
   } catch (err) {
     log.warn('skill draft failed', { error: err instanceof Error ? err.message : String(err) })
