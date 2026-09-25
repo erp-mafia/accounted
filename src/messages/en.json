@@ -4195,7 +4195,7 @@
     "title": "Match against existing voucher",
     "searching": "Searching candidates…",
     "no_candidates_title": "No vouchers with a matching line on account 1630.",
-    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date, and must not already be linked to another skattekonto transaction. Use <strong>Post</strong> to create a new voucher instead.",
+    "no_candidates_help": "The candidate must have the same amount and side on 1630 within ±14 days of the transaction date. Several events on the same day can be linked to one voucher when their sum exactly equals the 1630 line; for the employer declaration, vouchers dated in the declaration month also count. Vouchers reversed by an opposite voucher are not shown. Use <strong>Post</strong> to create a new voucher instead.",
     "th_date": "Date",
     "th_voucher": "Voucher",
     "th_description": "Description",
@@ -4205,7 +4205,10 @@
     "status_reversed": "Reversed",
     "linking": "Linking…",
     "link": "Link",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "combined_note": "Together with {count, plural, one {# event} other {# events}} on the same day, total {total} on 1630:",
+    "joins_linked_note": "Already linked to {count, plural, one {# event} other {# events}}; together they match the 1630 lines.",
+    "link_group": "Link {count} events"
   },
   "invoice_editor": {
     "amount_label": "Amount",
