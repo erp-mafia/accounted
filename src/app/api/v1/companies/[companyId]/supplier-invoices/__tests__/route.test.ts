@@ -1549,7 +1549,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
   })
 
   it('passes when exchange_rate_difference is supplied (even as 0) for non-SEK accrual', async () => {
-    const eurSI = { ...approvedSI, currency: 'EUR' }
+    const eurSI = { ...approvedSI, currency: 'EUR', exchange_rate: 11.5 }
     const paidEurSI = { ...eurSI, status: 'paid', paid_amount: 1250, remaining_amount: 0 }
     mockServiceClient.mockReturnValue(
       makeFlexibleSupabase({

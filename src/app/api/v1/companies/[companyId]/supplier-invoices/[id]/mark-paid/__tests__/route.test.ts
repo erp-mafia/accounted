@@ -17,6 +17,7 @@
  * account the verifikat credits.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { SupplierInvoice } from '@/types'
 
 beforeAll(() => {
   if (process.env.NODE_ENV !== 'test') {
@@ -532,5 +533,84 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
       expect(calls.some((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')).toBe(false)
     })
+  })
+})
+
+describe('FX manual payment units (#2955)', () => {
+  const usd = {
+    ...APPROVED_SI, currency: 'USD', total: 37.5, remaining_amount: 37.5,
+    total_sek: 361.55, exchange_rate: 9.6414,
+  }
+  function setup(overrides: Partial<SupplierInvoice> = {}, settledSek = 0, registeredSek = 361.55) {
+    const calls: RecordedCall[] = []
+    const paid = overrides.paid_amount ?? 0
+    mockServiceClient.mockReturnValue(makeFlexibleSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      supplier_invoices: [
+        { data: { ...usd, ...overrides }, error: null },
+        { data: [], error: null },
+        { data: { ...usd, status: 'paid', paid_amount: 37.5, remaining_amount: 0 }, error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      supplier_invoice_payments: [
+        { data: paid ? [{ id: 'p1', amount: paid, currency: 'USD', journal_entry_id: 'prior-je' }] : [], error: null },
+        { data: [], error: null },
+        { data: null, error: null },
+      ],
+      journal_entries: { data: [
+        { id: 'je-registration', status: 'posted', correction_of_id: null },
+        ...(paid ? [{ id: 'prior-je', status: 'posted', correction_of_id: null }] : []),
+      ], error: null },
+      journal_entry_lines: { data: [
+        { journal_entry_id: 'je-registration', debit_amount: 0, credit_amount: registeredSek },
+        ...(paid ? [{ journal_entry_id: 'prior-je', debit_amount: settledSek, credit_amount: 0 }] : []),
+      ], error: null },
+    }, calls))
+    return calls
+  }
+
+  it('passes SEK to the generator and USD to payment history', async () => {
+    const calls = setup()
+    const response = await markPaid(makeRequest({
+      amount: 37.5, payment_date: '2026-09-15', payment_account: '1686', exchange_rate_difference: -10,
+    }), detailParams())
+    expect(response.status).toBe(200)
+    expect(mockPaymentEntry.mock.calls[0][4]).toBe(361.55)
+    expect(mockPaymentEntry.mock.calls[0][6]).toBe(-10)
+    expect(mockPaymentEntry.mock.calls[0][PAYMENT_ACCOUNT_ARG]).toBe('1686')
+    expect(calls.find(c => c.table === 'supplier_invoice_payments' && c.method === 'insert')?.args[0])
+      .toMatchObject({ amount: 37.5, currency: 'USD' })
+  })
+
+  it.each([false, true])('refuses missing FX conversion, including dry-run: %s', async (dryRun) => {
+    setup({ exchange_rate: null, total_sek: null, registration_journal_entry_id: null })
+    const response = await markPaid(makeRequest({
+      amount: 37.5, payment_date: '2026-09-15', exchange_rate_difference: 0,
+    }, { dryRun }), detailParams())
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: { code: 'SI_FX_RATE_MISSING' } })
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { name: 'separately rounded registration', paid: 0, settled: 0, registered: 361.56, expected: 361.56 },
+    { name: 'reversed first partial', paid: 18.75, settled: 180.77, registered: 361.55, expected: 180.78 },
+    { name: 'bank-matched partials', paid: 25, settled: 241.04, registered: 361.55, expected: 120.51 },
+  ])('clears the actual balance after $name', async ({ paid, settled, registered, expected }) => {
+    const calls = setup({ paid_amount: paid, remaining_amount: 37.5 - paid }, settled, registered)
+    const response = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
+    expect(response.status).toBe(200)
+    expect(mockPaymentEntry.mock.calls[0][4]).toBe(expected)
+    expect(calls.find(c => c.table === 'supplier_invoice_payments' && c.method === 'insert')?.args[0])
+      .toMatchObject({ amount: 37.5 - paid, currency: 'USD' })
+  })
+
+  it.each([false, true])('refuses a missing posted voucher before any write, dry-run: %s', async dryRun => {
+    const calls = setup({ registration_journal_entry_id: 'missing-je' })
+    const response = await markPaid(makeRequest({ exchange_rate_difference: 0 }, { dryRun }), detailParams())
+    expect(response.status).toBe(409)
+    expect(await response.json()).toMatchObject({ error: { code: 'SI_PAYMENT_BALANCE_UNAVAILABLE' } })
+    expect(mockPaymentEntry).not.toHaveBeenCalled()
+    expect(calls.filter(c => c.method === 'insert' || c.method === 'update')).toEqual([])
   })
 })

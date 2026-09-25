@@ -6,6 +6,7 @@ import {
   createSupplierInvoiceCashEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { resolveSupplierInvoicePaymentSek, SupplierPaymentBalanceError } from '@/lib/bookkeeping/supplier-payment-amounts'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -191,10 +192,15 @@ export const POST = withRouteContext(
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else {
+        // This generator expects SEK; payment history below stays in invoice currency.
+        const paymentAmountSek = await resolveSupplierInvoicePaymentSek(supabase, companyId!, invoice, paymentAmount)
+        if (paymentAmountSek == null) {
+          return errorResponseFromCode('SI_FX_RATE_MISSING', opLog, { requestId })
+        }
         const journalEntry = await createSupplierInvoicePaymentEntry(
           supabase, companyId!, user.id,
           invoice as SupplierInvoice,
-          paymentAmount, paymentDate,
+          paymentAmountSek, paymentDate,
           body.exchange_rate_difference,
           invoice.supplier?.name,
           paymentAccount,
@@ -202,7 +208,7 @@ export const POST = withRouteContext(
         if (journalEntry) journalEntryId = journalEntry.id
       }
     } catch (err) {
-      if (isBookkeepingError(err)) {
+      if (isBookkeepingError(err) || err instanceof SupplierPaymentBalanceError) {
         return errorResponse(err, opLog, { requestId })
       }
       opLog.error('failed to create payment journal entry', err as Error)

@@ -34,6 +34,7 @@ import {
   createSupplierInvoicePaymentEntry,
 } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { reverseEntry, createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { resolveSupplierInvoicePaymentSek } from '@/lib/bookkeeping/supplier-payment-amounts'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -387,6 +388,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
+    const paymentAmountSek = useCashEntry || customLines ? null : await resolveSupplierInvoicePaymentSek(
+      ctx.supabase, ctx.companyId!, typed as unknown as SupplierInvoice, paymentAmount,
+    )
+    if (!useCashEntry && !customLines && paymentAmountSek == null) {
+      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, { requestId: ctx.requestId })
+    }
+
     if (ctx.dryRun) {
       // Keep the preview aligned with the live date-only payment timestamp.
       return dryRunPreview(
@@ -458,7 +466,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           ctx.companyId!,
           ctx.userId,
           typed as unknown as SupplierInvoice,
-          paymentAmount,
+          paymentAmountSek!,
           paymentDate,
           exchangeRateDifference,
           supplierRow?.name,
