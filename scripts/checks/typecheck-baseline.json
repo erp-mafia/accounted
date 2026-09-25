@@ -1,5 +1,5 @@
 {
-  "totalErrors": 533,
+  "totalErrors": 491,
   "perFile": {
     "src/app/api/assets/__tests__/id.test.ts": 9,
     "src/app/api/auth/email-hook/__tests__/route.test.ts": 1,
@@ -41,7 +41,6 @@
     "src/app/api/settings/eu-trade-signal/__tests__/route.test.ts": 3,
     "src/app/api/settings/ku-signal/__tests__/route.test.ts": 4,
     "src/app/api/settings/rot-rut-signal/__tests__/route.test.ts": 4,
-    "src/app/api/supplier-invoices/__tests__/route.test.ts": 39,
     "src/app/api/supplier-invoices/payment-batches/__tests__/route.test.ts": 12,
     "src/app/api/tax-assessment-notices/__tests__/route.test.ts": 5,
     "src/app/api/transactions/bulk-book/__tests__/route.test.ts": 16,
@@ -49,7 +48,6 @@
     "src/app/api/webshop-orders/__tests__/bulk-book.test.ts": 1,
     "src/app/api/webshop-orders/__tests__/list-and-settings.test.ts": 11,
     "src/extensions/general/enable-banking/__tests__/session-expired.test.ts": 4,
-    "src/extensions/general/enable-banking/__tests__/supersede.test.ts": 1,
     "src/extensions/general/invoice-inbox/__tests__/match-transaction.test.ts": 1,
     "src/extensions/general/invoice-inbox/__tests__/retry-extraction.test.ts": 1,
     "src/extensions/general/invoice-inbox/__tests__/sandbox-skip-extraction.test.ts": 1,
@@ -81,7 +79,6 @@
     "src/lib/pending-operations/__tests__/commit-authorization-recoverable.test.ts": 1,
     "src/lib/reports/__tests__/vat-declaration.test.ts": 5,
     "src/lib/supabase/__tests__/middleware.test.ts": 1,
-    "tests/pg/categorize-calibration-samples.pg.test.ts": 2,
     "tests/pg/match-batch-allocate.pg.test.ts": 1
   }
 }
