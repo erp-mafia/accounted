@@ -5257,6 +5257,15 @@ const DB_CONFLICTS = {
     message_en: 'Another change to the bank accounts is in progress. Wait a moment and retry.',
     retryable: true,
   },
+  // resolve_bank_ingest_route: an enabled account of the connection has no
+  // bound cash account, or its stored ledger differs from the bound one.
+  // Retrying never helps; saving the account picker rewrites both sides. The
+  // sync paths also store message_sv as the connection's error_message.
+  BANK_INGEST_ROUTE_UNRESOLVED: {
+    httpStatus: 409,
+    message_sv: 'Banksynkningen har stannat: kontovalet för bankkopplingen behöver sparas om. Öppna Välj konton och spara igen.',
+    message_en: 'Bank sync has stopped: the account selection for this bank connection needs to be saved again. Open Choose accounts and save again.',
+  },
 } satisfies Record<string, StructuredErrorEntry>
 
 /**

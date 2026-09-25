@@ -35,8 +35,13 @@ import { incrementalLookbackDays } from './cron-lookback'
 import { emitBankSyncFailed } from './sync-failure-event'
 import { applyRateLimitCooldown, claimSyncLease, rateLimitHoldUntil } from './sync-lease'
 import { retryAfterSeconds } from './rate-limit-message'
-import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
-import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
+import {
+  persistBankSyncResult,
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { eventBus } from '@/lib/events/bus'
 import {
   SYNC_COOLDOWN_MS,
@@ -345,6 +350,17 @@ export async function triggerConnectionSync(
         connection_id: connectionId,
         status: connection.status as string,
       }
+    }
+
+    // Retrying never fixes a stale account selection: store the picker
+    // advice on the row (status unchanged) so the settings panel shows it.
+    if (isBankRouteUnresolved(error)) {
+      await persistBankRouteNeedsConfiguration(supabase, { companyId, connectionId: connection.id as string }).catch(
+        (persistError: unknown) => log.warn('agent-triggered bank sync: could not store the account selection advice', {
+          connectionId,
+          message: persistError instanceof Error ? persistError.message : String(persistError),
+        }),
+      )
     }
 
     log.error('agent-triggered bank sync failed', {

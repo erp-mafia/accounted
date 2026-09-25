@@ -142,6 +142,8 @@ export function BankConnectionStatus({
         return { kind: 'badge', label: 'Välj konton', variant: 'warning' }
       case 'error':
         return { kind: 'badge', label: 'Fel', variant: 'destructive' }
+      case 'needs_configuration':
+        return { kind: 'badge', label: 'Synkningen har stannat', variant: 'warning' }
       case 'expired':
         return { kind: 'badge', label: 'Utgånget samtycke', variant: 'warning' }
       case 'expiring':
@@ -159,6 +161,7 @@ export function BankConnectionStatus({
   function renderPrimaryAction() {
     switch (uiState) {
       case 'pending_selection':
+      case 'needs_configuration':
         return onManageAccounts ? (
           <Button size="sm" onClick={() => onManageAccounts(connection.id)}>
             Välj konton
@@ -264,7 +267,7 @@ export function BankConnectionStatus({
                 </DropdownMenuItem>
               ) : (
                 <>
-                  {onManageAccounts && (
+                  {onManageAccounts && uiState !== 'needs_configuration' && (
                     <DropdownMenuItem onSelect={() => onManageAccounts(connection.id)}>
                       Välj konton
                     </DropdownMenuItem>
@@ -315,7 +318,7 @@ export function BankConnectionStatus({
 
       {/* Error detail: the page-level .attn owns the ochre sentence; the
           row's own message stays quiet. */}
-      {uiState === 'error' && connection.error_message && (
+      {(uiState === 'error' || uiState === 'needs_configuration') && connection.error_message && (
         <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
           {connection.error_message}
         </p>

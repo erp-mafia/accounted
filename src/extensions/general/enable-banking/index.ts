@@ -25,8 +25,13 @@ import {
   rateLimitHoldUntil,
 } from './lib/sync-lease'
 import { rateLimitMessages, retryAfterSeconds } from './lib/rate-limit-message'
-import { persistBankSyncResult, persistBankSyncFailure, BankSyncResultObsoleteError } from '@/lib/bank-sync/persist-sync-result'
-import { isBankRoutingConflict } from '@/lib/bank-sync/ingest-route'
+import {
+  persistBankSyncResult,
+  persistBankSyncFailure,
+  persistBankRouteNeedsConfiguration,
+  BankSyncResultObsoleteError,
+} from '@/lib/bank-sync/persist-sync-result'
+import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
@@ -953,7 +958,22 @@ export const enableBankingExtension: Extension = {
             trigger: 'manual',
             error,
           })
-          if (isBankRoutingConflict(error)) return errorResponse(error, log)
+          if (isBankRoutingConflict(error)) {
+            // The account selection no longer matches the bound cash account:
+            // the 409 carries the picker advice (BANK_INGEST_ROUTE_UNRESOLVED),
+            // and the row stores it too so the panel keeps saying it after the
+            // toast is gone. Status stays as it is; the next successful sync
+            // clears the message.
+            if (isBankRouteUnresolved(error)) {
+              await persistBankRouteNeedsConfiguration(supabase, { companyId, connectionId: connection.id }).catch(
+                (persistError: unknown) => log.warn('[enable-banking] Sync: could not store the account selection advice', {
+                  connection_id: connection.id,
+                  message: persistError instanceof Error ? persistError.message : String(persistError),
+                }),
+              )
+            }
+            return errorResponse(error, log)
+          }
           // A bank 429 keeps every path away for hours, not minutes. The hold
           // covers every connection on the session, which crosses companies:
           // RLS limits a user update to the active company, so this one write
