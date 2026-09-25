@@ -889,7 +889,6 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 
 /* Starta i Claude with a choice of where (ClaudeStart.tsx) */
 .splitStart { display: inline-flex; align-items: stretch; }
-.routineCreate { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid hsl(var(--border)); }
 .routineSwitch { align-self: center; }
 /* Accounted's review list (ReviewQueue.tsx) */
 .reviewList { display: flex; flex-direction: column; gap: 16px; margin: 0; padding: 0; list-style: none; }
@@ -912,3 +911,10 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .shareHint { font-size: 12px; font-weight: 400; color: hsl(var(--destructive)); }
 .shareCheck { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground)); }
 .shareCheck input { margin-top: 3px; accent-color: hsl(var(--foreground)); }
+/* Skriv själv's routine (RoutineRow): one row like the others, the choice inline on the right */
+.routineInline { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 6px; min-height: 60px; border-top: 1px solid hsl(var(--border)); padding-top: 8px; }
+.routineControls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.routineSelect { height: 34px; padding: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font: inherit; font-size: 13.5px; color: hsl(var(--foreground)); outline: none; }
+.routineSelect:focus { border-color: hsl(var(--ring)); }
+.routineInlineNote { grid-column: 1 / -1; justify-self: end; text-align: right; font-size: 12px; color: hsl(var(--muted-foreground)); }
+@media (max-width: 560px) { .routineInline { grid-template-columns: 1fr; } .routineControls { justify-content: flex-start; } .routineInlineNote { justify-self: start; text-align: left; } }

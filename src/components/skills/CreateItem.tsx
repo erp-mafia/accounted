@@ -19,9 +19,10 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { fetchConnections, readOptions, rulesSegment, simulatedClient } from './data'
-import { RoutineFields } from './RoutinePanel'
-import { pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
-import { routineQuery, type RoutineChoice } from '@/lib/agent-skills/routine'
+import { RoutineRow, useRoutinePrompt } from './RoutinePanel'
+import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { trackInstructions } from './track'
+import { coworkLink, routineQuery, type RoutineChoice } from '@/lib/agent-skills/routine'
 import styles from './skills.module.css'
 
 const KIND_PARAM: Record<string, ItemKind> = { arbetsfloden: 'workflow', kunskap: 'rules', analyser: 'analysis' }
@@ -113,7 +114,13 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
       : `${head}${text.trim()}\n`
   }
 
+  const routinePrompt = useRoutinePrompt()
+  const scheduling = !!routine && routineOffered
+
   async function save() {
+    // Opening Claude Desktop needs a click, and the browser honours one for a few seconds:
+    // the routine is sent from this same click when saving is quick, else handed to the new page.
+    const clickedAt = performance.now()
     setState('saving')
     setProblem(null)
     try {
@@ -139,9 +146,24 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
       // Drop the cached catalog rather than revalidate it: nothing on this page reads it, so a
       // revalidation would not run, and the new item's page would open on the old list.
       await mutate((key) => Array.isArray(key) && typeof key[0] === 'string' && (key[0] === '/api/skills' || key[0] === '/api/agents'), undefined, { revalidate: false })
-      // A routine chosen here opens filled in on the new item's page: Claude Desktop needs the user's own click.
-      const handOver = routine && routineOffered ? `?${routineQuery(routine)}` : ''
-      router.push(`${kind === 'workflow' ? `${backHref}/own-${data.id}` : `${backHref}/egen.${data.id}`}${handOver}`)
+      const page = kind === 'workflow' ? `${backHref}/own-${data.id}` : `${backHref}/egen.${data.id}`
+      if (routine && routineOffered) {
+        const stillClicked = (navigator.userActivation?.isActive ?? true) && performance.now() - clickedAt < 4000
+        if (stillClicked) {
+          const agent = `own/${data.id}`
+          const run = kind === 'workflow'
+            ? t('prompt', { say: t('own_say', { name: name.trim() }), agent, client: 'claude' })
+            : t('skill_prompt', { name: name.trim(), slug: agent, client: 'claude' })
+          trackInstructions('instructions_routine_opened', { item: 'own', kind, cadence: routine.cadence })
+          window.location.href = coworkLink(routinePrompt(routine, run))
+          router.push(page)
+          return
+        }
+        // Too slow for the browser to allow it: the new page opens with the routine filled in, one click away.
+        router.push(`${page}?${routineQuery(routine)}`)
+        return
+      }
+      router.push(page)
     } catch {
       setProblem(t('write_failed'))
       setState('idle')
@@ -163,7 +185,11 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
             <small>{t(`kind_one_${kind}`)} · {t('source_own_item')}</small>
           </div>
           <div className={styles.stageFoot}>
-            <Button size="lg" disabled={!ready || !canWrite} loading={state === 'saving'} onClick={() => void save()}>{t('write_save')}</Button>
+            <Button size="lg" className="gap-2" disabled={!ready || !canWrite} loading={state === 'saving'} onClick={() => void save()}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              {scheduling && <img src={AI_CLIENTS.find((c) => c.id === 'claude')!.logo} alt="" width={16} height={16} className={styles.btnLogo} />}
+              {scheduling ? t('write_save_schedule') : t('write_save')}
+            </Button>
             {problem && <span className={styles.stageStatus} role="alert">{problem}</span>}
           </div>
         </section>
@@ -224,13 +250,7 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
                     </Row>
                   </div>
                 )}
-                {routineOffered && (
-                  <div className={styles.routineCreate}>
-                    <span className={styles.rowLabel}>{t('routine_create_label')}</span>
-                    <RoutineFields value={routine} onChange={setRoutine} none />
-                    {routine && <small className={styles.muted}>{t('routine_create_hint')}</small>}
-                  </div>
-                )}
+                {routineOffered && <RoutineRow value={routine} onChange={setRoutine} />}
                 </div>
               </>
             )}
