@@ -2155,6 +2155,85 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/transactions/{id}/match-expense-payout`
+
+**Book an outgoing bank transaction as the repayment of one person's expense claims.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Books the bank row as the payout of the given registered claims: Debit their liability account (2013 for an enskild firma owner's 2018), Credit the transaction's own cash account, dated the transaction date, and links the row to the verifikat in the same transaction, so it can never be booked twice. The claims' total must equal the outflow to the öre. Idempotent. Dry-runnable.
+
+**Use when:** An unbooked SEK outflow is the transfer that paid an owner or employee back for their utlägg.
+**Do not use for:** A transfer with no bank row in Accounted (POST /expense-claims/payouts), partial repayments, or salary.
+
+**Pitfalls:**
+- The sum of the picked claims must equal |amount| exactly: 400 EXPENSE_PAYOUT_MATCH_AMOUNT otherwise.
+- Only unbooked outgoing SEK rows: incoming returns EXPENSE_PAYOUT_MATCH_NOT_EXPENSE, another currency EXPENSE_PAYOUT_MATCH_CURRENCY, an already booked row EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED.
+- All claims must belong to one person and one liability account.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ claim_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "claim_ids": [
+    "5a0a…",
+    "7b1c…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    batch_id: string,
+    journal_entry_id: string,
+    voucher_number: number | null,
+    total_sek: number,
+    claim_count: number,
+    transaction_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "1f2e…",
+    "batch_id": "e1f0…",
+    "journal_entry_id": "4d2a…",
+    "voucher_number": 119,
+    "total_sek": 1596,
+    "claim_count": 2
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/match-invoice`
 
 **Match a positive bank transaction to a customer invoice.**

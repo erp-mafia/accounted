@@ -760,6 +760,7 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 - An enskild firma must keep fiscal_year_start_month=1 (BFL 3 kap.).
 - aktiekapital and antal_aktier are set or cleared together.
 - accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).
+- defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
