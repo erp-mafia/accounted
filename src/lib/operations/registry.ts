@@ -6,8 +6,19 @@
  * data tables it needs (scope catalogue, risk tiers, approval vocabulary)
  * know about it.
  */
-import { dimensionsCreate, dimensionsDelete, dimensionsList, dimensionsUpdate } from './dimensions'
-import { accountsActivate, accountsCreate, accountsDeactivate, accountsDelete, accountsUpdate } from './accounts'
+import {
+  dimensionsCreate,
+  dimensionsDelete,
+  dimensionsList,
+  dimensionsUpdate,
+} from './dimensions'
+import {
+  accountsActivate,
+  accountsCreate,
+  accountsDeactivate,
+  accountsDelete,
+  accountsUpdate,
+} from './accounts'
 import {
   settingsGet,
   settingsUpdate,
@@ -34,6 +45,11 @@ import {
   salaryRunsUnapprove,
 } from './salary-run-lifecycle'
 import {
+  invoicesBook,
+  invoicesBulkBook,
+  supplierInvoicesBook,
+} from './invoice-booking'
+import {
   expenseClaimsCreate,
   expenseClaimsDelete,
   expenseClaimsGet,
@@ -41,7 +57,6 @@ import {
   expenseClaimsRecordPayout,
   transactionsMatchExpensePayout,
 } from './expense-claims'
-import { invoicesBook, invoicesBulkBook, supplierInvoicesBook } from './invoice-booking'
 import {
   supplierPaymentBatchesCancel,
   supplierPaymentBatchesCreate,
@@ -50,50 +65,160 @@ import {
   supplierPaymentBatchesList,
   supplierPaymentBatchesPreview,
 } from './supplier-payment-batches'
+import {
+  documentsDelete,
+  documentsGet,
+  documentsList,
+  transactionsAttachDocument,
+  transactionsDetachDocument,
+} from './documents'
+import {
+  inboxItemsConvertToSupplierInvoice,
+  inboxItemsDelete,
+  inboxItemsGet,
+  inboxItemsList,
+  inboxItemsUnmatchTransaction,
+  inboxItemsUpdateExtractedData,
+} from './inbox-items'
+import {
+  transactionsBulkBook,
+  transactionsDelete,
+  transactionsLinkJournalEntry,
+  transactionsMatchBatch,
+  transactionsRefreshExchangeRate,
+  transactionsUpdate,
+} from './transactions'
+import {
+  importsBankUndo,
+  importsSieResume,
+  importsSieUndo,
+} from './imports'
+import {
+  journalEntriesBatchNoDocumentRequired,
+  journalEntriesClearNoDocumentRequired,
+  journalEntriesCorrectMetadata,
+  journalEntriesRattelseLog,
+  journalEntriesRedate,
+  journalEntriesSetNoDocumentRequired,
+  journalEntriesSetNote,
+  journalEntriesStrikeLines,
+  journalEntriesUpdateDraft,
+} from './journal-entries'
+import {
+  auditTrailList,
+  reportsBehandlingshistorik,
+  reportsBokslutsbilagor,
+  reportsDimensionPnl,
+  reportsInk2,
+  reportsKassaflodesanalys,
+  reportsKpi,
+  reportsNeBilaga,
+  reportsPeriodiskSammanstallning,
+} from './filing-reports'
+import {
+  reportsVatSettlementProposal,
+  vatBookSettlement,
+} from './vat-settlement'
 import type { AnyOperation } from './types'
 
 export const OPERATIONS: readonly AnyOperation[] = [
+  // dimensions
   dimensionsList,
   dimensionsCreate,
   dimensionsUpdate,
   dimensionsDelete,
+  // accounts
   accountsCreate,
   accountsUpdate,
   accountsDelete,
   accountsActivate,
   accountsDeactivate,
+  // company-settings
   settingsGet,
   settingsUpdate,
   settingsUpdateTaxProfile,
   settingsUpdateBookkeepingLock,
+  // cash-accounts
   cashAccountsCreate,
   cashAccountsUpdate,
   cashAccountsSetPrimary,
   cashAccountsSetPayeeDefault,
+  // fiscal-periods
   fiscalPeriodsCreate,
   fiscalPeriodsUpdate,
   fiscalPeriodsUnlock,
   fiscalPeriodsCloseExternal,
   fiscalPeriodsReopenExternal,
+  // salary-run-lifecycle
   salaryRunsSendPayslips,
   salaryRunsRevert,
   salaryRunsUnapprove,
   salaryRunsAttachExpenseClaims,
+  // invoice-booking
   invoicesBook,
   invoicesBulkBook,
   supplierInvoicesBook,
+  // expense-claims
   expenseClaimsList,
   expenseClaimsGet,
   expenseClaimsCreate,
   expenseClaimsDelete,
   expenseClaimsRecordPayout,
   transactionsMatchExpensePayout,
+  // supplier-payment-batches
   supplierPaymentBatchesPreview,
   supplierPaymentBatchesCreate,
   supplierPaymentBatchesList,
   supplierPaymentBatchesGet,
   supplierPaymentBatchesFile,
   supplierPaymentBatchesCancel,
+  // documents
+  documentsList,
+  documentsGet,
+  documentsDelete,
+  transactionsAttachDocument,
+  transactionsDetachDocument,
+  // inbox-items
+  inboxItemsList,
+  inboxItemsGet,
+  inboxItemsUpdateExtractedData,
+  inboxItemsDelete,
+  inboxItemsUnmatchTransaction,
+  inboxItemsConvertToSupplierInvoice,
+  // transactions
+  transactionsDelete,
+  transactionsUpdate,
+  transactionsRefreshExchangeRate,
+  transactionsLinkJournalEntry,
+  transactionsMatchBatch,
+  transactionsBulkBook,
+  // imports
+  importsBankUndo,
+  importsSieUndo,
+  importsSieResume,
+  // journal-entries
+  journalEntriesUpdateDraft,
+  journalEntriesSetNote,
+  journalEntriesCorrectMetadata,
+  journalEntriesStrikeLines,
+  journalEntriesRedate,
+  journalEntriesSetNoDocumentRequired,
+  journalEntriesClearNoDocumentRequired,
+  journalEntriesBatchNoDocumentRequired,
+  journalEntriesRattelseLog,
+  // filing-reports
+  reportsInk2,
+  reportsNeBilaga,
+  reportsPeriodiskSammanstallning,
+  reportsKassaflodesanalys,
+  reportsBehandlingshistorik,
+  reportsBokslutsbilagor,
+  reportsKpi,
+  reportsDimensionPnl,
+  auditTrailList,
+  // vat-settlement
+  reportsVatSettlementProposal,
+  vatBookSettlement,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

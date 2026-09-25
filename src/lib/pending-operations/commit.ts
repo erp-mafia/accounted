@@ -142,10 +142,7 @@ import {
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
-import {
-  completeInboxItemsForBookedTransaction,
-  resolveVoucherLinkedEntryIds,
-} from '@/lib/transactions/inbox-underlag'
+import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
@@ -3900,6 +3897,11 @@ async function commitUncategorizeTransaction(
   return { data: { transaction_id: txId, reversed_journal_entry_id: journalEntryId } }
 }
 
+/**
+ * attach_document_to_transaction (gnubok_attach_document_to_transaction): the
+ * same rules as the dashboard route and the v1 operation
+ * transactions.attach-document, in lib/transactions/document-attach.ts.
+ */
 async function commitAttachDocumentToTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -3912,198 +3914,25 @@ async function commitAttachDocumentToTransaction(
     return { error: 'transaction_id and document_id are required', status: 400 }
   }
 
-  const { data: tx, error: txError } = await supabase
-    .from('transactions')
-    .select('id, document_id, journal_entry_id')
-    .eq('id', txId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (txError || !tx) return { error: 'Transaction not found', status: 404 }
-
-  const previousDocumentId = (tx.document_id as string | null) ?? null
-
-  // Pre-check: if the tx already has a doc and that doc is räkenskapsinformation,
-  // mirror the DELETE-route 409 instead of letting the DB trigger raise a
-  // raw check_violation. Same compliance message in both places.
-  if (tx.document_id && tx.document_id !== documentId) {
-    const { data: existing } = await supabase
-      .from('document_attachments')
-      .select('journal_entry_id')
-      .eq('id', tx.document_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (existing?.journal_entry_id) {
-      return {
-        error:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
-        status: 409,
-      }
-    }
-  }
-
-  const { data: doc, error: docError } = await supabase
-    .from('document_attachments')
-    .select('id, journal_entry_id')
-    .eq('id', documentId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (docError || !doc) return { error: 'Document not found', status: 404 }
-
-  // A document that already serves as underlag for a DIFFERENT verifikation
-  // cannot be pinned here: propagating would either corrupt that link or be
-  // blocked by the document-metadata immutability trigger. Same verifikation
-  // is fine (idempotent re-attach; propagation below becomes a no-op). A
-  // bulk-booked tx keeps journal_entry_id null and is anchored through
-  // transaction_voucher_links, so that anchoring counts as "same" too.
-  // Mirrors the REST route in app/api/transactions/[id]/attach-document.
-  const docJournalEntryId = (doc.journal_entry_id as string | null) ?? null
-  if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
-    const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [txId])
-    if (docJournalEntryId !== voucherLinked.get(txId)) {
-      return {
-        error: 'Underlaget är redan kopplat till en annan verifikation.',
-        status: 409,
-      }
-    }
-  }
-
-  // Race-free read of journal_entry_id: use UPDATE ... RETURNING so the value
-  // we propagate against reflects any concurrent categorize that committed
-  // before our UPDATE acquired the row lock. Reading the post-update state
-  // (rather than the pre-staging state) is what makes the
-  // attach-then-categorize and categorize-then-attach orderings produce the
-  // same final state: both end with document_attachments.journal_entry_id
-  // set to the tx's journal_entry_id. (BFL 5 kap 6 § verifikation underlag.)
-  const { data: postUpdate, error: updateError } = await supabase
-    .from('transactions')
-    .update({ document_id: documentId })
-    .eq('id', txId)
-    .eq('company_id', companyId)
-    .select('journal_entry_id')
-    .maybeSingle()
-
-  if (updateError) {
-    // The DB-level immutability trigger raises P0001 with a stable
-    // BFL_DOCUMENT_IMMUTABILITY: prefix when the previous doc is already
-    // räkenskapsinformation. Match on the prefix (not the generic SQLSTATE)
-    // so unrelated future exceptions don't get translated.
-    const errMsg = (updateError as { message?: string }).message ?? ''
-    if (errMsg.includes('BFL_DOCUMENT_IMMUTABILITY')) {
-      return {
-        error:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
-        status: 409,
-      }
-    }
-    return { error: 'Failed to attach document', status: 500 }
-  }
-  if (!postUpdate) return { error: 'Transaction not found', status: 404 }
-
-  // If the attached doc came from an invoice_inbox_items row, mark that row
-  // as matched so the inbox UI shows "Kopplad till transaktion". Best-effort:
-  // a failure must not roll back the (compliant) attach. Mirrors the REST
-  // route in app/api/transactions/[id]/attach-document/route.ts so MCP-staged
-  // and REST attaches converge on the same inbox state.
-  //
-  // The Supabase client resolves with { error } rather than rejecting on
-  // RLS/DB errors, so we destructure rather than try/catch.
-  const { error: inboxLinkErr } = await supabase
-    .from('invoice_inbox_items')
-    .update({ matched_transaction_id: txId })
-    .eq('document_id', documentId)
-    .eq('company_id', companyId)
-    .is('matched_transaction_id', null)
-    .is('created_supplier_invoice_id', null)
-  if (inboxLinkErr) {
-    console.error('[commitAttach] Failed to link inbox item:', inboxLinkErr)
-  }
-
-  const journalEntryId = postUpdate.journal_entry_id as string | null
-  // Skip when the doc already points at this verifikation: the period-lock
-  // trigger raises on ANY journal_entry_id write (even a same-value rewrite),
-  // so an unconditional re-run would 500 an otherwise idempotent re-attach
-  // once the period locks.
-  if (journalEntryId && docJournalEntryId !== journalEntryId) {
-    const { error: linkErr } = await supabase
-      .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
-      .eq('id', documentId)
-      .eq('company_id', companyId)
-    if (linkErr) {
-      // The enforce_period_lock trigger blocks journal_entry_id writes when
-      // the target entry sits in a closed/locked period. Map to 409: the
-      // dispatcher auto-rejects it, and a retry could never succeed until the
-      // period is unlocked, so "försök igen" would be a false promise.
-      const linkMsg = (linkErr as { message?: string }).message ?? ''
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(linkMsg)) {
-        return {
-          error:
-            'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
-          status: 409,
-        }
-      }
-      // Surface the propagation failure rather than logging-and-continuing.
-      // BFL 5 kap 6 § requires the verifikation to reference its underlag, so
-      // a "succeeded" attach that left document_attachments.journal_entry_id
-      // null would be a silent compliance gap. Failing here marks the op
-      // failed; a retry is idempotent (same documentId on tx, same propagate
-      // target) and will replay the document_attachments UPDATE.
-      console.error('[commitAttach] Failed to propagate to journal entry:', linkErr)
-      return {
-        error:
-          'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
-        status: 500,
-      }
-    }
-  }
-
-  // The transaction may already be booked, directly or via a bulk-book
-  // samlingsverifikat (journal_entry_id null, anchored through
-  // transaction_voucher_links): complete the matched inbox items against the
-  // anchoring verifikat so an after-the-fact attach resolves them instead of
-  // stranding them as "linked" forever. Best-effort, logged inside. Returns
-  // the anchoring verifikat (the direct id when there is one), so the result
-  // and audit trail can report the voucher-linked case too.
-  const effectiveJournalEntryId = await completeInboxItemsForBookedTransaction(
-    supabase,
-    companyId,
+  const outcome = await attachDocumentToTransaction(
+    { supabase, companyId, userId, log: log.child({ operation: 'attach_document_to_transaction' }) },
     txId,
-    { directJournalEntryId: journalEntryId },
+    documentId,
   )
-
-  // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
-  // the swap to processing_history so the original is traceable. Best-effort:
-  // a logging failure must not roll back the (compliant) attach.
-  if (previousDocumentId && previousDocumentId !== documentId) {
-    try {
-      await appendProcessingHistory({
-        companyId,
-        correlationId: txId,
-        aggregateType: 'BankTransaction',
-        aggregateId: txId,
-        eventType: 'TransactionDocumentReplaced',
-        payload: {
-          transaction_id: txId,
-          previous_document_id: previousDocumentId,
-          new_document_id: documentId,
-          journal_entry_id: effectiveJournalEntryId,
-        },
-        actor: { type: 'user', id: userId },
-        occurredAt: new Date(),
-      })
-    } catch (logErr) {
-      console.error('[commitAttach] Failed to append rättelse event:', logErr)
+  if (!outcome.ok) {
+    if (outcome.error) {
+      if (isBookkeepingError(outcome.error)) throw outcome.error
+      return { error: 'Failed to attach document', status: 500 }
+    }
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: outcome.messageSv || entry?.message_sv || outcome.code,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
     }
   }
-
-  return {
-    data: {
-      transaction_id: txId,
-      document_id: documentId,
-      previous_document_id: previousDocumentId,
-      journal_entry_id: effectiveJournalEntryId,
-    },
-  }
+  if (outcome.dryRun) return { data: outcome.preview }
+  return { data: { ...outcome.data } }
 }
 
 /**

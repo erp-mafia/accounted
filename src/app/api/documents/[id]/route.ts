@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createServiceClient } from '@/lib/supabase/server'
-import { deleteDocument } from '@/lib/core/documents/document-service'
+import { removeDocument } from '@/lib/documents/document-actions'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { eventBus } from '@/lib/events'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -79,27 +80,19 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
  * linked to a journal entry: once linked, it is räkenskapsinformation under
  * BFL 7 kap 2§ and must be retained for 7 years. For linked docs the caller
  * should use POST /api/documents/:id/versions to supersede via a new version.
+ *
+ * The rule lives in lib/documents/document-actions.ts (removeDocument), shared
+ * with the v1 operation documents.delete.
  */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'document.delete',
-  async (_request, { supabase, companyId }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
-    try {
-      const result = await deleteDocument(supabase, companyId, id)
-
-      if (!result.ok) {
-        return NextResponse.json({ error: result.message }, { status: result.status })
-      }
-
-      return NextResponse.json({ data: { id: result.document.id, deleted: true } })
-    } catch (error) {
-      console.error('[documents/DELETE] Failed to delete document:', error)
-      return NextResponse.json(
-        { error: error instanceof Error ? getUserErrorMessage(error) : 'Failed to delete document' },
-        { status: 500 }
-      )
-    }
+    const outcome = await removeDocument({ supabase, companyId, userId: user.id, log }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: { id: outcome.data.id, deleted: true } })
   },
   { requireWrite: true }
 )

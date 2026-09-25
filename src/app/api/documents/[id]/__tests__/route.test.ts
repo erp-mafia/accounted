@@ -194,9 +194,10 @@ describe('DELETE /api/documents/[id]', () => {
   it('returns 404 when document not found in company', async () => {
     enqueue({ data: null, error: null }) // doc lookup
     const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(404)
-    expect(body.error).toContain('hittades inte')
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    expect(body.error.code).toBe('DOC_NOT_FOUND')
   })
 
   it('returns 409 with BFL message when doc is linked to a journal entry', async () => {
@@ -211,10 +212,10 @@ describe('DELETE /api/documents/[id]', () => {
       error: null,
     })
     const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('Bokföringslagen')
-    expect(body.error).toContain('7 kap')
+    expect(body.error.message).toContain('Bokföringslagen')
+    expect(body.error.message).toContain('7 kap')
   })
 
   it('deletes the row, removes Storage file, and emits document.deleted on unlinked doc', async () => {
@@ -281,8 +282,8 @@ describe('DELETE /api/documents/[id]', () => {
     })
 
     const res = await DELETE(makeReq(), createMockRouteParams({ id: 'doc-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('Bokföringslagen')
+    expect(body.error.message).toContain('Bokföringslagen')
   })
 })

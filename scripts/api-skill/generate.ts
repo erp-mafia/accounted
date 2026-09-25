@@ -138,7 +138,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports'],
+    members: ['reports', 'audit-trail', 'vat'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
       'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export.',

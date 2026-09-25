@@ -412,6 +412,62 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       tool: 'gnubok_query_journal',
     },
   },
+  // ── Wave 3: journal-entry actions (lib/core/bookkeeping/journal-entry-corrections.ts,
+  // lib/core/bookkeeping/journal-entry-edits.ts, lib/bookkeeping/no-doc-required.ts) ──
+  JOURNAL_RATTELSE_REFUSED: {
+    httpStatus: 409,
+    message_sv: 'Rättelsen kan inte göras i samma verifikat. Använd rättelseverifikat (storno) i stället.',
+    message_en:
+      'The inline rättelse was refused by a bookkeeping rule (the Swedish message names it). Correct the verifikat with storno instead: POST /journal-entries/{id}/correct.',
+    remediation: {
+      description:
+        'Read the message. If the rule cannot be met inside the verifikat (linked underlag, foreign currency, bank-anchored amount, structural entry type), use the storno correction (gnubok_correct_entry) instead.',
+      tool: 'gnubok_correct_entry',
+    },
+    thrown_message_sv: true,
+  },
+  JOURNAL_RATTELSE_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Perioden är stängd eller låst: använd rättelseverifikat (storno).',
+    message_en:
+      'Inline rättelse is only allowed in an open, unlocked period after the company lock date. Past a lock or close, storno is the only lawful correction (BFL 5 kap 5 §).',
+    remediation: {
+      description:
+        'Correct the verifikat with storno (gnubok_correct_entry, POST /journal-entries/{id}/correct). Unlock the period only if the user explicitly asks for it.',
+      tool: 'gnubok_correct_entry',
+    },
+    thrown_message_sv: true,
+  },
+  JOURNAL_RATTELSE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte rätta verifikationen. Försök igen.',
+    message_en: 'The inline rättelse failed unexpectedly. Nothing was changed.',
+    retryable: true,
+  },
+  JOURNAL_RATTELSE_LOG_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte hämta rättelsehistorik.',
+    message_en: 'Could not read the rättelse log.',
+    retryable: true,
+  },
+  JOURNAL_ENTRY_UPDATE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Utkastet kunde inte sparas.',
+    message_en: 'The draft journal entry could not be saved.',
+    thrown_message_sv: true,
+  },
+  JOURNAL_ENTRY_NOTE_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Anteckningen kunde inte sparas.',
+    message_en: 'The note could not be saved.',
+    thrown_message_sv: true,
+  },
+  NO_DOC_REQUIRED_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Markeringen "Inget underlag krävs" kunde inte sparas.',
+    message_en: 'The "no document required" flag could not be saved.',
+    thrown_message_sv: true,
+  },
   NO_OPEN_PERIOD_FOR_DATE: {
     httpStatus: 400,
     message_sv:
@@ -2766,6 +2822,59 @@ const TAX_DECL: Record<string, StructuredErrorEntry> = {
     message_sv: 'Skattedeklarationen kunde inte genereras.',
     message_en: 'Failed to generate tax declaration.',
   },
+  // ── Wave 3: filing reports and the momsredovisning verifikat over v1/MCP
+  // (lib/reports/filing-report-service.ts, lib/reports/vat-settlement-booking.ts) ──
+  TAX_DECL_INK2_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'INK2 lämnas bara av aktiebolag. En enskild firma lämnar NE-bilagan i stället.',
+    message_en: 'INK2 is filed only by an aktiebolag. An enskild firma files the NE-bilaga instead.',
+  },
+  TAX_DECL_NE_WRONG_LEGAL_FORM: {
+    httpStatus: 400,
+    message_sv: 'NE-bilagan lämnas bara av enskild firma. Ett aktiebolag lämnar INK2 i stället.',
+    message_en: 'The NE-bilaga is filed only by an enskild firma. An aktiebolag files INK2 instead.',
+  },
+  VAT_ESKD_SETTINGS_MISSING: {
+    httpStatus: 404,
+    message_sv: 'Företagsinställningar saknas: momsdeklarationsfilen kan inte skapas.',
+    message_en: 'Company settings are missing; the VAT declaration file cannot be created.',
+  },
+  VAT_ESKD_ORG_NUMBER_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Organisationsnummer saknas eller är ogiltigt. Ange ett giltigt organisationsnummer i företagsinställningarna för att skapa momsdeklarationsfilen.',
+    message_en:
+      'The organisation number is missing or invalid. Set a valid organisation number in the company settings to create the VAT declaration file.',
+  },
+  VAT_SETTLEMENT_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Momsen för perioden är redan bokförd. Annullera det verifikatet först om perioden behöver bokföras om.',
+    message_en:
+      'The VAT for this period is already booked. Reverse that journal entry first if the period needs to be booked again.',
+  },
+  VAT_SETTLEMENT_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Ingen moms att bokföra för perioden.',
+    message_en: 'There is no VAT to book for this period.',
+  },
+  VAT_SETTLEMENT_PROPOSAL_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen för perioden har ändrats sedan förslaget togs fram. Hämta ett nytt förslag och granska det innan momsen bokförs.',
+    message_en:
+      'The bookkeeping for the period changed after the proposal was made. Fetch a new proposal and review it before booking the VAT.',
+  },
+  VAT_SETTLEMENT_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Det finns inget öppet räkenskapsår som täcker periodens sista dag.',
+    message_en: 'No open fiscal year covers the last day of the VAT period.',
+  },
+  VAT_SETTLEMENT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Momsen kunde inte bokföras.',
+    message_en: 'Failed to book the VAT settlement.',
+  },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -2947,6 +3056,54 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Det valda bankkontot kan inte användas för den här filen. Inget importerades.',
     message_en: 'The selected bank account cannot be used for this file. Nothing was imported.',
+  },
+  // ── Wave 3: bank transaction actions and import undo (lib/transactions/manage.ts,
+  // lib/import/bank-file/undo-operation.ts, lib/import/sie-job-action-service.ts) ──
+  TRANSACTION_DELETE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd eller kopplad till en verifikation och kan inte raderas. Koppla bort den under Rapporter → Bankavstämning om kopplingen är fel, eller storna verifikationen.',
+    message_en:
+      'The transaction is already booked or linked to a journal entry and cannot be deleted. Unlink it under Reports → Bank reconciliation if the link is wrong, or reverse (storno) the voucher.',
+  },
+  TRANSACTION_DELETE_IMPORTED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen har hämtats från banken eller importerats via fil och kan inte raderas. Du kan ignorera den så att den döljs från listan över transaktioner att bokföra.',
+    message_en:
+      'This transaction was fetched from your bank or imported from a file and cannot be deleted. You can ignore it to hide it from the list of transactions to book.',
+  },
+  TRANSACTION_DELETE_HAS_AUDIT_TRAIL: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen kan inte raderas eftersom den har en kopplad matchningshistorik (räkenskapsinformation, BFL 7 kap.). Matcha den mot en befintlig verifikation, eller ignorera den under Rapporter → Bankavstämning om du inte vill bokföra den.',
+    message_en:
+      'The transaction cannot be deleted because it has linked match-history records (accounting information, BFL ch. 7). Match it to an existing voucher, or ignore it under Reports → Bank reconciliation if you do not want to book it.',
+  },
+  TRANSACTION_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte ta bort transaktionen. Försök igen.',
+    message_en: 'Could not delete the transaction. Please try again.',
+    retryable: true,
+  },
+  TX_EXCHANGE_RATE_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen är redan bokförd, så dess växelkurs kan inte ändras här. Bokförda verifikat rättas med storno.',
+    message_en:
+      'The transaction is already booked, so its exchange rate cannot be changed here. Posted vouchers are corrected with storno.',
+  },
+  BANK_FILE_UNDO_NOT_COMPLETED: {
+    httpStatus: 409,
+    message_sv: 'Bara slutförda bankfilsimporter kan ångras.',
+    message_en: 'Only completed bank file imports can be undone.',
+  },
+  SIE_IMPORT_ACTION_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'SIE-importen kan inte ångras eller återupptas just nu: en annan körning pågår, perioden är låst eller en rättelse av ett importerat verifikat behöver granskas först.',
+    message_en:
+      'The SIE import cannot be undone or resumed right now: another run is in progress, the period is locked, or a correction of an imported voucher needs review first.',
   },
 }
 
@@ -3478,6 +3635,87 @@ const DOCUMENT: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Verifikationen kommer inte från en SIE-import och kan inte matchas mot filnamn.',
     message_en: 'The journal entry did not come from a SIE import and cannot be matched by filename.',
+  },
+  // Documents, transaction underlag and the invoice inbox as operations
+  // (lib/operations/documents.ts, lib/operations/inbox-items.ts).
+  DOC_DELETE_LINKED: {
+    httpStatus: 409,
+    message_sv:
+      'Underlaget är knutet till en verifikation och utgör räkenskapsinformation enligt Bokföringslagen 7 kap 2§. Räkenskapsinformation ska bevaras i minst 7 år och får inte raderas. Använd "Ersätt med ny version" om underlaget behöver korrigeras.',
+    message_en:
+      'The document is linked to a journal entry and is accounting records under BFL 7 kap 2 §: it must be kept for 7 years and cannot be deleted. Upload a new version instead.',
+  },
+  DOC_ATTACH_REPLACES_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
+    message_en: 'The document currently on the transaction belongs to a posted journal entry and cannot be replaced. Reverse the entry first.',
+  },
+  DOC_ATTACH_OTHER_VERIFIKAT: {
+    httpStatus: 409,
+    message_sv: 'Underlaget är redan kopplat till en annan verifikation.',
+    message_en: 'The document is already the underlag of another journal entry.',
+  },
+  DOC_ATTACH_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
+    message_en:
+      'The document was attached to the transaction, but its journal entry is in a locked period, so it could not be linked to the entry.',
+  },
+  DOC_ATTACH_PROPAGATION_FAILED: {
+    httpStatus: 500,
+    message_sv:
+      'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
+    message_en:
+      'The document was attached to the transaction but could not be linked to its journal entry. Retry: the operation is idempotent.',
+    retryable: true,
+  },
+  DOC_DETACH_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Bilagan är kopplad till en bokförd verifikation och kan inte tas bort. Storno verifikationen först.',
+    message_en: 'The document is the underlag of a journal entry and cannot be detached. Reverse the entry first.',
+  },
+  DOC_DETACH_INBOX_UNLINK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Inkorgsposten kunde inte släppas, så underlaget är fortfarande kopplat. Försök igen.',
+    message_en: 'The inbox item could not be released, so the document is still attached. Retry.',
+    retryable: true,
+  },
+  DOC_DETACH_CONCURRENT: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen ändrades samtidigt. Ladda om sidan och försök igen.',
+    message_en: 'The transaction changed at the same time. Reload and try again.',
+  },
+  INBOX_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inkorgsposten hittades inte.',
+    message_en: 'Inbox item not found.',
+  },
+  INBOX_ITEM_ALREADY_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Posten är redan kopplad till en leverantörsfaktura.',
+    message_en: 'The inbox item is already linked to a supplier invoice.',
+  },
+  INBOX_ITEM_EDIT_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.',
+    message_en: 'The inbox item is linked to a supplier invoice and cannot be changed.',
+  },
+  INBOX_ITEM_EDIT_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Posten ändrades samtidigt av någon annan. Försök igen.',
+    message_en: 'The inbox item was changed by someone else at the same time. Try again.',
+    retryable: true,
+  },
+  INBOX_ITEM_DELETE_CONVERTED: {
+    httpStatus: 409,
+    message_sv: 'Posten är kopplad till en leverantörsfaktura och kan inte tas bort.',
+    message_en: 'The inbox item is linked to a supplier invoice and cannot be deleted.',
+  },
+  INBOX_ITEM_DELETE_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Posten är bokförd och kan inte tas bort.',
+    message_en: 'The inbox item is booked and cannot be deleted.',
   },
 }
 

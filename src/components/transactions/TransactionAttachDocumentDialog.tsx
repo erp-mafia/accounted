@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
@@ -82,12 +83,12 @@ export default function TransactionAttachDocumentDialog({
         body: JSON.stringify({ document_id: selectedDocumentId }),
       })
       if (!res.ok) {
-        const json = (await res.json().catch(() => ({}))) as { error?: unknown }
-        // The route returns Swedish domain messages (immutability, locked
-        // period) as a plain string: surface them verbatim.
+        const json: unknown = await res.json().catch(() => null)
+        // The route answers the structured envelope with a Swedish domain
+        // message (immutability, locked period): surface it.
         toast({
           title: t('error_toast'),
-          description: typeof json.error === 'string' ? json.error : undefined,
+          description: getErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
         return

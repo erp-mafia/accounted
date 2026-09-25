@@ -148,8 +148,8 @@ import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/correct/route'
 // Phase 5 PR-3: Reports + import async. All reports wrap existing
 // lib/reports/* generators. Imports run inline today but record their
 // progress on the `operations` table for consistent polling-shape. KPI,
-// audit-trail, periodisk-sammanstallning, ne-bilaga, and ink2 are deferred
-// to a follow-up PR (different lib-module structures).
+// audit-trail, periodisk-sammanstallning, ne-bilaga and ink2 followed in the
+// operation registry's wave 3 (see its import block).
 import '@/app/api/v1/companies/[companyId]/reports/trial-balance/route'
 import '@/app/api/v1/companies/[companyId]/reports/balance-sheet/route'
 import '@/app/api/v1/companies/[companyId]/reports/balance-sheet/pdf/route'
@@ -199,6 +199,43 @@ import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/route'
+// Operation registry, wave 3: documents, transactions, rättelse, filing.
+import '@/app/api/v1/companies/[companyId]/documents/[id]/route'
+import '@/app/api/v1/companies/[companyId]/inbox-items/route'
+import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/route'
+import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/unmatch-transaction/route'
+import '@/app/api/v1/companies/[companyId]/inbox-items/[id]/convert/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/attach-document/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/detach-document/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/refresh-exchange-rate/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/link-journal-entry/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/match-batch/route'
+import '@/app/api/v1/companies/[companyId]/transactions/bulk-book/route'
+import '@/app/api/v1/companies/[companyId]/imports/bank/[id]/undo/route'
+import '@/app/api/v1/companies/[companyId]/imports/sie/[id]/undo/route'
+import '@/app/api/v1/companies/[companyId]/imports/sie/[id]/resume/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/correct-metadata/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/strike-lines/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/redate/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/notes/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/no-document-required/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/[id]/rattelse-log/route'
+import '@/app/api/v1/companies/[companyId]/journal-entries/no-document-required/route'
+import '@/app/api/v1/companies/[companyId]/reports/ink2/route'
+import '@/app/api/v1/companies/[companyId]/reports/ink2/sru/route'
+import '@/app/api/v1/companies/[companyId]/reports/ne-bilaga/route'
+import '@/app/api/v1/companies/[companyId]/reports/ne-bilaga/sru/route'
+import '@/app/api/v1/companies/[companyId]/reports/periodisk-sammanstallning/route'
+import '@/app/api/v1/companies/[companyId]/reports/periodisk-sammanstallning/csv/route'
+import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/eskd/route'
+import '@/app/api/v1/companies/[companyId]/reports/vat-declaration/settlement-proposal/route'
+import '@/app/api/v1/companies/[companyId]/reports/kassaflodesanalys/route'
+import '@/app/api/v1/companies/[companyId]/reports/behandlingshistorik/route'
+import '@/app/api/v1/companies/[companyId]/reports/bokslutsbilagor/route'
+import '@/app/api/v1/companies/[companyId]/reports/kpi/route'
+import '@/app/api/v1/companies/[companyId]/reports/dimension-pnl/route'
+import '@/app/api/v1/companies/[companyId]/audit-trail/route'
+import '@/app/api/v1/companies/[companyId]/vat/settlement/route'
 // Operation registry, wave 2: booking, payment files, utlägg, payroll.
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/send-payslips/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/revert/route'

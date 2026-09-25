@@ -212,7 +212,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // behandlingshistorik.ts: valid_from/valid_to as of a date, belief window,
 // ilike on title and counterparty), which PostgREST can only express as a
 // formatted or-string.
-const UNRESOLVED_CEILING = 422
+// API parity wave 3, documents (+2): the (created_at, id) keyset cursor of
+// documents.list and inbox-items.list (lib/documents/document-actions.ts,
+// lib/documents/inbox-item-actions.ts) is a runtime or-string, the same
+// shape expense-claims.list already carries.
+const UNRESOLVED_CEILING = 424
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

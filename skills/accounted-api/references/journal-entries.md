@@ -270,6 +270,123 @@ Example response `200`:
 
 ---
 
+### `PATCH /api/v1/companies/{companyId}/journal-entries/{id}`
+
+**Replace the header and lines of a DRAFT journal entry.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Edits a draft verifikat in place (fiscal_period_id, entry_date, description, voucher_series, notes and the full line set, which is replaced). Only drafts: a posted entry is refused with 409 CANNOT_EDIT_NON_DRAFT and is corrected with storno or inline rättelse instead. The draft keeps its source_type and source_id and still has no voucher number: POST /journal-entries/{id}/commit posts it. Idempotent. Dry-runnable: the dry run validates balance, period, lock and accounts and writes nothing.
+
+**Use when:** A draft created with POST /journal-entries (or in the dashboard) needs different lines, date or text before it is committed.
+**Do not use for:** Posted verifikat (use /correct, /strike-lines, /correct-metadata or /redate), or only the note (PATCH /journal-entries/{id}/notes).
+
+**Pitfalls:**
+- Send the COMPLETE line set: lines are replaced, not merged.
+- Lines must balance (sum debit = sum credit > 0): 400 JOURNAL_ENTRY_NOT_BALANCED.
+- entry_date must fall inside fiscal_period_id: 400 ENTRY_DATE_OUTSIDE_FISCAL_PERIOD; a locked period answers 400 PERIOD_LOCKED.
+- A standard BAS account missing from the chart is added at commit time of this edit; a deactivated or unknown account fails with ACCOUNTS_NOT_IN_CHART.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  fiscal_period_id: string,
+  entry_date: string,
+  description: string,
+  voucher_series?: string,
+  notes?: string,
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[]
+}
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "a8f1…",
+  "entry_date": "2026-05-12",
+  "description": "Bankavgift maj 2026",
+  "lines": [
+    {
+      "account_number": "6570",
+      "debit_amount": 60,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "1930",
+      "debit_amount": 0,
+      "credit_amount": 60
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    status: string,
+    fiscal_period_id: string,
+    entry_date: string,
+    description: string,
+    voucher_series: string,
+    voucher_number: number,
+    notes: string | null,
+    lines: { account_number: string, debit_amount: number, credit_amount: number, line_description: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "0e9c…",
+    "status": "draft",
+    "fiscal_period_id": "a8f1…",
+    "entry_date": "2026-05-12",
+    "description": "Bankavgift maj 2026",
+    "voucher_series": "A",
+    "voucher_number": 0,
+    "notes": null,
+    "lines": [
+      {
+        "account_number": "6570",
+        "debit_amount": 60,
+        "credit_amount": 0,
+        "line_description": null
+      },
+      {
+        "account_number": "1930",
+        "debit_amount": 0,
+        "credit_amount": 60,
+        "line_description": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `DELETE /api/v1/companies/{companyId}/journal-entries/{id}`
 
 **Cancel an uncommitted draft verifikation.**
@@ -495,6 +612,425 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/journal-entries/{id}/correct-metadata`
+
+**Correct the description and/or date of a posted verifikat inside the same verifikat (inline rättelse).**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Metadata rättelse (BFL 5 kap 5 § and 9 §): changes the verifikationstext and/or moves the entry date WITHIN its own fiscal period, without a rättelseverifikation. The correct_entry_metadata RPC writes the old and new values with who and when to the immutable rättelse log (GET /journal-entries/{id}/rattelse-log) before it changes anything. Amounts and accounts are never touched here. Idempotent. Dry-runnable: the dry run checks every rule and shows old and new values without writing.
+
+**Use when:** A posted verifikat in an open, unlocked period has a wrong or unclear description, or a date that is wrong but inside the same fiscal year.
+**Do not use for:** Moving the entry to another fiscal year (POST /journal-entries/{id}/redate), wrong amounts or accounts (POST /journal-entries/{id}/strike-lines, or /correct once the period is locked), drafts (PATCH /journal-entries/{id}).
+
+**Pitfalls:**
+- Inline rättelse is only for an open, unlocked period after the company lock date: otherwise 409 JOURNAL_RATTELSE_PERIOD_LOCKED, and storno (POST /journal-entries/{id}/correct) is the only lawful path (BFL 5 kap 5 §).
+- A new date outside the entry's own fiscal period answers 409 JOURNAL_RATTELSE_REFUSED: use /redate for a cross-period move.
+- Storno entries are never corrected; opening-balance, year-end and VAT-settlement entries keep their date (409 JOURNAL_RATTELSE_REFUSED).
+- Values equal to the current ones succeed with changed=false and write no log row.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ description?: string, entry_date?: string }
+```
+
+Example request:
+```json
+{
+  "description": "Hyra lokal september 2026"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    changed: boolean,
+    log_id: string | null,
+    old_description?: string,
+    new_description?: string,
+    old_entry_date?: string,
+    new_entry_date?: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "changed": true,
+    "log_id": "5c1e…",
+    "old_description": "Hyra",
+    "new_description": "Hyra lokal september 2026",
+    "old_entry_date": "2026-09-01",
+    "new_entry_date": "2026-09-01"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/journal-entries/{id}/no-document-required`
+
+**Mark a verifikat as "Inget underlag krävs" (no supporting document required).**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no external underlag exists (avskrivning, periodisering, internal transfer) the verifikation itself is the documentation. The flag records that judgement and removes the entry from the missing-underlag worklist. It is stored beside the verifikat, which is not changed, and the audit log records who set it. Setting it again replaces the reason. Idempotent. Dry-runnable.
+
+**Use when:** The user confirms a verifikat has no external underlag by nature (avskrivning, periodisering, bokslutspost, transfer between own accounts) and it should stop showing as missing underlag.
+**Do not use for:** Hiding a purchase or sale whose receipt or invoice is simply missing: that underlag must be found and attached (POST /documents), not waived.
+
+**Pitfalls:**
+- Only mark what genuinely has no external underlag: a waived receipt is a compliance gap, not a fix.
+- Undo with DELETE /journal-entries/{id}/no-document-required.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ reason?: string | null }
+```
+
+Example request:
+```json
+{
+  "reason": "Avskrivning enligt plan"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { journal_entry_id: string, exempted: true, reason: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "0e9c…",
+    "exempted": true,
+    "reason": "Avskrivning enligt plan"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/journal-entries/{id}/no-document-required`
+
+**Remove the "Inget underlag krävs" mark from a verifikat.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+The verifikat shows as missing underlag again until a document is attached. Clearing a mark that is not set succeeds with removed=false. Idempotent. Dry-runnable.
+
+**Use when:** A verifikat was marked by mistake and does need an underlag.
+**Do not use for:** Detaching a document (documents have their own endpoints).
+
+**Pitfalls:**
+- The mark is company-shared: any member with write access may clear it; the audit log records who did.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { journal_entry_id: string, exempted: false, removed: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "0e9c…",
+    "exempted": false,
+    "removed": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/journal-entries/{id}/notes`
+
+**Set, replace or clear the internal note (anteckning) on a verifikat.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+The note is annotation metadata beside the verifikat, not räkenskapsinformation: it may be edited on posted entries too, while every bookkeeping field stays immutable (the journal_entries trigger allows a notes-only update and nothing else). null or a blank string clears it. Idempotent. Dry-runnable.
+
+**Use when:** Recording context for a verifikat (who approved it, what an odd booking is about) or clearing an outdated note.
+**Do not use for:** Changing the verifikationstext (POST /journal-entries/{id}/correct-metadata) or anything that belongs in the books.
+
+**Pitfalls:**
+- At most 2000 characters.
+- The whole note is replaced, not appended to.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ notes: string | null }
+```
+
+Example request:
+```json
+{
+  "notes": "Godkänd av Anna 2026-09-12"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "0e9c…",
+    "voucher_series": "A",
+    "voucher_number": 142,
+    "notes": "Godkänd av Anna 2026-09-12"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/journal-entries/{id}/rattelse-log`
+
+**Read the inline rättelse history of a verifikat, newest first.**
+`scope:reports:read · risk:low · idempotent`
+
+The immutable who/when trail behind every metadata rättelse and line strike on the verifikat (BFL 5 kap 5 §): old and new text and date, snapshots of struck and added lines, the actor and when. Rows with source sie_import carry correction history from an imported SIE file (#BTRANS/#RTRANS) and name the corrector in external_signature. Storno corrections are not here: they are separate verifikat linked by reverses_id/correction_of_id.
+
+**Use when:** Explaining how a verifikat came to look as it does, or checking what an inline rättelse changed before correcting it again.
+**Do not use for:** Storno chains (read the linked verifikat) or the company-wide change history (behandlingshistorik report).
+
+**Pitfalls:**
+- An entry of another company answers 404, never an empty list.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: { id: string, rattelse_type: string, old_description: string | null, new_description: string | null, old_entry_date: string | null, new_entry_date: string | null, struck_lines: (Record<string, unknown>)[] | null, added_lines: (Record<string, unknown>)[] | null, actor: string | null, actor_label: string | null, created_at: string, source: string | null, external_signature: string | null }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "id": "5c1e…",
+      "rattelse_type": "lines",
+      "old_description": null,
+      "new_description": null,
+      "old_entry_date": null,
+      "new_entry_date": null,
+      "struck_lines": [
+        {
+          "account_number": "5410",
+          "debit_amount": 500,
+          "credit_amount": 0
+        }
+      ],
+      "added_lines": [
+        {
+          "account_number": "5420",
+          "debit_amount": 500,
+          "credit_amount": 0
+        }
+      ],
+      "actor": "9d2b…",
+      "actor_label": "Anna Svensson",
+      "created_at": "2026-09-12T08:14:00Z",
+      "source": null,
+      "external_signature": null
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/journal-entries/{id}/redate`
+
+**Move a posted verifikat to another date, and thereby another period, by storno and re-post.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Fixes a verifikat booked on the wrong date or year (e.g. 2026-07-03 that should be 2025-07-03). A posted verifikat is immutable, so this is the dashboard's "Flytta till annat datum": a storno of the original is posted on the original date (netting it to zero there) and an identical copy is posted on new_entry_date in the period that covers it, the original is marked reversed, and underlag and bank links follow the copy. The chain original, storno, copy stays linked (BFL 5 kap 5 §). Two voucher numbers are used. Idempotent. Dry-runnable: the dry run shows both verifikat with their lines and posts nothing.
+
+**Use when:** A posted verifikat has the right lines but the wrong date in another fiscal period or year, or the period of its date is past an inline rättelse.
+**Do not use for:** A date inside the same open period (POST /journal-entries/{id}/correct-metadata keeps one verifikat), wrong lines (/correct), drafts (PATCH /journal-entries/{id}).
+
+**Pitfalls:**
+- The target date must fall in an existing, open, unlocked period: 409 TARGET_PERIOD_CLOSED or TARGET_PERIOD_LOCKED, or 400 NO_OPEN_PERIOD_FOR_DATE (periods are never created here).
+- The storno lands on the ORIGINAL date: a locked original period answers 400 PERIOD_LOCKED.
+- The same date answers 400 MEANINGLESS_CORRECTION (details.reason no_date_change).
+- A chain three or more corrections deep answers 409 CORRECTION_CHAIN_TOO_DEEP; pass allow_deep_chain=true only when another layer is intended.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ new_entry_date: string, allow_deep_chain?: boolean }
+```
+
+Example request:
+```json
+{
+  "new_entry_date": "2025-07-03"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    original_id: string,
+    reversal_id: string,
+    corrected_id: string,
+    voucher_series: string,
+    reversal_voucher_number: number,
+    corrected_voucher_number: number,
+    new_entry_date: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "original_id": "0e9c…",
+    "reversal_id": "4d2a…",
+    "corrected_id": "7b3a…",
+    "voucher_series": "A",
+    "reversal_voucher_number": 144,
+    "corrected_voucher_number": 88,
+    "new_entry_date": "2025-07-03"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/journal-entries/{id}/reverse`
 
 **Storno a posted journal entry.**
@@ -562,6 +1098,95 @@ Example response `200`:
     "voucher_number": 144,
     "entry_date": "2026-05-13",
     "status": "posted"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/journal-entries/{id}/strike-lines`
+
+**Strike lines of a posted verifikat and add replacement lines inside the same verifikat (inline rättelse).**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifikat and adds replacement lines in the same verifikat, without a rättelseverifikation and without a new voucher number. The correct_entry_lines_inline RPC enforces the envelope (posted, open and unlocked period, after the company lock date, at least two lines left, balanced to the öre, SEK only) and snapshots the struck originals with who and when to the immutable rättelse log, so the original stays readable. Standard BAS accounts missing from the chart are added first. Idempotent. Dry-runnable: the dry run shows the struck, added and resulting lines and writes nothing.
+
+**Use when:** A posted verifikat in an open, unlocked period was booked on the wrong account or with a wrong amount split, e.g. 5410 that should have been 5420, and the user wants it fixed inside the verifikat the way Fortnox "ändra verifikat" does.
+**Do not use for:** Locked or closed periods (storno: POST /journal-entries/{id}/correct), foreign-currency lines, lines with a linked underlag, storno/year-end/VAT-settlement entries, drafts (PATCH /journal-entries/{id}), or cancelling a whole verifikat (/reverse).
+
+**Pitfalls:**
+- Inline rättelse is only for an open, unlocked period after the company lock date: otherwise 409 JOURNAL_RATTELSE_PERIOD_LOCKED, and storno (POST /journal-entries/{id}/correct) is the only lawful path (BFL 5 kap 5 §).
+- The resulting verifikat must balance (sum debit = sum credit > 0): 400 JOURNAL_ENTRY_NOT_BALANCED otherwise. Amounts are SEK with at most two decimals; account numbers are 4-digit strings.
+- strike_line_ids must be ids of this verifikat's lines (GET /journal-entries/{id}); a line in foreign currency or with a linked underlag cannot be struck (409 JOURNAL_RATTELSE_REFUSED).
+- A verifikat linked to a bank transaction may only change its bank-account net to the linked bank amount; linked customer/supplier payments keep their 15xx/24xx net. The dry run flags bank_anchor_check; the commit is authoritative.
+- Striking and re-adding identical lines answers 400 MEANINGLESS_CORRECTION.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  strike_line_ids?: string[],
+  lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, dimensions?: Record<string, string> }[]
+}
+```
+
+Example request:
+```json
+{
+  "strike_line_ids": [
+    "4b1f…"
+  ],
+  "lines": [
+    {
+      "account_number": "5420",
+      "debit_amount": 500,
+      "credit_amount": 0,
+      "line_description": "Programvara"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    log_id: string,
+    struck_count: number,
+    added_count: number,
+    total_debit: number,
+    total_credit: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "log_id": "5c1e…",
+    "struck_count": 1,
+    "added_count": 1,
+    "total_debit": 625,
+    "total_credit": 625
   },
   "meta": {
     "request_id": "req_…",
@@ -663,6 +1288,78 @@ Example response `200`:
       "succeeded": 1,
       "failed": 0
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/journal-entries/no-document-required`
+
+**Mark many posted verifikat as "Inget underlag krävs" in one call.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no external underlag exists (avskrivning, periodisering, internal transfer) the verifikation itself is the documentation. The flag records that judgement and removes the entry from the missing-underlag worklist. It is stored beside the verifikat, which is not changed, and the audit log records who set it. Only posted verifikat of this company whose type normally needs an underlag are marked; every other id is returned in skipped_ids, never an error. Already-marked entries keep their existing reason. At most 500 ids. Idempotent. Dry-runnable: the dry run lists what would be marked and what is skipped.
+
+**Use when:** Clearing many entries that by nature have no external underlag (e.g. historical SIE-imported bokslutsposter) out of the missing-underlag worklist after the user has reviewed them.
+**Do not use for:** Waiving receipts that are missing: find and attach them instead.
+
+**Pitfalls:**
+- Check data.skipped_ids: drafts, reversed entries, other companies' ids and entry types that never need an underlag are skipped.
+- data.exempted counts the ids processed, including ones already marked.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ journal_entry_ids: string[], reason?: string | null }
+```
+
+Example request:
+```json
+{
+  "journal_entry_ids": [
+    "0e9c…",
+    "7b3a…"
+  ],
+  "reason": "Bokslutspost, egen handling"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { exempted: number, journal_entry_ids: string[], skipped_ids: string[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "exempted": 1,
+    "journal_entry_ids": [
+      "0e9c…"
+    ],
+    "skipped_ids": [
+      "7b3a…"
+    ]
   },
   "meta": {
     "request_id": "req_…",
