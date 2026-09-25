@@ -894,7 +894,7 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .routinePreview { max-height: none; padding: 12px 14px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground) / 0.8); white-space: pre-wrap; }
 
 /* Starta i Claude with a choice of where (ClaudeStart.tsx) */
-.splitStart { display: inline-flex; align-items: center; gap: 4px; }
+.splitStart { display: inline-flex; align-items: stretch; }
 .routineCreate { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid hsl(var(--border)); }
 .routineSwitch { align-self: center; }
 /* Accounted's review list (ReviewQueue.tsx) */
