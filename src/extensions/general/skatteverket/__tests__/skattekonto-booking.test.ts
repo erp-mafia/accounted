@@ -23,9 +23,15 @@ const SEED_RULES = [
     label: 'Utbetalning från skattekonto', active: true, requires_employer: false,
   },
   {
+    id: 'sys-7', priority: 15, pattern: 'skattetillägg,förseningsavgift,förs.avgift,förs avgift',
+    amount_min: null, amount_max: null, company_type: 'all',
+    counter_account: '6992', counter_account_ef: null,
+    label: 'Ej avdragsgilla skatteavgifter', active: true, requires_employer: false,
+  },
+  {
     id: 'sys-3', priority: 20, pattern: 'debiterad preliminärskatt,preliminärskatt,f-skatt,fskatt',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2510', counter_account_ef: '2013',
+    counter_account: '2518', counter_account_ef: '2013',
     label: 'Preliminär skatt', active: true, requires_employer: false,
   },
   {
@@ -45,12 +51,6 @@ const SEED_RULES = [
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '2650', counter_account_ef: null,
     label: 'Redovisningskonto för moms', active: true, requires_employer: false,
-  },
-  {
-    id: 'sys-7', priority: 25, pattern: 'skattetillägg,förseningsavgift',
-    amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '6992', counter_account_ef: null,
-    label: 'Ej avdragsgilla skatteavgifter', active: true, requires_employer: false,
   },
   {
     id: 'sys-8', priority: 30, pattern: 'kostnadsränta',
@@ -100,6 +100,34 @@ describe('guessCounterAccount', () => {
     expect(guess?.account).toBe('1930')
   })
 
+  // Skatteverket abbreviates the fee, and a fee row always names the tax it
+  // belongs to. "Förs.avgift moms/arbetsgivardeklaration" therefore contains
+  // "moms" but not "förseningsavgift": it used to be booked on 2650, the VAT
+  // settlement account, instead of 6992 ej avdragsgilla. Seen on a real
+  // statement, 2 rows of 24.
+  it('books the abbreviated förseningsavgift on 6992, not on the moms account it names', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue)
+    const guess = await guessCounterAccount(
+      supabase as unknown as SupabaseClient,
+      'company-1',
+      'Förs.avgift moms/arbetsgivardeklaration 251112',
+      'aktiebolag',
+    )
+    expect(guess?.account).toBe('6992')
+  })
+
+  // The other side of the same priority change: outranking the tax-type rules
+  // must not let the fee rule swallow an ordinary VAT row.
+  it('still books a plain moms row on 2650', async () => {
+    const { supabase, enqueue } = makeSupabase()
+    enqueueRules(enqueue)
+    const guess = await guessCounterAccount(
+      supabase as unknown as SupabaseClient, 'company-1', 'Moms okt 2025 - dec 2025', 'aktiebolag',
+    )
+    expect(guess?.account).toBe('2650')
+  })
+
   it('resolves __PRIMARY_SEK__ to the cash_accounts.is_primary row when present', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueueRules(enqueue, SEED_RULES, { ledger_account: '1932' })
@@ -122,12 +150,16 @@ describe('guessCounterAccount', () => {
     ).toBe('1930')
   })
 
-  it('uses 2510 for AB preliminär skatt and 2013 for EF (regression: 2012 is not standard BAS)', async () => {
+  // 2518 Betald F-skatt carries the debit balance during the year and is
+  // netted against 2512/2510 at bokslut; 2510 is the group's summary account
+  // and booking straight to it mixes tax paid with tax owed. EF books no
+  // liability at all: the owner's F-skatt is an eget uttag (2013).
+  it('uses 2518 for AB preliminär skatt and 2013 for EF', async () => {
     const { supabase, enqueue } = makeSupabase()
     enqueue({ data: SEED_RULES })
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Debiterad preliminärskatt', 'aktiebolag'))?.account,
-    ).toBe('2510')
+    ).toBe('2518')
 
     enqueue({ data: SEED_RULES })
     expect(

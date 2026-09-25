@@ -38,7 +38,7 @@ const SEED_RULES = [
   {
     id: 'sys-3', priority: 20, pattern: 'debiterad preliminärskatt,preliminärskatt,f-skatt,fskatt',
     amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '2510', counter_account_ef: '2013',
+    counter_account: '2518', counter_account_ef: '2013',
     label: 'Preliminär skatt', active: true,
   },
   {
@@ -136,7 +136,7 @@ describe('attachBookingSuggestions', () => {
       'company-1',
       [makeSkvRow({ transaktionstext: 'Debiterad preliminärskatt' })],
     )
-    expect(enrichedAb[0].booking_suggestion?.account).toBe('2510')
+    expect(enrichedAb[0].booking_suggestion?.account).toBe('2518')
   })
 
   it('returns null when no rule matches', async () => {
@@ -259,7 +259,7 @@ describe('attachBookingSuggestions', () => {
     expect(enriched.map((r) => r.booking_suggestion?.account)).toEqual([
       '8314',
       '8423',
-      '2510',
+      '2518',
     ])
     expect(fromCount(supabase, 'skattekonto_rules')).toBe(1)
     expect(fromCount(supabase, 'company_settings')).toBe(1)

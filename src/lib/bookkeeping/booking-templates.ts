@@ -1073,7 +1073,10 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'personnel',
     direction: 'expense',
     entity_applicability: 'aktiebolag',
-    debit_account: '2510',
+    // 2518 Betald F-skatt, not the 2510 summary account: the paid preliminary
+    // tax has to stay separable from the estimated liability until bokslut
+    // nets them.
+    debit_account: '2518',
     credit_account: '1930',
     vat_treatment: null,
     vat_rate: 0,
