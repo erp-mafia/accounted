@@ -90,6 +90,20 @@ export function toThreadMessage(m: RawMessage): ThreadMessage | null {
   }
 }
 
+/**
+ * The status the customer sees, which is not always the one PostHog stores.
+ * Support sets a ticket to `pending` ("waiting for you") after answering, and
+ * a later customer message does not move it back. Shown verbatim, the customer
+ * keeps reading "waiting for you" under their own latest message. So a pending
+ * ticket whose last visible message is the customer's own reads as `open`:
+ * the ball is with support again. Every other status passes through.
+ */
+export function displayStatus(status: TicketStatus, messages: readonly Pick<ThreadMessage, 'from'>[]): TicketStatus {
+  if (status !== 'pending') return status
+  const last = messages[messages.length - 1]
+  return last?.from === 'me' ? 'open' : status
+}
+
 function lastActivity(t: TicketSummary): number {
   return new Date(t.lastMessageAt ?? t.createdAt).getTime()
 }

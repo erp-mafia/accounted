@@ -108,10 +108,10 @@ describe('POST /connect credential prefill', () => {
     mockStartAuthorization.mockResolvedValue({ url: 'https://bank.example/auth', authorization_id: 'auth-1' })
   })
 
-  function ctxWithCompany(orgNumber: string | null) {
+  function ctxWithCompany(orgNumber: string | null, entityType = 'aktiebolag') {
     let call = 0
     return makeContext((table: string) => {
-      if (table === 'companies') return makeChain({ data: { entity_type: 'aktiebolag', org_number: orgNumber } })
+      if (table === 'companies') return makeChain({ data: { entity_type: entityType, org_number: orgNumber } })
       call++
       if (call === 1) return makeChain({ data: null }) // no recent pending
       if (call === 2) return makeChain({ data: [] }) // sweep
@@ -143,6 +143,19 @@ describe('POST /connect credential prefill', () => {
     )
     expect(started?.[1]).toMatchObject({ credentials_prefilled: ['companyId'] })
     expect(JSON.stringify(started?.[1])).not.toContain('5568098239')
+  })
+
+  it('sends no companyId for a sole trader: the person types it on the bank page (Nordea business)', async () => {
+    mockGetPreferredAuthMethod.mockResolvedValue({
+      name: 'BANKID',
+      approach: 'DECOUPLED',
+      hidden_method: true,
+      credentials: [{ name: 'companyId', required: true }],
+    })
+    const ctx = ctxWithCompany('198501011234', 'enskild_firma')
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+    expect(response.status).toBe(200)
+    expect(mockStartAuthorization.mock.calls[0][7]).toBeUndefined()
   })
 
   it('sends no credentials, and never reads the company, when the method declares none', async () => {
