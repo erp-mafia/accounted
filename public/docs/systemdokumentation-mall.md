@@ -213,7 +213,7 @@ Dokument som är kopplade till bokförda eller omförda verifikationer kan inte 
 | 25 % | Standardsats | 2611 | 2641 |
 | 12 % | Reducerad (restaurang och servering, hotell m.m.) | 2621 | 2641 |
 | 6 % | Reducerad (livsmedel tillfälligt, böcker, tidningar, persontransport, kultur m.m.) | 2631 | 2641 |
-| 0 % | Export av varor utanför EU (3105) och försäljning av tjänster till företag i andra länder (3305 utanför EU, 3308 inom EU) | - | - |
+| 0 % | Export av varor utanför EU (3105) och försäljning av tjänster till företag i andra länder när tjänsten enligt reglerna om beskattningsland beskattas utomlands (3305 utanför EU, 3308 inom EU) | - | - |
 | Omvänd skattskyldighet vid inköp | Tjänster från EU och från länder utanför EU, inrikes omvänd skattskyldighet (t.ex. byggtjänster) | 2614 / 2624 / 2634 (beräknad utgående moms 25 / 12 / 6 %) | 2645 (utland), 2647 (inrikes) |
 | Momsfri | Undantagna transaktioner | - | - |
 
