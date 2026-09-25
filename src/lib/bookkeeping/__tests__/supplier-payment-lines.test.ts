@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  addSupplierBankFeeLine,
   buildSupplierPaymentClearingLines,
   resolveSupplierCashSettlement,
   supplierOreResidual,
@@ -202,5 +203,42 @@ describe('resolveSupplierCashSettlement', () => {
         owedSek: -10.5,
       }),
     ).toEqual({ bankSek: -10.5, oreDiffSek: 0 })
+  })
+})
+
+describe('addSupplierBankFeeLine', () => {
+  it('grows the payment-account credit by the fee and debits 6570, keeping the entry balanced', () => {
+    const { lines } = buildSupplierPaymentClearingLines({
+      apSek: 1000,
+      bankSek: 1000,
+      paymentAccount: '1930',
+      bankFeeSek: 12.5,
+    })
+    expect(line(lines, '2440')).toMatchObject({ debit_amount: 1000 })
+    expect(line(lines, '1930')).toMatchObject({ credit_amount: 1012.5 })
+    expect(line(lines, '6570')).toMatchObject({ debit_amount: 12.5, credit_amount: 0 })
+    expect(sumDebit(lines)).toBe(sumCredit(lines))
+  })
+
+  it('stacks on an öresavrundning settlement without touching 3740', () => {
+    const { lines } = buildSupplierPaymentClearingLines({
+      apSek: 11231.25,
+      bankSek: 11231,
+      paymentAccount: '1930',
+      bankFeeSek: 5,
+    })
+    expect(line(lines, '3740')).toMatchObject({ credit_amount: 0.25 })
+    expect(line(lines, '1930')).toMatchObject({ credit_amount: 11236 })
+    expect(sumDebit(lines)).toBe(sumCredit(lines))
+  })
+
+  it('is a no-op for a zero or missing fee', () => {
+    const lines = [
+      { account_number: '2440', debit_amount: 100, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+    ]
+    addSupplierBankFeeLine(lines, '1930', 0)
+    addSupplierBankFeeLine(lines, '1930', undefined)
+    expect(lines).toHaveLength(2)
   })
 })
