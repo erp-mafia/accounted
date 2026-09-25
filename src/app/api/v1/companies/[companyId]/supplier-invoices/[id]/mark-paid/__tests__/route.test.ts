@@ -106,19 +106,27 @@ function makeFlexibleSupabase(
   for (const [t, val] of Object.entries(byTable)) {
     queues.set(t, Array.isArray(val) ? [...val] : [val])
   }
-  const buildChain = (table: string): unknown => {
+  const buildChain = (table: string, selection?: string): unknown => {
     const handler: ProxyHandler<object> = {
       get(_target, prop) {
         if (prop === 'then') {
           return (resolve: (v: unknown) => void) => {
             const q = queues.get(table)
             const next = q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null })
-            resolve(next)
+            // Model PostgREST's top-level projection so fixtures cannot supply
+            // fields the route forgot to select. Keep nested relation fixtures.
+            const fields = selection?.replace(/\([^)]*\)/g, '').split(',')
+              .map(field => field.trim().split(':')[0])
+            const project = (row: unknown) => {
+              if (!fields || fields.includes('*') || row == null || typeof row !== 'object') return row
+              return Object.fromEntries(Object.entries(row).filter(([key]) => fields.includes(key)))
+            }
+            resolve({ ...next, data: Array.isArray(next.data) ? next.data.map(project) : project(next.data) })
           }
         }
         return (...args: unknown[]) => {
           calls?.push({ table, method: String(prop), args })
-          return buildChain(table)
+          return buildChain(table, prop === 'select' ? args[0] as string | undefined : selection)
         }
       },
     }
@@ -541,7 +549,7 @@ describe('FX manual payment units (#2955)', () => {
     ...APPROVED_SI, currency: 'USD', total: 37.5, remaining_amount: 37.5,
     total_sek: 361.55, exchange_rate: 9.6414,
   }
-  function setup(overrides: Partial<SupplierInvoice> = {}, settledSek = 0, registeredSek = 361.55) {
+  function setup(overrides: Partial<SupplierInvoice> = {}, settledSek = 0, registeredSek = 361.55, method = 'accrual') {
     const calls: RecordedCall[] = []
     const paid = overrides.paid_amount ?? 0
     mockServiceClient.mockReturnValue(makeFlexibleSupabase({
@@ -551,7 +559,7 @@ describe('FX manual payment units (#2955)', () => {
         { data: [], error: null },
         { data: { ...usd, status: 'paid', paid_amount: 37.5, remaining_amount: 0 }, error: null },
       ],
-      company_settings: { data: { accounting_method: 'accrual' }, error: null },
+      company_settings: { data: { accounting_method: method }, error: null },
       supplier_invoice_payments: [
         { data: paid ? [{ id: 'p1', amount: paid, currency: 'USD', journal_entry_id: 'prior-je' }] : [], error: null },
         { data: [], error: null },
@@ -596,14 +604,18 @@ describe('FX manual payment units (#2955)', () => {
     { name: 'separately rounded registration', paid: 0, settled: 0, registered: 361.56, expected: 361.56 },
     { name: 'reversed first partial', paid: 18.75, settled: 180.77, registered: 361.55, expected: 180.78 },
     { name: 'bank-matched partials', paid: 25, settled: 241.04, registered: 361.55, expected: 120.51 },
-  ])('clears the actual balance after $name', async ({ paid, settled, registered, expected }) => {
-    const calls = setup({ paid_amount: paid, remaining_amount: 37.5 - paid }, settled, registered)
-    const response = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
-    expect(response.status).toBe(200)
-    expect(mockPaymentEntry.mock.calls[0][4]).toBe(expected)
-    expect(calls.find(c => c.table === 'supplier_invoice_payments' && c.method === 'insert')?.args[0])
-      .toMatchObject({ amount: 37.5 - paid, currency: 'USD' })
-  })
+  ].flatMap(scenario => ['accrual', 'cash'].map(method => ({ ...scenario, method }))))(
+    'clears the actual balance after $name under the current $method setting',
+    async ({ paid, settled, registered, expected, method }) => {
+      const calls = setup({ paid_amount: paid, remaining_amount: 37.5 - paid }, settled, registered, method)
+      const response = await markPaid(makeRequest({ exchange_rate_difference: 0 }), detailParams())
+      expect(response.status).toBe(200)
+      expect(mockPaymentEntry.mock.calls[0][4]).toBe(expected)
+      expect(mockCashEntry).not.toHaveBeenCalled()
+      expect(calls.find(c => c.table === 'supplier_invoice_payments' && c.method === 'insert')?.args[0])
+        .toMatchObject({ amount: 37.5 - paid, currency: 'USD' })
+    },
+  )
 
   it.each([false, true])('refuses a missing posted voucher before any write, dry-run: %s', async dryRun => {
     const calls = setup({ registration_journal_entry_id: 'missing-je' })
