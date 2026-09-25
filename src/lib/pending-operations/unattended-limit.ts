@@ -66,6 +66,14 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   link_supplier_invoice_voucher: ['payment_amount'],
   match_batch_allocate: ['total_allocated'],
   mark_invoice_paid: ['total'],
+  // Operation registry, wave 2. Dotted paths read a nested preview field.
+  book_invoice: ['journal_entry.total_debit'],
+  bulk_book_invoices: ['total_debit'],
+  book_supplier_invoice: ['journal_entry.total_debit'],
+  create_supplier_payment_batch: ['total_amount'],
+  create_expense_claim: ['amount_sek'],
+  record_expense_payout: ['total_sek'],
+  match_expense_payout: ['total_sek'],
 }
 
 /**
@@ -85,7 +93,10 @@ export function priceOperation(
 
   const record = previewData as Record<string, unknown>
   for (const field of fields) {
-    const raw = record[field]
+    let raw: unknown = record
+    for (const key of field.split('.')) {
+      raw = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>)[key] : undefined
+    }
     if (raw === null || raw === undefined) continue
     // jsonb numerics can arrive as strings; parse rather than trusting
     // comparison coercion.

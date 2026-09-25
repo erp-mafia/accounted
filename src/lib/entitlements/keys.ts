@@ -135,6 +135,8 @@ export function isConnectorCapability(key: CapabilityKey): boolean {
  */
 export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   gnubok_send_invoice: CAPABILITY.email_send,
+  // Emails every employee a payslip link (operation salary-runs.send-payslips).
+  gnubok_send_payslips: CAPABILITY.email_send,
   gnubok_vat_declaration_submit: CAPABILITY.skatteverket,
   gnubok_agi_submit: CAPABILITY.skatteverket,
   // Onboarding connect-link tools (issue #1814): gated like the links' targets.
@@ -158,6 +160,7 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
  */
 export const PAID_OPERATION_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   send_invoice: CAPABILITY.email_send,
+  send_payslips: CAPABILITY.email_send,
   submit_vat_declaration: CAPABILITY.skatteverket,
   submit_agi: CAPABILITY.skatteverket,
 } as const

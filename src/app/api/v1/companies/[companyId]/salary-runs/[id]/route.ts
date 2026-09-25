@@ -306,7 +306,7 @@ registerEndpoint({
   useWhen:
     'You created a run by mistake or want to recreate it with different period_month. Only draft runs can be deleted.',
   doNotUseFor:
-    'Reverting a booked run (use the internal /correct flow; v1 promotion deferred). Hiding a run from listings (no soft-delete on this table: drafts are truly removed).',
+    'Reverting a booked run (POST /salary-runs/{id}/correct). Hiding a run from listings (no soft-delete on this table: drafts are truly removed).',
   pitfalls: [
     'Returns 400 SALARY_RUN_DELETE_NOT_DRAFT for any status other than draft.',
     'Hard delete: the salary_run_employees + salary_line_items rows cascade away.',

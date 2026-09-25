@@ -21,6 +21,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre, sumOre } from '@/lib/money'
+import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import {
   assertRunDraft,
   resolveRunEmployee,
@@ -152,6 +153,56 @@ export async function addOpenExpenseClaimsToPayslip(
       claim_count: claims.length,
       total_sek: sumOre(claims.map((c) => c.amount_sek)),
     },
+  }
+}
+
+/**
+ * "Lägg till öppna utlägg" as an operation outcome, for every door: the
+ * dashboard route, the v1 operation salary-runs.attach-expense-claims and
+ * gnubok_attach_salary_expense_claims (lib/operations/salary-run-lifecycle.ts).
+ * A dry run runs the same gates (draft run, employee on the run, at least one
+ * open claim) and answers the claims that would be added; it writes nothing.
+ */
+export async function attachOpenExpenseClaims(
+  ctx: OperationContext,
+  args: { salaryRunId: string; employeeId: string },
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<AddedExpenseClaimLines>> {
+  const { supabase, companyId, log } = ctx
+  try {
+    if (!options.dryRun) {
+      const result = await addOpenExpenseClaimsToPayslip(supabase, { companyId, ...args })
+      if (!result.ok) return { ok: false, code: result.code, details: result.details }
+      return { ok: true, data: result.data, created: true }
+    }
+
+    const gate = await assertRunDraft(supabase, companyId, args.salaryRunId)
+    if (!gate.ok) return { ok: false, code: gate.code, details: gate.details }
+    const sre = await resolveRunEmployee(supabase, companyId, args.salaryRunId, { employeeId: args.employeeId })
+    if (!sre.ok) return { ok: false, code: sre.code, details: sre.details }
+    const claims = await listOpenExpenseClaimsForEmployee(supabase, companyId, args.employeeId)
+    if (claims.length === 0) return { ok: false, code: 'SALARY_RUN_NO_OPEN_EXPENSE_CLAIMS' }
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        salary_run_id: args.salaryRunId,
+        employee_id: args.employeeId,
+        claim_count: claims.length,
+        total_sek: sumOre(claims.map((c) => c.amount_sek)),
+        claims: claims.map((c) => ({
+          expense_claim_id: c.id,
+          description: c.description,
+          expense_date: c.expense_date,
+          amount_sek: c.amount_sek,
+          liability_account: c.liability_account,
+        })),
+        note: 'Tax-free expense_reimbursement lines; recalculate the run afterwards. Booking the run marks these claims paid.',
+      },
+    }
+  } catch (err) {
+    log.error('attach expense claims to payslip failed', err as Error)
+    return { ok: false, code: 'UNKNOWN_ERROR', error: err }
   }
 }
 

@@ -27,6 +27,29 @@ import {
   fiscalPeriodsUnlock,
   fiscalPeriodsUpdate,
 } from './fiscal-periods'
+import {
+  salaryRunsAttachExpenseClaims,
+  salaryRunsRevert,
+  salaryRunsSendPayslips,
+  salaryRunsUnapprove,
+} from './salary-run-lifecycle'
+import {
+  expenseClaimsCreate,
+  expenseClaimsDelete,
+  expenseClaimsGet,
+  expenseClaimsList,
+  expenseClaimsRecordPayout,
+  transactionsMatchExpensePayout,
+} from './expense-claims'
+import { invoicesBook, invoicesBulkBook, supplierInvoicesBook } from './invoice-booking'
+import {
+  supplierPaymentBatchesCancel,
+  supplierPaymentBatchesCreate,
+  supplierPaymentBatchesFile,
+  supplierPaymentBatchesGet,
+  supplierPaymentBatchesList,
+  supplierPaymentBatchesPreview,
+} from './supplier-payment-batches'
 import type { AnyOperation } from './types'
 
 export const OPERATIONS: readonly AnyOperation[] = [
@@ -52,6 +75,25 @@ export const OPERATIONS: readonly AnyOperation[] = [
   fiscalPeriodsUnlock,
   fiscalPeriodsCloseExternal,
   fiscalPeriodsReopenExternal,
+  salaryRunsSendPayslips,
+  salaryRunsRevert,
+  salaryRunsUnapprove,
+  salaryRunsAttachExpenseClaims,
+  invoicesBook,
+  invoicesBulkBook,
+  supplierInvoicesBook,
+  expenseClaimsList,
+  expenseClaimsGet,
+  expenseClaimsCreate,
+  expenseClaimsDelete,
+  expenseClaimsRecordPayout,
+  transactionsMatchExpensePayout,
+  supplierPaymentBatchesPreview,
+  supplierPaymentBatchesCreate,
+  supplierPaymentBatchesList,
+  supplierPaymentBatchesGet,
+  supplierPaymentBatchesFile,
+  supplierPaymentBatchesCancel,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

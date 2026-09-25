@@ -112,16 +112,18 @@ describe('/api/expense-claims', () => {
     expect(response.status).toBe(400)
   })
 
+  // Failures answer the structured envelope with registry codes since the
+  // route shares lib/expenses/expense-claim-actions.ts with the v1 and MCP doors.
   it.each([
-    ['EMPLOYEE_NOT_FOUND', 404],
-    ['RATE_UNAVAILABLE', 400],
-    ['FISCAL_PERIOD_NOT_FOUND', 400],
-    ['CLAIM_INSERT_FAILED', 500],
-  ] as const)('POST maps service code %s to %d', async (code, expected) => {
+    ['EMPLOYEE_NOT_FOUND', 'EMPLOYEE_NOT_FOUND', 404],
+    ['RATE_UNAVAILABLE', 'EXPENSE_CLAIM_RATE_UNAVAILABLE', 400],
+    ['FISCAL_PERIOD_NOT_FOUND', 'EXPENSE_CLAIM_NO_FISCAL_PERIOD', 400],
+    ['CLAIM_INSERT_FAILED', 'EXPENSE_CLAIM_SAVE_FAILED', 500],
+  ] as const)('POST maps service code %s to %s (%d)', async (code, publicCode, expected) => {
     registerMock.mockResolvedValue({ ok: false, code })
     const response = await POST(post(validClaim), {} as never)
-    const { status, body } = await parseJsonResponse<{ code: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
     expect(status).toBe(expected)
-    expect(body.code).toBe(code)
+    expect(body.error.code).toBe(publicCode)
   })
 })

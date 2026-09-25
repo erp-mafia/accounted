@@ -321,7 +321,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'Register a new supplier invoice.',
   description:
-    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
     'You\'re registering an incoming leverantörsfaktura. Use dry-run first to validate VAT calculations + period-lock state before committing.',
   doNotUseFor:
