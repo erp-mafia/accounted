@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { captureArkivEvent } from '@/lib/arkiv/events'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import { isSearchKind, searchRecords, SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_QUERY_MAX, SEARCH_QUERY_MIN, type SearchItem, type SearchKind } from '@/lib/arkiv/search'
@@ -56,9 +56,12 @@ export const GET = withRouteContext('arkiv.search', async (request, ctx) => {
   const kinds = parsed.data.kinds ? parsed.data.kinds.split(',').map((k) => k.trim()) : []
   if (!kinds.every(isSearchKind)) return NextResponse.json({ error: 'Okänd typ av post.' }, { status: 400 })
 
+  // Agreements and facts are the brain's records: outside it, the documents are the whole archive.
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  const searchKinds: SearchKind[] = brain ? kinds : ['document']
   let items: SearchItem[]
   try {
-    items = await searchRecords(ctx.supabase, ctx.companyId, q, { kinds, limit })
+    items = await searchRecords(ctx.supabase, ctx.companyId, q, { kinds: searchKinds, limit })
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 500 })
   }
@@ -68,10 +71,11 @@ export const GET = withRouteContext('arkiv.search', async (request, ctx) => {
   const titleOf = new Map<string, string>()
   const fileNameOf = new Map<string, string>()
   if (docIds.length) {
+    const none = Promise.resolve({ data: [], error: null })
     const [docs, extractions, agreements] = await Promise.all([
       ctx.supabase.from('document_attachments').select('id, file_name, doc_type').eq('company_id', ctx.companyId).in('id', docIds),
-      ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', docIds).eq('is_current', true),
-      ctx.supabase.from('agreements').select('source_document_id, title').eq('company_id', ctx.companyId).in('source_document_id', docIds),
+      brain ? ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', docIds).eq('is_current', true) : none,
+      brain ? ctx.supabase.from('agreements').select('source_document_id, title').eq('company_id', ctx.companyId).in('source_document_id', docIds) : none,
     ])
     for (const r of [docs, extractions, agreements]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
     const payloadByDoc = new Map(((extractions.data ?? []) as Array<{ document_id: string; payload: Payload }>).map((e) => [e.document_id, e.payload]))

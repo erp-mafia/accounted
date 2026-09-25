@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
+import { CashFlowTaxAllocationError } from '@/lib/reports/cash-flow-tax'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { listAssets } from '@/lib/bokslut/assets/asset-service'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { LATENT_TAX_DEFAULT_RATE } from '@/lib/bokslut/tax-provision/latent-tax-calculator'
@@ -42,6 +44,7 @@ import type { AccountingFramework, Asset, TrialBalanceRow } from '@/types'
  *  document leaves out is not something the user has to fix. */
 export const K3_CASH_FLOW_FAILED_WARNING =
   'Kassaflödesanalysen kunde inte genereras automatiskt. Kontrollera att ingående och utgående saldo på 19xx finns och kör om bokslutet.'
+export const K3_CASH_FLOW_TAX_ALLOCATION_WARNING = getErrorMessage(new CashFlowTaxAllocationError())
 
 /** The K3 notice enumerating what the PDF contains. */
 export function k3ContentsNotice(hasCashFlow: boolean): string {
@@ -166,8 +169,9 @@ export async function buildArsredovisningData(
   // Every prior period needed by the comparatives and/or the flerårsöversikt
   // gets its TB pair fetched exactly once. Comparative RR figures need the
   // same statutory view as the current year: keep booked depreciation,
-  // appropriations, and tax, excluding only the linked final result-closing
-  // entry. A failed pair downgrades to null so a broken prior year (e.g. a
+  // appropriations, and tax, excluding only the result-closing entry (also
+  // when the previous system booked it and it arrived by SIE import). A
+  // failed pair downgrades to null so a broken prior year (e.g. a
   // partial SIE import without IB continuity) never blocks the document.
   const tbTargets = new Map<string, PeriodRow>()
   if (prevPeriodRow) tbTargets.set(prevPeriodRow.id, prevPeriodRow)
@@ -293,7 +297,7 @@ export async function buildArsredovisningData(
       ),
       generateKassaflodesanalys(supabase, companyId, fiscalPeriodId).then(
         (cashFlow) => ({ ok: true as const, cashFlow }),
-        () => ({ ok: false as const }),
+        (error: unknown) => ({ ok: false as const, error }),
       ),
     ])
     // User-edited note texts (K3 only: the K2 notes feed the iXBRL filing,
@@ -317,7 +321,9 @@ export async function buildArsredovisningData(
     } else {
       // A partial SIE import can leave 1xxx without an IB row: the report
       // throws. Surface as a warning instead of blocking the whole ÅR.
-      noterWarnings.push(K3_CASH_FLOW_FAILED_WARNING)
+      noterWarnings.push(cashFlowSettled.error instanceof CashFlowTaxAllocationError
+        ? K3_CASH_FLOW_TAX_ALLOCATION_WARNING
+        : K3_CASH_FLOW_FAILED_WARNING)
     }
 
     // Equity-changes statement: derived from the post-level mapping. We

@@ -46,7 +46,7 @@ export function StagePipeline({
             )}
           >
             <span className="truncate">{t(`stage_${s}`)}</span>
-            {AUTO_STAGES.has(s) && <span className="text-[10.5px] text-muted-foreground">{t('stage_auto')}</span>}
+            {AUTO_STAGES.has(s) && <span className="text-[11px] text-muted-foreground">{t('stage_auto')}</span>}
             <span className="font-medium tabular-nums text-foreground" data-ph-mask>
               {n || '–'}
             </span>
@@ -84,7 +84,7 @@ export function StageSteps({
           >
             <span
               className={cn(
-                'truncate text-[10.5px] font-semibold uppercase tracking-[0.06em]',
+                'truncate text-[11px] font-semibold uppercase tracking-[0.06em]',
                 state === 'done' ? 'text-success' : state === 'now' ? 'text-foreground' : 'text-muted-foreground',
               )}
             >

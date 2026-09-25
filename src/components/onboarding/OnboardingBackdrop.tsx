@@ -12,7 +12,7 @@ export default function OnboardingBackdrop() {
     <div
       aria-hidden
       data-onboarding-backdrop
-      className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-700 ease-out"
+      className="pointer-events-none fixed inset-0 z-0 overflow-hidden transition-opacity duration-300 ease-out"
     >
       {/* Stadshuset skyline anchored to the bottom: translated down so its
           water reflection falls below the fold and only the silhouette hugs

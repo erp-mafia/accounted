@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
-import { ArrowLeft, FileDown, Plus, ExternalLink, Loader2, Save, CheckCircle2, Trash2 } from 'lucide-react'
+import { ArrowLeft, FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2 } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -654,7 +654,7 @@ export default function ArsredovisningPage() {
               includeAllOption={false}
               hideFuturePeriods
             />
-            <Button variant="outline" asChild>
+            <Button size="sm" variant="outline" asChild>
               <Link href={`/bookkeeping/year-end?period=${periodId}`}>
                 <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
               </Link>
@@ -1063,12 +1063,11 @@ export default function ArsredovisningPage() {
             </div>
             <Button
               onClick={handleSaveNarrative}
-              disabled={savingNarrative || !hasUnsavedNarrative}
+              disabled={!hasUnsavedNarrative}
+              loading={savingNarrative}
             >
               {savingNarrative ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
-                </>
+                'Sparar…'
               ) : (
                 <>
                   <Save className="mr-2 h-4 w-4" /> Spara texten
@@ -1226,7 +1225,7 @@ export default function ArsredovisningPage() {
               </div>
               <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
                 {sig.status === 'signed' ? (
-                  <Badge variant="success">Signerad</Badge>
+                  <span className="text-xs text-muted-foreground">Signerad</span>
                 ) : sig.status === 'declined' ? (
                   <Badge variant="destructive">Avböjd</Badge>
                 ) : (
@@ -1344,7 +1343,7 @@ export default function ArsredovisningPage() {
               them alongside the coming-soon Bolagsverket parts made the
               pre-submission checklist unreadable in the default config. */}
           {data.warnings.length > 0 && (
-            <div className="space-y-1 border-t border-border/60 pt-3 text-xs">
+            <div className="space-y-1 border-t border-border pt-3 text-xs">
               <p className="font-medium">Innan inlämning till Bolagsverket:</p>
               <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
                 {data.warnings.map((w, i) => (

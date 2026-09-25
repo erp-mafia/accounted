@@ -58,6 +58,35 @@ describe('readDocumentBytes', () => {
     ])
   })
 
+  it('reads a picture page whole with the model and keeps its text layer when the model may not', async () => {
+    const local = {
+      pages: [
+        { pageNo: 1, text: 'Shareholders Agreement', reader: 'pdf_text', hasTextLayer: true },
+        { pageNo: 2, text: 'Schedule 1.2 - Cap Table', reader: 'pdf_text', hasTextLayer: true },
+      ],
+      pagesNeedingVision: [],
+      pagesWithImages: [2],
+      pageCount: 2,
+    }
+    mock(readPdfTextLayer).mockResolvedValue(local)
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('%PDF-page2'))
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000' })
+    const read = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf')
+    expect(extractSinglePagePdf).toHaveBeenCalledWith(expect.any(Buffer), 2)
+    expect(read.ok && read.pages.map((p) => [p.pageNo, p.reader, p.text])).toEqual([
+      [1, 'pdf_text', 'Shareholders Agreement'],
+      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000'],
+    ])
+
+    vi.clearAllMocks()
+    mock(readPdfTextLayer).mockResolvedValue(local)
+    const gated = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: false })
+    expect(transcribeWithModel).not.toHaveBeenCalled()
+    // Nothing is lost: the text layer stays, and the partial read is retried when the model may.
+    expect(gated).toMatchObject({ ok: true, reader: 'pdf_text', partial: 'ai_gated' })
+    expect(gated.ok && gated.pages.map((p) => p.text)).toEqual(['Shareholders Agreement', 'Schedule 1.2 - Cap Table'])
+  })
+
   it('stops at the page cap and says so, keeping what it read', async () => {
     mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3], pageCount: 3, pdfType: 'Scanned' })
     mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('x'))

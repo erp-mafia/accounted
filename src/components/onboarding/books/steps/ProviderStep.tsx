@@ -20,11 +20,13 @@ import {
   providerSubmitToken, takeReturnedConsentId, useProviderMessage, type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 type Phase = 'connect' | 'connecting' | 'token' | 'loading' | 'preview' | 'importing' | 'imported'
 type OptKey = 'kunder' | 'lev' | 'kf' | 'lf' | 'anl'
 
-/** The provider's own colour on the one button that leaves for it. */
+/** The provider's own colour on the one button that leaves for it: a
+ *  depiction of a third party's brand, so these stay literal (not theme tokens). */
 const BRAND: Record<string, { color: string; dark?: boolean }> = {
   fortnox: { color: '#0b8a46' },
   visma: { color: '#d3202b' },
@@ -33,6 +35,7 @@ const BRAND: Record<string, { color: string; dark?: boolean }> = {
   briox: { color: '#e05a2b' },
   wint: { color: '#1b1b1b' },
 }
+const BRAND_TEXT = { light: '#fff', dark: '#171717' }
 
 /**
  * Hämtar från det gamla systemet: log in at the provider (popup, the
@@ -293,10 +296,10 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
 
       {phase === 'connect' ? (
         <div className="bks-center-col">
-          <button
-            type="button"
-            className={`brandbtn${BRAND[providerId ?? '']?.dark ? ' is-dark-text' : ''}`}
-            style={{ ['--brand' as string]: BRAND[providerId ?? '']?.color }}
+          <Button
+            size="lg"
+            className="brandbtn animate-fade-in gap-2 pl-2"
+            style={BRAND[providerId ?? ''] ? { backgroundColor: BRAND[providerId ?? ''].color, color: BRAND[providerId ?? ''].dark ? BRAND_TEXT.dark : BRAND_TEXT.light } : undefined}
             onClick={() => void connect()}
           >
             {provLogo ? (
@@ -306,7 +309,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
               </span>
             ) : null}
             {t('provider_login', { provider: provName })}
-          </button>
+          </Button>
         </div>
       ) : null}
       {phase === 'connecting' ? <Wait text={t('provider_connecting', { provider: provName })} /> : null}
@@ -316,8 +319,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={t('tok_company', { provider: provName })} />
           <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
           <div className="jny-qactions" style={{ marginTop: 12 }}>
-            <button type="button" className="jny-btn-quiet" onClick={() => setPhase('connect')}>‹ {t('back')}</button>
-            <button type="button" className="jny-btn" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</button>
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
+            <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
       ) : null}
@@ -385,9 +388,9 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             </OptRows>
           ) : null}
           <div className="jny-qactions">
-            <button type="button" className="jny-btn" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
+            <Button size="lg" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
               {years.length === 0 && preview.sieAvailable !== false ? t('years_pick_one') : t('sie_import', { count: years.length })}
-            </button>
+            </Button>
           </div>
         </>
       ) : null}
@@ -424,19 +427,19 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           have written is skipped, not duplicated, on the next run. */}
       {phase === 'imported' && !importError ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
+          <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BOOKS', flags })}>
             {flags.hasBanking ? t('to_bank') : flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-          </button>
+          </Button>
         </div>
       ) : null}
       {phase === 'imported' && importError ? (
         <div className="jny-qactions">
-          <button type="button" className="jny-btn" onClick={() => { setShown(0); setTick(0); void runImport() }}>
+          <Button size="lg" onClick={() => { setShown(0); setTick(0); void runImport() }}>
             {t('provider_retry')}
-          </button>
-          <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
+          </Button>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'GO_BACK', flags })}>
             {t('provider_change_source')}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>

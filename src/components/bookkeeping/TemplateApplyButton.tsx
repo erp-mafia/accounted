@@ -109,13 +109,13 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
             />
           </div>
           <form
-            className="flex items-center gap-2 border-t border-border/70 bg-background px-3 py-2"
+            className="flex items-center gap-2 border-t border-border bg-background px-3 py-2"
             onSubmit={(e) => {
               e.preventDefault()
               submit()
             }}
           >
-            <label htmlFor="template-apply-amount" className="shrink-0 text-[12px] text-muted-foreground">
+            <label htmlFor="template-apply-amount" className="shrink-0 text-[12.5px] text-muted-foreground">
               {t('amount_label')}
             </label>
             <Input
@@ -127,7 +127,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
               onChange={(e) => setAmount(e.target.value)}
               className="h-8 flex-1 tabular-nums"
             />
-            <Button type="submit" size="sm" className="h-8" disabled={!picked || parseAmount(amount) <= 0}>
+            <Button type="submit" size="sm" disabled={!picked || parseAmount(amount) <= 0}>
               {t('apply')}
             </Button>
           </form>

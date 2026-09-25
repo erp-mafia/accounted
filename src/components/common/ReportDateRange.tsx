@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn, formatDate } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 
 export type DateRangeValue = {
   /** Inclusive lower bound. ISO YYYY-MM-DD. `undefined` = period start. */
@@ -279,7 +280,7 @@ export function ReportDateRange({
             role="dialog"
             aria-label={t('date_range_label')}
             data-dialog-companion=""
-            className="pointer-events-auto fixed z-[60] w-[320px] rounded-lg border border-border bg-popover p-1 shadow-lg"
+            className={cn('pointer-events-auto fixed z-[60] w-[320px] p-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}
             style={{ top: pos.top, left: pos.left }}
           >
             <div role="listbox" aria-label={t('date_range_label')}>

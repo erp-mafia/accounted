@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -507,8 +506,7 @@ export default function BulkOrderBookingDialog({
               >
                 {t('cancel')}
               </Button>
-              <Button onClick={() => void handleConfirm()} disabled={!canConfirm}>
-                {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              <Button onClick={() => void handleConfirm()} disabled={!canConfirm} loading={submitting}>
                 {t('bulk_confirm', { count: bookableOrders.length })}
               </Button>
             </>

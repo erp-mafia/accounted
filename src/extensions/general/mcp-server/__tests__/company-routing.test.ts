@@ -66,7 +66,7 @@ describe('MCP company routing', () => {
     expect(projected.additionalProperties).toBe(false)
   })
 
-  it.each(['gnubok_search_tools', 'gnubok_load_skill', 'gnubok_list_companies'])(
+  it.each(['gnubok_search_tools', 'gnubok_list_companies'])(
     'keeps the company-independent schema unchanged for %s',
     (name) => {
       const inputSchema = {
@@ -315,10 +315,10 @@ describe('MCP company routing', () => {
 })
 
 describe('optional-company tools (issue #1814)', () => {
-  it('gnubok_list_skills is company-independent but still advertises company_id', () => {
-    expect(isCompanyDependentTool('gnubok_list_skills')).toBe(false)
+  it.each(['gnubok_list_skills', 'gnubok_load_skill'])('%s is company-independent but still advertises company_id', (name) => {
+    expect(isCompanyDependentTool(name)).toBe(false)
     const projected = projectToolInputSchema({
-      name: 'gnubok_list_skills',
+      name,
       inputSchema: { type: 'object', properties: { tag: { type: 'string' } } },
     })
     expect((projected.properties as Record<string, unknown>).company_id).toBeDefined()

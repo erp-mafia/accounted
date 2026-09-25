@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { HandCoins, Loader2, Plus, Users } from 'lucide-react'
+import { HandCoins, Plus, Users } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -31,14 +31,15 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
 // look): the payout-date note beside the chip carries the urgency, not an
 // ochre border. Booked renders as muted text, corrected as the outline
 // exception.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+// paid and booked are the normal outcome, so they render as muted text
+// (MUTED_STATUSES) and never reach the chip.
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'warning' | 'destructive' | 'outline'> = {
   draft: 'secondary',
   review: 'secondary',
   approved: 'secondary',
-  paid: 'success',
-  booked: 'success',
   corrected: 'outline',
 }
+const MUTED_STATUSES = new Set(['paid', 'booked'])
 
 /**
  * Löner landing (concept scene 22): header + the lönekörningar dry-table,
@@ -129,12 +130,8 @@ export default function SalaryPage() {
           {t('employees')}
         </Link>
         {canWrite && (
-          <Button onClick={startRun} disabled={starting || loading}>
-            {starting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Plus className="mr-2 h-4 w-4" />
-            )}
+          <Button size="sm" onClick={startRun} disabled={loading} loading={starting}>
+            {!starting && <Plus className="mr-2 h-4 w-4" />}
             {startRunLabel}
           </Button>
         )}
@@ -231,13 +228,17 @@ export default function SalaryPage() {
                           <span className="inline-flex items-center gap-2">
                             {run.status === 'booked' ? (
                               <span className="text-muted-foreground">{t('status_booked')}</span>
+                            ) : MUTED_STATUSES.has(run.status) ? (
+                              <span className="text-muted-foreground">
+                                {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
+                              </span>
                             ) : (
                               <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'} className="font-normal">
                                 {STATUS_LABEL_KEYS[run.status] ? t(STATUS_LABEL_KEYS[run.status]) : run.status}
                               </Badge>
                             )}
                             {inFlight && (
-                              <span className="text-[11.5px] text-muted-foreground tabular-nums">
+                              <span className="text-[11px] text-muted-foreground tabular-nums">
                                 {t('run_payout_note', { date: formatDate(run.payment_date) })}
                               </span>
                             )}

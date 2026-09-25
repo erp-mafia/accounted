@@ -1,6 +1,7 @@
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import { routeClassifiedDocument } from './lib/route-from-arkiv'
+import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import type { EventPayload } from '@/lib/events/types'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 const extensionLog = createLogger('invoice-inbox')
@@ -672,6 +673,8 @@ export const invoiceInboxExtension: Extension = {
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
+          extracted_data: Record<string, unknown> | null
+          extraction_skipped: boolean | null
         }
         const rows = (data ?? []) as ItemRow[]
         const unresolved = rows.filter(
@@ -723,7 +726,29 @@ export const invoiceInboxExtension: Extension = {
           }
         })
 
-        return NextResponse.json({ data: { items, count: items.length } })
+        // A receipt dropped into Dokument is routed here the moment the
+        // classifier types it, before its reading has landed: the item was
+        // created with none and stayed "Inte AI-tolkad" although the document
+        // row got the reading seconds later (prod 2026-09-24). The document's
+        // own reading stands in for the item's.
+        const unread = items.filter((i) => i.extracted_data == null && i.document_id).map((i) => i.document_id as string)
+        if (unread.length > 0) {
+          const { data: docs, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data').in('id', unread)
+          if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
+          const readingOf = new Map(
+            ((docs ?? []) as Array<{ id: string; extracted_data: Record<string, unknown> | null }>).filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
+          )
+          for (const item of items) {
+            if (item.extracted_data == null && item.document_id && readingOf.has(item.document_id)) {
+              item.extracted_data = readingOf.get(item.document_id) ?? null
+              item.extraction_skipped = false
+            }
+          }
+        }
+
+        // arkiv_section: whether the Dokument section is open for this company, so the
+        // "routed to the archive" line links there only when the link leads somewhere.
+        return NextResponse.json({ data: { items, count: items.length, arkiv_section: isArkivSectionEnabled(ctx.companyId) } })
       },
     },
 
@@ -792,6 +817,8 @@ export const invoiceInboxExtension: Extension = {
           matched_transaction_id: string | null
           created_journal_entry_id: string | null
           created_supplier_invoice_id: string | null
+          extracted_data: Record<string, unknown> | null
+          extraction_skipped: boolean | null
         }
         let matchedTransactionJournalEntryId: string | null = null
         let underlagStatus: UnderlagStatus | null = null
@@ -813,6 +840,16 @@ export const invoiceInboxExtension: Extension = {
               },
             ])
             underlagStatus = anchoring.get(row.id)?.status ?? 'unknown'
+          }
+        }
+
+        // Same stand-in as the list: the document's reading when the item has none.
+        if (row.extracted_data == null && row.document_id) {
+          const { data: doc } = await ctx.supabase.from('document_attachments').select('id, extracted_data').eq('id', row.document_id).maybeSingle()
+          const reading = (doc as { extracted_data?: Record<string, unknown> | null } | null)?.extracted_data ?? null
+          if (reading) {
+            row.extracted_data = reading
+            row.extraction_skipped = false
           }
         }
 

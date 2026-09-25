@@ -3,6 +3,7 @@ import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { VISMA_BASE_URL, VISMA_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
 
 const FETCH_TIMEOUT_MS = 15_000;
 
@@ -65,7 +66,7 @@ export class VismaClient {
           );
         }
 
-        return response.json() as Promise<T>;
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 3,

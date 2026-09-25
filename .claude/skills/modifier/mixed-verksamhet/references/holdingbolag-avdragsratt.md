@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Holdingbolag: avdragsrätt för ingående moms
 
 ## 1. Grundindelning

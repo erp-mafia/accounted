@@ -4,6 +4,10 @@ import { contentDisposition } from '@/lib/api/content-disposition'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { OPAQUE_DOCUMENT_CSP, inlineSafeMimeType } from '@/lib/core/documents/storage-proxy'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { HEIC_MIME_TYPES, decodeHeicToJpeg } from '@/lib/documents/read/image'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('documents/inline')
 
 /**
  * GET /api/documents/:id/inline
@@ -35,6 +39,8 @@ const EXTENSION_MIME_MAP: Record<string, string> = {
   jpeg: 'image/jpeg',
   png: 'image/png',
   webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
 }
 
 /**
@@ -85,16 +91,32 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
       )
     }
 
-    const contentType = resolveContentType(doc.file_name, doc.mime_type)
+    let contentType = resolveContentType(doc.file_name, doc.mime_type)
+    let body: Blob | ArrayBuffer = blob
+    let fileName = doc.file_name
+    // An iPhone photo is HEIC, which no browser draws: the viewer showed a
+    // broken image. The reader already decodes HEIC to JPEG for the model;
+    // the same decode serves the picture. A file the decoder rejects is
+    // served as it is, as before.
+    if ((HEIC_MIME_TYPES as readonly string[]).includes(contentType)) {
+      try {
+        const jpeg = await decodeHeicToJpeg(Buffer.from(await blob.arrayBuffer()))
+        body = jpeg.buffer.slice(jpeg.byteOffset, jpeg.byteOffset + jpeg.byteLength) as ArrayBuffer
+        contentType = 'image/jpeg'
+        fileName = `${fileName.replace(/\.hei[cf]$/i, '')}.jpg`
+      } catch (err) {
+        log.warn('heic not decoded for inline view', { documentId: doc.id, reason: err instanceof Error ? err.message : String(err) })
+      }
+    }
 
-    return new NextResponse(blob, {
+    return new NextResponse(body, {
       status: 200,
       headers: {
         'Content-Type': contentType,
         // RFC 5987 dual form: NFD filenames from macOS/iOS uploads contain
         // combining marks (> 0xFF), which undici Headers reject as non-
         // ByteString values; splicing the raw name here 500ed the route.
-        'Content-Disposition': contentDisposition('inline', doc.file_name),
+        'Content-Disposition': contentDisposition('inline', fileName),
         'Cache-Control': 'private, no-store',
         // Block MIME sniffing: Content-Type is derived from DB metadata
         // (with extension fallback for legacy rows), never from response

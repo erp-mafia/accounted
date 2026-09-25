@@ -4,8 +4,13 @@ import {
   createDraftEntry,
 } from '@/lib/bookkeeping/engine'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { computeAnnualDepreciation } from './depreciation-engine'
+import { computeAnnualDepreciation, openingDepreciationOf } from './depreciation-engine'
+import {
+  AssetOpeningDepreciationInvalidError,
+  validateOpeningDepreciation,
+} from './opening-depreciation'
 import { assessJamkning, assessJamkningEligibility } from './jamkning'
 import type {
   AccountingFramework,
@@ -151,6 +156,11 @@ export interface CreateAssetInput {
    *  engine sums per-component linear depreciation. The API layer rejects
    *  writes for K2 companies with K3_REQUIRED_FOR_COMPONENTS. */
   k3_components?: K3Component[] | null
+  /** Ackumulerad avskrivning booked in a previous system, per
+   *  opening_depreciation_date. Registered only: never posted (it is already
+   *  in the imported 12x9 balance). The schema validates the pair. */
+  opening_accumulated_depreciation?: number
+  opening_depreciation_date?: string | null
   notes?: string
 }
 
@@ -187,6 +197,8 @@ export async function createAsset(
     // accounting_framework='k3' gate; here we only pass the value through
     // (null when omitted, so K2 assets stay clean).
     k3_components: input.k3_components ?? null,
+    // A zero amount carries no date: the DB CHECK pairs them.
+    ...openingColumns(input.opening_accumulated_depreciation, input.opening_depreciation_date),
     notes: input.notes ?? null,
   }
 
@@ -200,6 +212,19 @@ export async function createAsset(
     throw new Error(`Failed to create asset: ${error?.message ?? 'unknown'}`)
   }
   return data as Asset
+}
+
+/** Normalize the opening pair for persistence: öre-rounded amount, and no
+ *  date without an amount. */
+function openingColumns(
+  amount: number | null | undefined,
+  date: string | null | undefined,
+): { opening_accumulated_depreciation: number; opening_depreciation_date: string | null } {
+  const rounded = roundOre(Number(amount ?? 0) || 0)
+  return {
+    opening_accumulated_depreciation: rounded,
+    opening_depreciation_date: rounded > 0 ? date ?? null : null,
+  }
 }
 
 export async function listAssets(
@@ -293,6 +318,11 @@ export interface UpdateAssetInput {
    *  (engine then falls back to ordinary linear depreciation). The route handler
    *  enforces accounting_framework='k3' + sum validation before delegating. */
   k3_components?: K3Component[] | null
+  /** Opening accumulated depreciation from a previous system. Part of the
+   *  depreciation basis, so it is a correction field: editable only while
+   *  nothing is posted against the asset. 0 clears it (and its date). */
+  opening_accumulated_depreciation?: number
+  opening_depreciation_date?: string | null
 }
 
 /**
@@ -394,10 +424,14 @@ export async function updateAsset(
     input.category !== undefined ||
     input.acquisition_date !== undefined ||
     input.acquisition_cost !== undefined ||
+    input.salvage_value !== undefined ||
     input.depreciation_method !== undefined ||
     input.bas_asset_account !== undefined ||
     input.bas_accumulated_account !== undefined ||
-    input.bas_expense_account !== undefined
+    input.bas_expense_account !== undefined ||
+    input.opening_accumulated_depreciation !== undefined ||
+    input.opening_depreciation_date !== undefined ||
+    input.k3_components !== undefined
   let existing: Asset | null = null
   if (needsExisting) {
     existing = await getAsset(supabase, companyId, assetId)
@@ -410,22 +444,63 @@ export async function updateAsset(
   // has driven postings (disposal voucher or booked avskrivningar) the edit
   // would silently desync those vouchers from the register. Force those cases
   // through reverse/storno instead.
+  const touchesOpening =
+    input.opening_accumulated_depreciation !== undefined ||
+    input.opening_depreciation_date !== undefined
   const isCorrection =
     input.category !== undefined ||
     input.acquisition_date !== undefined ||
     input.acquisition_cost !== undefined
-  if (isCorrection && existing) {
+  if ((isCorrection || touchesOpening) && existing) {
     if (existing.disposed_at) {
       throw new AssetCorrectionBlockedError('disposed')
     }
     // Engine-driven (depreciation_schedules) OR hand-posted (ledger): either
     // means the basis has driven postings and a correction must go via storno.
-    if (
-      (await hasPostedDepreciation(supabase, companyId, assetId)) ||
-      (await hasManualDepreciationPosted(supabase, companyId, existing))
-    ) {
+    // The opening amount is the exception to the ledger scan: it describes
+    // depreciation that IS on the ledger's 12x9 account from the previous
+    // system (imported vouchers or opening balance), so a posted credit there
+    // is expected, not a reason to refuse. Only Accounted's own postings,
+    // which the engine planned from the old opening amount, lock it.
+    if (await hasPostedDepreciation(supabase, companyId, assetId)) {
       throw new AssetCorrectionBlockedError('depreciation_posted')
     }
+    if (isCorrection && (await hasManualDepreciationPosted(supabase, companyId, existing))) {
+      throw new AssetCorrectionBlockedError('depreciation_posted')
+    }
+  }
+
+  // ── Opening accumulated depreciation ──────────────────────────────
+  // Judged on the row as it will END UP: a patch that lowers the cost (or
+  // raises the restvärde) below the stored opening amount, or adds components
+  // to an asset carrying one, is refused just like a bad opening amount
+  // itself. When the patch touches the opening fields, finalOpening is judged
+  // as is: a cleared date must fail here, not fall back to the stored date.
+  if (existing) {
+    const finalOpening = touchesOpening
+      ? openingColumns(
+          input.opening_accumulated_depreciation ??
+            Number(existing.opening_accumulated_depreciation ?? 0),
+          input.opening_depreciation_date !== undefined
+            ? input.opening_depreciation_date
+            : existing.opening_depreciation_date ?? null,
+        )
+      : null
+    const issues = validateOpeningDepreciation({
+      acquisition_cost: input.acquisition_cost ?? Number(existing.acquisition_cost),
+      acquisition_date: input.acquisition_date ?? existing.acquisition_date,
+      salvage_value: input.salvage_value ?? Number(existing.salvage_value ?? 0),
+      opening_accumulated_depreciation: finalOpening
+        ? finalOpening.opening_accumulated_depreciation
+        : Number(existing.opening_accumulated_depreciation ?? 0),
+      opening_depreciation_date: finalOpening
+        ? finalOpening.opening_depreciation_date
+        : existing.opening_depreciation_date ?? null,
+      k3_components:
+        input.k3_components !== undefined ? input.k3_components : existing.k3_components,
+    })
+    if (issues.length > 0) throw new AssetOpeningDepreciationInvalidError(issues)
+    if (finalOpening) input = { ...input, ...finalOpening }
   }
 
   // ── Category change → realign BAS accounts ────────────────────────
@@ -504,6 +579,9 @@ export async function updateAsset(
     .select('*')
     .single()
   if (error || !data) {
+    if (error?.code === 'PT409' && error.message === 'ASSET_CORRECTION_BLOCKED') {
+      throw new AssetCorrectionBlockedError('depreciation_posted')
+    }
     throw new Error(`Failed to update asset: ${error?.message ?? 'unknown'}`)
   }
   return data as Asset
@@ -676,8 +754,14 @@ export function buildAssetDisposalPlan(args: {
     currentDepreciation = 0
   }
 
+  // The opening accumulated depreciation from a previous system sits in the
+  // same 12x9 balance (it arrived with the imported ledger), so the disposal
+  // clears it together with what Accounted booked.
+  const openingAmount = openingDepreciationOf(asset)?.amount ?? 0
   const accumulatedDepreciation = round2(
-    priorAccumulated + (currentPosted ? Number(currentPosted.planned_depreciation) : requiredCurrent),
+    openingAmount +
+      priorAccumulated +
+      (currentPosted ? Number(currentPosted.planned_depreciation) : requiredCurrent),
   )
   const acquisitionCost = round2(Number(asset.acquisition_cost))
   const proceedsGross = input.disposal_type === 'scrap' ? 0 : round2(input.disposed_proceeds)

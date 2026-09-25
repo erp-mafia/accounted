@@ -245,7 +245,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                 onClick={() => onSelectRotRutPayout([request])}
                 className={cn(
                   'min-w-0 flex-1 rounded-r-lg py-2.5 pl-2 pr-3 text-left transition-colors',
-                  'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
+                  'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 )}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -265,7 +265,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                     <p className={cn('text-sm font-medium tabular-nums', exact && 'text-success')}>
                       {formatCurrency(expected, DOMESTIC_CURRENCY)}
                     </p>
-                    {exact && <p className="text-[10px] text-success">{t('exact_match')}</p>}
+                    {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
                   </div>
                 </div>
               </button>
@@ -338,7 +338,7 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
               onClick={() => onSelect(invoice)}
               className={cn(
                 'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring',
+                'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 exact && 'border-success/50 bg-success/5',
                 close && 'border-primary/30'
               )}
@@ -351,17 +351,17 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                       {invoice.invoice_number ?? t('no_number')}
                     </span>
                     {invoice.status === 'overdue' && (
-                      <span className="text-[10px] uppercase tracking-wide text-destructive">
+                      <span className="text-[11px] uppercase tracking-wide text-destructive">
                         {t('status_overdue')}
                       </span>
                     )}
                     {invoice.status === 'partially_paid' && (
-                      <span className="text-[10px] uppercase tracking-wide text-attn">
+                      <span className="text-[11px] uppercase tracking-wide text-attn">
                         {t('status_partially_paid')}
                       </span>
                     )}
                     {foreignCurrency && (
-                      <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                      <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
                         {invoiceCurrency}
                       </span>
                     )}
@@ -379,9 +379,9 @@ export default function InvoicePicker({ transaction, onSelect, onSelectRotRutPay
                   >
                     {formatCurrency(remaining, invoiceCurrency)}
                   </p>
-                  {exact && <p className="text-[10px] text-success">{t('exact_match')}</p>}
+                  {exact && <p className="text-[11px] text-success">{t('exact_match')}</p>}
                   {candidateSek != null && (
-                    <p className="text-[10px] text-muted-foreground tabular-nums">
+                    <p className="text-[11px] text-muted-foreground tabular-nums">
                       ≈ {formatCurrency(candidateSek, DOMESTIC_CURRENCY)}
                     </p>
                   )}

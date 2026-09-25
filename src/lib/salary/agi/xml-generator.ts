@@ -15,7 +15,7 @@ import { escapeXml } from '@/lib/xml/escape'
  * Sources verified against Skatteverket's schema + technical description
  * (SKV 269, teknisk beskrivning 1.1.16):
  *   - Root: <Skatteverket omrade="Arbetsgivardeklaration">
- *   - HU totals: SummaSkatteavdr (497), SummaArbAvgSlf (487), TotalSjuklonekostnad (499)
+ *   - HU totals: SummaSkatteavdr (497), SummaArbAvgSlf (487)
  *   - IU identity: BetalningsmottagarId (215), Specifikationsnummer (570)
  *   - IU amounts: KontantErsattningUlagAG (011), AvdrPrelSkatt (001)
  *   - Every HU and IU must include AgRegistreradId (201) + RedovisningsPeriod (006)
@@ -42,10 +42,11 @@ import { escapeXml } from '@/lib/xml/escape'
  *     matches each event back to its prior submission.
  *   - Periods before 202501 emit no Frånvarouppgift (Skatteverket rejects).
  *
- * Per-employee sick days are NOT reported via AGI under any version: they
- * go to Försäkringskassan separately. The company-level FK499
- * TotalSjuklonekostnad in HU is correctly emitted from sick_day2_14 line
- * items × dailyRate × 0.80 (see agi/xml/route.ts).
+ * Sick pay never reaches the AGI. Per-employee sick days go to
+ * Försäkringskassan, and the company-level FK499 TotalSjuklonekostnad in HU
+ * (the input for högkostnadsskyddet för sjuklönekostnader) is only valid up
+ * to period 202406: the scheme was abolished 2024-07-01 and Skatteverket
+ * rejects the whole file when the field appears in a later period.
  */
 
 const INSTANS_NS = 'http://xmls.skatteverket.se/se/skatteverket/da/instans/schema/1.1'
@@ -174,12 +175,6 @@ export interface AGITotals {
   totalTax: number                // FK497 SummaSkatteavdr
   totalAvgifterBasis: number      // retained for compat (sum of IU underlag)
   totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (sum of calculated avgifter across categories)
-  /**
-   * FK499 TotalSjuklonekostnad: company's total sjuklön cost for the period
-   * (sum of sjuklön paid days 2-14 across all employees). Required per 2025+ rules.
-   * Day 1 is karens (unpaid); day 15+ is Försäkringskassan, not employer.
-   */
-  totalSjuklonekostnad?: number
   avgifterByCategory: {
     standard?: { basis: number; amount: number }
     reduced65plus?: { basis: number; amount: number }
@@ -430,11 +425,6 @@ export function generateAGIXml(
     lines.push(`        <gem:SummaArbAvgSlf faltkod="487">${formatAmount(totals.totalAvgifterAmount)}</gem:SummaArbAvgSlf>`)
   }
 
-  // FK499: Total sjuklönekostnad (legal requirement from 2025 when > 0)
-  if (totals.totalSjuklonekostnad && totals.totalSjuklonekostnad > 0) {
-    lines.push(`        <gem:TotalSjuklonekostnad faltkod="499">${formatAmount(totals.totalSjuklonekostnad)}</gem:TotalSjuklonekostnad>`)
-  }
-
   lines.push('      </gem:HU>')
   lines.push('    </gem:Blankettinnehall>')
   lines.push('  </gem:Blankett>')
@@ -574,8 +564,8 @@ export function generateAGIXml(
     }
 
     // Sjuk/VAB/föräldra-dagar flows elsewhere:
-    //   - Per-employee sick days are reported to Försäkringskassan, not AGI.
-    //     The company-level total goes in HU as TotalSjuklonekostnad (FK499).
+    //   - Sick days are reported to Försäkringskassan, not AGI. FK499
+    //     TotalSjuklonekostnad is retired since period 202407 (header comment).
     //   - VAB and parental leave are reported via the top-level
     //     <Franvarouppgift> section (FK820-827) as per-event date records,
     //     not as per-IU day counts. Not implemented in this generator yet.

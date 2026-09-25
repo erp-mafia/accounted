@@ -32,7 +32,8 @@ import { creditNoteNeedsJournalEntry } from '@/lib/invoices/issue-credit-note'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
-import { Loader2, Mail, Plus, Send, Trash2 } from 'lucide-react'
+import { Mail, Plus, Send, Trash2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Customer, EntityType } from '@/types'
 import type { InvoiceWithRelations } from '@/components/invoices/types'
@@ -543,8 +544,11 @@ export default function SendInvoiceDialog({
         </DialogHeader>
 
         {!isInitialized ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+          <div className="space-y-3 py-2">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-1/2" />
           </div>
         ) : (
           <div className="space-y-4">
@@ -646,8 +650,8 @@ export default function SendInvoiceDialog({
                         <Button
                           type="button"
                           variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 min-h-[44px] min-w-[44px] shrink-0 -mr-1 -mt-1"
+                          size="icon-sm"
+                          className="shrink-0 -mr-1 -mt-1"
                           onClick={() => removeLine(index)}
                           disabled={editLines.length <= 2}
                           aria-label={t('remove_row')}
@@ -744,8 +748,8 @@ export default function SendInvoiceDialog({
                       <Button
                         type="button"
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        size="icon-sm"
+                        className="text-muted-foreground hover:text-destructive"
                         onClick={() => removeLine(index)}
                         disabled={editLines.length <= 2}
                         aria-label={t('remove_row')}
@@ -770,7 +774,7 @@ export default function SendInvoiceDialog({
                 {/* Balance indicator */}
                 <div className="flex items-center justify-between border-t pt-3">
                   {isBalanced ? (
-                    <Badge variant="success">{t('balanced_badge')}</Badge>
+                    <span className="text-xs text-muted-foreground">{t('balanced_badge')}</span>
                   ) : (
                     <Badge variant="destructive">
                       {t('unbalanced_badge', { delta: formatCurrency(Math.abs(totalDebit - totalCredit)) })}
@@ -854,20 +858,18 @@ export default function SendInvoiceDialog({
             variant="outline"
             onClick={handleClose}
             disabled={isSubmitting}
-            className="w-full sm:w-auto min-h-11"
           >
             {t(isCreditNote ? 'later' : 'cancel')}
           </Button>
           <Button
             onClick={handleConfirm}
+            loading={isSubmitting}
             disabled={
-              isSubmitting ||
               !isInitialized ||
               (editable && (!isBalanced || hasOrphanAmounts)) ||
               (mode === 'email' && (isSandbox || !canEmail || !!recipientError)) ||
               (needsSwedishVatAcknowledgement && !swedishVatAcknowledged)
             }
-            className="w-full sm:w-auto min-h-11"
             title={
               mode === 'email' && isSandbox
                 ? 'E-postutskick är avstängt i sandlådan'
@@ -876,13 +878,11 @@ export default function SendInvoiceDialog({
                   : undefined
             }
           >
-            {isSubmitting ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : mode === 'email' ? (
+            {!isSubmitting && (mode === 'email' ? (
               <Mail className="mr-2 h-4 w-4" />
             ) : (
               <Send className="mr-2 h-4 w-4" />
-            )}
+            ))}
             {t(
               isCreditRepair
                 ? 'complete_credit_bookkeeping'

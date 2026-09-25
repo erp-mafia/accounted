@@ -34,11 +34,11 @@ const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDo
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'co-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'co-1'
 })
 
 afterEach(() => {
-  delete process.env.ARKIV_COMPANY_IDS
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
 })
 
 describe('enqueueDocumentJob', () => {
@@ -58,7 +58,7 @@ describe('enqueueDocumentJob', () => {
 
 describe('enqueueMissingExtractions', () => {
   it('does nothing when nobody is in the rollout', async () => {
-    delete process.env.ARKIV_COMPANY_IDS
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
     await expect(enqueueMissingExtractions(supabase, 20)).resolves.toBe(0)
     expect(rpc).not.toHaveBeenCalled()
   })
@@ -67,7 +67,7 @@ describe('enqueueMissingExtractions', () => {
     enqueue({ data: 3 })
     await expect(enqueueMissingExtractions(supabase, 20)).resolves.toBe(3)
     expect(rpc).toHaveBeenLastCalledWith('enqueue_missing_document_extractions', { p_company_ids: ['co-1'], p_limit: 20 })
-    process.env.ARKIV_COMPANY_IDS = '*'
+    process.env.ARKIV_BRAIN_COMPANY_IDS = '*'
     enqueue({ data: 0 })
     await enqueueMissingExtractions(supabase, 20)
     expect(rpc).toHaveBeenLastCalledWith('enqueue_missing_document_extractions', { p_company_ids: null, p_limit: 20 })
@@ -109,17 +109,17 @@ describe('runDocumentJobs', () => {
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: lane_done' })
   })
 
-  it('reads text for every company but classifies only in the rollout', async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    enqueue({ data: [job(), job({ id: 'job-2', kind: 'classify' })] })
+  it('reads and classifies for every company, but extracts only in the brain rollout', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    enqueue({ data: [job(), job({ id: 'job-2', kind: 'extract' })] })
     enqueue({ data: DOCUMENT })
     mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'read', pages: 1, reader: 'pdf_text' } })
+    enqueue({ data: true })
     enqueue({})
     enqueue({})
 
     await expect(run()).resolves.toMatchObject({ done: 2 })
-    expect(rpc).not.toHaveBeenCalledWith('enqueue_document_job', expect.anything())
-    expect(classifyDocument).not.toHaveBeenCalled()
+    expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'classify' })
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: not_in_rollout' })
   })
 
@@ -139,6 +139,15 @@ describe('runDocumentJobs', () => {
     expect(recordArkivUsage).toHaveBeenCalledTimes(1)
     expect(recordArkivUsage).toHaveBeenCalledWith(supabase, 'co-1', 'documents', 1)
     expect(lastJobUpdate()).toEqual({ status: 'failed', last_error: 'model timeout', run_after: new Date(t0 + 8 * 60_000).toISOString(), locked_at: null, locked_by: null })
+  })
+
+  it('settles a job the period-lock trigger refuses as skipped instead of retrying it five times', async () => {
+    enqueue({ data: [job({ kind: 'classify' })] })
+    mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'document update failed: Cannot attach documents to entries in a locked/closed fiscal period' })
+    enqueue({})
+    await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
+    expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'skipped: period_locked' })
+    expect(recordArkivUsage).not.toHaveBeenCalled()
   })
 
   it('reads the rest of a capped loose-history document before extracting it when it is an acting type', async () => {

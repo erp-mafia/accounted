@@ -180,7 +180,7 @@ export function DocumentDecision({
               <div className="mb-1.5 h-[5px] w-[90%] rounded-sm bg-border" />
               <div className="mb-3 h-[5px] w-[84%] rounded-sm bg-border" />
               {highlight ? (
-                <div className="rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-1.5 py-1 text-[9.5px] leading-snug">
+                <div className="rounded-sm border-[1.5px] border-attn/70 bg-attn/10 px-1.5 py-1 text-[11px] leading-snug">
                   {highlight.length > 160 ? `${highlight.slice(0, 159)}…` : highlight}
                 </div>
               ) : (

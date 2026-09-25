@@ -261,7 +261,7 @@ export default function CompanyTabSync() {
       {/* Veil: deliberately no click-to-close and no Esc: the dialog is
           blocking, its two buttons are the only exits (WL-09). */}
       <div className="absolute inset-0 bg-background/80 backdrop-blur-sm" aria-hidden="true" />
-      <div className="relative w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-lg">
+      <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-[var(--shadow-lg)]">
         <h2 id="company-tab-guard-title" className="font-display text-lg leading-6">
           {t('title')}
         </h2>
@@ -270,9 +270,12 @@ export default function CompanyTabSync() {
             ? t('body_named', { company: company?.name ?? '', newCompany: newCompanyName })
             : t('body', { company: company?.name ?? '' })}
         </p>
-        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        {/* Both labels carry a company name of any length: let the row wrap and
+            each label break, or two long names push the buttons out of the card. */}
+        <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
           <Button
             variant="outline"
+            className="max-w-full whitespace-normal"
             disabled={resolving}
             onClick={handleReloadAsNew}
           >
@@ -280,7 +283,11 @@ export default function CompanyTabSync() {
               ? t('reload_as_named', { newCompany: newCompanyName })
               : t('reload_as_new')}
           </Button>
-          <Button disabled={resolving} onClick={() => void handleSwitchBack()}>
+          <Button
+            className="max-w-full whitespace-normal"
+            disabled={resolving}
+            onClick={() => void handleSwitchBack()}
+          >
             {t('switch_back', { company: company?.name ?? '' })}
           </Button>
         </div>

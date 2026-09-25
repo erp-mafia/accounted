@@ -1262,6 +1262,9 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   agent_conversations: 'AI assistant state, not räkenskapsinformation',
   agent_memory: 'AI assistant state, not räkenskapsinformation',
   agent_profiles: 'AI assistant state, not räkenskapsinformation',
+  company_skills: 'Company/team AI instructions; proposal provenance is retained in pending_operations and audit_log',
+  company_agent_knowledge: 'which knowledge packs each AI agent carries for the company; configuration, not räkenskapsinformation',
+  community_feedback: 'upvotes on shared community agent instructions; not räkenskapsinformation',
   api_keys: 'secrets',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',
@@ -1292,6 +1295,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   arkiv_autonomy: 'audit tallies per document type, recomputed nightly from activities',
   arkiv_graph_snapshots: 'the last build of the company graph, recomputed from the ledger, the agreements, the documents and the facts; no content of its own',
   arkiv_usage_daily: 'daily counts of what the pipeline read and answered for the company; operational, not räkenskapsinformation',
+  ai_usage_events: 'token counts per model call, kept internally to see what AI costs; operational, not räkenskapsinformation',
   // Verification metadata ABOUT räkenskapsinformation, not räkenskapsinformation
   // itself: one row per nightly SHA-256 recompute of an archived document
   // (migration 20260901130000). The documents ship under dokument/ with their
@@ -1659,7 +1663,7 @@ async function buildSystemDoc(
     kontoplan: {
       standard: 'BAS 2026',
       accounts,
-      sie_import_regler: 'SIE-importer kan bevara oanvända kontodefinitioner i klass 0 och 9. Konton med belopp måste mappas till konton 1000-8999, eftersom klass 0 och 9 inte stöds som ekonomiska rapportkonton. Källfil och kontomappningar bevaras i importarkivet.',
+      sie_import_regler: 'SIE-importer bevarar oanvända kontodefinitioner i klass 9. Oanvända konton under 1000 är källsystemets interna konton och tas inte med. Konton med belopp måste mappas till konton 1000-8999, eftersom klass 0 och 9 inte stöds som ekonomiska rapportkonton; för klass 9 med belopp föreslås 2999 OBS-konto. Källfil och kontomappningar bevaras i importarkivet.',
     },
     leverantorsfakturor_avrundning_regler: {
       val: 'Avstängd som standard för nya leverantörsfakturor oavsett företagsinställning. Användaren väljer avrundning när den finns på leverantörens faktura. Redan inlästa avrundningsrader behålls även när valet är avstängt.',
@@ -1730,7 +1734,7 @@ async function buildSystemDoc(
         'Skapas automatiskt (BFL 5 kap. 11 §, BFNAR 2013:2 punkt 9.16): registreringstidpunkt och utförare för varje bokföringspost (journal_entries), förändringar via databasens oföränderliga ändringslogg audit_log (kontoplan, inställningar som styr bokföringen, räkenskapsår, API-nycklar, makuleringar, raderingar), rättelser i samma verifikat (journal_entry_rattelse_log) samt SIE-, bankfils- och migreringsloggar.',
       rapport:
         'Rapporter > Export & arkiv > Behandlingshistorik: per räkenskapsår eller datumintervall, som PDF, CSV eller Excel',
-      arkivfil: 'revision/behandlingshistorik.json i denna säkerhetsbackup (råa loggrader)',
+      arkivfil: 'revision/behandlingshistorik.json i detta arkiv (råa loggrader)',
       tidszon: 'Europe/Stockholm i rapporten, UTC i JSON-filen',
     },
     generated_at: new Date().toISOString(),

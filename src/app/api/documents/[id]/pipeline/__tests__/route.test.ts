@@ -21,16 +21,13 @@ const document = (over: Record<string, unknown> = {}) => ({ id: DOC, file_name: 
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  delete process.env.ARKIV_BRAIN_COMPANY_IDS
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })
 
 describe('GET /api/documents/[id]/pipeline', () => {
-  it("is 404 outside the rollout and for another company's document", async () => {
-    process.env.ARKIV_COMPANY_IDS = 'someone-else'
-    expect((await parseJsonResponse(await call())).status).toBe(404)
-    process.env.ARKIV_COMPANY_IDS = 'company-1'
+  it("is 404 for another company's document", async () => {
     enqueue({ data: null })
     expect((await parseJsonResponse(await call())).status).toBe(404)
   })
@@ -66,7 +63,40 @@ describe('GET /api/documents/[id]/pipeline', () => {
     expect(body).toMatchObject({ data: { stage: 'landing', title: 'Kvitto Balzac', landed: { kind: 'underlag', href: '/e/general/invoice-inbox', matched: true } } })
   })
 
-  it('says an agreement landed on its own page, and a document nobody could read failed', async () => {
+  it('outside the brain, an untyped document and an agreement land on the document page, where the type is set', async () => {
+    enqueue({ data: { id: DOC } })
+    enqueue({ data: document({ doc_type: 'other' }) })
+    enqueue({
+      data: [
+        { kind: 'read', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+        { kind: 'classify', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+      ],
+    })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    expect((await parseJsonResponse(await call())).body).toMatchObject({
+      data: { stage: 'landed', landed: { kind: 'review', href: `/arkiv/dokument/${DOC}` } },
+    })
+
+    enqueue({ data: { id: DOC } })
+    enqueue({ data: document({ doc_type: 'agreement.loan' }) })
+    enqueue({
+      data: [
+        { kind: 'read', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+        { kind: 'classify', status: 'done', attempts: 1, max_attempts: 5, last_error: null },
+      ],
+    })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null })
+    expect((await parseJsonResponse(await call())).body).toMatchObject({
+      data: { stage: 'landed', landed: { kind: 'document', href: `/arkiv/dokument/${DOC}` } },
+    })
+  })
+
+  it('in the brain, says an agreement landed on its own page, and a document nobody could read failed', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
     enqueue({ data: { id: DOC } })
     enqueue({ data: document({ doc_type: 'agreement.loan' }) })
     enqueue({

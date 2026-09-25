@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # Pågående arbeten (K3, K2, IL): flödesexempel
 
 ## K3 (BFNAR 2012:1) kapitel 23

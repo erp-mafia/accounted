@@ -5,8 +5,9 @@ import { formatDateLong } from '@/lib/utils'
 import { useState, useEffect } from 'react'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { Calendar, Copy, RefreshCw, Loader2, Check } from 'lucide-react'
+import { Calendar, Copy, RefreshCw, Check } from 'lucide-react'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
   SettingsGroup,
@@ -167,8 +168,10 @@ export function CalendarFeedSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex h-32 items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      <div aria-busy className="space-y-3 py-3">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-4 w-full" />
+        <Skeleton className="h-4 w-3/4" />
       </div>
     )
   }
@@ -178,12 +181,9 @@ export function CalendarFeedSettings() {
       <SettingsGroup label={t('title')} help={t('description')}>
         <SettingsRow label={t('activate_sync')} help={t('empty_intro')}>
           <SettingsRowEnd>
-            <Button variant="outline" size="sm" onClick={createFeed} disabled={isSaving}>
+            <Button variant="outline" size="sm" onClick={createFeed} loading={isSaving}>
               {isSaving ? (
-                <>
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  {t('creating')}
-                </>
+                t('creating')
               ) : (
                 <>
                   <Calendar className="mr-2 h-3.5 w-3.5" />
@@ -249,13 +249,10 @@ export function CalendarFeedSettings() {
               variant="outline"
               size="sm"
               onClick={regenerateToken}
-              disabled={isRegenerating}
+              loading={isRegenerating}
             >
               {isRegenerating ? (
-                <>
-                  <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                  {t('creating_new_link')}
-                </>
+                t('creating_new_link')
               ) : (
                 <>
                   <RefreshCw className="mr-2 h-3.5 w-3.5" />

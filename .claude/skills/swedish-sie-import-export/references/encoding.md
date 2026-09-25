@@ -1,8 +1,12 @@
+---
+audience: developer
+---
+
 # SIE4 Character Encoding Reference
 
 ## The spec vs. reality
 
-The SIE4 spec mandates IBM PC Codepage 437 (declared as `#FORMAT PC8`). Modern cloud accounting software exports UTF-8. Many programs write `#FORMAT PC8` regardless of actual encoding. This mismatch is the single largest source of SIE interoperability failures.
+The SIE4 spec (still in utgåva 4C, 2025-08-06) allows only IBM PC Codepage 437 (declared as `#FORMAT PC8`). Modern cloud accounting software exports UTF-8. Many programs write `#FORMAT PC8` regardless of actual encoding. This mismatch is the single largest source of SIE interoperability failures.
 
 ## Byte values for Swedish characters
 
@@ -25,9 +29,10 @@ The SIE4 spec mandates IBM PC Codepage 437 (declared as `#FORMAT PC8`). Modern c
 - **Fix**: Re-read the file as UTF-8
 
 ### CP437 bytes misread as Latin-1/CP1252
-- å → `†`, ä → `„`, ö → `"`
-- Å → control char (0x8F), Ä → control char (0x8E), Ö → `™`
-- **Telltale**: Typographic characters like `†„"™` in account names
+- å → `†`, ä → `„`, ö → `”`
+- Å → undefined in CP1252 (0x8F; shown as a control char or `�`), Ä → `Ž` (0x8E), Ö → `™`
+- In strict ISO 8859-1, every byte 0x80-0x9F is a control character, so all six letters show as control chars or disappear
+- **Telltale**: Typographic characters like `†„”™Ž` in account names
 - **Fix**: Re-read the file as CP437
 
 ### Latin-1 bytes misread as CP437
@@ -76,7 +81,7 @@ The CRC-32 checksum (#KSUMMA) is defined to operate on CP437 byte values. When a
 1. Swedish characters have different byte representations (2 bytes in UTF-8 vs 1 byte in CP437)
 2. The checksum computed on UTF-8 bytes will NOT match the expected CP437-based value
 3. **Recommendation**: When non-CP437 encoding is detected, skip #KSUMMA validation entirely
-4. When generating SIE files, either: (a) write CP437 with correct KSUMMA, or (b) write UTF-8 and omit KSUMMA
+4. When generating SIE files, write CP437 (the only encoding the spec allows) and, if used, a KSUMMA computed on the CP437 bytes. A UTF-8 file is not a valid SIE file even without KSUMMA; produce one only when the receiving program explicitly requires it
 
 ## Normalization strategy for import
 
@@ -88,4 +93,4 @@ Best practice for robust SIE import:
 4. Validate #KSUMMA only if encoding is CP437
 5. Parse all records from the Unicode text
 6. Store internally as UTF-8
-7. When exporting: write CP437 if standards compliance is critical (auditors, Skatteverket), otherwise UTF-8 with a note that KSUMMA is omitted
+7. When exporting: write CP437 and transliterate characters CP437 lacks (e.g. `€`). Write UTF-8 only if the receiving program explicitly requires it, and omit KSUMMA in that case

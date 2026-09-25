@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { BankIdAuth } from '@/components/auth/BankIdAuth'
 import type { BankIdResult } from '@/components/auth/BankIdAuth'
 import { Button } from '@/components/ui/button'
-import { Loader2 } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { formatDateLong } from '@/lib/utils'
 import {
@@ -84,7 +84,7 @@ export function BankIdSettings() {
   if (isLoading) {
     return (
       <SettingsRow label={t('title')}>
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <Skeleton aria-busy className="h-4 w-32" />
       </SettingsRow>
     )
   }

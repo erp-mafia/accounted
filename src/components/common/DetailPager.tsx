@@ -41,7 +41,7 @@ export function DetailPager({
     <div className={cn('flex items-center', className)}>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         className="text-muted-foreground hover:text-foreground"
         onClick={pager.goPrev}
         disabled={!pager.prevId}
@@ -54,7 +54,7 @@ export function DetailPager({
       </span>
       <Button
         variant="ghost"
-        size="icon"
+        size="icon-sm"
         className="text-muted-foreground hover:text-foreground"
         onClick={pager.goNext}
         disabled={!pager.nextId}

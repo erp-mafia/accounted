@@ -8,6 +8,8 @@ import {
   countPendingOperations,
   countReconciliationDue,
   countSuggestedMatches,
+  countUnclassifiedDocuments,
+  REVIEW_RECENT_DAYS,
   countSupplierInvoicesAwaitingApproval,
   countUnbookedSkattekontoRows,
   countUnbookedTransactions,
@@ -814,3 +816,17 @@ describe('listSkattekontoPaymentDue', () => {
     await expect(countSkattekontoPaymentDue(supabase, COMPANY, TODAY)).resolves.toBe(0)
   })
 })
+
+describe('countUnclassifiedDocuments', () => {
+  beforeEach(() => reset())
+
+  it('asks only about documents uploaded in the last REVIEW_RECENT_DAYS days: typed history is not a to-do', async () => {
+    enqueue({ count: 2 })
+    expect(await countUnclassifiedDocuments(supabase, COMPANY)).toBe(2)
+    const since = findCall('document_classifications', 'gte') as [string, string] | undefined
+    expect(since?.[0]).toBe('document_attachments.created_at')
+    const days = (Date.now() - new Date(since![1]).getTime()) / 86_400_000
+    expect(Math.round(days)).toBe(REVIEW_RECENT_DAYS)
+  })
+})
+

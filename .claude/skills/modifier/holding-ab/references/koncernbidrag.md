@@ -1,3 +1,7 @@
+---
+areas: [bokslut]
+---
+
 # Koncernbidrag: utvidgad referens
 
 Ladda när uppgiften specifikt rör koncernbidragens skatte- eller civilrättsliga mekanik, slussning, EES-filialer, eller bokföringsmässig klassificering.

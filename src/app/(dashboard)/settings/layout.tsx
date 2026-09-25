@@ -18,6 +18,8 @@ const TAB_TO_ROUTE: Record<string, string> = {
   templates: '/settings/templates',
   'agent-memory': '/settings/assistant',
   assistant: '/settings/assistant',
+  members: '/settings/members',
+  security: '/settings/security',
   account: '/settings/account',
   api: '/settings/api',
 }
@@ -38,7 +40,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
   return (
     <div className="space-y-8">
       <PageHeader title={t('aria_label')} action={<ActiveCompanyBadge />} />
-      <SettingsShell variant="page">{children}</SettingsShell>
+      <SettingsShell>{children}</SettingsShell>
     </div>
   )
 }

@@ -839,7 +839,7 @@ describe('stripOwnCompanyAsSupplier', () => {
     }
     await expect(
       fetchOwnCompanyIdentity(supabase as never, 'company-1')
-    ).resolves.toEqual({ orgNumber: null, name: null })
+    ).resolves.toEqual({ orgNumber: null, name: null, companyId: 'company-1' })
   })
 
   it('is a no-op without ownCompany', () => {

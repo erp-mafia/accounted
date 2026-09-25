@@ -31,7 +31,7 @@ Set per model in Skatteverket's billistor, not the actual purchase price. For ca
 
 ### 3,000-mil rule
 
-Reduces the fixed portion by 25% if the employee drives ≥30,000 km/year for work.
+If the employee drives the förmånsbil ≥3,000 mil (30,000 km) in tjänsten during a calendar year, the whole förmånsvärde is reduced to 75% (IL 61:9).
 
 ### Miljöbil reductions (cars taxable ≥ July 2022)
 
@@ -58,6 +58,24 @@ If the employee pays ≥ schablonvärde via nettolöneavdrag, no taxable benefit
 Tax-free up to 5,000 SEK per employee per year (including moms). If exceeded, the entire amount becomes taxable (not just the excess). Must be offered to all employees on equal terms. Non-motion activities (massage, acupuncture) qualify only if ≤1,000 SEK per occasion. Unchanged for 2024-2026.
 
 Book to account 7699.
+
+## Cykelförmån
+
+A bike provided by the employer for private use is taxable only on the value above 3,000 SEK per year, provided the offer covers all permanent staff at the workplace (IL 11:12 a, since 2022).
+
+## Laddning på arbetsplatsen
+
+Electricity for charging a car, light truck, motorcycle, moped or bike at a charging point provided by the employer at the workplace is tax-free, but not if the workplace is in the employee's home (IL 11:12 b). The exemption was temporary from 2023-07-01 and is permanent from 2026-07-01 (SFS 2026:465, prop. 2025/26:80). For the plug-in hybrid fuel rule when charging at work, see `travel-expenses.md`.
+
+## Gåvor till anställda
+
+Julgåva, jubileumsgåva and minnesgåva are tax-free up to these amounts including moms. Above the limit the whole gift is taxable. Cash and cash equivalents (e.g. presentkort that can be exchanged for money) are never tax-free.
+
+| Gift | 2025 | 2026 |
+|---|---|---|
+| Julgåva | 550 SEK | 600 SEK |
+| Jubileumsgåva | 1,650 SEK | 1,800 SEK |
+| Minnesgåva | 15,000 SEK | 15,000 SEK |
 
 ## Kvalificerade personaloptioner (KPO)
 

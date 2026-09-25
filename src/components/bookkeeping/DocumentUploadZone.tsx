@@ -403,9 +403,9 @@ export default function DocumentUploadZone({
                 <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
               )}
               {file.status === 'uploaded' && (
-                <Badge variant="success" className="text-xs px-1.5 py-0">
+                <span className="text-xs text-muted-foreground shrink-0">
                   {t('uploaded')}
-                </Badge>
+                </span>
               )}
               {file.status === 'error' && (
                 <>
@@ -420,9 +420,9 @@ export default function DocumentUploadZone({
 
               <Button
                 variant="ghost"
-                size="sm"
+                size="icon-sm"
                 aria-label={t('remove_file')}
-                className="h-6 w-6 p-0 shrink-0"
+                className="shrink-0"
                 onClick={(e) => {
                   e.stopPropagation()
                   removeFile(index)

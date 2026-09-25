@@ -5,15 +5,13 @@ vi.mock('../lib/sync', () => ({
   syncAccountTransactions: vi.fn(),
 }))
 
-// Mock the cash-accounts service (dynamically imported by the route) so the
-// mirror + allocation passes are deterministic and observable.
-const { mockUpsertFromPsd2, mockAllocate, mockGetRevokedConnectionIds } = vi.hoisted(() => ({
-  mockUpsertFromPsd2: vi.fn(),
+// Keep ledger preparation deterministic. Selection writes use the real
+// configuration wrapper and an RPC stub; pg-real tests verify atomicity.
+const { mockAllocate, mockGetRevokedConnectionIds } = vi.hoisted(() => ({
   mockAllocate: vi.fn(),
   mockGetRevokedConnectionIds: vi.fn(),
 }))
 vi.mock('@/lib/cash-accounts/service', () => ({
-  upsertFromPsd2: (...args: unknown[]) => mockUpsertFromPsd2(...args),
   // See the callback route suite: mockAllocate stays the allocation stand-in
   // and the wrapper wraps it in the resolver's envelope.
   resolvePsd2LedgerAccount: async (...args: unknown[]) => {
@@ -65,15 +63,13 @@ interface SupabaseStub {
     status: string
     accounts_data: StoredAccount[]
   } | null
-  connectionError?: { message: string } | null
-  /** Error returned for every update. Use updateErrorByCall for per-call control. */
-  updateError?: { message: string } | null
-  /**
-   * Per-call update errors. Indexed by 0-based call number. Lets a test
-   * succeed the first update (status flip) and fail the second (metadata).
-   * Falls back to updateError when the index isn't present.
-   */
-  updateErrorByCall?: Array<{ message: string } | null>
+  connectionError?: { message: string; code?: string } | null
+  selectionError?: { message: string; code?: string } | null
+  selectionCalls?: Array<Record<string, unknown>>
+  selectionReceipts?: Array<{ status: string; accounts_data: StoredAccount[] }>
+  returnedAccounts?: StoredAccount[]
+  syncError?: { message: string }
+  capturedSync?: Record<string, unknown>
   /** BAS account numbers that exist in the company's chart_of_accounts (PR 2 ledger validation). */
   chartAccountNumbers?: string[]
   /** Existing cash_accounts rows for the company (ledger collision validation). */
@@ -83,26 +79,49 @@ interface SupabaseStub {
     bank_connection_id: string | null
     ledger_account: string
     iban?: string | null
+    currency?: string
     /** Mirrors the picker's checkbox in that row's connection; absent = live claim. */
     enabled?: boolean
   }>
-  /** Release-pass updates (rows demoted to manual before the mirror), in order. */
-  cashReleases?: Array<{ payload: Record<string, unknown>; ids: string[] }>
-  /** Error returned by the release-pass update. */
-  cashReleaseError?: { message: string } | null
   /** Completed SIE import overlapping the backfill window (renewal-flood guard). */
   sieImportRow?: { id: string } | null
   /** company_members row for the caller; role 'viewer' disables the sweep. */
   membershipRow?: { role: string } | null
-  /** Last update payload (may be overwritten by a follow-up metadata update). */
-  capturedUpdate?: Record<string, unknown>
-  /** All update payloads in order: first is the status flip, second the initial-sync metadata. */
-  capturedUpdates?: Record<string, unknown>[]
 }
 
 function buildSupabase(stub: SupabaseStub) {
-  let updateCallCount = 0
   return {
+    rpc: vi.fn(async (name: string, args: Record<string, unknown>) => {
+      if (name === 'read_bank_configuration') {
+        if (stub.connectionError || !stub.connectionRow) return { data: null, error: stub.connectionError ?? { code: 'P0002', message: 'BANK_CONNECTION_NOT_FOUND' } }
+        return { data: { token: 'configuration-token', connection: { session_id: 'current-session', bank_name: 'Test bank', ...stub.connectionRow } }, error: null }
+      }
+      if (name === 'save_bank_account_selection') {
+        ;(stub.selectionCalls ??= []).push(args)
+        if (stub.selectionError) return { data: null, error: stub.selectionError }
+        const selections = args.p_selections as Array<{ uid: string; enabled: boolean; ledger_account?: string }>
+        const accounts = stub.returnedAccounts ?? stub.connectionRow!.accounts_data.map(account => {
+          const selected = selections.find(a => a.uid === account.uid)!
+          const saved = { ...account, enabled: selected.enabled, ledger_account: selected.ledger_account }
+          if (!saved.ledger_account) delete saved.ledger_account
+          if (saved.enabled) {
+            delete saved.mirror_card_account
+            delete saved.claimed_by_company_id
+            delete saved.claimed_by_company_name
+            delete saved.deselected_elsewhere
+          }
+          return saved
+        })
+        const status = stub.connectionRow!.status === 'pending_selection' ? 'active' : stub.connectionRow!.status
+        ;(stub.selectionReceipts ??= []).push({ status, accounts_data: accounts })
+        return { data: { status, accounts }, error: null }
+      }
+      if (name === 'persist_bank_sync_result') {
+        stub.capturedSync = args
+        return { data: { applied: true }, error: stub.syncError ?? null }
+      }
+      throw new Error(`Unexpected RPC: ${name}`)
+    }),
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: stub.authUser }, error: null }),
     },
@@ -128,13 +147,7 @@ function buildSupabase(stub: SupabaseStub) {
         return {
           select: vi.fn().mockReturnThis(),
           eq: vi.fn(() => Promise.resolve({ data: stub.cashAccountRows ?? [], error: null })),
-          // Release pass: update({...}).in('id', ids) awaited as a thenable.
-          update: vi.fn((payload: Record<string, unknown>) => ({
-            in: vi.fn((_col: string, ids: string[]) => {
-              ;(stub.cashReleases ??= []).push({ payload, ids })
-              return Promise.resolve({ error: stub.cashReleaseError ?? null })
-            }),
-          })),
+          update: vi.fn(() => { throw new Error('Selection must not write cash rows outside its RPC') }),
         }
       }
       // Renewal-flood guard: SIE-overlap probe before the inline backfill.
@@ -162,19 +175,7 @@ function buildSupabase(stub: SupabaseStub) {
           data: stub.connectionRow,
           error: stub.connectionError ?? null,
         }),
-        update: vi.fn((payload: Record<string, unknown>) => {
-          const callIndex = updateCallCount++
-          stub.capturedUpdate = payload
-          ;(stub.capturedUpdates ??= []).push(payload)
-          // Per-call error overrides win when set; fall back to updateError otherwise.
-          const error =
-            stub.updateErrorByCall && callIndex < stub.updateErrorByCall.length
-              ? stub.updateErrorByCall[callIndex]
-              : stub.updateError ?? null
-          return {
-            eq: vi.fn().mockResolvedValue({ error }),
-          }
-        }),
+        update: vi.fn(() => { throw new Error('Selection must not write connections outside its RPC') }),
       }
     }),
   }
@@ -220,7 +221,6 @@ describe('PATCH /accounts (enable-banking)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     eventBus.clear()
-    mockUpsertFromPsd2.mockResolvedValue(undefined)
     mockRunReconciliation.mockResolvedValue({
       matches: [],
       applied: 0,
@@ -325,7 +325,7 @@ describe('PATCH /accounts (enable-banking)', () => {
     const supabase = buildSupabase({
       authUser: { id: 'user-1' },
       connectionRow: null,
-      connectionError: { message: 'not found' },
+      connectionError: { message: 'BANK_CONNECTION_NOT_FOUND', code: 'P0002' },
     })
     const ctx = makeContext(supabase)
 
@@ -334,6 +334,50 @@ describe('PATCH /accounts (enable-banking)', () => {
       ctx
     )
     expect(res.status).toBe(404)
+  })
+
+  it('returns 409 for an obsolete configuration without emitting an event or starting sync', async () => {
+    const stub: SupabaseStub = { authUser: { id: 'user-1' }, selectionError: { code: 'PT409', message: 'BANK_CONFIGURATION_CHANGED' },
+      connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] } }
+    const ctx = makeContext(buildSupabase(stub))
+    const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), ctx)
+    expect(res.status).toBe(409)
+    expect(stub.selectionCalls).toHaveLength(1)
+    expect(ctx.emit).not.toHaveBeenCalled()
+    expect(mockedSync).not.toHaveBeenCalled()
+  })
+
+  it.each(['exhausted', 'failed'])('does not save or sync when ledger preparation is %s', async failure => {
+    if (failure === 'exhausted') mockAllocate.mockResolvedValue(null)
+    else mockAllocate.mockRejectedValue(new Error('Lookup unavailable'))
+    const stub: SupabaseStub = { authUser: { id: 'user-1' },
+      connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }] } }
+    const ctx = makeContext(buildSupabase(stub))
+    const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), ctx)
+    expect(res.status).toBe(failure === 'exhausted' ? 409 : 500)
+    expect(mockAllocate).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', expect.objectContaining({ prepareOnly: true }))
+    expect(stub.selectionCalls).toBeUndefined()
+    expect(ctx.emit).not.toHaveBeenCalled()
+    expect(mockedSync).not.toHaveBeenCalled()
+  })
+
+  it('starts backfill using the current accounts returned by the atomic save', async () => {
+    mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
+    const fresh = { uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930', balance: 987, dedup_scope: 'fresh-scope' }
+    const stub: SupabaseStub = { authUser: { id: 'user-1' }, returnedAccounts: [fresh],
+      connectionRow: { id: 'conn-1', status: 'pending_selection', accounts_data: [{ ...fresh, balance: 1, dedup_scope: 'old-scope' }] } }
+    const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), makeContext(buildSupabase(stub)))
+    expect(res.status).toBe(200)
+    expect(mockedSync.mock.calls[0]).toContainEqual(expect.objectContaining({ balance: 987, dedup_scope: 'fresh-scope' }))
+  })
+
+  it('does not reuse another currency cash row sharing an IBAN', async () => {
+    const stub: SupabaseStub = { authUser: { id: 'user-1' },
+      cashAccountRows: [{ id: 'eur-row', iban: 'SE1234', currency: 'EUR', ledger_account: '1932', bank_connection_id: 'old-connection', external_uid: 'old-uid' }],
+      connectionRow: { id: 'conn-1', status: 'active', accounts_data: [{ uid: 'acc-1', currency: 'SEK', iban: 'SE1234', enabled: true }] } }
+    const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), makeContext(buildSupabase(stub)))
+    expect(res.status).toBe(200)
+    expect(stub.selectionCalls?.[0]?.p_selections).toEqual([expect.objectContaining({ uid: 'acc-1', ledger_account: '1930', reuse_cash_account_id: null })])
   })
 
   it('returns 400 when connection is in an invalid status (e.g. expired)', async () => {
@@ -379,10 +423,8 @@ describe('PATCH /accounts (enable-banking)', () => {
     const body = await res.json()
     expect(body).toMatchObject({ success: true, enabled_count: 2, total_count: 3 })
 
-    // The first update (before inline backfill) is the status flip + accounts_data.
-    // A second metadata update only follows if backfill succeeds; assert against
-    // the first explicitly so this test is robust to both paths.
-    const firstUpdate = stub.capturedUpdates?.[0]
+    // The atomic save returns the selected accounts before initial backfill.
+    const firstUpdate = stub.selectionReceipts?.[0]
     expect(firstUpdate).toBeDefined()
     expect(firstUpdate?.status).toBe('active')
     const written = firstUpdate?.accounts_data as StoredAccount[]
@@ -416,19 +458,19 @@ describe('PATCH /accounts (enable-banking)', () => {
       ctx
     )
     expect(keptOff.status).toBe(200)
-    const keptOffWritten = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+    const keptOffWritten = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
     expect(keptOffWritten.find(a => a.uid === 'acc-card')).toMatchObject({
       enabled: false,
       mirror_card_account: true,
     })
 
-    stub.capturedUpdates = []
+    stub.selectionReceipts = []
     const turnedOn = await accountsRoute.handler(
       makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main', 'acc-card'] }),
       ctx
     )
     expect(turnedOn.status).toBe(200)
-    const turnedOnWritten = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+    const turnedOnWritten = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
     const card = turnedOnWritten.find(a => a.uid === 'acc-card')
     expect(card?.enabled).toBe(true)
     expect(card?.mirror_card_account).toBeUndefined()
@@ -455,12 +497,12 @@ describe('PATCH /accounts (enable-banking)', () => {
     )
 
     expect(res.status).toBe(200)
-    const written = stub.capturedUpdate?.accounts_data as StoredAccount[]
+    const written = stub.selectionReceipts?.at(-1)?.accounts_data as StoredAccount[]
     expect(written.find(a => a.uid === 'acc-1')?.enabled).toBe(false)
     expect(written.find(a => a.uid === 'acc-2')?.enabled).toBe(true)
   })
 
-  it('omits status from update payload when connection is already active (state machine)', async () => {
+  it('submits the snapshot token and selection without a caller-controlled status', async () => {
     const stub: SupabaseStub = {
       authUser: { id: 'user-1' },
       connectionRow: {
@@ -481,10 +523,9 @@ describe('PATCH /accounts (enable-banking)', () => {
     )
 
     expect(res.status).toBe(200)
-    // Status field is NOT present in the update: already-active connections
-    // don't re-assert the transition, which keeps the state machine explicit.
-    expect(stub.capturedUpdate).toBeDefined()
-    expect('status' in (stub.capturedUpdate ?? {})).toBe(false)
+    expect(stub.selectionCalls).toHaveLength(1)
+    expect(stub.selectionCalls?.[0]).toMatchObject({ p_expected_token: 'configuration-token', p_company_id: 'company-1', p_connection_id: 'conn-1' })
+    expect(stub.selectionCalls?.[0]).not.toHaveProperty('status')
   })
 
   it('returns 400 when ctx.companyId is absent (no user.id fallback)', async () => {
@@ -621,15 +662,14 @@ describe('PATCH /accounts (enable-banking)', () => {
         { strategy: 'longest' }
       )
 
-      // Two updates: status flip first, then initial_sync metadata.
-      expect(stub.capturedUpdates).toHaveLength(2)
-      expect(stub.capturedUpdates?.[0]?.status).toBe('active')
-      const meta = stub.capturedUpdates?.[1]
-      expect(meta?.initial_sync_completed_at).toBeDefined()
-      expect(meta?.initial_sync_returned_min_date).toBe('2026-02-15')
-      expect(meta?.initial_sync_returned_max_date).toBe('2026-05-13')
-      expect(meta?.initial_sync_lookback_days).toBe(90)
-      expect(meta?.last_synced_at).toBeDefined()
+      // Configuration is written once; results go through the shared RPC.
+      expect(stub.selectionReceipts).toHaveLength(1)
+      expect(stub.selectionReceipts?.[0]?.status).toBe('active')
+      expect(stub.capturedSync).toMatchObject({
+        p_company_id: 'company-1', p_connection_id: 'conn-1',
+        p_completed_at: expect.any(String),
+        p_initial_sync: { returned_min: '2026-02-15', returned_max: '2026-05-13', lookback_days: 90 },
+      })
     })
 
     it('suppresses auto-categorization and reconciles per ledger account when the window overlaps an SIE import (renewal-flood guard)', async () => {
@@ -925,7 +965,7 @@ describe('PATCH /accounts (enable-banking)', () => {
 
       expect(mockedSync).not.toHaveBeenCalled()
       // Only one update: the original selection edit, no metadata follow-up.
-      expect(stub.capturedUpdates).toHaveLength(1)
+      expect(stub.selectionReceipts).toHaveLength(1)
     })
 
     it('still flips status to active when inline sync fails, surfacing initial_sync_error', async () => {
@@ -959,8 +999,8 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.initial_sync_error).toBe('ASPSP_DOWN')
 
       // Status flip happened; no metadata follow-up because sync threw.
-      expect(stub.capturedUpdates).toHaveLength(1)
-      expect(stub.capturedUpdates?.[0]?.status).toBe('active')
+      expect(stub.selectionReceipts).toHaveLength(1)
+      expect(stub.selectionReceipts?.[0]?.status).toBe('active')
     })
 
     it('clamps initial_lookback_days to [30, 365]', async () => {
@@ -993,10 +1033,10 @@ describe('PATCH /accounts (enable-banking)', () => {
         ctx
       )
 
-      expect(stub.capturedUpdates?.[1]?.initial_sync_lookback_days).toBe(365)
+      expect(stub.capturedSync?.p_initial_sync).toMatchObject({ lookback_days: 365 })
     })
 
-    it('surfaces metadata_update_failed when the second update errors after a successful sync', async () => {
+    it('surfaces persistence failure after a successful sync', async () => {
       // Sync runs and ingests transactions, but persisting initial_sync_completed_at
       // fails. The client must see the failure (not a fake success) so the UI can
       // show a retry warning; the cron will gate on initial_sync_completed_at IS NULL
@@ -1019,7 +1059,7 @@ describe('PATCH /accounts (enable-banking)', () => {
           accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true }],
         },
         // First update (status flip) succeeds; second (metadata) fails.
-        updateErrorByCall: [null, { message: 'connection lost' }],
+        syncError: { message: 'connection lost' },
       }
       const supabase = buildSupabase(stub)
       const ctx = makeContext(supabase)
@@ -1039,10 +1079,10 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.initial_sync).toBeUndefined()
       // The error code surfaces the metadata-update failure mode so the UI
       // and audit log can distinguish it from an ingest-side failure.
-      expect(body.initial_sync_error).toMatch(/^metadata_update_failed:/)
+      expect(body.initial_sync_error).toContain('connection lost')
       // Status flip still happened: connection is active, cron will retry backfill.
-      expect(stub.capturedUpdates?.[0]?.status).toBe('active')
-      expect(stub.capturedUpdates).toHaveLength(2)
+      expect(stub.selectionReceipts?.[0]?.status).toBe('active')
+      expect(stub.selectionReceipts).toHaveLength(1)
     })
   })
 
@@ -1080,7 +1120,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
-      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-sek')?.ledger_account).toBe('1930')
       expect(written.find(a => a.uid === 'acc-eur')?.ledger_account).toBe('1932')
       expect(written.find(a => a.uid === 'acc-usd')?.ledger_account).toBe('1933')
@@ -1194,7 +1234,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
-      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       // Both ledger_account values stay intact even though acc-2 is now disabled.
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
       expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1932')
@@ -1232,7 +1272,7 @@ describe('PATCH /accounts (enable-banking)', () => {
 
       expect(res.status).toBe(200)
       expect(mockAllocate).toHaveBeenCalledTimes(1)
-      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
     })
 
@@ -1269,8 +1309,8 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(body.error).toMatch(/samma konto/i)
       expect(body.duplicate_accounts).toEqual(['1930'])
       // Nothing written — the collision is rejected before any update.
-      expect(stub.capturedUpdates).toBeUndefined()
-      expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+      expect(stub.selectionReceipts).toBeUndefined()
+      expect(stub.selectionCalls).toBeUndefined()
     })
 
     it('returns 400 when a mapping targets a ledger held by another connection', async () => {
@@ -1344,15 +1384,10 @@ describe('PATCH /accounts (enable-banking)', () => {
         ['conn-REVOKED']
       )
       // The mirror received the user's pick, not an overflow slot.
-      expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
-        expect.anything(),
-        'company-1',
-        expect.objectContaining({
-          bank_connection_id: 'conn-1',
-          external_uid: 'acc-1',
+      expect(stub.selectionCalls?.[0]?.p_selections).toEqual(expect.arrayContaining([expect.objectContaining({
+          uid: 'acc-1',
           ledger_account: '1930',
-        })
-      )
+        })]))
     })
 
     it('allocates distinct ledgers for legacy accounts with no mapping at all', async () => {
@@ -1378,13 +1413,11 @@ describe('PATCH /accounts (enable-banking)', () => {
       )
 
       expect(res.status).toBe(200)
-      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1930')
       expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1931')
       // The mirror received the same distinct assignments.
-      const mirrorLedgers = mockUpsertFromPsd2.mock.calls.map(
-        (c) => (c[2] as { ledger_account: string }).ledger_account,
-      )
+      const mirrorLedgers = (stub.selectionCalls?.[0]?.p_selections as StoredAccount[]).map(a => a.ledger_account)
       expect(mirrorLedgers.sort()).toEqual(['1930', '1931'])
     })
 
@@ -1411,7 +1444,7 @@ describe('PATCH /accounts (enable-banking)', () => {
       expect(res.status).toBe(200)
       // No allocation — the existing mirrored assignment wins.
       expect(mockAllocate).not.toHaveBeenCalled()
-      const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+      const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
       expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1940')
     })
 
@@ -1422,7 +1455,6 @@ describe('PATCH /accounts (enable-banking)', () => {
       // account still counted as a claim. The picker hides the ledger
       // dropdown for unchecked rows and disconnect + reconnect re-claims the
       // same rows by IBAN, so no route led out of it.
-      const RELEASE = { bank_connection_id: null, external_uid: null }
 
       it('lets a checked account take 1930 from an unchecked one on the same connection', async () => {
         mockedSync.mockResolvedValue({ requestedFromDate: '2026-01-01', historyNarrowed: false, imported: 0, duplicates: 0, errors: 0 })
@@ -1455,21 +1487,15 @@ describe('PATCH /accounts (enable-banking)', () => {
         )
 
         expect(res.status).toBe(200)
-        // The unchecked account's row handed over its slot before the mirror ran.
-        expect(stub.cashReleases).toEqual([{ payload: RELEASE, ids: ['row-1930'] }])
         // accounts_data: the unchecked account no longer pre-fills 1930, the checked one holds it.
-        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
         const wrong = written.find(a => a.uid === 'acc-wrong')
         expect(wrong?.enabled).toBe(false)
         expect(wrong).not.toHaveProperty('ledger_account')
         expect(written.find(a => a.uid === 'acc-right')?.ledger_account).toBe('1930')
         // The mirror only touches the checked account; the yielded one has no row to write.
-        expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(1)
-        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
-          expect.anything(),
-          'company-1',
-          expect.objectContaining({ external_uid: 'acc-right', ledger_account: '1930', enabled: true })
-        )
+        expect((stub.selectionCalls?.[0]?.p_selections as StoredAccount[]).filter(a => a.ledger_account)).toHaveLength(1)
+        expect(stub.selectionCalls?.[0]?.p_selections).toEqual(expect.arrayContaining([expect.objectContaining({ uid: 'acc-right', ledger_account: '1930', enabled: true })]))
         expect(mockAllocate).not.toHaveBeenCalled()
       })
 
@@ -1498,19 +1524,14 @@ describe('PATCH /accounts (enable-banking)', () => {
         )
 
         expect(res.status).toBe(200)
-        expect(stub.cashReleases).toBeUndefined()
-        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
         expect(written.find(a => a.uid === 'acc-2')).toMatchObject({ enabled: false, ledger_account: '1935' })
         // Re-checking later lands back on 1935: the row stays, its enabled flag flips off.
-        expect(mockUpsertFromPsd2).toHaveBeenCalledTimes(2)
-        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
-          expect.anything(),
-          'company-1',
-          expect.objectContaining({ external_uid: 'acc-2', ledger_account: '1935', enabled: false })
-        )
+        expect(stub.selectionCalls?.[0]?.p_selections).toHaveLength(2)
+        expect(stub.selectionCalls?.[0]?.p_selections).toEqual(expect.arrayContaining([expect.objectContaining({ uid: 'acc-2', ledger_account: '1935', enabled: false })]))
       })
 
-      it('lets two checked accounts swap ledgers in one save', async () => {
+      it('submits both requested ledger changes in one checked save', async () => {
         const stub: SupabaseStub = {
           authUser: { id: 'user-1' },
           chartAccountNumbers: ['1930', '1935'],
@@ -1543,17 +1564,11 @@ describe('PATCH /accounts (enable-banking)', () => {
         )
 
         expect(res.status).toBe(200)
-        // Both rows are demoted in ONE update, so neither upsert can trip the
-        // (company_id, ledger_account) constraint on the other's old slot.
-        expect(stub.cashReleases).toHaveLength(1)
-        expect([...stub.cashReleases![0].ids].sort()).toEqual(['row-1930', 'row-1935'])
-        const written = stub.capturedUpdates?.[0]?.accounts_data as StoredAccount[]
+        // Both assignments are submitted together; the database validates their physical identity.
+        const written = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
         expect(written.find(a => a.uid === 'acc-1')?.ledger_account).toBe('1935')
         expect(written.find(a => a.uid === 'acc-2')?.ledger_account).toBe('1930')
-        const mirrored = mockUpsertFromPsd2.mock.calls.map(c => {
-          const input = c[2] as { external_uid: string; ledger_account: string }
-          return [input.external_uid, input.ledger_account]
-        })
+        const mirrored = (stub.selectionCalls?.[0]?.p_selections as StoredAccount[]).map(a => [a.uid, a.ledger_account])
         expect(mirrored.sort()).toEqual([
           ['acc-1', '1935'],
           ['acc-2', '1930'],
@@ -1594,19 +1609,14 @@ describe('PATCH /accounts (enable-banking)', () => {
 
         // Contrast with the synced-elsewhere case above, which stays a 400.
         expect(res.status).toBe(200)
-        expect(stub.cashReleases).toEqual([{ payload: RELEASE, ids: ['row-other'] }])
-        expect(mockUpsertFromPsd2).toHaveBeenCalledWith(
-          expect.anything(),
-          'company-1',
-          expect.objectContaining({ external_uid: 'acc-1', ledger_account: '1935' })
-        )
+        expect(stub.selectionCalls?.[0]?.p_selections).toEqual(expect.arrayContaining([expect.objectContaining({ uid: 'acc-1', ledger_account: '1935' })]))
       })
 
-      it('returns 500 and persists nothing when the release update fails', async () => {
+      it('returns 500 without starting sync when the atomic selection fails', async () => {
         const stub: SupabaseStub = {
           authUser: { id: 'user-1' },
           chartAccountNumbers: ['1930'],
-          cashReleaseError: { message: 'boom' },
+          selectionError: { message: 'boom' },
           cashAccountRows: [
             { id: 'row-1930', external_uid: 'acc-wrong', bank_connection_id: 'conn-1', ledger_account: '1930' },
             { id: 'row-1935', external_uid: 'acc-right', bank_connection_id: 'conn-1', ledger_account: '1935' },
@@ -1633,8 +1643,9 @@ describe('PATCH /accounts (enable-banking)', () => {
         )
 
         expect(res.status).toBe(500)
-        expect(stub.capturedUpdates).toBeUndefined()
-        expect(mockUpsertFromPsd2).not.toHaveBeenCalled()
+        expect(stub.selectionReceipts).toBeUndefined()
+        expect(stub.selectionCalls).toHaveLength(1)
+        expect(mockedSync).not.toHaveBeenCalled()
       })
     })
 

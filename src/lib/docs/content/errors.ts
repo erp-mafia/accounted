@@ -24,7 +24,7 @@ const DOMAINS: DomainGroup[] = [
   { label: 'Periods + year-end', description: 'Fiscal period locking, year-end closing, opening balances, FX revaluation.', prefixes: ['PERIOD_', 'YEAR_END_', 'OPENING_BALANCE_', 'FX_'] },
   { label: 'Invoices', description: 'Customer invoice lifecycle: draft, send, mark paid, credit.', prefixes: ['INVOICE_', 'CREDIT_NOTE_', 'CUSTOMER_'] },
   { label: 'Supplier invoices', description: 'AP lifecycle: register, approve, mark paid, credit.', prefixes: ['SUPPLIER_INVOICE_', 'SUPPLIER_'] },
-  { label: 'Transactions', description: 'Bank transaction ingest, categorisation, matching.', prefixes: ['TRANSACTION_', 'MATCH_INVOICE_', 'MATCH_SI_', 'MATCH_'] },
+  { label: 'Transactions', description: 'Bank transaction ingest, categorisation, matching.', prefixes: ['TRANSACTION_', 'MATCH_INVOICE_', 'MATCH_SI_', 'MATCH_', 'BANK_BOOKING_', 'BANK_ANCHOR_', 'CASH_ACCOUNT_'] },
   { label: 'Reports', description: 'Report generation: VAT declaration, periodisk sammanställning, SIE export, INK2.', prefixes: ['REPORT_', 'VAT_', 'PS_', 'SIE_EXPORT_', 'TAX_DECL_'] },
   { label: 'Imports', description: 'SIE import, bank file import, opening-balance import, provider migration.', prefixes: ['SIE_IMPORT_', 'BANK_FILE_', 'OPENING_BALANCE_IMPORT_', 'REGISTER_IMPORT_', 'PROVIDER_MIGRATION_'] },
   { label: 'Documents', description: 'Document upload, link, signed-URL download, retention.', prefixes: ['DOCUMENT_'] },

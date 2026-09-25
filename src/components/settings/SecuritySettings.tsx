@@ -4,7 +4,6 @@ import { useTranslations } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
@@ -234,15 +233,8 @@ export function SecuritySettings() {
               disabled={isChangingPassword}
             />
             <SettingsRowEnd>
-              <Button type="submit" size="sm" disabled={isChangingPassword}>
-                {isChangingPassword ? (
-                  <>
-                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                    {t('saving')}
-                  </>
-                ) : (
-                  t('update_password_button')
-                )}
+              <Button type="submit" size="sm" loading={isChangingPassword}>
+                {isChangingPassword ? t('saving') : t('update_password_button')}
               </Button>
             </SettingsRowEnd>
           </SettingsRow>
@@ -269,7 +261,7 @@ export function SecuritySettings() {
             </span>
           ) : hasMfa ? (
             <>
-              <Badge variant="success">{t('mfa_active_title')}</Badge>
+              <span className="text-xs text-muted-foreground">{t('mfa_active_title')}</span>
               <SettingsRowNote>{t('mfa_active_description')}</SettingsRowNote>
               <SettingsRowEnd>
                 {mfaRequired ? (
@@ -281,19 +273,10 @@ export function SecuritySettings() {
                     variant="outline"
                     size="sm"
                     onClick={handleUnenrollMfa}
-                    disabled={isUnenrolling}
+                    loading={isUnenrolling}
                   >
-                    {isUnenrolling ? (
-                      <>
-                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                        {t('disabling')}
-                      </>
-                    ) : (
-                      <>
-                        <ShieldOff className="mr-2 h-3.5 w-3.5" />
-                        {t('disable_mfa')}
-                      </>
-                    )}
+                    {!isUnenrolling && <ShieldOff className="mr-2 h-3.5 w-3.5" />}
+                    {isUnenrolling ? t('disabling') : t('disable_mfa')}
                   </Button>
                 )}
               </SettingsRowEnd>

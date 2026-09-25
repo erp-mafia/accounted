@@ -53,7 +53,7 @@ const PROSE =
   'prose-code:before:content-none prose-code:after:content-none ' +
   'prose-table:my-2 prose-table:text-xs [&_table]:w-full ' +
   '[&_th]:border-b [&_th]:border-border [&_th]:py-1.5 [&_th]:px-2 [&_th]:text-left [&_th]:font-medium ' +
-  '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[10px] ' +
+  '[&_th]:text-muted-foreground [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-[11px] ' +
   '[&_td]:border-b [&_td]:border-border [&_td]:py-1.5 [&_td]:px-2 [&_td]:align-top'
 
 export function AgentSkillsPanel() {
@@ -177,7 +177,7 @@ export function AgentSkillsPanel() {
     <div className="space-y-6">
       {atoms && (
         <div className="flex items-center gap-2">
-          <p className="text-[12px] tabular-nums text-muted-foreground">
+          <p className="text-[12.5px] tabular-nums text-muted-foreground">
             {counts.total} kunskapsområden · {counts.active} aktiva för ditt företag
           </p>
           <HelpPopover className="shrink-0">
@@ -206,7 +206,7 @@ export function AgentSkillsPanel() {
         <div aria-busy>
           <Skeleton className="mb-3 h-3 w-32" />
           {[0, 1, 2, 3, 4].map((i) => (
-            <div key={i} className="flex items-center justify-between border-b border-border/60 py-3.5">
+            <div key={i} className="flex items-center justify-between border-b border-border py-3.5">
               <Skeleton className="h-3.5 w-72" />
               <Skeleton className="h-3.5 w-12" />
             </div>
@@ -242,18 +242,18 @@ export function AgentSkillsPanel() {
                 const body = bodies[atom.id]
                 const dormant = !atom.active
                 return (
-                  <div key={atom.id} className="border-b border-border/60">
+                  <div key={atom.id} className="border-b border-border">
                     <button
                       type="button"
                       onClick={() => toggle(atom)}
                       aria-expanded={isOpen}
                       className="group flex w-full items-baseline gap-3 py-3 text-left"
                     >
-                      <span className={cn('min-w-0 flex-1 truncate text-[13.5px] font-medium', dormant ? 'text-muted-foreground' : 'text-foreground')}>
+                      <span className={cn('min-w-0 flex-1 truncate text-[13px] font-medium', dormant ? 'text-muted-foreground' : 'text-foreground')}>
                         {atomLabel(atom)}
                       </span>
                       {tier !== 'horizontal' && (
-                        <span className={cn('shrink-0 text-[11.5px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
+                        <span className={cn('shrink-0 text-[11px]', dormant ? 'rounded-full border border-border px-2 py-px text-muted-foreground' : 'text-muted-foreground')}>
                           {dormant ? 'Vilande' : 'Aktiv'}
                         </span>
                       )}

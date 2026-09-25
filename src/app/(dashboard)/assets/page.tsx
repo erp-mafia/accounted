@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -118,7 +118,7 @@ export default function AssetsPage() {
       {/* Page header (concept scene 29): title + Ny tillgång */}
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
-        <Button onClick={() => setDialogOpen(true)}>
+        <Button size="sm" onClick={() => setDialogOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           {t('new_asset')}
         </Button>
@@ -207,7 +207,7 @@ export default function AssetsPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         {!disposed && (
-                          <span className="inline-flex items-center gap-4 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100">
+                          <span className={cn('inline-flex items-center gap-4', HOVER_REVEAL_CLASS)}>
                             <button
                               type="button"
                               className={QUIET_LINK_CLASS}

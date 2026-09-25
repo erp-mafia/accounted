@@ -240,7 +240,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                     <tr
                       key={item.item_id}
                       onClick={() => toggleExternal(item.item_id)}
-                      className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-muted/40')}
+                      className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-secondary/35')}
                     >
                       <td className={cn(TD_CLASS, 'px-2')}>
                         <Checkbox
@@ -295,7 +295,7 @@ export function ManualMatchMode({ account, window, onChanged }: ManualMatchModeP
                     <tr
                       key={item.item_id}
                       onClick={() => toggleEntry(item.item_id)}
-                      className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-muted/40')}
+                      className={cn('cursor-pointer', picked ? 'bg-secondary/60' : 'hover:bg-secondary/35')}
                     >
                       <td className={cn(TD_CLASS, 'px-2')}>
                         {splitMode ? (

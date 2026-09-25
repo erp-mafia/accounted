@@ -9,20 +9,42 @@ const log = createLogger('auth.rate-limit')
 let redis: Redis | null = null
 
 /**
+ * The REST credential pairs the limiter accepts, first complete pair wins.
+ * UPSTASH_REDIS_REST_* is what Upstash itself documents and what self-hosted
+ * installs set. The Vercel Marketplace integration writes KV_REST_API_* under
+ * a prefix chosen at install: none, or UPSTASH_STORAGE_ (the hosted project,
+ * 2026-09-23). A URL is only ever used with the token of its own pair, never
+ * one integration's URL with another's token.
+ */
+const CREDENTIAL_PAIRS = [
+  ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN'],
+  ['KV_REST_API_URL', 'KV_REST_API_TOKEN'],
+  ['UPSTASH_STORAGE_KV_REST_API_URL', 'UPSTASH_STORAGE_KV_REST_API_TOKEN'],
+] as const
+
+function restCredentials(): { url: string; token: string } | null {
+  for (const [urlKey, tokenKey] of CREDENTIAL_PAIRS) {
+    const url = process.env[urlKey]
+    const token = process.env[tokenKey]
+    if (url && token) return { url, token }
+  }
+  return null
+}
+
+/**
  * Whether the Upstash credentials the limiter needs are present. Exposed so
  * health / version surfaces can report the limiter's state instead of every
  * caller re-reading the env.
  */
 export function isRateLimiterConfigured(): boolean {
-  return Boolean(process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+  return restCredentials() !== null
 }
 
 function getRedis(): Redis | null {
   if (redis) return redis
-  const url = process.env.UPSTASH_REDIS_REST_URL
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN
-  if (!url || !token) return null
-  redis = new Redis({ url, token })
+  const credentials = restCredentials()
+  if (!credentials) return null
+  redis = new Redis(credentials)
   return redis
 }
 
@@ -66,7 +88,7 @@ function reportNotConfiguredOnce(): void {
   if (isSelfHosted()) return
   if (process.env.NODE_ENV !== 'production') return
   log.error(
-    'HTTP rate limiting is disabled: UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN are not set on a hosted deployment; checkRateLimit() is failing open',
+    'HTTP rate limiting is disabled: no Upstash REST credentials (UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN, or the Vercel Marketplace KV_REST_API_URL / KV_REST_API_TOKEN) are set on a hosted deployment; checkRateLimit() is failing open',
     { alert: true, operation: 'rate-limit.not-configured' },
   )
 }
@@ -91,8 +113,8 @@ export interface RateLimitResult {
  *
  * No-ops (allows the request) when Upstash env vars are not configured:
  * intentional so local dev and self-hosted deployments without Redis still work.
- * Production hosted deployments must set UPSTASH_REDIS_REST_URL/TOKEN for the
- * limit to be enforced; a hosted process without them logs one error-level
+ * Production hosted deployments must set one credential pair (see
+ * CREDENTIAL_PAIRS) for the limit to be enforced; a hosted process without them logs one error-level
  * record (see reportNotConfiguredOnce) and `isRateLimiterConfigured()` reports
  * the state for health surfaces.
  */

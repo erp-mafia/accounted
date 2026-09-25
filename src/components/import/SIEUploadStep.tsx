@@ -1,7 +1,8 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Upload, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
@@ -112,7 +113,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
                 </p>
               </div>
-              <Progress value={phase.progress} className="w-64 mx-auto transition-all duration-1000" />
+              <Progress value={phase.progress} className="w-64 mx-auto" />
               <p className="text-xs text-muted-foreground">
                 Lämna inte sidan förrän analysen är klar
               </p>
@@ -130,11 +131,31 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
           <CardTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
             Ladda upp SIE-fil
+            {/* Format primer and per-system export paths live behind the "?"
+                (convention 7), not as three info cards under the drop zone. */}
+            <HelpPopover className="shrink-0">
+              <div className="space-y-3">
+                <p>
+                  Exportera en SIE4-fil från ditt nuvarande bokföringssystem (Fortnox, Visma, etc.)
+                  och ladda upp den här för att importera din bokföring.
+                </p>
+                <p>
+                  SIE (Standard Import Export) är det svenska standardformatet för att överföra
+                  bokföringsdata mellan system. Det används av alla större bokföringsprogram i Sverige.
+                </p>
+                <ul className="space-y-1">
+                  <li><strong>SIE4</strong>: full historik med alla verifikationer (rekommenderas)</li>
+                  <li><strong>SIE1</strong>: endast årssaldon (enklare import)</li>
+                </ul>
+                <div className="space-y-1">
+                  <p className="font-medium">Så exporterar du från...</p>
+                  <p>Fortnox: Inställningar → Import/Export → Exportera SIE</p>
+                  <p>Visma: Rapporter → Övrigt → Exportera till SIE</p>
+                  <p>Bokio: Inställningar → Bokföring → Exportera SIE-fil</p>
+                </div>
+              </div>
+            </HelpPopover>
           </CardTitle>
-          <CardDescription>
-            Exportera en SIE4-fil från ditt nuvarande bokföringssystem (Fortnox, Visma, etc.)
-            och ladda upp den här för att importera din bokföring.
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {/* Drop zone */}
@@ -220,7 +241,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <p className="text-sm text-muted-foreground">{error}</p>
 
                   {/* Actionable guidance */}
-                  <div className="text-sm text-muted-foreground pt-1 border-t border-border/50 mt-2">
+                  <div className="text-sm text-muted-foreground pt-1 border-t border-border mt-2">
                     {(errorType === 'duplicate' || errorType === 'duplicate_period') && (
                       <div className="space-y-2">
                         <p>Den befintliga importens verifikationer kommer att makuleras (status ändras till &quot;makulerad&quot;). De finns kvar som spårbar historik.</p>
@@ -228,15 +249,15 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                           <Button
                             variant="outline"
                             size="sm"
-                            className="border-border text-warning hover:bg-muted/30"
-                            disabled={isReplacing}
+                            className="border-border text-warning hover:bg-secondary/60"
+                            loading={isReplacing}
                             onClick={(e) => {
                               e.stopPropagation()
                               onReplace(duplicateImportId)
                             }}
                           >
                             {isReplacing ? (
-                              <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Ersätter...</>
+                              'Ersätter...'
                             ) : (
                               <><RefreshCw className="h-4 w-4 mr-2" />Ersätt befintlig import</>
                             )}
@@ -288,54 +309,6 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               )}
             </div>
           )}
-        </CardContent>
-      </Card>
-
-      {/* Info cards */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Vad är SIE?</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <p>
-              SIE (Standard Import Export) är det svenska standardformatet för att överföra
-              bokföringsdata mellan system. Det används av alla större bokföringsprogram i Sverige.
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Vilken SIE-typ?</CardTitle>
-          </CardHeader>
-          <CardContent className="text-sm text-muted-foreground">
-            <ul className="space-y-1">
-              <li><strong>SIE4</strong> - Full historik med alla verifikationer (rekommenderas)</li>
-              <li><strong>SIE1</strong> - Endast årssaldon (enklare import)</li>
-            </ul>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Export instructions */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base">Så exporterar du från...</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm space-y-3">
-          <div>
-            <p className="font-medium">Fortnox</p>
-            <p className="text-muted-foreground">Inställningar → Import/Export → Exportera SIE</p>
-          </div>
-          <div>
-            <p className="font-medium">Visma</p>
-            <p className="text-muted-foreground">Rapporter → Övrigt → Exportera till SIE</p>
-          </div>
-          <div>
-            <p className="font-medium">Bokio</p>
-            <p className="text-muted-foreground">Inställningar → Bokföring → Exportera SIE-fil</p>
-          </div>
         </CardContent>
       </Card>
     </div>

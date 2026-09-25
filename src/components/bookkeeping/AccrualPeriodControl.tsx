@@ -124,8 +124,7 @@ export default function AccrualPeriodControl({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
-          className="h-7 w-7"
+          size="icon-sm"
           onClick={onRemove}
           aria-label={t('remove_aria')}
         >

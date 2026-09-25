@@ -5,6 +5,7 @@ import {
   contentBucketKey,
   descriptionsBridge,
   normalizeImportedDescription,
+  reconcileStableExternalIds,
   shiftIsoDate,
   FALLBACK_DESCRIPTION,
 } from '../external-id'
@@ -228,5 +229,68 @@ describe('shiftIsoDate', () => {
     expect(shiftIsoDate('2024-02-28', 1)).toBe('2024-02-29') // 2024 is a leap year
     expect(shiftIsoDate('2024-03-01', -1)).toBe('2024-02-29')
     expect(shiftIsoDate('2025-02-28', 1)).toBe('2025-03-01') // 2025 is not
+  })
+})
+
+describe('reconcileStableExternalIds', () => {
+  const id = (n: number) => `eb_SE47_2026-09-21_20000_${n}`
+  const stored = [
+    { externalId: id(0), desc: '12305999102631' },
+    { externalId: id(1), desc: '12305999102621' },
+  ]
+
+  it('gives a late-booked sibling a fresh index instead of a stored row\'s id', () => {
+    // The bank returns a third 200 kr row for the same day, ordered so the
+    // newcomer lands on index 1, which the stored ...621 row already holds.
+    const ids = reconcileStableExternalIds(
+      [
+        { external_id: id(0), description: '12305999102631' },
+        { external_id: id(1), description: '12305999102641' },
+        { external_id: id(2), description: '12305999102621' },
+      ],
+      stored,
+    )
+    expect(ids).toEqual([id(0), id(2), id(1)])
+  })
+
+  it('maps an unchanged set back onto the stored ids whatever the order', () => {
+    const ids = reconcileStableExternalIds(
+      [
+        { external_id: id(0), description: '12305999102621' },
+        { external_id: id(1), description: '12305999102631' },
+      ],
+      stored,
+    )
+    expect(ids).toEqual([id(1), id(0)])
+  })
+
+  it('keeps the id of a row whose description drifted without bridging', () => {
+    const ids = reconcileStableExternalIds(
+      [{ external_id: id(0), description: 'Insättning' }],
+      [{ externalId: id(0), desc: '12305999102631' }],
+    )
+    expect(ids).toEqual([id(0)])
+  })
+
+  it('gives a late identical-description twin the next free index', () => {
+    const ids = reconcileStableExternalIds(
+      [
+        { external_id: id(0), description: 'Swish' },
+        { external_id: id(1), description: 'Swish' },
+      ],
+      [{ externalId: id(0), desc: 'swish' }],
+    )
+    expect(ids).toEqual([id(0), id(1)])
+  })
+
+  it('leaves non-stable ids and families without stored rows untouched', () => {
+    const ids = reconcileStableExternalIds(
+      [
+        { external_id: 'csv_lunar_ab12cd34', description: '12305999102621' },
+        { external_id: 'eb_SE47_2026-09-22_20000_0', description: '12305999102621' },
+      ],
+      [...stored, { externalId: 'csv_lunar_ab12cd34', desc: 'other' }],
+    )
+    expect(ids).toEqual(['csv_lunar_ab12cd34', 'eb_SE47_2026-09-22_20000_0'])
   })
 })

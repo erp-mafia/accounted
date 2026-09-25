@@ -243,15 +243,8 @@ export function FiscalYearEditDialog({
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isSaving}>
             {t('fy_confirm_cancel')}
           </Button>
-          <Button onClick={handleSave} disabled={!canSave}>
-            {isSaving ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('fy_edit_saving')}
-              </>
-            ) : (
-              t('fy_edit_save')
-            )}
+          <Button onClick={handleSave} disabled={!canSave} loading={isSaving}>
+            {isSaving ? t('fy_edit_saving') : t('fy_edit_save')}
           </Button>
         </DialogFooter>
       </DialogContent>

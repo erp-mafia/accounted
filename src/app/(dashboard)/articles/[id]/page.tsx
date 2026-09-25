@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +17,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { ArrowLeft, Loader2, Lock } from 'lucide-react'
+import { Lock } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import { parseArticleHouseworkType, workTypeLabel } from '@/lib/invoices/rot-rut-rules'
@@ -216,75 +215,63 @@ export default function ArticleDetailPage({
 
   return (
     <div className="space-y-8 stagger-enter">
-      {/* Header: serif name over a quiet type/status kicker, quiet actions right */}
-      <div>
-        <Link
-          href="/articles"
-          className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-6"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back')}
-        </Link>
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <h1 className="font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
-            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span className="tabular-nums">
-                {t(ARTICLE_TYPE_KEY[article.type])}
-                {article.article_number ? ` · #${article.article_number}` : ''}
-                {article.active ? ` · ${t('status_active')}` : ''}
-              </span>
-              {!article.active && (
-                <Badge variant="outline" className="font-normal">
-                  {t('status_inactive')}
-                </Badge>
-              )}
-            </p>
-          </div>
+      {/* Header: the page-header hooks make it the panel's top bar
+          (convention 2), like the customer and supplier detail pages: name,
+          a quiet type/status kicker, quiet actions right. The sidebar says
+          where we are, so there is no back link. */}
+      <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="page-header-lead min-w-0">
+          <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{article.name}</h1>
+          <p className="page-header-meta mt-1 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+            <span className="tabular-nums">
+              {t(ARTICLE_TYPE_KEY[article.type])}
+              {article.article_number ? ` · #${article.article_number}` : ''}
+              {article.active ? ` · ${t('status_active')}` : ''}
+            </span>
+            {!article.active && (
+              <Badge variant="outline" className="font-normal">
+                {t('status_inactive')}
+              </Badge>
+            )}
+          </p>
+        </div>
 
-          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsEditOpen(true)}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
-              disabled={!canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
-              {t('edit')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleToggleActive}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
-              disabled={isTogglingActive || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isTogglingActive ? (
-                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="h-4 w-4 mr-1" />
-              ) : null}
-              {article.active ? t('deactivate') : t('activate')}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
-              disabled={isDeleting || !canWrite}
-              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
-            >
-              {isDeleting ? (
-                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-              ) : !canWrite ? (
-                <Lock className="h-4 w-4 mr-1" />
-              ) : null}
-              {t('delete')}
-            </Button>
-          </div>
+        <div className="page-header-action flex shrink-0 flex-wrap items-center justify-end gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setIsEditOpen(true)}
+            className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {t('edit')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleToggleActive}
+            className="text-muted-foreground hover:text-foreground"
+            disabled={!canWrite}
+            loading={isTogglingActive}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {!isTogglingActive && !canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {article.active ? t('deactivate') : t('activate')}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDelete}
+            className="text-muted-foreground hover:text-destructive"
+            disabled={!canWrite}
+            loading={isDeleting}
+            title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+          >
+            {!isDeleting && !canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {t('delete')}
+          </Button>
         </div>
       </div>
 

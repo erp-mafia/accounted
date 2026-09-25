@@ -15,6 +15,8 @@ import {
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import { useDimensions } from '@/lib/reference-data/hooks'
+import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
+import { cn } from '@/lib/utils'
 
 export type DimensionFilterValue = {
   /** SIE dimension number as a string ('1' kostnadsställe, '6' projekt). */
@@ -70,7 +72,7 @@ export function DimensionFilter({ value, onChange }: Props) {
             setPendingDimNo(dimNo)
           }}
         >
-          <SelectTrigger className="h-10 w-[170px]">
+          <SelectTrigger className={cn(TOOLBAR_FIELD_CLASS, 'w-[170px]')}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -88,12 +90,13 @@ export function DimensionFilter({ value, onChange }: Props) {
             onChange={(code) =>
               onChange(code ? { dimNo: activeDimNo, code } : null)
             }
+            className={TOOLBAR_FIELD_CLASS}
           />
         </div>
         {value && (
           <Button
             variant="ghost"
-            size="icon"
+            size="icon-sm"
             onClick={() => onChange(null)}
             aria-label="Rensa dimensionsfilter"
           >

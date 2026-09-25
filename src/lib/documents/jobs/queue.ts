@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { arkivRollout, isArkivEnabled } from '@/lib/arkiv/flag'
+import { arkivBrainRollout, isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { classifyDocument, loadCompanyIdentity, type CompanyIdentity } from '@/lib/documents/classify/classify'
 import { extractDocument } from '@/lib/documents/extract/store'
 import { agreementKindFor } from '@/lib/arkiv/agreements/derive'
@@ -7,7 +7,7 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
-import { isActingType } from '@/lib/documents/read/lanes'
+import { isActingType, isBooked } from '@/lib/documents/read/lanes'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 
@@ -45,9 +45,9 @@ export async function enqueueDocumentJob(supabase: SupabaseClient, companyId: st
   return data === true
 }
 
-/** Queue extract jobs for admitted documents in the rollout that never had one. Returns how many were queued. */
+/** Queue extract jobs for admitted documents of the brain rollout that never had one. Returns how many were queued. */
 export async function enqueueMissingExtractions(supabase: SupabaseClient, limit: number): Promise<number> {
-  const rollout = arkivRollout()
+  const rollout = arkivBrainRollout()
   if (rollout !== 'all' && rollout.length === 0) return 0
   const { data, error } = await supabase.rpc('enqueue_missing_document_extractions', {
     p_company_ids: rollout === 'all' ? null : rollout,
@@ -92,6 +92,10 @@ async function runClaimed(
     return { kind: job.kind, result }
   } catch (err) {
     const reason = (err instanceof Error ? err.message : String(err)).slice(0, 500)
+    if (PERIOD_LOCKED_RE.test(reason)) {
+      await settleJob(supabase, job, { status: 'done', result: 'skipped: period_locked', last_error: reason })
+      return { kind: job.kind, result: 'skipped: period_locked' }
+    }
     await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts)).toISOString() })
     log.warn('document job failed', { job: job.id, kind: job.kind, doc: job.document_id, attempt: job.attempts, reason })
     return { kind: job.kind, error: reason }
@@ -117,6 +121,16 @@ export async function runDocumentJobFor(
 
 /** 2, 4, 8, 16, 32 minutes, capped at an hour. */
 const backoffMs = (attempts: number) => Math.min(60, 2 ** attempts) * 60_000
+
+/**
+ * The period-lock trigger on document_attachments (migration 017) refuses
+ * every write to a document that sits on an entry in a locked or closed
+ * period, Arkiv's type and read stamps included. Retrying buys nothing and
+ * five attempts with backoff ate the worker's minute (prod 2026-09-24: eight
+ * such failures an hour ahead of a person's uploads). The job is settled as
+ * skipped; the document stays untyped until the lock or the trigger changes.
+ */
+const PERIOD_LOCKED_RE = /locked\/closed fiscal period|Bokföringen är låst/i
 
 async function settleJob(supabase: SupabaseClient, job: ClaimedJob, patch: Record<string, unknown>): Promise<void> {
   const { error } = await supabase
@@ -152,8 +166,9 @@ async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<strin
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return `skipped: ${out.reason}`
   if (isArkivEnabled(job.company_id)) {
-    if (!doc.doc_type) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
-    else if (finishing && doc.admission_state === 'admitted') await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+    // A booked document is typed when someone opens it (goal: agents answer correctly when asked).
+    if (!doc.doc_type && !isBooked(doc)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
+    else if (finishing && doc.admission_state === 'admitted' && isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   }
   return `read ${out.pages} pages (${out.reader}, ${plan.lane})${out.partial ? `, partial: ${out.partial}` : ''}`
 }
@@ -172,13 +187,14 @@ async function runClassify(supabase: SupabaseClient, job: ClaimedJob, identities
       await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'read')
       return `classified ${out.classification.doc_type} (${out.admission}), reading the rest`
     }
-    await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
+    // The brain reads the record out of the document; the shelf stops at the type.
+    if (isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   }
   return `classified ${out.classification.doc_type} (${out.admission})`
 }
 
 async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities: Map<string, CompanyIdentity>): Promise<string> {
-  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
+  if (!isArkivBrainEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await extractDocument(supabase, job.document_id, await identityFor(supabase, job.company_id, identities))
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return skipNote(out.reason)
@@ -188,7 +204,7 @@ async function runExtract(supabase: SupabaseClient, job: ClaimedJob, identities:
 }
 
 async function runDerive(supabase: SupabaseClient, job: ClaimedJob): Promise<string> {
-  if (!isArkivEnabled(job.company_id)) return 'skipped: not_in_rollout'
+  if (!isArkivBrainEnabled(job.company_id)) return 'skipped: not_in_rollout'
   const out = await deriveDocument(supabase, job.document_id)
   if (out.status === 'error') throw new Error(out.reason)
   const facts = await recordFactsForDocument(supabase, job.document_id)

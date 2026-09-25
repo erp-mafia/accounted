@@ -135,7 +135,7 @@ describe('voucher number atomicity', () => {
       rpc: vi.fn().mockResolvedValue({ data: null, error: { code: 'PT409', message: 'BANK_BOOKING_SOURCE_CHANGED' } }),
     }
     await expect(commitEntry(supabase as never, 'co-1', 'user-1', 'entry-1')).rejects.toMatchObject({
-      code: 'CONFLICT', pgCode: 'PT409', operation: 'commit_entry',
+      code: 'BANK_BOOKING_SOURCE_CHANGED', pgCode: 'PT409', operation: 'commit_entry',
     })
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(supabase.from).not.toHaveBeenCalledWith('journal_entries')

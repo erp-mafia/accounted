@@ -13,7 +13,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
-import { CreditCard, History, Link2, Loader2, RefreshCw, Unlink } from 'lucide-react'
+import { CreditCard, History, Link2, RefreshCw, Unlink } from 'lucide-react'
 import {
   stripeRequest,
   syncSummary,
@@ -36,8 +36,9 @@ function earliestBackfillDay(): string {
   return isoDay(floor)
 }
 
-const STATUS_VARIANT: Record<ConnectionInfo['status'], 'success' | 'secondary' | 'destructive' | 'warning'> = {
-  active: 'success',
+const STATUS_VARIANT: Record<ConnectionInfo['status'], 'secondary' | 'destructive' | 'warning' | null> = {
+  // Active is the normal state: muted text, not a chip (chips mark exceptions).
+  active: null,
   pending: 'secondary',
   revoked: 'warning',
   error: 'destructive',
@@ -356,9 +357,13 @@ export default function StripeSettingsPanel() {
                   <span className="text-sm font-medium">
                     {connection.display_name || connection.stripe_account_id || t('unnamed_account')}
                   </span>
-                  <Badge variant={STATUS_VARIANT[connection.status]}>
-                    {t(`status_${connection.status}`)}
-                  </Badge>
+                  {STATUS_VARIANT[connection.status] ? (
+                    <Badge variant={STATUS_VARIANT[connection.status] ?? undefined}>
+                      {t(`status_${connection.status}`)}
+                    </Badge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">{t(`status_${connection.status}`)}</span>
+                  )}
                   {!connection.livemode && isActive && (
                     <Badge variant="warning">{t('test_mode')}</Badge>
                   )}
@@ -395,12 +400,8 @@ export default function StripeSettingsPanel() {
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
-                  <Button variant="outline" size="sm" onClick={handleSyncNow} disabled={syncing}>
-                    {syncing ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <RefreshCw className="mr-2 h-4 w-4" />
-                    )}
+                  <Button variant="outline" size="sm" onClick={handleSyncNow} loading={syncing}>
+                    {!syncing && <RefreshCw className="mr-2 h-4 w-4" />}
                     {syncing ? t('syncing') : t('sync_now')}
                   </Button>
                   <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect(true)}>
@@ -477,13 +478,9 @@ export default function StripeSettingsPanel() {
                 variant="outline"
                 size="sm"
                 onClick={handleBackfill}
-                disabled={backfilling}
+                loading={backfilling}
               >
-                {backfilling ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <History className="mr-2 h-4 w-4" />
-                )}
+                {!backfilling && <History className="mr-2 h-4 w-4" />}
                 {backfilling ? t('backfill_running') : t('backfill_submit')}
               </Button>
             </div>

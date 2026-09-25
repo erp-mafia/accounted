@@ -19,7 +19,7 @@ const call = (body: unknown) => POST(new Request(`http://localhost/api/arkiv/fac
 beforeEach(() => {
   vi.clearAllMocks()
   reset()
-  process.env.ARKIV_COMPANY_IDS = 'company-1'
+  process.env.ARKIV_BRAIN_COMPANY_IDS = 'company-1'
   ;(requireAuth as ReturnType<typeof vi.fn>).mockResolvedValue({ user: { id: 'user-1', email: 't@t.se' }, supabase: mockSupabase })
   ;(getActiveCompanyId as ReturnType<typeof vi.fn>).mockResolvedValue('company-1')
 })

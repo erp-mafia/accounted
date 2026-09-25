@@ -11,7 +11,7 @@ let mockResults: Record<string, MockResult[]>
 
 function makeBuilder(tableName: string) {
   const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'or', 'order', 'range']) {
+  for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'not', 'or', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
   const consume = (): MockResult => {
@@ -555,9 +555,11 @@ describe('generateTrialBalance', () => {
 
   // ── final-closing precision ──────────────────────────────────────
   // Tax and appropriations are also source_type='year_end'. The statutory
-  // pre-closing report must exclude only fiscal_periods.closing_entry_id.
+  // pre-closing report must exclude only the result transfers into equity,
+  // the set the result_closing_entry_ids SQL function resolves (its shape
+  // rule is pinned in tests/pg/trial-balance-aggregates-rpc.pg.test.ts).
 
-  it('excludes only the fiscal period closing entry', async () => {
+  it('excludes only the result closing entries the SQL function reports', async () => {
     mockResults = {
       fiscal_periods: [
         {
@@ -570,6 +572,8 @@ describe('generateTrialBalance', () => {
           error: null,
         },
       ],
+      // The linked closing plus a resultatavslut imported from the old system.
+      'rpc:result_closing_entry_ids': [{ data: ['closing-1', 'imported-closing-1'], error: null }],
       journal_entries: [{ data: [{ id: 'tax-1' }, { id: 'appropriation-1' }], error: null }],
       journal_entry_lines: [
         {
@@ -593,8 +597,12 @@ describe('generateTrialBalance', () => {
     const neqCalls = builders.flatMap((b: any) => (b.neq ? b.neq.mock.calls : []))
     expect(neqCalls).not.toContainEqual(['source_type', 'year_end'])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
-    expect(orCalls).toContainEqual(['id.neq.closing-1,status.neq.posted'])
+    const notCalls = builders.flatMap((b: any) => (b.not ? b.not.mock.calls : []))
+    expect(notCalls).toContainEqual(['id', 'in', '(closing-1,imported-closing-1)'])
+    expect(supabase.rpc).toHaveBeenCalledWith('result_closing_entry_ids', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+    })
   })
 
   it('fails closed when a closed period has no linked final closing entry', async () => {
@@ -700,6 +708,9 @@ describe('generateTrialBalance', () => {
           error: null,
         },
       ],
+      // result_closing_entry_ids returns posted entries only: a closing
+      // reversed during an administrative undo is not in the set.
+      'rpc:result_closing_entry_ids': [{ data: [], error: null }],
       journal_entries: [{ data: [{ id: 'closing-1' }, { closingEntry: 'include', id: 'storno-1' }], error: null }],
       journal_entry_lines: [{ data: [], error: null }],
       chart_of_accounts: [{ data: [], error: null }],
@@ -709,13 +720,35 @@ describe('generateTrialBalance', () => {
       closingEntry: 'exclude-final',
     })
 
-    // The OR excludes closing-1 only while status is posted. If it is
-    // reversed during an administrative undo, both it and its storno remain.
+    // Nothing is excluded, so the reversed closing and its storno both remain
+    // and keep netting to zero.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const builders = supabase.from.mock.results.map((r: { value: any }) => r.value)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const orCalls = builders.flatMap((b: any) => (b.or ? b.or.mock.calls : []))
-    expect(orCalls).toContainEqual(['id.neq.closing-1,status.neq.posted'])
+    const notCalls = builders.flatMap((b: any) => (b.not ? b.not.mock.calls : []))
+    expect(notCalls).toEqual([])
+  })
+
+  it('surfaces a failed result_closing_entry_ids call instead of reading unfiltered books', async () => {
+    mockResults = {
+      fiscal_periods: [
+        {
+          data: {
+            period_start: '2025-01-01',
+            period_end: '2025-12-31',
+            opening_balance_entry_id: null,
+            closing_entry_id: null,
+          },
+          error: null,
+        },
+      ],
+      'rpc:result_closing_entry_ids': [{ data: null, error: { message: 'boom', code: '57014' } }],
+      chart_of_accounts: [{ data: [], error: null }],
+    }
+
+    await expect(
+      generateTrialBalance(supabase, 'company-1', 'period-1', { closingEntry: 'exclude-final' }),
+    ).rejects.toThrow(/result_closing_entry_ids failed/)
   })
 
   it('preserves the broad year-end exclusion for operational reports', async () => {

@@ -32,7 +32,6 @@ import {
   Download,
   Eye,
   FileDown,
-  Loader2,
   MoreHorizontal,
   Send,
   Trash2,
@@ -45,14 +44,14 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { periodLabelOf, type RunDetail } from './types'
 
 // Same chip vocabulary as the Löner list (chips mark exceptions): in-flight
-// states wear the quiet beige chip, paid is sage, corrected the outline
-// exception, and booked renders as muted text.
-const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'success' | 'warning' | 'destructive' | 'outline'> = {
+// states wear the quiet beige chip, corrected the outline exception, and
+// paid and booked render as muted text.
+const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'muted' | 'warning' | 'destructive' | 'outline'> = {
   draft: 'secondary',
   review: 'secondary',
   approved: 'secondary',
-  paid: 'success',
-  booked: 'success',
+  paid: 'muted',
+  booked: 'muted',
   corrected: 'outline',
 }
 
@@ -114,6 +113,7 @@ export function RunHeader({
   const hasEmailSend = useCapability(CAPABILITY.email_send)
 
   const statusKey = `status_${run.status}`
+  const statusVariant = STATUS_VARIANTS[run.status] ?? 'secondary'
   const rank = STATUS_RANK[run.status] ?? 0
   const busy = !!actionLoading
   const deliveries = run.payslip_deliveries_summary
@@ -252,10 +252,10 @@ export function RunHeader({
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {t('title', { period: periodLabel })}
             </h1>
-            {run.status === 'booked' ? (
+            {statusVariant === 'muted' ? (
               <span className="text-sm text-muted-foreground">{tSalary(statusKey)}</span>
             ) : (
-              <Badge variant={STATUS_VARIANTS[run.status] || 'secondary'}>
+              <Badge variant={statusVariant}>
                 {tSalary(statusKey)}
               </Badge>
             )}
@@ -278,16 +278,13 @@ export function RunHeader({
             // The span carries the tooltip: browsers suppress `title` on
             // disabled elements, and hover events don't fire on them.
             <span title={!hasEmailSend ? t('payslips_send_requires_subscription') : undefined}>
-              <Button
+              <Button size="sm"
                 variant="outline"
                 onClick={onSendPayslips}
                 disabled={busy || !hasEmailSend}
+                loading={actionLoading === 'payslips-send'}
               >
-                {actionLoading === 'payslips-send' ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="mr-2 h-4 w-4" />
-                )}
+                {actionLoading !== 'payslips-send' && <Send className="mr-2 h-4 w-4" />}
                 {deliveries && deliveries.sent > 0
                   ? t('action_send_payslips_again')
                   : t('action_send_payslips')}
@@ -296,8 +293,7 @@ export function RunHeader({
           )}
 
           {primaryAction && (
-            <Button onClick={primaryAction.onClick} disabled={busy}>
-              {actionLoading === primaryAction.key && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button size="sm" onClick={primaryAction.onClick} disabled={busy} loading={actionLoading === primaryAction.key}>
               {primaryAction.label}
             </Button>
           )}
@@ -305,12 +301,8 @@ export function RunHeader({
           {hasMenu && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label={t('more_actions')}>
-                  {menuBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <MoreHorizontal className="h-4 w-4" />
-                  )}
+                <Button variant="ghost" size="icon-sm" aria-label={t('more_actions')} loading={menuBusy}>
+                  {!menuBusy && <MoreHorizontal className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">

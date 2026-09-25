@@ -4,7 +4,6 @@ import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Loader2 } from 'lucide-react'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 
@@ -113,8 +112,7 @@ export default function BatchDuplicateDialog({
           <Button variant="outline" onClick={onCancel} disabled={processing}>
             {t('dialog_duplicate_cancel')}
           </Button>
-          <Button onClick={onBookAll} disabled={processing}>
-            {processing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          <Button onClick={onBookAll} loading={processing}>
             {t('dialog_batch_duplicate_book_all')}
           </Button>
         </DialogFooter>

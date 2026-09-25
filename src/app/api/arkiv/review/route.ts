@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
+import { reviewSince } from '@/lib/worklist/categories'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import type { FieldReviewDocument, ReviewDocument } from '@/lib/arkiv/questions'
 import type { Payload } from '@/lib/documents/extract/fields'
 import type { CheckFailure } from '@/lib/documents/extract/merge'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -18,7 +19,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 export type { ReviewDocument, FieldReviewDocument, FieldQuestion, ReviewData } from '@/lib/arkiv/questions'
 
 export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
-  if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (!isArkivBrainEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const { data: held, error: heldError } = await ctx.supabase
     .from('document_attachments')
@@ -53,6 +54,7 @@ export const GET = withRouteContext('arkiv.review', async (_request, ctx) => {
       .eq('company_id', ctx.companyId)
       .eq('admission_state', 'admitted')
       .in('id', unsureIds)
+      .gte('created_at', reviewSince())
       .order('created_at', { ascending: false })
     if (docsError) return NextResponse.json({ error: getErrorMessage(docsError) }, { status: 500 })
     unclassifiedRows = ((docs ?? []) as Array<Record<string, unknown>>).map((d) => toReview(d, byDoc.get(d.id as string))).filter((r) => r.relevance === 'relevant')

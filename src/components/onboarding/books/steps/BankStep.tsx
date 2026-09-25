@@ -9,7 +9,7 @@ import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import type { CashAccount } from '@/types'
-import { allocateLedgers, ledgerName, ledgerOptions } from '@/lib/onboarding-books/ledger'
+import { allocateLedgers, ledgerClaims, ledgerName, ledgerOptions } from '@/lib/onboarding-books/ledger'
 import { LOOKBACK_SAFE_DAYS, resolveLookback, type LookbackMode } from '@/lib/onboarding-books/lookback'
 import { biggestInflow, buildCashSeries, type CashPoint, type CashTx } from '@/lib/onboarding-books/cash-series'
 import { toPickerAccounts, type PickerAccount, type StoredPickerAccount } from '@/lib/onboarding-books/picker-accounts'
@@ -20,6 +20,7 @@ import { initials, Pill, Pills } from '../ui/Pills'
 import { OptRow, OptRows, Sentence } from '../ui/Sentence'
 import { VerdictList, Wait, type Verdict } from '../ui/Verdicts'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 const EB = '/api/extensions/ext/enable-banking'
 const POPULAR = ['Swedbank', 'SEB', 'Nordea', 'Handelsbanken', 'Danske Bank', 'Länsförsäkringar', 'Skandiabanken', 'ICA Banken']
@@ -259,15 +260,16 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
   // The consequence line appears only once one of those accounts is actually
   // ticked: a notice, not a dialog, and nothing to dismiss.
   const tickedClaimed = useMemo(() => tickedList.filter((a) => a.claimedBy), [tickedList])
-  const usedLedgers = useMemo(
-    () => cashAccounts.filter((c) => c.bank_connection_id !== state.bankConnectionId).map((c) => c.ledger_account),
+  const claims = useMemo(
+    () => ledgerClaims(cashAccounts, state.bankConnectionId ?? null),
     [cashAccounts, state.bankConnectionId],
   )
+  const usedLedgers = claims.used
   const ledgerOf = useMemo(() => {
     const preset: Record<string, string> = {}
     for (const a of tickedList) if (a.ledger) preset[a.uid] = a.ledger
-    return allocateLedgers(tickedList, usedLedgers, { ...preset, ...picks })
-  }, [tickedList, usedLedgers, picks])
+    return allocateLedgers(tickedList, claims.used, { ...preset, ...picks }, claims.connected)
+  }, [tickedList, claims, picks])
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
 
   const today = isoToday()
@@ -402,8 +404,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'pick' && !alreadyConnected ? (
         !findings ? (
           <div className="jny-qactions is-stack">
-            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <button type="button" className="jny-btn-quiet" onClick={() => void loadFindings()}>{t('findings_retry')}</button>}
-            <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</button>
+            {loadingFindings ? <Wait text={t('bank_loading')} height={96} /> : <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => void loadFindings()}>{t('findings_retry')}</Button>}
+            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>{t('bank_manual')}</Button>
           </div>
         ) : !flags.hasBanking ? (
           <p className="jny-qsub" style={{ textAlign: 'center' }}>{t('bank_unavailable')}</p>
@@ -417,9 +419,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             </div>
             <div className="bank-picker-actions">
               {orderedBanks.length > PICK_COUNT || query ? (
-                <button type="button" className="jny-btn-quiet" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
+                <Button variant="ghost" size="sm" className="text-muted-foreground" aria-expanded={more || !!query.trim()} aria-controls="onboarding-bank-list" onClick={() => { setMore(!more && !query.trim()); setQuery('') }}>
                   {more || query.trim() ? t('bank_less') : t('bank_more')}
-                </button>
+                </Button>
               ) : null}
             </div>
             <div id="onboarding-bank-list" className="bankgrid bank-list">
@@ -432,9 +434,9 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             {shownBanks.length === 0 ? <p className="jny-qsub">{t('bank_no_matches')}</p> : null}
             {/* The way out sits under the banks, quiet: connecting is the point of the step (founder direction 2026-09-14). */}
             <div className="bank-exit">
-              <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+              <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
                 {t('bank_manual')}
-              </button>
+              </Button>
             </div>
           </>
         )
@@ -511,7 +513,8 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
             <OptRows>
               {tickedList.map((a) => {
                 const cur = ledgerOf[a.uid]
-                const opts = ledgerOptions(a.currency, [...usedLedgers, ...Object.values(ledgerOf).filter((l) => l !== cur)], cur)
+                const others = Object.values(ledgerOf).filter((l) => l !== cur)
+                const opts = ledgerOptions(a.currency, [...usedLedgers, ...others], cur, [...claims.connected, ...others])
                 return (
                   <OptRow
                     key={a.uid}
@@ -591,19 +594,19 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       {/* One column: the primary alone, Hoppa över quietly under it. Tillbaka lives at the top of the act. */}
       <div className="jny-qactions is-stack">
         {(phase === 'connected' && landed) || alreadyConnected ? (
-          <button type="button" className="jny-btn" onClick={() => dispatch({ type: 'AFTER_BANK', flags })}>
+          <Button size="lg" onClick={() => dispatch({ type: 'AFTER_BANK', flags })}>
             {flags.hasSkatteverket ? t('to_skv') : t('to_done')}
-          </button>
+          </Button>
         ) : null}
         {phase === 'authed' && tickedList.length > 0 ? (
-          <button type="button" className="jny-btn" onClick={() => void fetchTransactions()}>
+          <Button size="lg" onClick={() => void fetchTransactions()}>
             {t('bank_fetch')}
-          </button>
+          </Button>
         ) : null}
         {(phase === 'pick' && !alreadyConnected && (!flags.hasBanking || banks === null)) || phase === 'authed' ? (
-          <button type="button" className="jny-btn-quiet" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => dispatch({ type: 'BANK_SKIP', flags })}>
             {t('bank_skip')}
-          </button>
+          </Button>
         ) : null}
       </div>
     </div>

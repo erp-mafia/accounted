@@ -222,8 +222,32 @@ export const ALLOWED_DOCUMENT_TYPES = [
   'image/jpeg',
   'image/png',
   'image/webp',
+  // The iPhone default. Verified by its ISO-BMFF brand like any other image,
+  // read by the vision model after a decode, served to the viewer as JPEG.
+  // Before 2026-09-24 the app's own drop zone refused it while the MCP and
+  // the channels took it.
+  'image/heic',
+  'image/heif',
   ...OFFICE_DOCUMENT_TYPES,
 ]
+
+/** What a browser leaves blank or generic: a HEIC arrives with no type or as application/octet-stream (prod, 2026-09-24). */
+const EXTENSION_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  heic: 'image/heic',
+  heif: 'image/heif',
+}
+
+/** The declared type, or the one the file extension implies when the browser declared none or only the generic one. */
+export function declaredDocumentType(file: { name?: string | null; type?: string | null }): string {
+  if (file.type && file.type !== 'application/octet-stream') return file.type
+  const ext = (file.name ?? '').toLowerCase().split('.').pop() ?? ''
+  return EXTENSION_TYPES[ext] ?? file.type ?? ''
+}
 
 /**
  * Validate file size and MIME type before upload.
@@ -237,7 +261,7 @@ export function validateDocumentFile(file: { size: number; type?: string }): str
     return `Filen är för stor (max ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB)`
   }
   if (!file.type || !ALLOWED_DOCUMENT_TYPES.includes(file.type)) {
-    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP, Word, Excel, PowerPoint, OpenDocument, RTF, CSV.'
+    return 'Otillåten filtyp. Tillåtna: PDF, JPG, PNG, WebP, HEIC, Word, Excel, PowerPoint, OpenDocument, RTF, CSV.'
   }
   return null
 }

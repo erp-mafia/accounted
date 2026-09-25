@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
@@ -284,10 +285,22 @@ export default function ImportReviewStep({
           <CardTitle className="flex items-center gap-2">
             <CheckCircle className="h-5 w-5 text-success" />
             Redo att importera
+            {/* What the import does lives behind the "?" (convention 7)
+                instead of a trailing card of numbered steps. */}
+            <HelpPopover className="shrink-0">
+              <div className="space-y-2">
+                <p className="font-medium">Vad händer när du importerar?</p>
+                <p>1. Räkenskapsåret skapas om det inte finns</p>
+                <p>2. {t('review_step_chart')}</p>
+                <p>3. En verifikation för ingående balanser skapas</p>
+                <p>4. Alla verifikationer importeras med nya verifikationsnummer</p>
+                <p>5. Kontomappningarna sparas för framtida importer</p>
+                <p className="pt-2">
+                  En genomförd import kan ångras i efterhand via importhistoriken.
+                </p>
+              </div>
+            </HelpPopover>
           </CardTitle>
-          <CardDescription>
-            Granska inställningarna nedan och klicka på &quot;Starta import&quot; för att genomföra importen.
-          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
@@ -543,23 +556,6 @@ export default function ImportReviewStep({
         </Card>
       )}
 
-      {/* What happens next */}
-      <Card className="bg-muted/50">
-        <CardHeader>
-          <CardTitle className="text-base">Vad händer när du importerar?</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <p>1. Räkenskapsåret skapas om det inte finns</p>
-          <p>2. {t('review_step_chart')}</p>
-          <p>3. En verifikation för ingående balanser skapas</p>
-          <p>4. Alla verifikationer importeras med nya verifikationsnummer</p>
-          <p>5. Kontomappningarna sparas för framtida importer</p>
-          <p className="pt-2 font-medium">
-            Importen kan inte ångras automatiskt, men du kan ta bort skapade verifikationer manuellt.
-          </p>
-        </CardContent>
-      </Card>
-
       {error && (
         <div role="alert" className="p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
           <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
@@ -572,11 +568,10 @@ export default function ImportReviewStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onBack}>
+        <Button variant="outline" onClick={onBack}>
           Tillbaka
         </Button>
         <Button
-          className="min-h-11"
           onClick={handleExecute}
           disabled={!canWrite || isLoading}
           title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}

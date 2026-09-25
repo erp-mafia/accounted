@@ -5,7 +5,6 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import {
   Select,
   SelectContent,
@@ -20,6 +19,7 @@ import {
   CheckCircle,
   HelpCircle,
   Landmark,
+  Loader2,
 } from 'lucide-react'
 import type { BankFileFormatId } from '@/lib/import/bank-file/types'
 
@@ -174,9 +174,11 @@ export default function BankFileUploadStep({
 
             {isLoading ? (
               <div className="space-y-4">
-                <FileText className="mx-auto h-12 w-12 text-muted-foreground animate-pulse" />
-                <p className="text-muted-foreground">Analyserar fil...</p>
-                <Progress value={33} className="w-48 mx-auto" />
+                <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
+                <p className="flex items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  Analyserar fil...
+                </p>
               </div>
             ) : selectedFile && detectedFormat ? (
               <div className="space-y-4">

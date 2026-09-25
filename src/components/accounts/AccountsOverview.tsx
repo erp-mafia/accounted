@@ -4,6 +4,7 @@ import Link from 'next/link'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
@@ -87,9 +88,16 @@ export default function AccountsOverview() {
           </thead>
           <tbody>
             {isLoading ? (
-              <tr>
-                <td colSpan={5} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('loading')}</td>
-              </tr>
+              [1, 2].map((i) => (
+                <tr key={i} aria-busy>
+                  <td colSpan={5} className={cn(TD_CLASS, '!pl-0')}>
+                    <span className="flex items-center gap-3">
+                      <Skeleton className="h-7 w-7 shrink-0" />
+                      <Skeleton className="h-4 w-48" />
+                    </span>
+                  </td>
+                </tr>
+              ))
             ) : error ? (
               <tr>
                 <td colSpan={5} className={cn(TD_CLASS, '!pl-0 text-muted-foreground')}>{t('load_failed')}</td>
@@ -112,12 +120,17 @@ export default function AccountsOverview() {
                     <td className={cn(TD_CLASS, '!pl-0')}>
                       <Link href={accountHref(a)} className="flex items-center gap-3">
                         <Mark account={a} />
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium" data-ph-mask>
+                        {/* One line (convention 4): the mark says where the
+                            money comes from; the kind stays in the tooltip. */}
+                        <span
+                          className="flex min-w-0 items-baseline gap-2"
+                          title={a.kind === 'skattekonto' ? t('kind_skv') : a.kind === 'manual' ? t('kind_manual') : t('kind_bank')}
+                        >
+                          <span className="truncate font-medium" data-ph-mask>
                             {a.name}
                           </span>
-                          <span className="block truncate text-xs text-muted-foreground">
-                            {a.kind === 'skattekonto' ? t('kind_skv') : a.kind === 'manual' ? t('kind_manual') : t('kind_bank')} · {a.account_number}
+                          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                            {a.account_number}
                             {a.currency !== 'SEK' ? ` · ${a.currency}` : ''}
                           </span>
                         </span>

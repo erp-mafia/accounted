@@ -1,3 +1,7 @@
+---
+areas: [moms]
+---
+
 # Jämkning (justering) av ingående moms på investeringsvaror
 
 Lagstöd: ML (2023:200) **15 kap** (NML), motsv. ML (1994:200) **8a kap** (GML). EU-rätt: momsdirektivet 2006/112/EG art. 184-192. Skatteverkets rättsliga vägledning under "Mervärdesskatt → Avdragsrätt → Justering av avdrag". Terminologi i NML: "justering" istället för "jämkning"; "justeringsperiod" istället för "korrigeringstid"; "justeringshandling" istället för "jämkningshandling". Substansen är oförändrad.

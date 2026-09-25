@@ -697,6 +697,10 @@ export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
  * default account per currency.
  */
 export interface CashAccountPayeeFields {
+  // The bank name printed with the payment details. Not the bank the account
+  // belongs to: that is bank_connections.bank_name, read through
+  // lib/cash-accounts/labels.ts. A backfill or an admin may put a payee on
+  // another account than the one it names.
   bank_name: string | null
   clearing_number: string | null
   account_number: string | null
@@ -2631,6 +2635,9 @@ export type PendingOperationType =
   // (one or several, #2239): one voucher debit 19xx / credit 1513 per begäran,
   // the row linked, every begäran marked settled (gnubok_settle_rot_rut_payout).
   | 'settle_rot_rut_payout'
+  // Link ROT/RUT begäran to a payout verifikat that already exists (booked by
+  // hand): no voucher, only the settlement pointer (gnubok_link_rot_rut_payout_voucher).
+  | 'link_rot_rut_payout_voucher'
   // Anläggningsregister (gnubok_create_asset / gnubok_update_asset /
   // gnubok_dispose_asset): the register rows are master data (no voucher),
   // the disposal posts the avyttring voucher via disposeAsset().
@@ -2649,6 +2656,9 @@ export type PendingOperationActorType = 'user' | 'api_key' | 'mcp_oauth' | 'cron
 export type PendingOperationRiskLevel = 'low' | 'medium' | 'high'
 
 export interface PendingOperationAgentMetadata {
+  skills_loaded?: string[]
+  skill_retrievals?: Array<{ slug: string; retrieved_at: string; body_hash?: string; version?: number }>
+  skills_provenance?: 'no_session' | 'unavailable' | 'recent_session' | 'recent_session_truncated'
   conversation_id?: string
   intent_id?: string
   model?: string
@@ -3746,6 +3756,15 @@ export interface Asset {
    *  applying `depreciation_method` to the asset as a whole. Null for K2
    *  companies (the API rejects writes for accounting_framework='k2'). */
   k3_components: K3Component[] | null
+  /** Ackumulerad avskrivning booked before the asset entered Accounted (a
+   *  previous system), stated per `opening_depreciation_date`. Never posted
+   *  by Accounted: the amount is already in the imported 12x9 balance. The
+   *  engine counts it as depreciation on the books through that date and
+   *  plans the rest from there. 0 with a null date for assets bought while
+   *  on Accounted. NUMERIC arrives as a string from PostgREST. Optional on
+   *  the type so rows read before the column existed stay valid. */
+  opening_accumulated_depreciation?: number | string | null
+  opening_depreciation_date?: string | null
   notes: string | null
   created_at: string
   updated_at: string
@@ -3872,8 +3891,21 @@ export interface RawTransaction {
   proprietary_bank_transaction_code?: string | null
 }
 
+/** Internal bank-fetch context. Its token is revalidated within each database write. */
+export interface BankIngestRoute {
+  connectionId: string
+  sessionId: string
+  accountUid: string
+  cashAccountId: string
+  ledgerAccount: string
+  currency: string
+  token: string
+}
+
 /** Options for the transaction ingestion pipeline */
 export interface IngestOptions {
+  /** Required by the PSD2 extension; manual and file imports do not provide this. */
+  bankRoute?: BankIngestRoute
   /** Skip auto-categorization (mapping engine + journal entry creation).
    * Reconciliation and invoice matching still run.
    * Used when SIE-imported entries overlap the sync date range

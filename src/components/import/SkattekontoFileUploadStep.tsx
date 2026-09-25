@@ -3,8 +3,7 @@
 import { useState, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Progress } from '@/components/ui/progress'
-import { Upload, FileText, AlertCircle, HelpCircle } from 'lucide-react'
+import { Upload, FileText, AlertCircle, HelpCircle, Loader2 } from 'lucide-react'
 
 interface SkattekontoFileUploadStepProps {
   onFileSelect: (file: File) => void
@@ -93,9 +92,11 @@ export default function SkattekontoFileUploadStep({
 
             {isLoading ? (
               <div className="space-y-4">
-                <FileText className="mx-auto h-12 w-12 text-muted-foreground animate-pulse" />
-                <p className="text-muted-foreground">{t('skattekonto_analyzing')}</p>
-                <Progress value={33} className="w-48 mx-auto" />
+                <FileText className="mx-auto h-12 w-12 text-muted-foreground" />
+                <p className="flex items-center justify-center gap-2 text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                  {t('skattekonto_analyzing')}
+                </p>
               </div>
             ) : (
               <div className="space-y-4">

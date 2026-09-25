@@ -6,7 +6,8 @@ import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { Loader2, AlertCircle, Briefcase } from 'lucide-react'
+import { AlertCircle, Briefcase } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
@@ -197,23 +198,24 @@ export default function InvitePage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-dvh flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="min-h-dvh flex flex-col bg-background" aria-busy="true">
+        <div className="bg-frame border-b border-border">
+          <div className="max-w-2xl mx-auto w-full px-6 md:px-10 pt-5 pb-6 md:pt-6 md:pb-8 space-y-5">
+            <Skeleton className="h-4 w-24" />
+            <Skeleton className="h-8 w-64" />
+          </div>
+        </div>
+        <div className="max-w-lg mx-auto w-full px-6 md:px-10 py-6 md:py-8 space-y-4">
+          <Skeleton className="h-32 w-full rounded-xl" />
+          <Skeleton className="h-11 w-full" />
+        </div>
       </div>
     )
   }
 
   return (
     <div className="min-h-dvh flex flex-col bg-background">
-      <header className="relative bg-[#141414] text-white overflow-hidden">
-        <div className="absolute inset-0 pointer-events-none" aria-hidden>
-          <div
-            className="absolute inset-0"
-            style={{
-              background: 'radial-gradient(ellipse at 30% -20%, rgba(255,255,255,0.04) 0%, transparent 50%)',
-            }}
-          />
-        </div>
+      <header className="relative bg-frame text-foreground border-b border-border overflow-hidden">
         <div className="relative z-10 max-w-2xl mx-auto w-full px-6 md:px-10 pt-5 pb-6 md:pt-6 md:pb-8">
           <div className="flex items-center gap-2.5 mb-5 md:mb-6">
             <span className="font-display text-base tracking-tight" style={{ fontWeight: 700 }}>
@@ -291,13 +293,10 @@ export default function InvitePage() {
                   size="lg"
                   className="w-full"
                   onClick={handleJoinNow}
-                  disabled={isJoining}
+                  loading={isJoining}
                 >
                   {isJoining ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      {t('joining')}
-                    </>
+                    t('joining')
                   ) : (
                     <>{t('join_named', { companyName: invite.companyName ?? '' })}</>
                   )}

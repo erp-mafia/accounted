@@ -640,7 +640,7 @@ export default function QuickReviewDialog({
             it. The verifikat block further down is the proof. */}
         <div className="space-y-1.5">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
               {picked || proposal.source === 'manual' ? t('rec_kicker_manual') : t('rec_kicker')}
             </span>
             {onChangeTemplate && !hasCounterpartyPattern && (
@@ -658,14 +658,14 @@ export default function QuickReviewDialog({
             )}
           </div>
           <p className="text-[12.5px] text-muted-foreground">{whyFor(proposal)}</p>
-          {ruleLine && <p className="text-[12px] leading-snug text-muted-foreground">{ruleLine}</p>}
+          {ruleLine && <p className="text-[12.5px] leading-snug text-muted-foreground">{ruleLine}</p>}
           {/* The assistant's read, unless this review already is its pick. */}
           {previous && (
             <p className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-foreground">
               <span>{t('changed_from', { label: `${previous.name_sv} ${businessAccount(previous)}` })}</span>
               <button
                 type="button"
-                className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+                className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}
                 onClick={() => {
                   setProposal(previous)
                   setPrevious(null)
@@ -725,7 +725,7 @@ export default function QuickReviewDialog({
             they agree the verifikat above already shows the figure, and
             saying it twice reads as two different facts. */}
         {docVatDiffers && (
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] text-muted-foreground">
             <span>
               {useDocVat
                 ? t('vat_doc_wins', { amount: formatCurrency(docVat, tx.currency) })
@@ -733,7 +733,7 @@ export default function QuickReviewDialog({
             </span>
             <button
               type="button"
-              className={cn(QUIET_LINK_CLASS, 'text-[12px]')}
+              className={cn(QUIET_LINK_CLASS, 'text-[12.5px]')}
               disabled={isProcessing}
               onClick={() => setUseDocVat((v) => !v)}
             >
@@ -829,7 +829,7 @@ export default function QuickReviewDialog({
             <button
               type="button"
               onClick={() => setShowUploadZone(!showUploadZone)}
-              className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-muted/50 transition-colors"
+              className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-secondary/60 transition-colors"
             >
               <div className="flex items-center gap-2">
                 <Paperclip className="h-4 w-4 text-muted-foreground" />
@@ -863,8 +863,8 @@ export default function QuickReviewDialog({
                     <span className="flex-1 truncate">{doc.supplier_name ?? doc.file_name}</span>
                     <Button
                       variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 shrink-0 p-0"
+                      size="icon-sm"
+                      className="shrink-0"
                       aria-label={t('doc_picked_remove')}
                       disabled={isProcessing}
                       onClick={() =>

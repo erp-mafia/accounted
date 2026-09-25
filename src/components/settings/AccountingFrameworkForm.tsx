@@ -17,7 +17,6 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import type { AccountingFramework } from '@/types'
-import { Loader2 } from 'lucide-react'
 
 interface AccountingFrameworkFormProps {
   /** Current framework on the company row. */
@@ -200,12 +199,10 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
                 setSelected(pending)
                 void persist(pending)
               }}
-              disabled={saving}
+              loading={saving}
             >
               {saving ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sparar…
-                </>
+                'Sparar…'
               ) : pending === 'k2' ? (
                 'Byt till K2'
               ) : (

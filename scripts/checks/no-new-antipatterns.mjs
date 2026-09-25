@@ -122,6 +122,13 @@
  *      The ambiguous pairs are derived from supabase/migrations; both hint
  *      forms PostgREST accepts count as disambiguated. Implementation and
  *      rationale in ambiguous-embed.mjs. No baseline: the count is 0 today.
+ *   13. ui-uniformity: the design-system rules that drifted because nothing
+ *      checked them (button heights and spinners, motion durations and easing,
+ *      Tailwind shadows, faded borders, hover tints, raw colours, native
+ *      dialogs, focus rings, off-scale text, decorative animation). A
+ *      2026-09-24 scan found the one guarded design rule (radius ladder) clean
+ *      and every unguarded one drifted. Implementation, rule list and
+ *      rationale in ui-uniformity.mjs. No baseline: the count is 0 today.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -145,6 +152,7 @@ import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
 import { findLiteralLegalForms } from './literal-legal-form.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findAmbiguousEmbeds } from './ambiguous-embed.mjs'
+import { findUiUniformityFindings, UI_UNIFORMITY_HINTS } from './ui-uniformity.mjs'
 import {
   findExtensionRouteFindings,
   UNGATED_EXTENSION_ROUTES,
@@ -358,6 +366,11 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   // carries an explicit year-end exclusion of its own.
   'lib/reports/dimension-pnl.ts',
   'lib/reports/monthly-breakdown.ts',
+  // Tax balances/expenses come from generateTrialBalance; only mixed 2510
+  // counterpart evidence needs vouchers, which account totals cannot retain.
+  // Mirrors exclude-all-year-end (including reversal/correction chains and
+  // linked opening entry); kassaflodesanalys-tax.test.ts pins those filters.
+  'lib/reports/cash-flow-tax.ts',
   // Reconciliation and diagnostics: they compare against the ledger as posted.
   'lib/reports/ar-reconciliation.ts',
   'lib/reports/supplier-reconciliation.ts',
@@ -1110,6 +1123,7 @@ const current = {
   clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
   ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
+  uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1320,6 +1334,22 @@ if (current.offLadderRadii.length) {
       '    rounded-xl for overlays, rounded-lg for cards/fields/menu content, rounded-sm for nested\n' +
       '    leaves. rounded-md, bare `rounded`, rounded-2xl and rounded-[Npx] are dead vocabulary.',
   )
+}
+
+// 1e1a. ui-uniformity: no baseline, the 2026-09 sweep brought every rule to
+// 0 and any new finding is a hard failure.
+if (current.uiUniformity.length) {
+  failed = true
+  console.error(
+    `\n✗ ui-uniformity: ${current.uiUniformity.length} design-system violation(s) (.claude/rules/design.md):`,
+  )
+  const rules = [...new Set(current.uiUniformity.map((f) => f.rule))]
+  for (const rule of rules) {
+    console.error(`  ${rule}: ${UI_UNIFORMITY_HINTS[rule]}`)
+    current.uiUniformity
+      .filter((f) => f.rule === rule)
+      .forEach((f) => console.error(`    ${f.where}  ${f.detail}`))
+  }
 }
 
 // 1e1b. folded-public-flag: no baseline, the count is 0 and any new in-place
@@ -1587,5 +1617,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted).`,
 )

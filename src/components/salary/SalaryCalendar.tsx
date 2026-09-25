@@ -425,7 +425,7 @@ export function SalaryCalendar({
               disabled={readOnly}
               className={cn(
                 'relative flex min-h-[5.5rem] flex-col items-start gap-0.5 border-b border-r p-1.5 text-left text-xs transition-colors',
-                !readOnly && 'hover:bg-accent/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                !readOnly && 'hover:bg-secondary/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                 readOnly && 'cursor-default',
                 !inMonth && 'bg-muted/30 text-muted-foreground/60',
                 !inPeriod && inMonth && 'bg-muted/10',
@@ -440,7 +440,7 @@ export function SalaryCalendar({
               </span>
               <div className="mt-auto flex flex-col items-start gap-0.5">
                 {w && (
-                  <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[10px] font-medium text-secondary-foreground">
+                  <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[11px] font-medium text-secondary-foreground">
                     <Clock className="h-2.5 w-2.5" aria-hidden />
                     <span className="tabular-nums">{w.hours}h</span>
                   </span>
@@ -454,7 +454,7 @@ export function SalaryCalendar({
                         <span
                           key={a.id}
                           className={cn(
-                            'inline-flex items-center gap-0.5 rounded-full px-1 py-px text-[10px] font-medium',
+                            'inline-flex items-center gap-0.5 rounded-full px-1 py-px text-[11px] font-medium',
                             meta.pillClass,
                           )}
                           title={t('pill_title', { label: t(meta.labelKey), hours: String(a.hours) })}
@@ -532,13 +532,9 @@ export function SalaryCalendar({
               variant="outline"
               size="sm"
               onClick={handleBulkDelete}
-              disabled={deleting}
+              loading={deleting}
             >
-              {deleting ? (
-                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Trash2 className="mr-1 h-3.5 w-3.5" />
-              )}
+              {!deleting && <Trash2 className="mr-1 h-3.5 w-3.5" />}
               {t('delete')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setBulkMode('absence')} disabled={deleting}>
@@ -756,8 +752,7 @@ function BulkWorkedDialog({
           {conflicts.length > 0 ? (
             <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
-            <Button size="sm" onClick={handleSave} disabled={submitting}>
-              {submitting && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            <Button size="sm" onClick={handleSave} loading={submitting}>
               {isClear ? t('delete') : t('save')}
             </Button>
           )}
@@ -921,8 +916,7 @@ function BulkAbsenceDialog({
           {conflicts.length > 0 ? (
             <Button size="sm" onClick={() => onSaved(conflicts)}>{t('ok')}</Button>
           ) : (
-            <Button size="sm" onClick={handleSave} disabled={submitting}>
-              {submitting && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+            <Button size="sm" onClick={handleSave} loading={submitting}>
               {t('save')}
             </Button>
           )}
@@ -1030,9 +1024,10 @@ function DayInspectorDialog({
                 size="sm"
                 onClick={handleDeleteWorked}
                 disabled={busy !== null}
+                loading={busy === 'worked'}
                 aria-label={t('delete_worked_aria')}
               >
-                {busy === 'worked' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {busy !== 'worked' && <Trash2 className="h-3.5 w-3.5" />}
               </Button>
             </div>
           )}
@@ -1055,9 +1050,10 @@ function DayInspectorDialog({
                   size="sm"
                   onClick={() => handleDeleteAbsence(a)}
                   disabled={busy !== null}
+                  loading={busy === a.id}
                   aria-label={t('delete_absence_aria')}
                 >
-                  {busy === a.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {busy !== a.id && <Trash2 className="h-3.5 w-3.5" />}
                 </Button>
               </div>
             )

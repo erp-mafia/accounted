@@ -14,7 +14,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
-import { Plus, Lock, Unlock, Loader2, Eraser, Pencil } from 'lucide-react'
+import { Plus, Lock, Unlock, Eraser, Pencil } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
@@ -189,17 +189,11 @@ export function FiscalYearsManager() {
                     variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
-                    disabled={isMutating}
+                    loading={isMutating}
                     onClick={() => handleLock(p)}
                   >
-                    {isMutating ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Lock className="mr-1.5 h-4 w-4" />
-                        {t('fy_action_lock')}
-                      </>
-                    )}
+                    {!isMutating && <Lock className="mr-1.5 h-4 w-4" />}
+                    {t('fy_action_lock')}
                   </Button>
                 )}
                 {canManage && status === 'open' && (
@@ -219,17 +213,11 @@ export function FiscalYearsManager() {
                     variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
-                    disabled={isMutating}
+                    loading={isMutating}
                     onClick={() => handleUnlock(p)}
                   >
-                    {isMutating ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Unlock className="mr-1.5 h-4 w-4" />
-                        {t('fy_action_unlock')}
-                      </>
-                    )}
+                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {t('fy_action_unlock')}
                   </Button>
                 )}
                 {canReopen && (
@@ -237,17 +225,11 @@ export function FiscalYearsManager() {
                     variant="outline"
                     size="sm"
                     className="text-muted-foreground hover:text-foreground"
-                    disabled={isMutating}
+                    loading={isMutating}
                     onClick={() => handleReopen(p)}
                   >
-                    {isMutating ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <>
-                        <Unlock className="mr-1.5 h-4 w-4" />
-                        {t('fy_action_reopen')}
-                      </>
-                    )}
+                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {t('fy_action_reopen')}
                   </Button>
                 )}
               </div>

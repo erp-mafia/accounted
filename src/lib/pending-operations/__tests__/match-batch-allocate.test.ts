@@ -37,6 +37,17 @@ vi.mock('@/lib/invoices/duplicate-payment-detection', () => ({
   detectExplainingVoucherSetForTransaction: mockDetectExplaining,
   detectDuplicatePaymentVoucher: vi.fn(async () => null),
 }))
+
+// Kontantmetoden guard (lib/invoices/batch-cash-method-guard.ts). Mocked so
+// it consumes no slot in the queued Supabase mock; defaults to "nothing
+// unbooked" (accrual). Its own query shape is pinned by
+// lib/invoices/__tests__/batch-cash-method-guard.test.ts.
+const { mockFindCashUnbooked } = vi.hoisted(() => ({
+  mockFindCashUnbooked: vi.fn(async (..._args: unknown[]): Promise<unknown> => ({ ok: true, unbooked: [] })),
+}))
+vi.mock('@/lib/invoices/batch-cash-method-guard', () => ({
+  findCashMethodUnbookedAllocations: mockFindCashUnbooked,
+}))
 vi.mock('@/lib/processing-history/append', () => ({
   appendProcessingHistory: mockAppendProcessingHistory,
 }))
@@ -328,5 +339,42 @@ describe('commitPendingOperation: match_batch_allocate already-explained guard',
     expect(result.status).toBe('committed')
     expect(supabase.rpc).toHaveBeenCalledTimes(1)
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
+  })
+})
+
+describe('commitPendingOperation: match_batch_allocate kontantmetoden guard', () => {
+  const allocations = [{ kind: 'customer_invoice', invoice_id: INV_ID, amount: 1000 }]
+
+  it('refuses unbooked invoices under kontantmetoden without reaching the RPC', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({
+      ok: true,
+      unbooked: [{ kind: 'customer_invoice', id: INV_ID, invoice_number: '231' }],
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher rejection update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.code).toBe('BATCH_CASH_METHOD_UNBOOKED_INVOICE')
+    expect(result.http_status).toBe(400)
+    expect(result.error).toContain('kontantmetoden')
+    expect((result.data as { invoices: Array<{ id: string }> }).invoices[0].id).toBe(INV_ID)
+    expect(mockFindCashUnbooked).toHaveBeenCalledWith(supabase, 'company-1', allocations)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('refuses when the kontantmetoden check cannot run', async () => {
+    mockFindCashUnbooked.mockResolvedValueOnce({ ok: false, error: new Error('down') })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher update
+
+    const op = makePendingOp({ transaction_id: TX_ID, allocations })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
 })

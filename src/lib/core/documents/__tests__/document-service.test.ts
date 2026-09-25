@@ -94,6 +94,7 @@ import {
   createDocumentSignedUrl,
   _resetBucketVerified,
   validateDocumentFile,
+  declaredDocumentType,
   MAX_DOCUMENT_SIZE,
 } from '../document-service'
 
@@ -198,6 +199,21 @@ describe('receipt image upload metadata', () => {
     for (const type of [undefined, '', 'application/octet-stream', 'image/gif', 'image/svg+xml']) {
       expect(validateDocumentFile({ size: 100, type })).not.toBeNull()
     }
+    // The iPhone default is a document like any other picture.
+    expect(validateDocumentFile({ size: 100, type: 'image/heic' })).toBeNull()
+    expect(validateDocumentFile({ size: 100, type: 'image/heif' })).toBeNull()
+  })
+
+  it('takes the type from the extension when the browser declared none, and never overrides a declared one', () => {
+    expect(declaredDocumentType({ name: 'IMG_7484.heic', type: '' })).toBe('image/heic')
+    expect(declaredDocumentType({ name: 'IMG_7484.HEIF', type: null })).toBe('image/heif')
+    expect(declaredDocumentType({ name: 'kvitto.pdf', type: undefined })).toBe('application/pdf')
+    expect(declaredDocumentType({ name: 'kvitto.pdf', type: 'image/jpeg' })).toBe('image/jpeg')
+    expect(declaredDocumentType({ name: 'okänd.xyz', type: '' })).toBe('')
+    // The generic type a browser sends for a file it does not know is no declaration either.
+    expect(declaredDocumentType({ name: 'IMG_7484.heic', type: 'application/octet-stream' })).toBe('image/heic')
+    expect(declaredDocumentType({ name: 'okänd.xyz', type: 'application/octet-stream' })).toBe('application/octet-stream')
+    expect(declaredDocumentType({ name: null, type: '' })).toBe('')
   })
 
   it.each(pairs)('completes and retries $actual declared $declared with canonical Storage metadata', async ({ actual, declared }) => {

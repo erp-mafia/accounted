@@ -124,7 +124,7 @@ export default function ImportTheater({ model, preview, elapsed }: ImportTheater
             return (
               <li
                 key={line.title}
-                className={`border-b border-border/60 py-2.5 transition-opacity duration-500 last:border-b-0 ${
+                className={`border-b border-border py-2.5 transition-opacity duration-300 last:border-b-0 ${
                   visible ? 'opacity-100' : 'opacity-0'
                 }`}
               >

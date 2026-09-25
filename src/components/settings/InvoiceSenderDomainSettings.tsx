@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Copy, Loader2, RefreshCw, Trash2 } from 'lucide-react'
+import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
 import {
   SettingsGroup,
   SettingsRow,
@@ -22,9 +22,9 @@ import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
 
 const BASE = '/api/extensions/ext/email/sending-domain'
 
-const STATUS_VARIANT: Record<CompanySendingDomain['status'], 'secondary' | 'success' | 'destructive'> = {
+// Verified is the expected state, so it renders as muted text, not a chip.
+const STATUS_VARIANT: Record<Exclude<CompanySendingDomain['status'], 'verified'>, 'secondary' | 'destructive'> = {
   pending: 'secondary',
-  verified: 'success',
   failed: 'destructive',
 }
 
@@ -247,8 +247,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 if (e.key === 'Enter') void handleClaim()
               }}
             />
-            <Button size="sm" onClick={() => void handleClaim()} disabled={isClaiming || !domainInput.trim()}>
-              {isClaiming ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            <Button size="sm" onClick={() => void handleClaim()} disabled={!domainInput.trim()} loading={isClaiming}>
               {t('add_button')}
             </Button>
           </SettingsRow>
@@ -258,24 +257,24 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         <>
           <SettingsRow label={t('domain_label')}>
             <code className="truncate font-mono text-sm">{domain.domain}</code>
-            <Badge variant={STATUS_VARIANT[domain.status]}>{statusLabels[domain.status]}</Badge>
+            {domain.status === 'verified' ? (
+              <span className="text-xs text-muted-foreground">{statusLabels[domain.status]}</span>
+            ) : (
+              <Badge variant={STATUS_VARIANT[domain.status]}>{statusLabels[domain.status]}</Badge>
+            )}
             <div className="ml-auto flex shrink-0 items-center gap-2">
-              <Button variant="outline" size="sm" onClick={() => void handleVerify()} disabled={isChecking}>
-                {isChecking ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                )}
+              <Button variant="outline" size="sm" onClick={() => void handleVerify()} loading={isChecking}>
+                {!isChecking && <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
                 {t('check_again')}
               </Button>
               <Button
                 variant="outline"
                 size="icon"
                 onClick={() => void handleRemove()}
-                disabled={isRemoving}
+                loading={isRemoving}
                 aria-label={t('remove_aria')}
               >
-                {isRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                {!isRemoving && <Trash2 className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </SettingsRow>

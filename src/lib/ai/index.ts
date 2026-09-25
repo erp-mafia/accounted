@@ -2,6 +2,7 @@ import { readAiConfig, type ResolvedAiConfig } from './config'
 import { createAnthropicFamilyService } from './services/anthropic-family'
 import { createOpenAICompatibleService } from './services/openai-compatible'
 import type { AiService } from './types'
+import { withMetering } from './meter'
 
 export type {
   AiChatTurn,
@@ -14,6 +15,8 @@ export type {
 } from './types'
 export { getAiStatus, readAiConfig } from './config'
 export { extractJsonObject } from './json'
+export type { AiMeter } from './meter'
+export { withAiMeter } from './meter'
 
 // One service per resolved configuration. Keyed on the non-secret parts of
 // the config plus credential presence, so a changed environment (tests, the
@@ -43,10 +46,12 @@ export function getAiService(): AiService {
   const cfg = readAiConfig()
   const key = cacheKey(cfg)
   if (cached && cached.key === key) return cached.service
-  const service =
+  // Every call records its tokens (ai_usage_events), whichever feature made it.
+  const service = withMetering(
     cfg.provider === 'openai-compatible'
       ? createOpenAICompatibleService(cfg)
-      : createAnthropicFamilyService(cfg)
+      : createAnthropicFamilyService(cfg),
+  )
   cached = { key, service }
   return service
 }

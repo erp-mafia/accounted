@@ -17,6 +17,7 @@ import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
 import type { BooksCtx } from '../context'
+import { Button } from '@/components/ui/button'
 
 /** Null when the status is unavailable: the chips keep what they last showed. */
 async function fetchAiStatus(signal: AbortSignal): Promise<AiClient[] | null> {
@@ -132,16 +133,16 @@ export function DoneStep({ ctx, onLeave, leaving }: {
       {error ? (
         <p className="found-note" role="alert">
           {t('ai_handoff_failed')}{' '}
-          <button type="button" className="jny-btn-quiet" onClick={refetch} disabled={loading}>
+          <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={refetch} disabled={loading}>
             {t('ai_handoff_retry')}
-          </button>
+          </Button>
         </p>
       ) : tasks.length > 0 && (
         <div className="found">
-          <button type="button" className="found-toggle" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {t('tasks_found', { count: tasks.length })}
             <ChevronDown size={14} aria-hidden="true" className="chev" />
-          </button>
+          </Button>
           {open && (
             <ul className="found-list">
               {tasks.map((task) => (
@@ -151,9 +152,9 @@ export function DoneStep({ ctx, onLeave, leaving }: {
                     <span className="n">{task.count}</span>
                   </span>
                   <span className="a">
-                    <button type="button" className="open" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
+                    <Button variant="outline" size="sm" disabled={leaving} onClick={() => onLeave('done', AI_TASK_HREF[task.category])}>
                       {t('task_open')}
-                    </button>
+                    </Button>
                     <AiTaskAction
                       clients={connected}
                       task={task}
@@ -171,10 +172,10 @@ export function DoneStep({ ctx, onLeave, leaving }: {
 
       {/* The door is a quiet link, not the primary: the chips and the found rows are what this step is for (founder direction 2026-09-14). */}
       <div className="done-door">
-        <button type="button" className="jny-btn-quiet" disabled={leaving} onClick={() => onLeave('done')}>
+        <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}
           <ChevronRight size={13} aria-hidden="true" />
-        </button>
+        </Button>
       </div>
     </div>
   )

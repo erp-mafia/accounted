@@ -175,12 +175,12 @@ export default function RecurringInvoicesPage() {
         title={t('title')}
         action={
           canWrite ? (
-            <Button onClick={openNewSchedule}>
+            <Button size="sm" onClick={openNewSchedule}>
               <Plus className="mr-2 h-4 w-4" />
               {t('new_schedule')}
             </Button>
           ) : (
-            <Button disabled title={t('viewer_disabled_tooltip')}>
+            <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
               <Lock className="mr-2 h-4 w-4" />
               {t('new_schedule')}
             </Button>

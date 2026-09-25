@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
+import { POPOVER_ENTER_CLASS, POPOVER_ENTER_UP_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { useCompany } from '@/contexts/CompanyContext'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
@@ -67,7 +68,7 @@ function CompanyMark({ name }: { name: string }) {
   return (
     <span
       aria-hidden="true"
-      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[9px] font-semibold uppercase leading-none text-foreground"
+      className="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-sm bg-secondary text-[11px] font-semibold uppercase leading-none text-foreground"
     >
       {name.trim().charAt(0) || '?'}
     </span>
@@ -245,12 +246,12 @@ export default function UserMenu({
           <div
             ref={menuRef}
             role="menu"
-            className="fixed z-[60] rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-bottom-1 duration-150"
+            className={cn('fixed z-[60] py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_UP_CLASS)}
             style={{ top: menuPos.top, left: menuPos.left, width: menuPos.width }}
           >
             {/* Identity */}
             {(userName || userEmail) && (
-              <div className="border-b border-border/60 px-3 py-2.5">
+              <div className="border-b border-border px-3 py-2.5">
                 {userName && (
                   <p className="truncate text-[13px] font-medium text-foreground">{userName}</p>
                 )}
@@ -282,8 +283,8 @@ export default function UserMenu({
               {companiesOpen && (
                 // Top-aligned with the company row, growing DOWNWARD
                 // (founder feedback 2026-07-23: never upward over the menu).
-                <div className="absolute top-0 left-full z-[61] ml-1.5 w-60 rounded-lg border border-border bg-popover py-1 shadow-lg animate-in fade-in slide-in-from-left-1 duration-150">
-                  <div className="flex items-center gap-2 border-b border-border/60 px-3 pb-2 pt-1.5">
+                <div className={cn('absolute top-0 left-full z-[61] ml-1.5 w-60 py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
+                  <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-1.5">
                     <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     <input
                       ref={searchRef}
@@ -295,7 +296,7 @@ export default function UserMenu({
                   </div>
                   <div className="max-h-56 overflow-y-auto px-1 py-1" role="listbox">
                     {filteredCompanies.length === 0 && (
-                      <p className="px-2.5 py-2 text-[12px] text-muted-foreground">
+                      <p className="px-2.5 py-2 text-[12.5px] text-muted-foreground">
                         {tSwitcher('no_results')}
                       </p>
                     )}
@@ -319,7 +320,7 @@ export default function UserMenu({
                           <CompanyMark name={c.name} />
                           <span className="min-w-0 flex-1 truncate">{c.name}</span>
                           {role !== 'owner' && (
-                            <span className="flex-shrink-0 text-[10px] text-muted-foreground/60">
+                            <span className="flex-shrink-0 text-[11px] text-muted-foreground/60">
                               {role}
                             </span>
                           )}
@@ -336,18 +337,18 @@ export default function UserMenu({
                   {/* Companies homed on another domain (home-domain rule,
                       WL-01): subtle, non-clickable signpost entries. */}
                   {foreignCompanies.length > 0 && (
-                    <div className="border-t border-border/60 px-1 pt-1">
-                      <p className="px-2.5 pt-1 pb-0.5 text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">
+                    <div className="border-t border-border px-1 pt-1">
+                      <p className="px-2.5 pt-1 pb-0.5 text-[11px] font-semibold text-muted-foreground/60 uppercase tracking-[0.08em]">
                         {tSwitcher('managed_elsewhere')}
                       </p>
                       {foreignCompanies.map((entry) => (
                         <div
                           key={entry.id}
-                          className="px-2.5 py-1.5 text-[12px] leading-snug text-muted-foreground/60"
+                          className="px-2.5 py-1.5 text-[12.5px] leading-snug text-muted-foreground/60"
                           aria-disabled="true"
                         >
                           <span className="block truncate">{entry.name}</span>
-                          <span className="block truncate text-[10px]">
+                          <span className="block truncate text-[11px]">
                             {tSwitcher('managed_via', { domain: entry.domain })}
                           </span>
                         </div>
@@ -355,7 +356,7 @@ export default function UserMenu({
                     </div>
                   )}
                   {!sandbox && (
-                    <div className="border-t border-border/60 px-1 pt-1">
+                    <div className="border-t border-border px-1 pt-1">
                       <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
                         <Plus className="h-4 w-4 flex-shrink-0" />
                         {tSwitcher('add_company')}
@@ -379,7 +380,7 @@ export default function UserMenu({
                 {tNav('settings')}
               </Link>
               <Link
-                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/company#members'}
+                href={cockpitMode ? '/settings/team?ctx=byra' : '/settings/members'}
                 onClick={close}
                 className={menuRow}
               >
@@ -392,7 +393,7 @@ export default function UserMenu({
                   {tNav('subscription')}
                 </Link>
               )}
-              <div className="my-1 border-t border-border/60" />
+              <div className="my-1 border-t border-border" />
               <Link href="/help" onClick={close} className={menuRow}>
                 <HelpCircle className="h-4 w-4 flex-shrink-0" />
                 {tNav('help')}
@@ -408,7 +409,7 @@ export default function UserMenu({
                 {tNav('discord_community')}
               </a>
               <SupportLink variant="muted" className={menuRow} />
-              <div className="my-1 border-t border-border/60" />
+              <div className="my-1 border-t border-border" />
               <button
                 type="button"
                 onClick={() => {

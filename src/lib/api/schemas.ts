@@ -806,6 +806,14 @@ export const RotRutReclaimSchema = z.object({
   booking_date: isoDate,
 })
 
+// Link a begäran (plus any others the same transfer paid) to an existing
+// payout verifikat. The route's [id] is always part of the set.
+export const RotRutLinkVoucherSchema = z.object({
+  journal_entry_id: uuid,
+  request_ids: z.array(uuid).max(10).optional(),
+  dry_run: z.boolean().optional(),
+})
+
 // The beslutsfil JSON downloaded from Skatteverkets rot/rut e-tjänst.
 export const RotRutBeslutFileSchema = z.object({
   version: z.string(),

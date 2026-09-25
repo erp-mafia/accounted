@@ -21,6 +21,7 @@ import { InsightStep } from './steps/InsightStep'
 import { BankStep } from './steps/BankStep'
 import { SkvStep } from './steps/SkvStep'
 import { DoneStep } from './steps/DoneStep'
+import { Button } from '@/components/ui/button'
 
 const STATION_FRACS = [0.07, 0.36, 0.64, 0.93]
 
@@ -210,9 +211,9 @@ export default function BooksJourney(props: BooksJourneyProps) {
           <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
-            <button type="button" className="jny-btn-quiet bks-back" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? void leave('skipped') : dispatch({ type: 'GO_BACK', flags }))}>
+            <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? void leave('skipped') : dispatch({ type: 'GO_BACK', flags }))}>
               ‹ {t('back')}
-            </button>
+            </Button>
         </div>
         <div className="bks-qarea" ref={areaRef} key={state.step}>
           {navigation.ready ? renderStep() : null}

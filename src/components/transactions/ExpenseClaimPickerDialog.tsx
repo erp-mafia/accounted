@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -14,6 +13,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Select,
   SelectContent,
@@ -156,8 +156,11 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
         </DialogHeader>
 
         {loading ? (
-          <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          <div className="space-y-2 py-2">
+            <Skeleton className="h-4 w-1/3" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
           </div>
         ) : people.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">{t('no_claims')}</p>
@@ -191,7 +194,7 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
               {personClaims.map((c) => (
                 <label
                   key={c.id}
-                  className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 text-[13px] last:border-b-0 hover:bg-secondary/30"
+                  className="flex cursor-pointer items-center gap-3 border-b border-border px-3 py-2.5 text-[13px] last:border-b-0 hover:bg-secondary/35"
                 >
                   <Checkbox
                     checked={selected.has(c.id)}
@@ -219,8 +222,7 @@ export default function ExpenseClaimPickerDialog({ open, onOpenChange, transacti
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
             {t('cancel')}
           </Button>
-          <Button onClick={handleConfirm} disabled={!canConfirm}>
-            {submitting && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
+          <Button onClick={handleConfirm} disabled={!canConfirm} loading={submitting}>
             {t('confirm')}
           </Button>
         </DialogFooter>

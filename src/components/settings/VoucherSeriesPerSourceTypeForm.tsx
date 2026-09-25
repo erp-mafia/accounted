@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { ChevronDown, Loader2 } from 'lucide-react'
+import { ChevronDown } from 'lucide-react'
 import {
   SettingsGroup,
   SettingsReveal,
@@ -257,9 +257,9 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
           type="button"
           size="sm"
           onClick={handleSave}
-          disabled={!hasChanges || isSaving}
+          disabled={!hasChanges}
+          loading={isSaving}
         >
-          {isSaving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           Spara serier
         </Button>
       </div>

@@ -4,7 +4,7 @@ import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { createServiceClient } from '@/lib/supabase/server'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { documentTitle } from '@/lib/arkiv/documents/title'
 import { runDocumentJobFor } from '@/lib/documents/jobs/queue'
 import type { Payload } from '@/lib/documents/extract/fields'
@@ -108,12 +108,16 @@ export const GET = withRouteContext('document.pipeline', async (request, ctx, { 
   const inbox = item.data as { id: string; matched_transaction_id: string | null; routed_to_arkiv_at: string | null } | null
   const title = documentTitle({ docType: d.doc_type, fileName: d.file_name, payload, agreementTitle: agr?.title ?? null })
 
+  // Granska and Avtal are the brain's pages; outside it, a held, untyped or
+  // agreement document lands on its own page, where the type can be set.
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  const own = `/arkiv/dokument/${d.id}`
   let landed: PipelineView['landed'] = null
   if (steps.classify === 'done' || d.admission_state === 'held') {
-    if (d.admission_state === 'held') landed = { kind: 'held', href: '/arkiv/granska', label: null, matched: false }
-    else if (!d.doc_type || d.doc_type === 'other') landed = { kind: 'review', href: '/arkiv/granska#typ', label: null, matched: false }
+    if (d.admission_state === 'held') landed = { kind: 'held', href: brain ? '/arkiv/granska' : own, label: null, matched: false }
+    else if (!d.doc_type || d.doc_type === 'other') landed = { kind: 'review', href: brain ? '/arkiv/granska#typ' : own, label: null, matched: false }
     else if (VOUCHER.has(d.doc_type)) landed = { kind: 'underlag', href: UNDERLAG_HREF, label: null, matched: !!inbox?.matched_transaction_id }
-    else if (d.doc_type.startsWith('agreement.')) landed = { kind: 'agreement', href: agr ? `/arkiv/avtal/${agr.id}` : '/arkiv/avtal', label: agr?.title ?? null, matched: false }
+    else if (d.doc_type.startsWith('agreement.')) landed = brain ? { kind: 'agreement', href: agr ? `/arkiv/avtal/${agr.id}` : '/arkiv/avtal', label: agr?.title ?? null, matched: false } : { kind: 'document', href: own, label: null, matched: false }
     else if (AUTHORITY.has(d.doc_type)) landed = { kind: 'authority', href: `/arkiv/dokument/${d.id}`, label: null, matched: false }
     else landed = { kind: 'document', href: `/arkiv/dokument/${d.id}`, label: null, matched: false }
   }

@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { ArrowLeft } from 'lucide-react'
 import { useToast } from '@/components/ui/use-toast'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
+import { PageHeader } from '@/components/ui/page-header'
 import SalesOrderForm from '@/components/sales-orders/SalesOrderForm'
 import type { SalesOrder } from '@/types'
 
@@ -59,18 +60,19 @@ export default function EditSalesOrderPage({ params }: { params: Promise<{ id: s
 
   return (
     <div className="space-y-8">
-      <div>
-        <Link
-          href={`/sales-orders/${id}`}
-          className="mb-6 flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          {t('back_to_order')}
-        </Link>
-        <h1 data-ph-mask="" className="font-display text-2xl leading-8 tracking-tight">
-          {t('title_edit', { number: order.order_number ?? '' })}
-        </h1>
-      </div>
+      {/* data-ph-mask: the title carries the order number */}
+      <PageHeader
+        title={<span data-ph-mask="">{t('title_edit', { number: order.order_number ?? '' })}</span>}
+        action={
+          <Link
+            href={`/sales-orders/${id}`}
+            className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            {t('back_to_order')}
+          </Link>
+        }
+      />
       <SalesOrderForm mode="edit" initial={order} />
     </div>
   )

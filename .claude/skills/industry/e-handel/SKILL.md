@@ -20,6 +20,7 @@ trigger_signals:
     - "dropshipping"
     - "marketplace"
   bas_account_signals:
+    - "1686"
     - "1580"
     - "1581"
     - "1980"
@@ -45,7 +46,7 @@ version: 1
 
 ## 1. När denna skill ska laddas
 
-Ladda denna skill när huvudboken visar minst två av: (a) konton 1580/1581/2670/3106/4535/6040/6050, (b) leverantörsfakturor från Stripe/Klarna/Adyen/PayPal/Shopify/Klaviyo/Meta/Google Ireland/Amazon Services, (c) OSS-deklaration i agendan, (d) klientens SNI börjar på 47.91 eller 47.99, eller (e) order-/payout-flöden från Shopify, Centra, WooCommerce, Magento eller marketplace-feed. Ladda EJ för ren fysisk butik (SNI 47.1x-47.7x utan distansförsäljning): använd då `detaljhandel`-skillen. För hybrid (butik + e-handel) ladda båda.
+Ladda denna skill när huvudboken visar minst två av: (a) konton 1686 (eller legacy 1580/1581)/2670/3106/4535/6040/6050, (b) leverantörsfakturor från Stripe/Klarna/Adyen/PayPal/Shopify/Klaviyo/Meta/Google Ireland/Amazon Services, (c) OSS-deklaration i agendan, (d) klientens SNI börjar på 47.91 eller 47.99, eller (e) order-/payout-flöden från Shopify, Centra, WooCommerce, Magento eller marketplace-feed. Ladda EJ för ren fysisk butik (SNI 47.1x-47.7x utan distansförsäljning): använd då `detaljhandel`-skillen. För hybrid (butik + e-handel) ladda båda.
 
 ## 2. Typiska arbetsmönster
 
@@ -63,9 +64,9 @@ Tabellen avser BAS 2025 v.1.0 (bas.se/kontoplaner/bas-2025). **Genomgående namn
 
 | Konto | Officiellt namn (BAS 2025) | E-handel-kontext |
 |---|---|---|
-| 1580 | Fordringar för kontokort och kuponger | **Clearingkonto Stripe/Klarna/Adyen/PayPal/Shopify Payments**: ej 1684. Lägg upp underkonton 1581-1589 per provider. Saldo = orderintäkt mottagen av provider men ej utbetald till bank. |
+| 1686 | Fordringar för kontokort och kuponger | **Clearingkonto Stripe/Klarna/Adyen/PayPal/Shopify Payments**: ej 1684. BAS 2026 flyttade kontot från 1580 till 1686 (1580 finns inte i BAS 2026); en huvudbok som fortfarande bokar på 1580/1581-1589 ska mappas om till 1686. Dela per provider med objekt/dimension eller företagsegna underkonton. Saldo = orderintäkt mottagen av provider men ej utbetald till bank. |
 | 1513 | Kundfordringar, delad faktura | Klarna Pay Later/Slice it innan settlement, B2B-avbetalningsplaner. |
-| 1930 | Företagskonto / checkkonto | Mottagarkonto för payout efter clearing från 1580. |
+| 1930 | Företagskonto / checkkonto | Mottagarkonto för payout efter clearing från 1686. |
 | 1980 | Valutakonton | EUR/USD-konton för Stripe/PayPal-payouts som ligger kvar i FX innan växling: krav på månadsslutsvärdering till balansdagskurs (ÅRL 4 kap. 13 §). |
 | 2420 | Förskott från kunder | Betald order ej levererad: får ej intäktsföras (BFNAR 2013:2 leveransprincipen). |
 | 2421 | Ej inlösta presentkort | Skuld för MPV (flerfunktionsvoucher) tills inlösen eller civilrättslig preskription. SPV (enfunktionsvoucher) bokförs som intäkt + moms redan vid försäljning av kortet. |
@@ -96,7 +97,7 @@ Tabellen avser BAS 2025 v.1.0 (bas.se/kontoplaner/bas-2025). **Genomgående namn
 | 6050 | Försäljningsprovisioner | **Marketplace-provisioner**: Amazon referral fees, CDON/Fyndiq, eBay final value, Etsy listing fees. |
 | 6062 | Inkasso och KFM-avgifter | Klarna/Qliro-kreditfees, inkasso på obetalda fakturor. |
 
-**Avgörande korrigeringar mot vanliga felmappningar i andra skill-bibliotek:** 1684 är *inte* clearingkontot (det är "fordringar hos leverantörer"): använd **1580**. 2614/2624/2634 är reverse charge, inte OSS: OSS går på **2670 + 3106**. 3108 är EU-B2B *momsfritt*, inte export: export är **3105**. Kontona 4056 och 7920 finns inte i BAS 2025; korrekt är **4535** respektive **6040**. 561x-serien är personbilskostnader, inte logistik: logistik är **57x-serien**.
+**Avgörande korrigeringar mot vanliga felmappningar i andra skill-bibliotek:** 1684 är *inte* clearingkontot (det är "fordringar hos leverantörer"): använd **1686** (1580 i BAS 2025 och äldre). 2614/2624/2634 är reverse charge, inte OSS: OSS går på **2670 + 3106**. 3108 är EU-B2B *momsfritt*, inte export: export är **3105**. Kontona 4056 och 7920 finns inte i BAS 2025; korrekt är **4535** respektive **6040**. 561x-serien är personbilskostnader, inte logistik: logistik är **57x-serien**.
 
 ## 4. Regulatorisk hårddel (högst informationstäthet)
 
@@ -181,7 +182,7 @@ Tabellen avser BAS 2025 v.1.0 (bas.se/kontoplaner/bas-2025). **Genomgående namn
 
 ### 5.2 Plattformspayouts (Stripe/Klarna/Adyen) bokförda netto
 **Fel:** Daglig payout om 87 600 SEK (efter 2 400 SEK Stripe-avgift på 90 000 brutto) bokförs i sin helhet som 3001 + 2611 → omsättning underskattas, ingående moms på den momspliktiga delen av Stripe-tjänsten missas, marketplace-provisioner från Amazon/CDON syns inte i resultaträkningen som kostnad.
-**Rätt:** Brutto-redovisning krävs. Stegvis: (a) vid orderbekräftelse/leverans bokas brutto försäljning 3001 (eller 3106 för OSS) + utgående moms 2611/2670 mot fordran **1580/1581** per provider; (b) avgiften bokas separat som kostnad på **6040** (kontokortsavgifter, Stripe/Adyen/Klarna) eller **6050** (marketplace-provisioner Amazon/CDON/Fyndiq/eBay): reverse charge på EU-providers (Stripe Technology Europe IE, Klarna SE → ingen RC, Adyen NL) tillämpas på den momspliktiga komponenten enligt dnr 8-5507; (c) faktisk bankpayout bokas mot 1580 → 1930; (d) FX-differens på fordringskontot vid settlement bokas på 3960/7960. **HFD mål 4610-21 (2022-01-07)** stödjer att kortinlösen är momsfri men närliggande tekniska tjänster är momspliktiga: uppdelning krävs ofta. Vid fakturaspecifikation från providern följ deras momsklassificering per komponent.
+**Rätt:** Brutto-redovisning krävs. Stegvis: (a) vid orderbekräftelse/leverans bokas brutto försäljning 3001 (eller 3106 för OSS) + utgående moms 2611/2670 mot fordran **1686** per provider; (b) avgiften bokas separat som kostnad på **6040** (kontokortsavgifter, Stripe/Adyen/Klarna) eller **6050** (marketplace-provisioner Amazon/CDON/Fyndiq/eBay): reverse charge på EU-providers (Stripe Technology Europe IE, Klarna SE → ingen RC, Adyen NL) tillämpas på den momspliktiga komponenten enligt dnr 8-5507; (c) faktisk bankpayout bokas mot 1580 → 1930; (d) FX-differens på fordringskontot vid settlement bokas på 3960/7960. **HFD mål 4610-21 (2022-01-07)** stödjer att kortinlösen är momsfri men närliggande tekniska tjänster är momspliktiga: uppdelning krävs ofta. Vid fakturaspecifikation från providern följ deras momsklassificering per komponent.
 **Lagstöd:** Bruttoprincip 1 kap. ML 2023:200; BFL 5 kap. 6 §; dnr 8-5507 (2020-01-13); HFD mål 4610-21.
 
 ### 5.3 Dropshipping från tredjeland direkt till EU-konsument utan korrekt kedjeanalys

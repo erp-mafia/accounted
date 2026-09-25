@@ -10,6 +10,7 @@ import {
   guardAlreadyExplained,
   recordExplainedOverride,
 } from '@/lib/invoices/already-explained-guard'
+import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
 import { ensureInitialized } from '@/lib/init'
 import type { Invoice, SupplierInvoice, Transaction } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -143,6 +144,29 @@ export const POST = withRouteContext(
         reason: 'force=true',
         journalEntryIds: explained.set.vouchers.map((v) => v.journal_entry_id),
         userId: user.id,
+      })
+    }
+
+    // Kontantmetoden: the RPC clears 1510/2440 only, so an invoice with no
+    // booking yet would never get its revenue/cost + moms on the ledger.
+    // Refuse and route to the per-invoice paths that book the cash entry
+    // (lib/invoices/batch-cash-method-guard.ts). Fail closed on a lookup
+    // error: booking the wrong shape is worse than a retry. Runs after the
+    // already-explained guard so a row whose vouchers already exist (the
+    // invoices were marked paid one by one) is offered the link instead.
+    const cashCheck = await findCashMethodUnbookedAllocations(
+      supabase,
+      companyId!,
+      validation.data.allocations,
+    )
+    if (!cashCheck.ok) {
+      txLog.error('match-batch: kontantmetoden check failed', cashCheck.error as Error)
+      return errorResponse(cashCheck.error, txLog, { requestId })
+    }
+    if (cashCheck.unbooked.length > 0) {
+      return errorResponseFromCode('BATCH_CASH_METHOD_UNBOOKED_INVOICE', txLog, {
+        requestId,
+        details: { invoices: cashCheck.unbooked },
       })
     }
 

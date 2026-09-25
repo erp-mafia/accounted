@@ -1,3 +1,7 @@
+---
+areas: [moms, fakturering]
+---
+
 # Omvänd betalningsskyldighet inom byggsektorn: fördjupning
 
 ## Paragrafmappning gammal vs ny ML

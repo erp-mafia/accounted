@@ -119,9 +119,20 @@ describe('structured-errors registry', () => {
 
 describe('errorResponse', () => {
   it.each([
-    { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' },
-    new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'),
-  ])('returns 409 for a bank conflict without exposing its database message', async err => {
+    [{ code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' }, 'BANK_ANCHOR_SETTLEMENT_CHANGED'],
+    [new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'), 'BANK_BOOKING_SOURCE_CHANGED'],
+  ])('answers a named bank refusal with its own code and Swedish message', async (err, code) => {
+    const response = errorResponse(err, noopLogger)
+    expect(response.status).toBe(409)
+    expect(await readEnvelope(response)).toMatchObject({ error: {
+      code, message: getErrorEntry(code)!.message_sv, details: { pgCode: 'PT409' },
+    } })
+  })
+
+  it.each([
+    { code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' },
+    new BookkeepingDatabaseError('commit_entry', 'SOME_UNREGISTERED_REFUSAL', 'PT409'),
+  ])('keeps the generic conflict for an unregistered refusal without exposing its database message', async err => {
     const response = errorResponse(err, noopLogger)
     expect(response.status).toBe(409)
     expect(await readEnvelope(response)).toMatchObject({ error: {
@@ -132,6 +143,7 @@ describe('errorResponse', () => {
 
   it('keeps the legacy bookkeeping response status consistent with a bank conflict', () => {
     expect(bookkeepingErrorResponse(new BookkeepingDatabaseError('commit_entry', 'changed', 'PT409'))?.status).toBe(409)
+    expect(bookkeepingErrorResponse(new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SETTLEMENT_CHANGED', 'PT409'))?.status).toBe(409)
     expect(bookkeepingErrorResponse(new BookkeepingDatabaseError('commit_entry', 'unrelated', 'XX000'))?.status).toBe(500)
   })
   it('maps a plain Error carrying a registry code to that code, status and requestId', async () => {

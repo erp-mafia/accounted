@@ -1,6 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
+import { Loader2 } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { importPercent, type JobPhase } from '../lib/job-progress'
 
@@ -29,7 +30,7 @@ export function ImportProgress({ phase, written, total, prepared = 0, file }: Im
     <div className="th-progress" data-phase={phase} aria-busy={active}>
       <div className="th-progress-heading">
         <span className="th-progress-label">
-          {active ? <span className="th-progress-activity" aria-hidden="true" /> : null}
+          {active ? <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden="true" /> : null}
           <span role="status">{label}</span>
         </span>
         {percent !== null ? <span className="tabular-nums">{percent}%</span> : null}

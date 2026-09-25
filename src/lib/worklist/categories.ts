@@ -262,16 +262,25 @@ export async function countHeldDocuments(supabase: SupabaseClient, companyId: st
   return count ?? 0
 }
 
-/** Arkiv: admitted documents whose current model classification is 'other' or uncertain. */
+/**
+ * How far back "say what this is" reaches. The read backfill types years of history, and asking about every
+ * old document it could not name would bury Att göra (prod 2026-09-25: 621 such questions in 78 companies
+ * and growing as history was typed, 95 in one). Older ones stay in Dokument's folders, unasked.
+ */
+export const REVIEW_RECENT_DAYS = 60
+export const reviewSince = (now = new Date()): string => new Date(now.getTime() - REVIEW_RECENT_DAYS * 86_400_000).toISOString()
+
+/** Arkiv: recently uploaded, admitted documents whose current model classification is 'other' or uncertain. */
 export async function countUnclassifiedDocuments(supabase: SupabaseClient, companyId: string): Promise<number> {
   const { count, error } = await supabase
     .from('document_classifications')
-    .select('id', { count: 'exact', head: true })
+    .select('id, document_attachments!inner(created_at)', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('is_current', true)
     .eq('decided_by', 'model')
     .eq('relevance', 'relevant')
     .or('doc_type.eq.other,confidence.lt.0.6')
+    .gte('document_attachments.created_at', reviewSince())
   if (error) return logAndZero('document_unclassified', companyId, error)
   return count ?? 0
 }

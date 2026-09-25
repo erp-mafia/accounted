@@ -90,6 +90,7 @@ describe('GET /items', () => {
         makeInvoiceInboxItem({ id: 'unmatched', document_id: 'doc-e' }),
       ],
     })
+    enqueue({ data: [] }) // the documents' own readings: none here
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1], [TX2, JE2]]))
     resolveAnchoring.mockResolvedValue(
       anchoring({ anchored: 'anchored', unlinked: 'unlinked', elsewhere: 'anchored_elsewhere' }),
@@ -99,6 +100,8 @@ describe('GET /items', () => {
       await route.handler(req(), buildCtx(supabase)),
     )
     expect(status).toBe(200)
+    // The Dokument section is closed for this company (ARKIV_COMPANY_IDS unset), so the routed line gets no link.
+    expect((body.data as { arkiv_section?: boolean }).arkiv_section).toBe(false)
     const byId = Object.fromEntries(body.data.items.map((i) => [i.id, i]))
 
     expect(byId.anchored).toMatchObject({ matched_transaction_journal_entry_id: JE1, underlag_status: 'anchored' })
@@ -125,9 +128,20 @@ describe('GET /items', () => {
     ])
   })
 
+  it("shows the document's own reading for an item routed in before it landed, and drops the not-read flag", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ ...makeInvoiceInboxItem({ id: 'routed', document_id: 'doc-r' }), extraction_skipped: true }, { ...makeInvoiceInboxItem({ id: 'bare', document_id: 'doc-x' }), extraction_skipped: true }] })
+    enqueue({ data: [{ id: 'doc-r', extracted_data: { documentKind: 'receipt', totals: { total: 220 } } }, { id: 'doc-x', extracted_data: null }] })
+    const { body } = await parseJsonResponse<{ data: { items: Array<Record<string, unknown>> } }>(await route.handler(req(), buildCtx(supabase)))
+    const byId = Object.fromEntries(body.data.items.map((i) => [i.id as string, i]))
+    expect(byId.routed).toMatchObject({ extracted_data: { documentKind: 'receipt' }, extraction_skipped: false })
+    expect(byId.bare).toMatchObject({ extracted_data: null, extraction_skipped: true })
+  })
+
   it('reports unknown (never booked on a guess) when the anchoring read could not classify the item', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: TX1, document_id: 'doc-a' })] })
+    enqueue({ data: [] })
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
     // The helper's contract: absence means the document row could not be
     // read. The list must not degrade to the pre-#1548 "booked on the
@@ -166,6 +180,7 @@ describe('GET /items/:id', () => {
   it('derives the verifikat and underlag status for a matched, unstamped item', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: TX1, document_id: 'doc-a' }) })
+    enqueue({ data: null }) // no document reading
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
     resolveAnchoring.mockResolvedValue(anchoring({ i1: 'anchored_elsewhere' }))
 
@@ -186,6 +201,7 @@ describe('GET /items/:id', () => {
   it('reports unknown when the anchoring read could not classify the item', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: TX1, document_id: 'doc-a' }) })
+    enqueue({ data: null }) // no document reading
     resolveBooked.mockResolvedValue(new Map([[TX1, JE1]]))
     resolveAnchoring.mockResolvedValue(new Map())
 
@@ -212,6 +228,7 @@ describe('GET /items/:id', () => {
   it('reports null underlag status when the matched transaction is not booked', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: makeInvoiceInboxItem({ id: 'i1', matched_transaction_id: 'tx-open', document_id: 'doc-a' }) })
+    enqueue({ data: null })
     resolveBooked.mockResolvedValue(new Map())
 
     const { body } = await parseJsonResponse<{ data: EnrichedItem }>(

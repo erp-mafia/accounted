@@ -20,7 +20,6 @@ import {
   defaultLedgerForCurrency,
   getRevokedConnectionIds,
   upsertFromPsd2,
-  updateBalancesFromSync,
   ensureManualCashAccount,
 } from '../service'
 
@@ -39,7 +38,7 @@ interface MakeSupabaseOpts {
   error?: { message: string } | null
   /** bank_connections rows for the status lookup. Missing ids = not revoked. */
   connections?: ConnRow[]
-  connectionsError?: { message: string } | null
+  connectionsError?: { message: string; code?: string } | null
   /** 19xx account numbers already present in the company's chart. */
   chart?: string[]
   chartError?: { message: string } | null
@@ -257,6 +256,36 @@ describe('findFreeLedgerAccount', () => {
 })
 
 describe('allocatePsd2LedgerAccount', () => {
+  it('prepares an available ledger without creating a chart row', async () => {
+    const supabase = makeSupabase([])
+    expect(await allocatePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true })).toBe('1930')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it.each(['error', 'chartError'] as const)('aborts preparation on %s without chart writes', async key => {
+    const supabase = makeSupabase([], { [key]: { message: 'Lookup unavailable' } })
+    await expect(allocatePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true }))
+      .rejects.toThrow('Lookup unavailable')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it('does not allocate after a failed physical-account lookup during preparation', async () => {
+    const supabase = makeSupabase([], { error: { message: 'Identity lookup unavailable' } })
+    await expect(resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { iban: 'SE1234', currency: 'SEK', prepareOnly: true }))
+      .rejects.toThrow('Identity lookup unavailable')
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
+  it('does not choose an overflow ledger when connection status is unavailable during preparation', async () => {
+    const supabase = makeSupabase(
+      [{ ledger_account: '1930', bank_connection_id: 'conn-revoked' }],
+      { connectionsError: { message: 'Status lookup unavailable', code: 'PT409' } },
+    )
+    await expect(resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { currency: 'SEK', prepareOnly: true }))
+      .rejects.toMatchObject({ message: 'Status lookup unavailable', code: 'PT409' })
+    expect(mockSyncMappedAccounts).not.toHaveBeenCalled()
+  })
+
   it('allocates a slot and ensures it exists in the chart of accounts', async () => {
     const supabase = makeSupabase([{ ledger_account: '1930', bank_connection_id: 'conn-1' }])
 
@@ -875,108 +904,5 @@ describe('ensureManualCashAccount', () => {
     await expect(
       ensureManualCashAccount(makeManualSupabase(stub), 'c1', '1935', 'SEK'),
     ).rejects.toThrow(/boom/)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// updateBalancesFromSync: balance mirror from the PSD2 sync loop
-// ---------------------------------------------------------------------------
-describe('updateBalancesFromSync', () => {
-  interface BalanceUpdate {
-    payload: Record<string, unknown>
-    filters: Array<[string, unknown]>
-  }
-
-  function makeBalanceStub(updateError: { message: string } | null = null) {
-    const updates: BalanceUpdate[] = []
-    const supabase = {
-      from: vi.fn((table: string) => {
-        if (table !== 'cash_accounts') throw new Error(`unexpected table ${table}`)
-        return {
-          update: vi.fn((payload: Record<string, unknown>) => {
-            const entry: BalanceUpdate = { payload, filters: [] }
-            updates.push(entry)
-            const chain = {
-              eq: vi.fn((col: string, val: unknown) => {
-                entry.filters.push([col, val])
-                return chain
-              }),
-              lt: vi.fn((col: string, val: unknown) => {
-                entry.filters.push([`lt:${col}`, val])
-                return chain
-              }),
-              is: vi.fn((col: string, val: unknown) => {
-                entry.filters.push([`is:${col}`, val])
-                return chain
-              }),
-              then: (onFulfilled: (value: unknown) => unknown) =>
-                Promise.resolve({ error: updateError }).then(onFulfilled),
-            }
-            return chain
-          }),
-        }
-      }),
-    } as unknown as SupabaseClient
-    return { supabase, updates }
-  }
-
-  it('updates only balance fields, keyed on company + connection + uid', async () => {
-    const { supabase, updates } = makeBalanceStub()
-    await updateBalancesFromSync(supabase, 'c1', 'conn-1', [
-      {
-        external_uid: 'uid-1',
-        balance: 1000.5,
-        available_balance: 950.25,
-        balance_updated_at: '2026-09-01T05:00:00.000Z',
-      },
-    ])
-
-    // Two writes per account: one for rows with an OLDER timestamp, one for
-    // rows with NO timestamp. Together they are the stale-writer guard: an
-    // older sync run finishing later must not move the mirror backwards.
-    expect(updates).toHaveLength(2)
-    for (const u of updates) {
-      expect(u.payload).toEqual({
-        balance: 1000.5,
-        available_balance: 950.25,
-        balance_updated_at: '2026-09-01T05:00:00.000Z',
-      })
-    }
-    expect(updates[0].filters).toEqual([
-      ['company_id', 'c1'],
-      ['bank_connection_id', 'conn-1'],
-      ['external_uid', 'uid-1'],
-      ['lt:balance_updated_at', '2026-09-01T05:00:00.000Z'],
-    ])
-    expect(updates[1].filters).toEqual([
-      ['company_id', 'c1'],
-      ['bank_connection_id', 'conn-1'],
-      ['external_uid', 'uid-1'],
-      ['is:balance_updated_at', null],
-    ])
-  })
-
-  it('skips accounts without a timestamped balance (never nulls a stored one)', async () => {
-    const { supabase, updates } = makeBalanceStub()
-    await updateBalancesFromSync(supabase, 'c1', 'conn-1', [
-      { external_uid: 'uid-no-balance', balance: null, balance_updated_at: '2026-09-01T05:00:00.000Z' },
-      { external_uid: 'uid-no-timestamp', balance: 100 },
-      { external_uid: 'uid-ok', balance: 200, balance_updated_at: '2026-09-01T05:00:00.000Z' },
-    ])
-
-    expect(updates).toHaveLength(2)
-    expect(updates[0].filters).toContainEqual(['external_uid', 'uid-ok'])
-    // A refresh without an available type writes null: a stale available
-    // figure next to a fresh booked figure would misstate what can be spent.
-    expect(updates[0].payload.available_balance).toBeNull()
-  })
-
-  it('logs update failures instead of throwing (mirror must not fail the sync)', async () => {
-    const { supabase } = makeBalanceStub({ message: 'boom' })
-    await expect(
-      updateBalancesFromSync(supabase, 'c1', 'conn-1', [
-        { external_uid: 'uid-1', balance: 1, balance_updated_at: '2026-09-01T05:00:00.000Z' },
-      ]),
-    ).resolves.toBeUndefined()
   })
 })

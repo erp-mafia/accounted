@@ -3,6 +3,7 @@ import { TokenBucketRateLimiter } from '../rate-limiter';
 import { withRetry } from '../retry';
 import { FORTNOX_BASE_URL, FORTNOX_RATE_LIMIT } from './config';
 import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
+import { cleanProviderPayload } from '../provider-text';
 import { fortnoxRetryAfter } from './oauth-error';
 
 const FETCH_TIMEOUT_MS = 15_000;
@@ -113,7 +114,7 @@ export class FortnoxClient {
           );
         }
 
-        return response.json() as Promise<T>;
+        return cleanProviderPayload(await response.json()) as T;
       },
       {
         maxAttempts: 6,

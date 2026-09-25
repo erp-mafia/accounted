@@ -242,7 +242,7 @@ export function CalendarDayView({
           <button
             key={time}
             onClick={() => onAddDeadline(date)}
-            className="w-full flex border-b last:border-b-0 hover:bg-muted/50 transition-colors"
+            className="w-full flex border-b last:border-b-0 hover:bg-secondary/35 transition-colors"
           >
             <div className="w-16 p-2 border-r text-xs text-muted-foreground text-right pr-2 flex-shrink-0">
               {time}

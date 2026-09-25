@@ -120,12 +120,12 @@ export default function BankFileResultStep({
 
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
-        <Button variant="outline" className="min-h-11" onClick={onNewImport}>
+        <Button variant="outline" onClick={onNewImport}>
           <RotateCcw className="mr-2 h-4 w-4" />
           Ny import
         </Button>
         {isSuccess && (
-          <Button className="min-h-11" asChild>
+          <Button asChild>
             <Link href="/transactions">
               Visa transaktioner
               <ArrowRight className="ml-2 h-4 w-4" />

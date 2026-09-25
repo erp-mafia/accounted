@@ -209,7 +209,7 @@ export const ${apiRoutesVar}: ApiRouteDefinition[] = []
  * Add the new extension ID to extensions.schema.json enum array.
  */
 function updateSchemaJson(name: string): void {
-  const schemaPath = path.join(ROOT, 'extensions.schema.json')
+  const schemaPath = path.join(ROOT, 'src', 'extensions', 'extensions.schema.json')
 
   if (!fs.existsSync(schemaPath)) {
     console.warn('  Warning: extensions.schema.json not found, skipping enum update.')

@@ -16,7 +16,7 @@ import {
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { ChevronDown, Loader2, Lock } from 'lucide-react'
+import { ChevronDown, Lock } from 'lucide-react'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
@@ -490,7 +490,7 @@ export default function ArticleForm({
           aria-expanded={moreOpen}
         >
           <ChevronDown
-            className={cn('h-3.5 w-3.5 transition-transform duration-200', moreOpen && 'rotate-180')}
+            className={cn('h-3.5 w-3.5 transition-transform duration-150', moreOpen && 'rotate-180')}
             aria-hidden="true"
           />
           {t('more_fields')}
@@ -520,7 +520,7 @@ export default function ArticleForm({
             </span>
           </>
         ) : null}
-        <span className="ml-auto font-display text-[17px] tabular-nums text-foreground">
+        <span className="ml-auto font-display text-lg tabular-nums text-foreground">
           {formatCurrency(totalInclVat, currency)}
         </span>
       </div>
@@ -539,14 +539,12 @@ export default function ArticleForm({
           )}
           <Button
             type="submit"
-            disabled={isLoading || !canWrite}
+            disabled={!canWrite}
+            loading={isLoading}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
             {isLoading ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {t('submit_saving')}
-              </>
+              t('submit_saving')
             ) : !canWrite ? (
               <>
                 <Lock className="mr-2 h-4 w-4" />

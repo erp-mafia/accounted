@@ -24,7 +24,7 @@ Sjuklön = 80% of the salary and anställningsförmåner the employee loses due 
 
 ### Läkarintyg (medical certificate)
 
-Required from day 8. The employer may require it from day 1 (förstadagsintyg) with written, time-limited justification.
+Required from day 8 (SjLL 8 §). If there are särskilda skäl, the employer may request a certificate from an earlier day, or from day 1 of every future sick period (förstadagsintyg). The request must be in writing and may cover at most one year (SjLL 10 a §; does not apply where a kollektivavtal regulates the matter). Försäkringskassan can also order this, on its own initiative or at the employer's request, if there are särskilda skäl (SjLL 10 §).
 
 ## Återinsjuknande
 
@@ -35,9 +35,9 @@ If the employee falls sick again within 5 calendar days, the same sjuklöneperio
 The employer must report to Försäkringskassan within 7 calendar days after the sjuklöneperiod ends.
 
 Sjukpenning rates:
-- ~80% of SGI up to ceiling (10 × PBB, max ~1,284 SEK/day in 2025)
+- ~80% of SGI up to ceiling (10 × PBB; max 1,259 SEK/day in 2026, 1,250 SEK/day in 2025)
 - Up to 364 days within a 450-day frame
-- Then 75% (fortsättningsnivå)
+- Then 75% (fortsättningsnivå; max 1,180 SEK/day in 2026, 1,172 SEK/day in 2025)
 
 ## Högkostnadsskydd
 

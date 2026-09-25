@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Lock, Loader2 } from 'lucide-react'
+import { Lock } from 'lucide-react'
 
 interface ExecuteStepProps {
   periodName: string
@@ -69,13 +69,10 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
         <Button
           variant="destructive"
           onClick={() => setConfirmOpen(true)}
-          disabled={isRunning}
+          loading={isRunning}
         >
           {isRunning ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Verkställer bokslut…
-            </>
+            'Verkställer bokslut…'
           ) : (
             <>Verkställ bokslut</>
           )}

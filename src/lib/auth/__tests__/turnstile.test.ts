@@ -104,8 +104,8 @@ describe('Turnstile integration contract', () => {
 
   it('keeps the public key, CSP, and Docker runtime contract in sync', () => {
     const envExample = readRepoFile('.env.example')
-    const dockerEnvExample = readRepoFile('.env.docker.example')
-    const dockerfile = readRepoFile('Dockerfile')
+    const dockerEnvExample = readRepoFile('docker/.env.example')
+    const dockerfile = readRepoFile('docker/Dockerfile')
     const entrypoint = readRepoFile('docker/docker-entrypoint.sh')
     const nextConfig = readRepoFile('next.config.ts')
 

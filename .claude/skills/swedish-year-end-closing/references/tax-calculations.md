@@ -1,5 +1,14 @@
 # Tax Calculations: AB vs Enskild Firma
 
+<!-- toc -->
+**Contents**
+
+- [Bolagsskatt for AB](#bolagsskatt-for-ab)
+- [Enskild firma: four unique tax mechanisms](#enskild-firma-four-unique-tax-mechanisms)
+- [Critical distinction: booked vs declaration-only](#critical-distinction-booked-vs-declaration-only)
+
+<!-- /toc -->
+
 ## Bolagsskatt for AB
 
 Rate: **20.6%** (since January 1, 2021).
@@ -37,9 +46,14 @@ Formula: total periodiseringsfonder at year-start × statslåneränta (SLR) from
 
 This is a skattemässig justering ONLY. NEVER booked in accounting. Reported on INK2S field 4.6a.
 
-### Transition rule for pre-2019 periodiseringsfonder
+### Transition rule for periodiseringsfonder from before 2021
 
-Funds created before 2019 (when rate was 22%) require **gross-up of 103-106%** on reversal to compensate for rate reduction. Handled only in tax calculation.
+On reversal in a tax year beginning after 2020-12-31, the reversed amount is grossed up to compensate for the rate reductions (övergångsbestämmelser p. 5 till SFS 2018:1206; AB and other juridiska personer only):
+- Funds from tax years beginning before 2019 (22%): **106%**
+- Funds from tax years beginning 2019-2020 (21.4%): **104%**
+- Funds from 2021 onwards (20.6%): **100%** (no gross-up)
+
+The uplift is reported on INK2S field 4.6d. Handled only in tax calculation.
 
 ---
 
@@ -93,14 +107,14 @@ Gives sole traders equivalent of AB's ability to retain earnings at corporate ta
 - **No mandatory 6-year reversal** (can be held indefinitely)
 - On reversal: amount added back as NV income, previously paid 20.6% credited against that year's tax
 
-Handled exclusively in NE-bilaga (R33/R34), NEVER booked.
+Handled exclusively in NE-bilaga (R36 avsättning / R37 återföring), NEVER booked.
 
 ### 4. Periodiseringsfond (Enskild firma)
 
 - Max deferral: **30%** of result (vs 25% for AB)
 - Same 6-year mandatory reversal
 - **No schablonintäkt** for fysiska personer
-- Handled only in NE-bilaga (R29/R30), NEVER booked
+- Handled only in NE-bilaga (R34 avsättning / R32 återföring), NEVER booked
 
 ---
 
@@ -108,7 +122,7 @@ Handled exclusively in NE-bilaga (R33/R34), NEVER booked.
 
 | Item | AB | Enskild firma |
 |------|-----|---------------|
-| Periodiseringsfond | **Booked** (8811/21xx) | Declaration only (NE R29/R30) |
+| Periodiseringsfond | **Booked** (8811/21xx) | Declaration only (NE R34/R32) |
 | Överavskrivningar | **Booked** (8850/2150) | **Booked** (8850/2150) |
 | Skatt på årets resultat | **Booked** (8910/2512) | NOT booked (personal tax) |
 | Schablonintäkt periodiseringsfond | Declaration only (INK2S 4.6a) | N/A |

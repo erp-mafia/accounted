@@ -17,7 +17,7 @@ import {
 import { AttnLine } from '@/components/ui/attn-line'
 import CustomerForm from '@/components/customers/CustomerForm'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Lock, Eye, EyeOff } from 'lucide-react'
+import { Lock, Eye, EyeOff } from 'lucide-react'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -248,7 +248,7 @@ export default function CustomerDetailPage({
               variant="ghost"
               size="sm"
               onClick={() => setIsEditOpen(true)}
-              className="min-h-10 text-muted-foreground hover:text-foreground"
+              className="text-muted-foreground hover:text-foreground"
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -259,7 +259,7 @@ export default function CustomerDetailPage({
               variant="ghost"
               size="sm"
               onClick={handleDelete}
-              className="min-h-10 text-muted-foreground hover:text-destructive"
+              className="text-muted-foreground hover:text-destructive"
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
@@ -345,15 +345,13 @@ export default function CustomerDetailPage({
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="ml-1 h-10 w-10 -my-2 align-middle"
+                className="ml-1 -my-2 align-middle"
                 onClick={togglePersonalNumber}
-                disabled={isRevealing}
+                loading={isRevealing}
                 aria-label={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
                 title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
               >
-                {isRevealing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : revealedPersonalNumber ? (
+                {isRevealing ? null : revealedPersonalNumber ? (
                   <EyeOff className="h-4 w-4" />
                 ) : (
                   <Eye className="h-4 w-4" />
@@ -375,7 +373,7 @@ export default function CustomerDetailPage({
             <span className="inline-flex flex-wrap items-center gap-2">
               {customer.vat_number}
               {customer.vat_number_validated && (
-                <Badge variant="success" className="text-xs">{t('verified')}</Badge>
+                <span className="text-xs text-muted-foreground">{t('verified')}</span>
               )}
             </span>
           </DefRow>

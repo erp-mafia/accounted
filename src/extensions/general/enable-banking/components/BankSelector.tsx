@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { matchBankByName } from '../lib/bank-match'
@@ -228,12 +229,17 @@ export function BankSelector({
         />
       </div>
 
-      {/* Loading state. The spinner is decorative, so the state needs a text
-          equivalent: without it a screen-reader user gets silence between
+      {/* Loading state. The skeleton rows are decorative, so the state needs a
+          text equivalent: without it a screen-reader user gets silence between
           submitting and the list appearing. */}
       {isLoading && (
-        <div role="status" className="flex items-center justify-center py-12">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" aria-hidden="true" />
+        <div role="status" className="space-y-1 py-2">
+          {[0, 1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center gap-3 py-2" aria-hidden="true">
+              <Skeleton className="h-8 w-8 shrink-0 rounded-sm" />
+              <Skeleton className="h-4 w-40" />
+            </div>
+          ))}
           <span className="sr-only">Laddar banker...</span>
         </div>
       )}

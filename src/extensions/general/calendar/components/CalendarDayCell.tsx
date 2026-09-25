@@ -53,7 +53,7 @@ export function CalendarDayCell({
       onClick={() => onDayClick(date)}
       className={cn(
         'min-h-[80px] p-1 border-b border-r text-left transition-colors',
-        'hover:bg-muted/50 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-inset',
+        'hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
         !isCurrentMonth && 'bg-muted/30 text-muted-foreground',
         isToday && 'bg-primary/5',
         hasOverdue && 'border-l-2 border-l-destructive',
@@ -133,7 +133,7 @@ export function CalendarDayCell({
           {deadlinesByStatus.in_progress > 0 && (
             <div className="flex items-center gap-1">
               <div className={cn('w-2 h-2 rounded-sm', STATUS_COLORS.in_progress.dot)} />
-              <span className="text-xs text-yellow-700 truncate">
+              <span className="text-xs text-warning truncate">
                 {deadlinesByStatus.in_progress} pågår
               </span>
             </div>
@@ -143,7 +143,7 @@ export function CalendarDayCell({
           {deadlinesByStatus.submitted > 0 && (
             <div className="flex items-center gap-1">
               <div className={cn('w-2 h-2 rounded-sm', STATUS_COLORS.submitted.dot)} />
-              <span className="text-xs text-purple-700 truncate">
+              <span className="text-xs text-muted-foreground truncate">
                 {deadlinesByStatus.submitted} inskickad
               </span>
             </div>

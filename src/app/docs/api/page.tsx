@@ -31,7 +31,7 @@ export default function DocsApiLandingPage() {
             <Link
               key={c.href}
               href={c.href}
-              className="block rounded-lg border border-border p-5 hover:bg-secondary/40 transition-colors"
+              className="block rounded-lg border border-border p-5 hover:bg-secondary/60 transition-colors"
             >
               <div className="font-display text-lg tracking-tight mb-1">{c.label}</div>
               {c.summary && (
@@ -52,14 +52,14 @@ export default function DocsApiLandingPage() {
             <Link
               key={r.href}
               href={r.href}
-              className="block rounded-lg border border-border px-3 py-2 hover:bg-secondary/40 transition-colors text-sm"
+              className="block rounded-lg border border-border px-3 py-2 hover:bg-secondary/60 transition-colors text-sm"
             >
               {r.label}
             </Link>
           ))}
           <Link
             href="/docs/api/reference"
-            className="block rounded-lg border border-border px-3 py-2 hover:bg-secondary/40 transition-colors text-sm text-muted-foreground"
+            className="block rounded-lg border border-border px-3 py-2 hover:bg-secondary/60 transition-colors text-sm text-muted-foreground"
           >
             See all →
           </Link>

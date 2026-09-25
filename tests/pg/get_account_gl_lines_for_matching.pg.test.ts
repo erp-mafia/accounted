@@ -145,15 +145,15 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     expect(byId.get(matchedEntry)).toBe(2)
   })
 
-  it('still excludes opening_balance / storno / correction even with p_include_matched', async () => {
+  it('still excludes opening_balance / storno even with p_include_matched', async () => {
     const userId = await insertAuthUser()
     const companyId = await insertCompany({ createdBy: userId })
     const fiscalPeriodId = await insertFiscalPeriod({
       userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
     })
 
-    // These book-only / IB vouchers have no bank-feed counterpart and can never
-    // be a match target: the include_matched opt-in must not resurrect them.
+    // An IB and a storno have no bank-feed counterpart and can never be a match
+    // target: the include_matched opt-in must not resurrect them.
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-01-01', sourceType: 'opening_balance', voucherNumber: 1, amount: 50000,
@@ -161,10 +161,6 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
       entryDate: '2026-05-02', sourceType: 'storno', voucherNumber: 2, amount: 25000,
-    })
-    await insertPostedJournalEntry({
-      userId, companyId, fiscalPeriodId,
-      entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 3, amount: 25000,
     })
     const bankEntry = await insertPostedJournalEntry({
       userId, companyId, fiscalPeriodId,
@@ -181,7 +177,45 @@ describe('get_account_gl_lines_for_matching RPC: N:1 candidates', () => {
     expect(returnedIds.has(bankEntry)).toBe(true)
     expect(rows.find((r) => r.source_type === 'opening_balance')).toBeUndefined()
     expect(rows.find((r) => r.source_type === 'storno')).toBeUndefined()
-    expect(rows.find((r) => r.source_type === 'correction')).toBeUndefined()
+  })
+
+  it('offers an unmatched correction voucher, and hides one its bank row already settles (20260923150000)', async () => {
+    const userId = await insertAuthUser()
+    const companyId = await insertCompany({ createdBy: userId })
+    const fiscalPeriodId = await insertFiscalPeriod({
+      userId, companyId, periodStart: '2026-01-01', periodEnd: '2026-12-31',
+    })
+
+    // The rebooking half of storno-and-rebook is the LIVE booking of the bank
+    // movement. Never matched: it is the candidate the user must be able to pick.
+    const unmatchedCorrection = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-02', sourceType: 'correction', voucherNumber: 1, amount: 25000,
+    })
+    // Already settled (correctEntry re-points the original's bank link onto it).
+    const matchedCorrection = await insertPostedJournalEntry({
+      userId, companyId, fiscalPeriodId,
+      entryDate: '2026-05-04', sourceType: 'correction', voucherNumber: 2, amount: 4000,
+    })
+    await insertTransaction({ companyId, userId, currency: 'SEK', amount: 4000, date: '2026-05-04', journalEntryId: matchedCorrection })
+
+    const { rows: defaults } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1)`,
+      [companyId],
+    )
+    const defaultIds = new Set(defaults.map((r) => r.journal_entry_id))
+    expect(defaultIds.has(unmatchedCorrection)).toBe(true)
+    expect(defaultIds.has(matchedCorrection)).toBe(false)
+
+    const { rows: withMatched } = await getPool().query(
+      `SELECT journal_entry_id, linked_transaction_count
+         FROM public.get_account_gl_lines_for_matching(p_company_id => $1, p_include_matched => true)`,
+      [companyId],
+    )
+    const byId = new Map(withMatched.map((r) => [r.journal_entry_id, r.linked_transaction_count]))
+    expect(byId.get(unmatchedCorrection)).toBe(0)
+    expect(byId.get(matchedCorrection)).toBe(1)
   })
 })
 

@@ -103,6 +103,27 @@ describe('mapBokioToSupplierInvoice payment state', () => {
   });
 });
 
+describe('mapBokioToSupplierInvoice invoice number', () => {
+  const base = {
+    id: '6f6b2f17-3c4a-4a69-9f2d-3f5d7e1b8c90',
+    invoiceDate: '2023-10-01',
+    currency: 'SEK',
+    totalAmount: 1000,
+    remainingAmount: 0,
+    supplierRef: { id: 'sup-1', name: 'Leverantör AB' },
+  };
+
+  it('leaves a missing number empty instead of substituting the Bokio record id', () => {
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: null }).invoiceNumber).toBe('');
+    expect(mapBokioToSupplierInvoice({ ...base }).invoiceNumber).toBe('');
+  });
+
+  it('keeps the supplier number, trimmed, and stringifies a numeric one', () => {
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: '  F-77 ' }).invoiceNumber).toBe('F-77');
+    expect(mapBokioToSupplierInvoice({ ...base, invoiceNumber: 4711 }).invoiceNumber).toBe('4711');
+  });
+});
+
 /**
  * Shaped like `creditNoteResponseWithDiscount` in Bokio's published
  * company-api spec (github.com/bokio/bokio-api, branch v1,

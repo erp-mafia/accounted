@@ -85,11 +85,11 @@ export function TaxTableStatus({ year, compact = false }: Props) {
         variant="outline"
         size="sm"
         onClick={check}
-        disabled={loading}
+        loading={loading}
         aria-label={t('recheck')}
         className="ml-auto shrink-0"
       >
-        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCcw className="h-3.5 w-3.5" />}
+        {!loading && <RefreshCcw className="h-3.5 w-3.5" />}
       </Button>
     </div>
   )

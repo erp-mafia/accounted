@@ -43,7 +43,7 @@ function AgentSheetSkeleton() {
   return (
     <div
       aria-hidden="true"
-      className="fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-lg"
+      className="fixed inset-y-0 right-0 z-[60] flex w-full flex-col border-l border-border bg-background shadow-[var(--shadow-lg)]"
       style={{
         // Tracks the user's persisted dock width (set by the provider below)
         // so the skeleton has the same geometry as the sheet it stands in for.

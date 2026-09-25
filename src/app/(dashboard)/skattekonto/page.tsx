@@ -660,7 +660,7 @@ export default function SkattekontoPage() {
             layout="side-right"
             title={tStart('skattekonto_title')}
             body={tStart('skattekonto_body')}
-            primary={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+            primary={{ label: tStart('skattekonto_primary'), href: '/settings/skatteverket' }}
             secondary={{ label: t('import_statement_action'), href: '/import?mode=skattekonto' }}
           />
         </div>
@@ -695,7 +695,7 @@ export default function SkattekontoPage() {
         help={helpNode}
         action={
           notConnected ? (
-            <Button
+            <Button size="sm"
               variant="ghost"
               asChild
               className="text-muted-foreground hover:text-foreground"
@@ -705,7 +705,7 @@ export default function SkattekontoPage() {
           ) : (
             // The span carries the tooltip: `title` is suppressed on disabled elements.
             <span title={!hasSkvCapability ? 'Synk mot Skatteverket kräver ett abonnemang' : undefined}>
-              <Button
+              <Button size="sm"
                 variant="ghost"
                 onClick={syncNow}
                 disabled={syncing || !hasSkvCapability}
@@ -725,7 +725,7 @@ export default function SkattekontoPage() {
           shortfall line under convention 6's 2026-08-19 addendum (one
           lib/notices notice plus one page-domain attn line). */}
       {showReconnect ? (
-        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/tax' }}>
+        <AttnLine action={{ label: t('attn_reconnect_action'), href: '/settings/skatteverket' }}>
           {reconnectBody}
         </AttnLine>
       ) : notConnected ? (
@@ -733,7 +733,7 @@ export default function SkattekontoPage() {
         // booking/matching flows below work on the local table. One ochre
         // sentence with the connect action, per the attn convention.
         <AttnLine
-          action={{ label: tStart('skattekonto_primary'), href: '/settings/tax' }}
+          action={{ label: tStart('skattekonto_primary'), href: '/settings/skatteverket' }}
         >
           {t('imported_not_connected_attn')}
         </AttnLine>
@@ -924,10 +924,6 @@ export default function SkattekontoPage() {
           </button>
         </p>
       )}
-
-      <p className="px-1 text-xs leading-5 text-muted-foreground">
-        {t('pgnote', { amount: formatCurrency(data?.saldoKronofogden ?? 0) })}
-      </p>
 
       <DestructiveConfirmDialog {...ignoreConfirmProps} />
 
@@ -1206,7 +1202,7 @@ function SkattekontoRow({
               identical apart from ränteberäkningsdatum. Without this the rows
               read as duplicates from the automatic hämtning. */}
           {showInterestDate && row.ranteberakningsdatum && (
-            <span className="text-[12px] tabular-nums text-muted-foreground">
+            <span className="text-[12.5px] tabular-nums text-muted-foreground">
               {t('interest_from', { date: formatDate(row.ranteberakningsdatum) })}
             </span>
           )}
@@ -1229,7 +1225,7 @@ function SkattekontoRow({
             ) : (
               /* Plain fact, not an exception: quiet text, and the band
                  header carries the count once. */
-              <span className="text-[11.5px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
+              <span className="text-[11px] text-muted-foreground">{t('chip_not_booked').toLowerCase()}</span>
             )
           )}
         </span>
@@ -1370,8 +1366,9 @@ function MatchDialog({
                       {c.description}
                     </TableCell>
                     <TableCell>
+                      {/* Chips mark exceptions: posted is the normal case. */}
                       {c.status === 'posted' ? (
-                        <Badge variant="secondary">Bokförd</Badge>
+                        <span className="text-muted-foreground">Bokförd</span>
                       ) : c.status === 'draft' ? (
                         <Badge variant="outline">Utkast</Badge>
                       ) : (

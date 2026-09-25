@@ -182,7 +182,6 @@ Response:
       "totalTax": 24300.00,
       "totalAvgifterBasis": 80000.00,
       "totalAvgifterAmount": 25136.00,
-      "totalSjuklonekostnad": 0,
       "avgifterByCategory": { "standard": { "basis": 80000.00, "amount": 25136.00 } }
     },
     "xml": "<?xml version=\\"1.0\\" encoding=\\"UTF-8\\"?><Skatteverket omrade=\\"Arbetsgivardeklaration\\">…</Skatteverket>",

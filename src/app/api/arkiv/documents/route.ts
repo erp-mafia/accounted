@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
 import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
-import { documentDate, documentTitle } from '@/lib/arkiv/documents/title'
+import { documentDate, documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -25,12 +25,13 @@ export interface ArkivDocumentRow {
   /** The date the document carries; the upload date stands in when it has none. */
   document_date: string | null
   doc_type: string | null
+  page_count: number | null
   counterparty: string | null
   amount: number | null
   currency: string | null
   /** An agreement's amount recurs: monthly, quarterly, yearly; null for a one-off or a non-agreement. */
   period: string | null
-  linked: { journal_entry_id: string | null; voucher: string | null; agreement_id: string | null; expected: number; facts: number; held: boolean; unclassified: boolean }
+  linked: { journal_entry_id: string | null; voucher: string | null; agreement_id: string | null; expected: number; held: boolean; unclassified: boolean; reading: boolean }
   href: string
 }
 
@@ -87,7 +88,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id')
+    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, extracted_data, page_count')
     .eq('company_id', ctx.companyId)
     .in('admission_state', ['admitted', 'held'])
     .or(NOT_STRUCTURED_MIME_FILTER)
@@ -97,18 +98,20 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (searchIds) query = query.in('id', searchIds)
   const { data, error } = await query
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null }>
+  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
   if (docs.length === 0) return NextResponse.json({ data: [] })
   const ids = docs.map((d) => d.id)
 
   const entryIds = docs.map((d) => d.journal_entry_id).filter((id): id is string => !!id)
-  const [extractions, agreements, facts, entries] = await Promise.all([
-    ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true),
-    ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', ids),
-    ctx.supabase.from('company_facts').select('source_document_id').in('source_document_id', ids).is('sys_to', null).neq('rank', 'deprecated'),
-    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').in('id', entryIds) : Promise.resolve({ data: [], error: null }),
+  // Extractions and agreements are the brain's records: outside it the row is the document, its type and its verifikat.
+  const brain = isArkivBrainEnabled(ctx.companyId)
+  const none = Promise.resolve({ data: [], error: null })
+  const [extractions, agreements, entries] = await Promise.all([
+    brain ? ctx.supabase.from('document_extractions').select('document_id, payload').in('document_id', ids).eq('is_current', true) : none,
+    brain ? ctx.supabase.from('agreements').select('id, source_document_id, title, counterparty_name, amount, currency, period').in('source_document_id', ids) : none,
+    entryIds.length ? ctx.supabase.from('journal_entries').select('id, voucher_series, voucher_number').in('id', entryIds) : none,
   ])
-  for (const r of [extractions, agreements, facts, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
+  for (const r of [extractions, agreements, entries]) if (r.error) return NextResponse.json({ error: getErrorMessage(r.error) }, { status: 500 })
   const payloadByDoc = new Map(((extractions.data ?? []) as Array<{ document_id: string; payload: Payload }>).map((e) => [e.document_id, e.payload]))
   const agreementRows = (agreements.data ?? []) as Array<{
     id: string
@@ -120,8 +123,6 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     period: string | null
   }>
   const agreementByDoc = new Map(agreementRows.map((a) => [a.source_document_id, a]))
-  const factCount = new Map<string, number>()
-  for (const f of (facts.data ?? []) as Array<{ source_document_id: string }>) factCount.set(f.source_document_id, (factCount.get(f.source_document_id) ?? 0) + 1)
   const voucherOf = new Map(
     ((entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [
       e.id,
@@ -143,7 +144,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   }
 
   const rows: ArkivDocumentRow[] = docs.map((d) => {
-    const payload = payloadByDoc.get(d.id) ?? {}
+    // The brain's reading when there is one; the inbox's Underlag reading otherwise.
+    const payload = payloadByDoc.get(d.id) ?? underlagPayload(d.extracted_data, d.doc_type)
     const agreement = agreementByDoc.get(d.id)
     const settled = (...names: string[]) => names.map((n) => payload[n]?.normalized).find((v) => v != null) ?? null
     const counterparty =
@@ -187,6 +189,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
       title: documentTitle({ docType: d.doc_type, fileName: d.file_name, payload, agreementTitle: agreement?.title ?? null }),
       document_date: documentDate(d.doc_type, payload),
       doc_type: d.doc_type,
+      page_count: d.page_count ?? null,
       counterparty,
       amount,
       currency: agreement?.currency ?? (settled('currency', 'rent_currency') as string | null) ?? (amount != null ? 'SEK' : null),
@@ -196,9 +199,11 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         voucher: d.journal_entry_id ? (voucherOf.get(d.journal_entry_id) ?? null) : null,
         agreement_id: agreement?.id ?? null,
         expected: agreement ? (expectedCount.get(agreement.id) ?? 0) : 0,
-        facts: factCount.get(d.id) ?? 0,
         held: d.admission_state === 'held',
-        unclassified: d.admission_state === 'admitted' && (d.doc_type == null || d.doc_type === 'other'),
+        // A person is asked only about what the model read and could not name. A document with no type yet is
+        // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
+        unclassified: d.admission_state === 'admitted' && d.doc_type === 'other',
+        reading: d.admission_state === 'admitted' && d.doc_type == null,
       },
       href: agreement ? `/arkiv/avtal/${agreement.id}` : `/arkiv/dokument/${d.id}`,
     }

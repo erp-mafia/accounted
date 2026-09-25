@@ -2,7 +2,8 @@ import { Suspense } from 'react'
 import { redirect } from 'next/navigation'
 import { cookies, headers } from 'next/headers'
 import DashboardNav from '@/components/dashboard/DashboardNav'
-import { isArkivEnabled } from '@/lib/arkiv/flag'
+import { isArkivSectionEnabled } from '@/lib/arkiv/flag'
+import { isAgentsPageEnabled } from '@/lib/agent-skills/flag'
 import { DashboardRouteShell } from '@/components/dashboard/DashboardRouteShell'
 import { MainContainer } from '@/components/dashboard/MainContainer'
 import CompanyTabSync from '@/components/dashboard/CompanyTabSync'
@@ -14,6 +15,7 @@ import LazyCommandPalette from '@/components/common/LazyCommandPalette'
 import { SupportDialogHost } from '@/components/support/SupportDialogHost'
 import { SettingsHotkey } from '@/components/settings/SettingsHotkey'
 import { SessionTimeoutController } from '@/components/auth/SessionTimeoutController'
+import { BrowserSessionGuard } from '@/components/auth/BrowserSessionGuard'
 import { SandboxBanner } from '@/components/dashboard/SandboxBanner'
 import { SystemNoticeBanner } from '@/components/dashboard/SystemNoticeBanner'
 import { parseSystemNoticeUntil } from '@/components/dashboard/system-notice'
@@ -66,16 +68,12 @@ const MAIN_PANEL_CLASS =
   'safe-area-main-padding md:!pb-0 relative bg-background min-h-dvh ' +
   'md:min-h-0 md:ml-[var(--nav-w)] md:mt-[10px] md:mr-[var(--agent-dock-w)] md:h-[calc(100vh-20px)] ' +
   'md:overflow-y-auto md:rounded-xl md:border md:border-border ' +
-  'md:transition-[margin-left,margin-right] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)]'
+  'md:transition-[margin-left,margin-right] md:duration-300 md:ease-drawer'
 
 export default async function DashboardLayout({
   children,
-  settingsModal,
 }: {
   children: React.ReactNode
-  // `@settingsModal` parallel slot: renders the routed settings modal over the
-  // current page on in-app navigation to /settings/*; null otherwise.
-  settingsModal: React.ReactNode
 }) {
   const { supabase, user } = await getDashboardAuthContext()
 
@@ -223,6 +221,7 @@ export default async function DashboardLayout({
         }}
       >
         <SessionTimeoutController />
+        <BrowserSessionGuard />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
@@ -242,7 +241,6 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
-            {settingsModal}
             <SettingsHotkey />
           <Suspense fallback={null}>
             <SupportDialogHost />
@@ -305,9 +303,11 @@ export default async function DashboardLayout({
       .select('*')
       .eq('company_id', companyId)
       .order('period_start', { ascending: false }),
+    // The embed carries each account's bank for the Konto label; same select
+    // as fetchCashAccounts (lib/cash-accounts/labels.ts CashAccountWithBank).
     supabase
       .from('cash_accounts')
-      .select('*')
+      .select('*, bank_connection:bank_connections(bank_name)')
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),
@@ -385,6 +385,7 @@ export default async function DashboardLayout({
     return (
       <CompanyProvider value={companyContextValue}>
         <SessionTimeoutController />
+        <BrowserSessionGuard />
         <AgentSheetProvider>
           <CompanyTabSync />
           <div className="min-h-dvh bg-frame md:flex md:flex-col">
@@ -400,7 +401,6 @@ export default async function DashboardLayout({
                 {children}
               </MainContainer>
             </main>
-            {settingsModal}
             <SettingsHotkey />
           </div>
         </AgentSheetProvider>
@@ -537,6 +537,7 @@ export default async function DashboardLayout({
         settings={settingsError ? undefined : settings}
       >
       <SessionTimeoutController />
+      <BrowserSessionGuard />
       <DashboardRouteShell
         onboarding={
           <div className="relative min-h-dvh bg-background">
@@ -588,7 +589,8 @@ export default async function DashboardLayout({
             hasWebshop={hasWebshop}
             hasMileage={hasMileage}
             hasExpenseClaims={hasExpenseClaims}
-            arkivEnabled={isArkivEnabled(companyId)}
+            arkivEnabled={isArkivSectionEnabled(companyId)}
+            agentsEnabled={isAgentsPageEnabled(companyId)}
             isSandbox={isSandbox}
             extensionNavItems={getExtensionNavItems()}
             userName={userProfile?.full_name ?? null}
@@ -624,7 +626,6 @@ export default async function DashboardLayout({
           )}
           <LazyCommandPalette />
           <SettingsHotkey />
-          {settingsModal}
         </div>
         {/* Outside #dash-shell on purpose: non-modal dialogs (booking,
             invoice) set `inert` on the shell while open, and the assistant

@@ -181,12 +181,16 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
     return (
       <div className="space-y-6" aria-busy>
         {header}
-        <div className="grid gap-8 lg:grid-cols-[220px_1fr]">
-          <div className="space-y-2">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-          <Skeleton className="h-48 w-full" />
+        {/* Shaped like the landing table it resolves into: one-line rows,
+            not the retired rail + panel layout. */}
+        <div>
+          {[1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 border-b border-border py-3">
+              <Skeleton className="h-7 w-7 shrink-0" />
+              <Skeleton className="h-4 w-48" />
+              <Skeleton className="ml-auto h-4 w-20" />
+            </div>
+          ))}
         </div>
       </div>
     )
@@ -203,7 +207,7 @@ export function ReconciliationWorkspace({ initialPeriods, initialCompanyId }: Re
           actionLabel={t('empty_connect_bank')}
           actionHref="/settings/banking"
           secondaryActionLabel={t('empty_connect_skv')}
-          secondaryActionHref="/settings/tax"
+          secondaryActionHref="/settings/skatteverket"
         />
       </div>
     )

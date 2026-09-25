@@ -16,6 +16,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Loader2, ExternalLink } from 'lucide-react'
+import {
+  DestructiveConfirmDialog,
+  useDestructiveConfirm,
+} from '@/components/ui/destructive-confirm-dialog'
 import { WhatsAppMark } from '@/components/extensions/general/WhatsAppMark'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
@@ -70,6 +74,7 @@ export function WhatsAppLinkPanel() {
   const { toast } = useToast()
   const { companies } = useCompany()
   const { locale, formatDateLong } = useFormat()
+  const { dialogProps: confirmDialogProps, confirm } = useDestructiveConfirm()
 
   const [isLoading, setIsLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -146,7 +151,12 @@ export function WhatsAppLinkPanel() {
   }
 
   const revoke = async () => {
-    if (!window.confirm(t('revoke_confirm'))) return
+    const ok = await confirm({
+      title: t('disconnect_label'),
+      description: t('revoke_confirm'),
+      confirmLabel: t('revoke_button'),
+    })
+    if (!ok) return
     setIsSaving(true)
     try {
       const response = await fetch(`${BASE}/link/revoke`, { method: 'POST' })
@@ -200,6 +210,7 @@ export function WhatsAppLinkPanel() {
 
   if (status?.linked) {
     return (
+      <>
       <SettingsGroup label={t('group_label')}>
         {healthIssues > 0 ? (
           <div className="px-1 pt-3">
@@ -270,6 +281,8 @@ export function WhatsAppLinkPanel() {
           <SettingsRowNote>{t('revoke_note')}</SettingsRowNote>
         </SettingsRow>
       </SettingsGroup>
+      <DestructiveConfirmDialog {...confirmDialogProps} />
+      </>
     )
   }
 
@@ -308,8 +321,7 @@ export function WhatsAppLinkPanel() {
             </p>
           </div>
         ) : (
-          <Button type="button" disabled={isMinting} onClick={() => void startLinking()}>
-            {isMinting ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
+          <Button type="button" loading={isMinting} onClick={() => void startLinking()}>
             {t('connect_button')}
           </Button>
         )}

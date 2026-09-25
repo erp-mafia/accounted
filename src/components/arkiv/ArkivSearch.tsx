@@ -13,7 +13,7 @@ import { SourceLink } from './DefList'
  * The Arkiv search (phase 9c): one field over documents, agreements and
  * facts, answered with the record to open and the page it was read from.
  * Search is the in-app way to a fact; asking is done through the person's
- * own assistant, so the field carries the way there.
+ * own assistant, and the way there sits in the page's "?" help (ArkivHome).
  */
 export const SEARCH_MIN = 2
 
@@ -22,6 +22,33 @@ const GROUPS: Array<{ kind: ArkivSearchHit['kind']; labelKey: 'search_group_docu
   { kind: 'agreement', labelKey: 'search_group_agreements' },
   { kind: 'fact', labelKey: 'search_group_facts' },
 ]
+
+/** One document, however many of its pages matched: the first passage, the pages beside it. */
+interface DocumentGroup {
+  record_ref: string
+  title: string
+  subtitle: string | null
+  snippet: string | null
+  href: string
+  pages: Array<{ page: number; href: string }>
+}
+
+/** A seven-page loan agreement came back as seven rows with the same title; a person reads one row and picks the page. */
+export function groupDocumentHits(hits: ArkivSearchHit[]): DocumentGroup[] {
+  const groups = new Map<string, DocumentGroup>()
+  for (const hit of hits) {
+    if (hit.kind !== 'document') continue
+    const id = hit.record_ref.slice(hit.record_ref.indexOf(':') + 1)
+    let group = groups.get(hit.record_ref)
+    if (!group) {
+      group = { record_ref: hit.record_ref, title: hit.title, subtitle: hit.subtitle, snippet: hit.snippet, href: `/arkiv/dokument/${id}`, pages: [] }
+      groups.set(hit.record_ref, group)
+    }
+    if (hit.page && hit.href && !group.pages.some((p) => p.page === hit.page)) group.pages.push({ page: hit.page, href: hit.href })
+  }
+  for (const group of groups.values()) group.pages.sort((a, b) => a.page - b.page)
+  return [...groups.values()]
+}
 
 /** ts_headline marks matches with <b>; rendered as emphasis, never as HTML. */
 function Passage({ text }: { text: string }) {
@@ -75,16 +102,7 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder={t('search_documents')} containerClassName="w-full max-w-md" autoComplete="off" />
-        <p className="text-[12.5px] text-muted-foreground">
-          {t('search_ask_lead')}{' '}
-          <Link href="/settings/api" className={`${QUIET_LINK_CLASS} text-foreground`}>
-            {t('search_ask_link')}
-          </Link>
-          {t('search_ask_tail')}
-        </p>
-      </div>
+      <ToolbarSearch id="arkiv-search" value={query} onChange={(e) => onQueryChange(e.target.value)} placeholder={t('search_documents')} containerClassName="w-full max-w-md" autoComplete="off" />
 
       {failed && <p className="text-[13px] text-muted-foreground">{t('load_failed')}</p>}
       {loading && (
@@ -99,6 +117,42 @@ export function ArkivSearch({ query, onQueryChange }: { query: string; onQueryCh
           {GROUPS.map((group) => {
             const hits = current.hits.filter((h) => h.kind === group.kind)
             if (hits.length === 0) return null
+            if (group.kind === 'document') {
+              const documents = groupDocumentHits(hits)
+              return (
+                <section key={group.kind} aria-label={t(group.labelKey)}>
+                  <h3 className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                    {t(group.labelKey)} <span className="tabular-nums">({documents.length})</span>
+                  </h3>
+                  <ul className="divide-y divide-border">
+                    {documents.map((doc) => (
+                      <li key={doc.record_ref} className="flex items-start justify-between gap-4 py-2">
+                        <div className="min-w-0">
+                          <Link href={doc.href} className={`${QUIET_LINK_CLASS} text-[13px] text-foreground`}>
+                            {doc.title}
+                          </Link>
+                          {doc.subtitle ? <span className="ml-2 text-[11px] text-muted-foreground">{doc.subtitle}</span> : null}
+                          {doc.snippet ? (
+                            <div className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
+                              <Passage text={doc.snippet} />
+                            </div>
+                          ) : null}
+                        </div>
+                        {doc.pages.length > 0 ? (
+                          <div className="flex shrink-0 flex-wrap justify-end gap-x-2 text-[11px] text-muted-foreground">
+                            {doc.pages.map((p) => (
+                              <Link key={p.page} href={p.href} className={QUIET_LINK_CLASS}>
+                                {t('source_page_short_only', { page: p.page })}
+                              </Link>
+                            ))}
+                          </div>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )
+            }
             return (
               <section key={group.kind} aria-label={t(group.labelKey)}>
                 <h3 className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">

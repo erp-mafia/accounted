@@ -10,7 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
-import { SettingsSectionHeader } from '@/components/settings/SettingsRows'
+import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { useBranding } from '@/lib/branding/brand-context'
 
 const BankingPanel = getSettingsPanel('enable-banking')
@@ -94,6 +94,7 @@ export function BankingSettingsContent() {
 
   return (
     <div>
+      <SettingsBackLink href="/settings/connections" label={tNav('connections')} />
       <SettingsSectionHeader title={tNav('banking')} intro={tIntro('banking', { appName })} />
 
       {/* OAuth bounce-back failure: a live warning, so it stays visible in the

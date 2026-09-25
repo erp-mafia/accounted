@@ -19,12 +19,13 @@
 INK2 (Inkomstdeklaration 2, SKV 2002) has three core parts plus optional bilagor:
 
 ### INK2 -- Huvudblanketten (main form)
-Summary of taxable income. Fields 1.1-1.15.
+Summary of taxable income. Fields 1.1-1.16.
 - **1.1** Överskott of näringsverksamhet (from INK2S 4.15)
 - **1.2** Underskott of näringsverksamhet (from INK2S 4.16)
 - **1.4** Särskild löneskatt på pensionskostnader (rate **24.26%**)
-- **1.6a** Avkastningsskatt (rate **15%**)
-- **1.7-1.15** Fastighetsskatt/avgift
+- **1.6a/b** Avkastningsskatt (rate **15%**; fältkod 7153/7154)
+- **1.7a/b** Avkastningsskatt (rate **30%**; fältkod 7155/7156, e.g. utländsk kapitalförsäkring at 1.7b)
+- **1.8-1.15** Fastighetsskatt/avgift
 
 ### INK2R -- Räkenskapsschema
 Balansräkning (fields 2.1-2.50) and resultaträkning (fields 3.1-3.27). Mirrors ÅRL structure. Auto-populated from BAS accounts via SRU coupling tables when importing SIE files.
@@ -75,8 +76,9 @@ Specifically: INK2R 3.26/3.27 → INK2S 4.1/4.2 → adjustments → INK2S 4.15/4
 | 3.21 | Återföring periodiseringsfond | 8810, 8819 | 7420 |
 | 3.22 | Avsättning periodiseringsfond | 8810, 8811 | 7525 |
 | 3.23 | Förändring av överavskrivningar | 885x | 7421(+)/7526(-) |
-| 3.25 | Skatt på årets resultat | 89xx (exkl. 899x) | 7450 |
-| 3.26 | Årets resultat, vinst → p. 4.1 | +899x | 7550 |
+| 3.25 | Skatt på årets resultat | 89xx (exkl. 899x) | 7528 |
+| 3.26 | Årets resultat, vinst → p. 4.1 | +899x | 7450 |
+| 3.27 | Årets resultat, förlust → p. 4.2 | −899x | 7550 |
 
 ### Balansräkning (key fields)
 
@@ -113,39 +115,46 @@ Bokfört resultat (4.1 vinst / 4.2 förlust)
 = 4.15 Överskott OR 4.16 Underskott
 ```
 
+The four-digit numbers in parentheses below are **SRU fältkoder** (field codes in the INK2S file), not BAS accounts. INK2S fields are not coupled to BAS accounts.
+
 ### Punkt 4.3 -- Ej avdragsgilla kostnader (additions)
-- **4.3a** = skatt på årets resultat (auto from p. 3.25, BAS 7651)
-- **4.3b** = nedskrivning av finansiella tillgångar (from p. 3.17, BAS 7652). **HIGH ERROR RATE** -- almost never tax-deductible but frequently missed.
-- **4.3c** = andra ej avdragsgilla (böter, skattetillägg, förseningsavgifter, gåvor, ej avdragsgill representation, BAS 7653)
+- **4.3a** = skatt på årets resultat (SRU 7651; same amount as p. 3.25, i.e. the booked tax on BAS 8910 Skatt som belastar årets resultat)
+- **4.3b** = nedskrivning av finansiella tillgångar (from p. 3.17, SRU 7652). **HIGH ERROR RATE** -- almost never tax-deductible but frequently missed.
+- **4.3c** = andra ej avdragsgilla (böter, skattetillägg, förseningsavgifter, gåvor, ej avdragsgill representation, SRU 7653)
 
 ### Punkt 4.4 -- Avdragsgilla ej bokförda kostnader (deductions)
-- **4.4a** = lämnade koncernbidrag not booked through P&L (e.g. via equity under K3/RFR 2, BAS 7751)
-- **4.4b** = andra ej bokförda avdragsgilla kostnader (BAS 7764)
+- **4.4a** = lämnade koncernbidrag not booked through P&L (e.g. via equity under K3/RFR 2, SRU 7751)
+- **4.4b** = andra ej bokförda avdragsgilla kostnader (SRU 7764)
 
 ### Punkt 4.5 -- Ej skattepliktiga intäkter (deductions)
-- **4.5a** = skattefria ackordsvinster (BAS 7752)
-- **4.5b** = skattefri utdelning on näringsbetingade andelar per IL 24 kap. (BAS 7753)
-- **4.5c** = andra skattefria intäkter (BAS 7754)
+- **4.5a** = skattefria ackordsvinster (SRU 7752)
+- **4.5b** = skattefri utdelning on näringsbetingade andelar per IL 24 kap. (SRU 7753)
+- **4.5c** = andra skattefria intäkter (SRU 7754)
 
 ### Punkt 4.6 -- Skattepliktiga ej bokförda intäkter (additions)
-- **4.6a** = schablonintäkt på periodiseringsfonder (statslåneräntan x summa fonder, floor 0.5%, BAS 7654). **COMMONLY FORGOTTEN** -- pure tax item, not booked.
-- **4.6b** = schablonintäkt på fondandelar (0.4% of ingående värde, BAS 7668)
-- **4.6c** = mottagna koncernbidrag ej bokförda via resultat (BAS 7655)
-- **4.6d** = uppräknat belopp vid återföring av periodiseringsfond (106% pre-2019, 104% 2019-2020, 100% from 2021, BAS 7667)
+- **4.6a** = schablonintäkt på periodiseringsfonder (statslåneräntan x summa fonder, floor 0.5%, SRU 7654). **COMMONLY FORGOTTEN** -- pure tax item, not booked.
+- **4.6b** = schablonintäkt på fondandelar (0.4% of ingående värde, SRU 7668)
+- **4.6c** = mottagna koncernbidrag ej bokförda via resultat (SRU 7655)
+- **4.6d** = uppräknat belopp vid återföring av periodiseringsfond (106% pre-2019, 104% 2019-2020, 100% from 2021, SRU 7673)
+- **4.6e** = andra ej bokförda skattepliktiga intäkter (SRU 7665)
 
 ### Punkt 4.7 -- Avyttring delägarrätter
-- **4.7a** = bokförd vinst (deducted, BAS 7755)
-- **4.7b** = bokförd förlust (added, BAS 7656)
-- **4.7e** = skattemässig kapitalvinst (BAS 7658)
-- **4.7f** = skattemässig kapitalförlust -- the **aktiefållan** (only offsetable against future aktievinster, BAS 7757)
+- **4.7a** = bokförd vinst (deducted, SRU 7755)
+- **4.7b** = bokförd förlust (added, SRU 7656)
+- **4.7c** = uppskov med kapitalvinst enligt N4 (deducted, SRU 7756)
+- **4.7d** = återfört uppskov enligt N4 (added, SRU 7657)
+- **4.7e** = skattemässig kapitalvinst (SRU 7658)
+- **4.7f** = skattemässig kapitalförlust -- the **aktiefållan** (only offsetable against future aktievinster, SRU 7757)
 
 ### Punkt 4.14 -- Underskott från tidigare år
-- **4.14a** = outnyttjat underskott from prior year (BAS 7763)
-- **4.14b** = reduktion due to beloppsspärr, ackord, konkurs (BAS 7664)
-- **4.14c** = koncernbidragsspärrat/fusionsspärrat underskott (BAS 7670)
+- **4.14a** = outnyttjat underskott from prior year (SRU 7763)
+- **4.14b** = reduktion due to beloppsspärr, ackord, konkurs (SRU 7671)
+- **4.14c** = koncernbidragsspärrat/fusionsspärrat underskott (SRU 7672; also reported at p. 1.2)
 
 ### Tilläggsupplysningar (4.17-4.22)
-Värdeminskningsavdrag on byggnader/markanläggningar remaining at year-end, restvärdesavskrivning inventarier, skulder till närstående, pensionskostnader, koncernbidrags-/fusionsspärrat underskott.
+Värdeminskningsavdrag on byggnader (4.17, SRU 8020) and markanläggningar (4.18, SRU 8021) remaining at year-end, återförda belopp vid restvärdesavskrivning inventarier (4.19, SRU 8023), lån från aktieägare som är fysisk person (4.20, SRU 8026), pensionskostnader i p. 3.8 (4.21, SRU 8022), koncernbidrags-/fusionsspärrat underskott (4.22, SRU 8028).
+
+Överskott 4.15 = SRU 7670 and underskott 4.16 = SRU 7770 (→ INK2 1.1/1.2 = SRU 7104/7114).
 
 ---
 
@@ -237,7 +246,7 @@ Legal reference: IL 24:24-29 §§.
 ### Other common errors
 - INK2R figures not matching årsredovisningen (rounding)
 - Missing bilagor (INK2 without INK2R/INK2S makes declaration incomplete)
-- Negative amounts in SRU files causing upload failures
+- Wrong signs in SRU files: rows printed with "−" (costs, 4.4, 4.5, 4.14a, 4.16 etc.) are reported as positive amounts; a negative amount means deviation from the printed sign
 - Ej avdragsgill representation not identified and added back at 4.3c
 - Incorrect rollforward of underskott from prior years at 4.14
 
@@ -251,15 +260,16 @@ Approximately 7 months after FY end.
 ### Calendar year companies (Dec 31 FY end)
 Deadline: **1 augusti** (moved to next weekday if weekend/holiday).
 - FY 2025: 3 augusti 2026 (1 Aug is Saturday)
+- FY 2026: 2 augusti 2027 (1 Aug is Sunday)
 
 ### Other FY endings
 
 | FY ending | Deadline |
 |---|---|
-| Jan-Apr 2025 | 1 december 2025 |
-| May-Jun 2025 | 15 januari 2026 |
-| Jul-Aug 2025 | 1 april 2026 |
-| Sep-Dec 2025 | 3 augusti 2026 |
+| Jan-Apr 2026 | 1 december 2026 |
+| May-Jun 2026 | 15 januari 2027 |
+| Jul-Aug 2026 | 1 april 2027 |
+| Sep-Dec 2026 | 2 augusti 2027 |
 
 ### Consequences of late filing
 - Förseningsavgift: **6,250 SEK** per instance (up to 3, max **18,750 SEK** within 1 year)

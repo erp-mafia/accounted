@@ -56,6 +56,9 @@ export default function ReportsPage() {
         help={
           <HelpPopover>
             <p>{t('help_text')}</p>
+            {/* Was a footnote under the catalog: help belongs behind the "?"
+                (convention 7), not in the page flow. */}
+            <p className="mt-2">{t('catalog_footnote')}</p>
           </HelpPopover>
         }
         action={
@@ -71,23 +74,18 @@ export default function ReportsPage() {
 
       {fyReady && !selectedPeriod ? (
         <EmptyState
-          title="Inget räkenskapsår valt"
-          description="Skapa ett räkenskapsår för att kunna se rapporter."
-          actionLabel="Gå till inställningar"
+          title={t('no_fiscal_year_title')}
+          description={t('no_fiscal_year_description')}
+          actionLabel={t('no_fiscal_year_action')}
           actionHref="/settings"
         />
       ) : (
-        <>
-          <ReportLibrary
-            entityType={company?.entity_type}
-            dimensionsEnabled={settings?.dimensions_enabled === true}
-            openedAt={openedAt}
-            onOpen={openReport}
-          />
-          <p className="px-1 text-xs leading-5 text-muted-foreground">
-            {t('catalog_footnote')}
-          </p>
-        </>
+        <ReportLibrary
+          entityType={company?.entity_type}
+          dimensionsEnabled={settings?.dimensions_enabled === true}
+          openedAt={openedAt}
+          onOpen={openReport}
+        />
       )}
     </div>
   )

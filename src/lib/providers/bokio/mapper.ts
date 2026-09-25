@@ -510,7 +510,11 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
 
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoiceNumber'] ?? raw['id'] ?? ''),
+    // The supplier's own number, or nothing. Bokio's record id is not an
+    // invoice number: substituting it put a UUID in "Fakturanummer" on every
+    // number-less invoice. Empty becomes NULL at the insert, and the import
+    // recognises a number-less invoice by supplier, date and amount instead.
+    invoiceNumber: raw['invoiceNumber'] == null ? '' : String(raw['invoiceNumber']).trim(),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     invoiceTypeCode,

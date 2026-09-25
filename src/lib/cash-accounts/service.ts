@@ -724,12 +724,14 @@ export async function guardBookedCounterLines(
 
 /**
  * bank_connections.status for the given connection ids. Missing ids (and a
- * failed lookup, which returns an empty map) read as "status unknown".
+ * failed non-strict lookup) read as "status unknown". Strict preparation
+ * aborts on lookup failure so it cannot allocate from incomplete status data.
  */
 async function getConnectionStatuses(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
+  options: { strictReads?: boolean } = {},
 ): Promise<Map<string, string>> {
   if (connectionIds.length === 0) return new Map()
 
@@ -740,6 +742,7 @@ async function getConnectionStatuses(
     .in('id', [...connectionIds])
 
   if (error) {
+    if (options.strictReads) throw Object.assign(new Error(error.message), { code: error.code })
     log.warn('bank_connections status lookup failed', { companyId, error: error.message })
     return new Map()
   }
@@ -756,15 +759,16 @@ async function getConnectionStatuses(
  * upsertFromPsd2's promote-in-place path all treat those rows like manual
  * holders so a reconnect can land back on its original ledger account.
  *
- * On lookup failure this returns an empty set (treat every connection as
- * active): the conservative pre-fix behavior.
+ * On lookup failure non-strict callers get an empty set (treat every
+ * connection as active); strict preparation propagates the failure.
  */
 export async function getRevokedConnectionIds(
   supabase: SupabaseClient,
   companyId: string,
   connectionIds: readonly string[],
+  options: { strictReads?: boolean } = {},
 ): Promise<Set<string>> {
-  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds)
+  const statuses = await getConnectionStatuses(supabase, companyId, connectionIds, options)
   return new Set([...statuses.entries()].filter(([, status]) => status === 'revoked').map(([id]) => id))
 }
 
@@ -804,6 +808,7 @@ export async function findFreeLedgerAccount(
   companyId: string,
   currency: string,
   exclude: ReadonlySet<string> = new Set(),
+  options: { strictReads?: boolean } = {},
 ): Promise<string | null> {
   const preferred = defaultLedgerForCurrency(currency)
 
@@ -813,6 +818,7 @@ export async function findFreeLedgerAccount(
     .eq('company_id', companyId)
 
   if (error) {
+    if (options.strictReads) throw Object.assign(new Error(error.message), { code: error.code })
     log.error('findFreeLedgerAccount lookup failed', { companyId, error: error.message })
     return null
   }
@@ -826,6 +832,7 @@ export async function findFreeLedgerAccount(
     .like('account_number', '19%')
 
   if (chartError) {
+    if (options.strictReads) throw Object.assign(new Error(chartError.message), { code: chartError.code })
     log.warn('findFreeLedgerAccount chart lookup failed', {
       companyId,
       error: chartError.message,
@@ -840,6 +847,7 @@ export async function findFreeLedgerAccount(
     supabase,
     companyId,
     [...new Set(typedRows.map(r => r.bank_connection_id).filter((id): id is string => id !== null))],
+    options,
   )
 
   const anyTaken = new Set<string>()
@@ -894,10 +902,11 @@ export async function allocatePsd2LedgerAccount(
   userId: string,
   // accountName is accepted for caller compatibility but no longer names the
   // chart account: see the BAS-style naming note in the function body (#1643).
-  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string> },
+  input: { currency: string; accountName?: string | null; exclude?: ReadonlySet<string>; prepareOnly?: boolean },
 ): Promise<string | null> {
-  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set())
+  const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set(), { strictReads: input.prepareOnly })
   if (!ledger) return null
+  if (input.prepareOnly) return ledger
 
   // The CHART account always gets a BAS-style name: the BAS reference name
   // when the slot is a standard account (1930 Företagskonto, 1940 Övriga
@@ -1028,6 +1037,8 @@ export async function resolvePsd2LedgerAccount(
     currency: string
     accountName?: string | null
     exclude?: ReadonlySet<string>
+    /** The atomic configuration writer creates any missing chart account. */
+    prepareOnly?: boolean
   },
 ): Promise<Psd2LedgerResolution | null> {
   const exclude = input.exclude ?? new Set<string>()
@@ -1043,6 +1054,7 @@ export async function resolvePsd2LedgerAccount(
       .not('iban', 'is', null)
 
     if (error) {
+      if (input.prepareOnly) throw Object.assign(new Error(error.message), { code: error.code })
       // Fall through to allocation: a failed lookup must not block the
       // connection, it just costs us the reuse.
       log.warn('resolvePsd2LedgerAccount iban lookup failed', {
@@ -1065,6 +1077,7 @@ export async function resolvePsd2LedgerAccount(
         try {
           posted = await ledgersWithPostedLines(supabase, companyId, matches.map(r => r.ledger_account))
         } catch (postedError) {
+          if (input.prepareOnly) throw postedError
           log.warn('resolvePsd2LedgerAccount posted-lines lookup failed', {
             companyId,
             error: postedError instanceof Error ? postedError.message : String(postedError),
@@ -1086,6 +1099,7 @@ export async function resolvePsd2LedgerAccount(
     currency: input.currency,
     accountName: input.accountName,
     exclude,
+    prepareOnly: input.prepareOnly,
   })
   if (!allocated) return null
   return { ledgerAccount: allocated, reuseCashAccountId: null, source: 'allocated' }
@@ -1093,76 +1107,6 @@ export async function resolvePsd2LedgerAccount(
 
 /** Max transaction ids per `.in()` filter when rebinding: keeps the request URL short. */
 const REBIND_ID_CHUNK_SIZE = 100
-
-/** One account's refreshed balance snapshot, as the sync loop stores it. */
-export interface SyncedBalanceInput {
-  external_uid: string
-  balance?: number | null
-  available_balance?: number | null
-  balance_updated_at?: string | null
-}
-
-/**
- * Mirror freshly-synced balances from bank_connections.accounts_data into
- * cash_accounts. Before this, cash_accounts.balance was written only at
- * connect/selection-save time and then drifted: the transactions-page source
- * picker (which reads cash_accounts) showed a connect-time snapshot as if it
- * were current.
- *
- * Balance-only by design: routing fields (ledger_account, enabled, name) are
- * owned by the picker-save and callback paths via upsertFromPsd2. Rows are
- * matched on (company_id, bank_connection_id, external_uid); accounts without
- * a timestamped balance are skipped (never null out a stored balance because
- * one refresh was skipped or failed). Mirror failures are logged, not thrown:
- * a failed mirror must not fail the sync that produced the data.
- */
-export async function updateBalancesFromSync(
-  supabase: SupabaseClient,
-  companyId: string,
-  bankConnectionId: string,
-  accounts: SyncedBalanceInput[],
-): Promise<void> {
-  for (const account of accounts) {
-    if (account.balance == null || !account.balance_updated_at) continue
-    // Manual sync and cron are not serialized per connection: an older run
-    // finishing later must not overwrite a newer mirror (the timestamp would
-    // visibly move backwards). Only rows with an older-or-missing timestamp
-    // accept the write. Two literal predicates instead of one .or(), and the
-    // payload inlined twice: the schema guard cannot resolve dynamically-built
-    // logical expressions or payload variables.
-    const { error: staleError } = await supabase
-      .from('cash_accounts')
-      .update({
-        balance: account.balance,
-        available_balance: account.available_balance ?? null,
-        balance_updated_at: account.balance_updated_at,
-      })
-      .eq('company_id', companyId)
-      .eq('bank_connection_id', bankConnectionId)
-      .eq('external_uid', account.external_uid)
-      .lt('balance_updated_at', account.balance_updated_at)
-    const { error: nullError } = await supabase
-      .from('cash_accounts')
-      .update({
-        balance: account.balance,
-        available_balance: account.available_balance ?? null,
-        balance_updated_at: account.balance_updated_at,
-      })
-      .eq('company_id', companyId)
-      .eq('bank_connection_id', bankConnectionId)
-      .eq('external_uid', account.external_uid)
-      .is('balance_updated_at', null)
-    const error = staleError ?? nullError
-    if (error) {
-      log.error('updateBalancesFromSync failed', {
-        companyId,
-        bankConnectionId,
-        externalUid: account.external_uid,
-        error: error.message,
-      })
-    }
-  }
-}
 
 /**
  * Promote and mirror a PSD2 account through one database transaction. Routing,

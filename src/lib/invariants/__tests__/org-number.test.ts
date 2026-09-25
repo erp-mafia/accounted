@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeOrgNumber,
   orgNumberKey,
+  registrationNumberKey,
   isValidOrgNumber,
   isOrgNumberShaped,
   hasInvalidOrgNumberCheckDigit,
@@ -97,6 +98,30 @@ describe('orgNumberKey', () => {
     expect(orgNumberKey('')).toBeNull()
     expect(orgNumberKey(null)).toBeNull()
     expect(orgNumberKey(undefined)).toBeNull()
+  })
+})
+
+describe('registrationNumberKey', () => {
+  it('keys a sole trader\'s 16-digit TIC number to the stored personnummer', () => {
+    // crm#68: the BankID picker listed the owner's own firm as new because
+    // 1982090948720001 was compared raw with the stored 8209094872.
+    expect(registrationNumberKey('1982090948720001')).toBe('8209094872')
+    expect(registrationNumberKey('2002011732750002')).toBe('0201173275')
+  })
+
+  it('keys every other shape exactly as orgNumberKey', () => {
+    for (const raw of ['5560125790', '556012-5790', '165560125790', '198001011231', '556012579001', 'BE0123456789', '']) {
+      expect(registrationNumberKey(raw)).toBe(orgNumberKey(raw))
+    }
+  })
+
+  it('does not strip an arbitrary 16-digit number', () => {
+    expect(registrationNumberKey('5560125790000001')).toBeNull()
+  })
+
+  it('returns null for missing input', () => {
+    expect(registrationNumberKey(null)).toBeNull()
+    expect(registrationNumberKey(undefined)).toBeNull()
   })
 })
 

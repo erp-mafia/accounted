@@ -14,7 +14,7 @@ import { findRotRutPayoutSetMatch } from '@/lib/invoices/rot-rut-payout-set-matc
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, shiftIsoDate } from '@/lib/transactions/external-id'
+import { contentBucketKey, descriptionsBridge, normalizeImportedDescription, reconcileStableExternalIds, shiftIsoDate } from '@/lib/transactions/external-id'
 import { classifyTransactionMethod } from '@/lib/transactions/transaction-method'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { createLogger } from '@/lib/logger'
@@ -94,6 +94,12 @@ export interface ExistingTransactionMaps {
    * consume an incoming import.
    */
   unbookedImported: DescBucket
+  /**
+   * The content bucket each stored `external_id` sits in, so a Layer-1 id match
+   * consumes its stored row even when the incoming row's date or amount drifted
+   * into a different bucket (see consumeByExternalId).
+   */
+  bucketKeyByExternalId: Map<string, string>
 }
 
 /** Push a row into its (date, öre) bucket, normalizing the description. */
@@ -108,7 +114,7 @@ function addToBucket(
   isImportFeed: boolean,
   currency: string | null,
   externalId: string | null,
-): void {
+): string {
   const key = contentBucketKey(date, amount)
   const entry: BucketEntry = {
     id,
@@ -122,6 +128,25 @@ function addToBucket(
   const entries = bucket.get(key)
   if (entries) entries.push(entry)
   else bucket.set(key, [entry])
+  return key
+}
+
+/**
+ * Remove the stored entry carrying `externalId` from its content bucket once a
+ * Layer-1 id match has claimed it. Exported so the dedup preview applies the
+ * same rule.
+ */
+export function consumeByExternalId(maps: ExistingTransactionMaps, externalId: string): void {
+  const bucketKey = maps.bucketKeyByExternalId.get(externalId)
+  if (bucketKey === undefined) return
+  for (const bucket of [maps.booked, maps.unbookedImported]) {
+    const entries = bucket.get(bucketKey)
+    const idx = entries?.findIndex((entry) => entry.externalId === externalId) ?? -1
+    if (idx !== -1) {
+      entries!.splice(idx, 1)
+      return
+    }
+  }
 }
 
 /**
@@ -164,7 +189,8 @@ export async function buildExistingTransactionMaps(
 ): Promise<ExistingTransactionMaps> {
   const booked: DescBucket = new Map()
   const unbookedImported: DescBucket = new Map()
-  if (rawTransactions.length === 0) return { booked, unbookedImported }
+  const bucketKeyByExternalId = new Map<string, string>()
+  if (rawTransactions.length === 0) return { booked, unbookedImported, bucketKeyByExternalId }
 
   const dates = rawTransactions.map((t) => t.date).sort()
   const dateFrom = dates[0]
@@ -188,7 +214,7 @@ export async function buildExistingTransactionMaps(
       // description: a title edit must never make the dedup bridge miss a
       // genuine re-import. Falls back to description for rows predating the
       // original_description column.
-      addToBucket(
+      const key = addToBucket(
         booked,
         tx.id ?? null,
         tx.date,
@@ -200,6 +226,7 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: content-based dedup will be skipped
@@ -229,7 +256,7 @@ export async function buildExistingTransactionMaps(
     for (const tx of unbookedRows) {
       // See booked-map note: dedup on the immutable bank original so a
       // user title edit cannot reopen the duplicate-import window.
-      addToBucket(
+      const key = addToBucket(
         unbookedImported,
         tx.id ?? null,
         tx.date,
@@ -241,12 +268,13 @@ export async function buildExistingTransactionMaps(
         tx.currency ?? null,
         tx.external_id ?? null,
       )
+      if (tx.external_id) bucketKeyByExternalId.set(tx.external_id, key)
     }
   } catch {
     // Non-critical: reconnect dedup will be skipped
   }
 
-  return { booked, unbookedImported }
+  return { booked, unbookedImported, bucketKeyByExternalId }
 }
 
 /**
@@ -275,6 +303,13 @@ export async function ingestTransactions(
   rawTransactions: RawTransaction[],
   options?: IngestOptions
 ): Promise<IngestResult> {
+  if (options?.bankRoute) {
+    const route = options.bankRoute
+    if (options.settlementAccount !== route.ledgerAccount || rawTransactions.some(raw =>
+      raw.bank_connection_id !== route.connectionId || raw.currency?.toUpperCase() !== route.currency)) {
+      throw new Error('Bank ingest context does not match the fetched batch')
+    }
+  }
   const result: IngestResult = {
     imported: 0,
     duplicates: 0,
@@ -314,6 +349,17 @@ export async function ingestTransactions(
   // re-imports the same period via CSV, or the reverse, a CSV import that
   // predates the first PSD2 sync of the same account.
   const existingMaps = await buildExistingTransactionMaps(supabase, companyId, rawTransactions)
+
+  // Stable (date, öre, index) ids name a transaction only while its bucket's
+  // set of rows never changes; a late-booked sibling would otherwise take a
+  // stored row's index and be skipped as a duplicate. Re-key them against the
+  // stored rows before any dedup layer runs (see reconcileStableExternalIds).
+  const reconciledIds = reconcileStableExternalIds(
+    rawTransactions.map((raw) => ({ external_id: raw.external_id, description: normalizeImportedDescription(raw.description) })),
+    [...existingMaps.booked.values(), ...existingMaps.unbookedImported.values()].flat(),
+  )
+  rawTransactions = rawTransactions.map((raw, i) =>
+    reconciledIds[i] === raw.external_id ? raw : { ...raw, external_id: reconciledIds[i] })
 
   // Every row in one ingest call shares an import_source (EB sync passes
   // 'enable_banking', bank-file import passes 'csv_<format>'/'camt053'), so the
@@ -453,6 +499,13 @@ export async function ingestTransactions(
       .in('external_id', chunk)
     data?.forEach(r => existingExternalIds.add(r.external_id))
   }
+  // A stored row an incoming id names is accounted for by Layer 1: take it out
+  // of the content buckets BEFORE the loop, so no other incoming row (earlier
+  // in the batch or later) can also be deduped against it. Counting semantics
+  // then hold across both layers, independent of batch order.
+  for (const raw of rawTransactions) {
+    if (existingExternalIds.has(raw.external_id)) consumeByExternalId(existingMaps, raw.external_id)
+  }
 
   // Resolve the cash account this batch settled on, once. Every row in one
   // ingest call shares a settlement account: enable-banking calls this per
@@ -472,10 +525,13 @@ export async function ingestTransactions(
   let cashAccountId: string | null = null
   const physicalKeyById = new Map<string, string>()
   if (options?.settlementAccount) {
-    const { data: cashAccountRows } = await supabase
+    const { data: cashAccountRows, error: cashAccountError } = await supabase
       .from('cash_accounts')
       .select('id, ledger_account, iban, currency, enabled, bank_connection_id, invoice_payee')
       .eq('company_id', companyId)
+    if (cashAccountError && options.bankRoute) {
+      throw new Error(`Bank ingest account read failed: ${cashAccountError.message}`)
+    }
     type BoundRow = {
       id: string
       ledger_account: string
@@ -500,7 +556,11 @@ export async function ingestTransactions(
     // account never collects open transactions (desk crm#59). No-op for an
     // enabled account and for one a bank connection holds; refuses, binding
     // nothing, for a disabled invoice payee (owner/admin turns that on).
-    if (boundRow) await reenableIfUnused(supabase, companyId, boundRow)
+    if (options.bankRoute) {
+      if (cashAccountId !== options.bankRoute.cashAccountId) throw new Error('Bank ingest account changed; reload the route')
+    } else if (boundRow) {
+      await reenableIfUnused(supabase, companyId, boundRow)
+    }
   }
 
   // ── Shadow-mode same-feed scope-drift precompute (measure only) ──────────
@@ -823,6 +883,18 @@ export async function ingestTransactions(
         consumedTwin.cashAccountId === null &&
         cashAccountId !== null
       ) {
+        if (options?.bankRoute) {
+          const route = options.bankRoute
+          const { data: adoptedId, error: adoptionError } = await supabase.rpc('bind_bank_transaction', {
+            p_company_id: companyId, p_connection_id: route.connectionId, p_account_uid: route.accountUid,
+            p_currency: route.currency, p_route_token: route.token, p_transaction_id: consumedTwin.id,
+            p_expected_date: raw.date, p_expected_amount: raw.amount,
+          })
+          if (adoptionError || !adoptedId) {
+            throw new Error(`Bank transaction adoption failed: ${adoptionError?.message ?? 'missing acknowledgement'}`)
+          }
+          continue
+        }
         try {
           const { error: stampError } = await supabase
             .from('transactions')
@@ -970,9 +1042,7 @@ export async function ingestTransactions(
       ? Math.round(raw.amount * rateInfo.rate * 100) / 100
       : null
 
-    const { data: newTransaction, error: insertError } = await supabase
-      .from('transactions')
-      .insert({
+    const insertPayload = {
         company_id: companyId,
         user_id: userId,
         bank_connection_id: raw.bank_connection_id || null,
@@ -1006,9 +1076,15 @@ export async function ingestTransactions(
         bank_file_import_id: options?.bankFileImportId ?? null,
         counterparty_iban: raw.counterparty_iban || null,
         counterparty_account: raw.counterparty_account || null,
-      })
-      .select()
-      .single()
+    }
+    const route = options?.bankRoute
+    const { data: newTransaction, error: insertError } = route
+      ? await supabase.rpc('insert_bank_transaction', {
+          p_company_id: companyId, p_user_id: userId, p_connection_id: route.connectionId,
+          p_account_uid: route.accountUid, p_currency: route.currency, p_route_token: route.token,
+          p_transaction: insertPayload,
+        })
+      : await supabase.from('transactions').insert(insertPayload).select().single()
 
     if (insertError || !newTransaction) {
       result.errors++

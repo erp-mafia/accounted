@@ -247,7 +247,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-10 w-10 shrink-0"
+                      className="shrink-0"
                       aria-label={t('picker_preview')}
                       title={t('picker_preview')}
                       onClick={(e) => {
@@ -330,15 +330,9 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                 if (previewItem) void handlePick(previewItem)
               }}
               disabled={!!linkingId}
+              loading={!!previewItem && linkingId === previewItem.document_id}
             >
-              {previewItem && linkingId === previewItem.document_id ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {t('picker_attach')}
-                </>
-              ) : (
-                t('picker_attach')
-              )}
+              {t('picker_attach')}
             </Button>
           </DialogFooter>
         </DialogContent>
