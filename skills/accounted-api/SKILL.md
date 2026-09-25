@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 176 endpoints.
+  pagination, scopes), and all 193 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,17 +142,20 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 176 operations. Paths are shown without
+API version `2026-05-12`, 193 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (5)
+### Core (8)
 
 Full detail: [references/core.md](references/core.md)
 
 ```text
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
 POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
-PATCH /companies/{companyId}/settings : Partially update company settings [scope:companies:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/settings : Read the company settings [scope:companies:read risk:low idempotent]
+PATCH /companies/{companyId}/settings : Partially update company settings (contact, invoicing, reminders, voucher series, toggles) [scope:companies:write risk:medium idempotent dry-run reversible]
+PATCH /companies/{companyId}/settings/bookkeeping-lock : Set, move or remove the company-wide bookkeeping lock date [scope:companies:write risk:high idempotent dry-run reversible]
+PATCH /companies/{companyId}/settings/tax-profile : Change the tax and legal profile: VAT, F-skatt, employer registration, fiscal year, accounting method [scope:companies:write risk:high idempotent dry-run reversible]
 GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]
 ```
@@ -173,12 +176,17 @@ POST /companies/{companyId}/journal-entries/batch-create : Create up to 50 draft
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (16)
+### Periods and registers (26)
 
 Full detail: [references/periods.md](references/periods.md)
 
 ```text
 GET /companies/{companyId}/accounts : List chart-of-accounts entries (BAS chart) [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/accounts : Add an account to the chart of accounts (kontoplan) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/accounts/{number} : Edit or deactivate an account in the chart of accounts [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/accounts/{number} : Delete an account nothing has been booked on [scope:bookkeeping:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/accounts/activate : Activate BAS accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/accounts/deactivate : Deactivate accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/compliance/check : Run a structured compliance pre-flight check [scope:compliance:read risk:low idempotent]
 GET /companies/{companyId}/dimensions : List dimensions (kostnadsställe/projekt) with their values [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/dimensions : Create a custom dimension (e.g. Avdelning, Kund, Fordon) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
@@ -188,10 +196,15 @@ POST /companies/{companyId}/dimensions/{id}/values : Create a dimension value (k
 PATCH /companies/{companyId}/dimensions/{id}/values/{valueId} : Update a dimension value (rename, archive, set start/end date) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/dimensions/{id}/values/{valueId} : Delete an unreferenced dimension value [scope:bookkeeping:write risk:medium idempotent]
 GET /companies/{companyId}/fiscal-periods : List fiscal periods (räkenskapsår) [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/fiscal-periods : Create a fiscal year (räkenskapsår) [scope:bookkeeping:write risk:medium idempotent dry-run]
+PATCH /companies/{companyId}/fiscal-periods/{id} : Rename or re-date an open fiscal year [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/close : Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §) [scope:bookkeeping:write risk:high idempotent]
+POST /companies/{companyId}/fiscal-periods/{id}/close-external : Mark a migrated fiscal year as closed in the previous system (klarmarkera) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/currency-revaluation : Run FX revaluation for the fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/lock : Lock a fiscal period (no new entries can be posted into it) [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/opening-balances : Generate opening-balance verifikation for the next fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
+POST /companies/{companyId}/fiscal-periods/{id}/reopen-external : Undo klarmarkera: reopen a year marked closed in the previous system [scope:bookkeeping:write risk:high idempotent dry-run reversible]
+POST /companies/{companyId}/fiscal-periods/{id}/unlock : Unlock a locked (not closed) fiscal year [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end closing (currency revaluation + closing entry) [scope:bookkeeping:write risk:high idempotent]
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
@@ -260,7 +273,7 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (28)
+### Banking (32)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -268,6 +281,10 @@ Full detail: [references/banking.md](references/banking.md)
 GET /companies/{companyId}/bank-connections : List PSD2 bank connections with sync freshness and consent expiry [scope:companies:read risk:low idempotent]
 POST /companies/{companyId}/bank-connections/{connectionId}/sync : Sync one bank connection now instead of waiting for the nightly run [scope:transactions:write risk:low]
 GET /companies/{companyId}/cash-accounts : List bank/cash accounts with the bank-reported balance [scope:transactions:read risk:low idempotent]
+POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no bank connection), with the payee details invoices print [scope:companies:write risk:low idempotent dry-run]
+PATCH /companies/{companyId}/cash-accounts/{id} : Edit a bank account: verifikationsserie, payee details, name, or turn it on/off [scope:companies:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/cash-accounts/{id}/set-primary : Make a bank account the company's primary [scope:companies:write risk:medium idempotent dry-run reversible]
+PUT /companies/{companyId}/cash-accounts/payee-defaults : Choose which bank account invoices in a currency tell the customer to pay to [scope:companies:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/imports/bank : Import a bank-file (CSV / XML / CAMT053) [scope:transactions:write risk:medium idempotent]
 POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/imports/sie/upload : Reserve a direct SIE upload [scope:bookkeeping:write risk:low reversible]

@@ -1,453 +1,475 @@
 /**
- * Integration tests for PATCH /api/v1/companies/:companyId/settings.
+ * The company settings through the v1 door of the operation registry
+ * (src/lib/operations/company-settings.ts via lib/operations/v1.ts):
+ *   GET   /api/v1/companies/:companyId/settings                   settings.get
+ *   PATCH /api/v1/companies/:companyId/settings                   settings.update
+ *   PATCH /api/v1/companies/:companyId/settings/tax-profile       settings.update-tax-profile
+ *   PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock  settings.update-bookkeeping-lock
  *
- * Modeled on the v1 customers route tests: mocked API-key auth + a flexible
- * Supabase proxy mock; no real network or database access.
+ * The rules themselves are pinned by the dashboard route tests
+ * (src/app/api/settings/__tests__/route.test.ts), which run the same service.
+ * Here: auth, scope, the owner/admin gate API keys cannot skip, validation,
+ * the public field names, dry run writing nothing, and deadline regeneration
+ * happening on a tax-profile save and not on its dry run.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 beforeAll(() => {
-  // Belt-and-braces: ensure we never reach a real DB from this test suite.
-  if (process.env.NODE_ENV !== 'test') {
-    throw new Error(
-      `settings route tests require NODE_ENV=test (got ${process.env.NODE_ENV ?? 'undefined'})`,
-    )
-  }
+  if (process.env.NODE_ENV !== 'test') throw new Error('NODE_ENV=test required')
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||= 'test-anon-key'
 })
 
 vi.mock('@/lib/auth/api-keys', async () => {
   const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
-  return {
-    ...actual,
-    validateApiKey: vi.fn(),
-    createServiceClientNoCookies: vi.fn(),
-  }
+  return { ...actual, validateApiKey: vi.fn(), createServiceClientNoCookies: vi.fn() }
 })
-
 vi.mock('@supabase/supabase-js', async () => {
   const actual = await vi.importActual<typeof import('@supabase/supabase-js')>('@supabase/supabase-js')
   return { ...actual, createClient: vi.fn().mockReturnValue({}) }
 })
+// The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts).
+vi.mock('@/lib/cash-accounts/invoice-payee', () => ({
+  propagateLegacyPayeeWrite: vi.fn().mockResolvedValue(['SEK']),
+}))
+const deadlineMocks = vi.hoisted(() => ({ regenerate: vi.fn().mockResolvedValue({ created: 4, deleted: 4 }) }))
+vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/tax/deadline-generator')>()
+  return { ...actual, regenerateTaxDeadlinesForUser: deadlineMocks.regenerate }
+})
 
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
-import { PATCH as updateSettings } from '../route'
+import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
+import { GET as getSettings, PATCH as updateSettings } from '../route'
+import { PATCH as updateTaxProfile } from '../tax-profile/route'
+import { PATCH as updateLock } from '../bookkeeping-lock/route'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
 
-function makeFlexibleSupabase(byTable: Record<string, { data?: unknown; error?: unknown }>) {
-  // Records update payloads and .select() projection strings so tests can
-  // assert what the route writes and which columns it fetches back.
-  const captured: {
-    update: unknown[]
-    selects: Record<string, string[]>
-  } = { update: [], selects: {} }
-  const buildChain = (table: string): unknown => {
-    const handler: ProxyHandler<object> = {
-      get(_target, prop) {
-        if (prop === 'then') {
-          return (resolve: (v: unknown) => void) =>
-            resolve(byTable[table] ?? { data: null, error: null })
-        }
-        return (...args: unknown[]) => {
-          if (prop === 'update') captured.update.push(args[0])
-          if (prop === 'select' && typeof args[0] === 'string') {
-            ;(captured.selects[table] ??= []).push(args[0])
+interface TableResp {
+  data?: unknown
+  error?: unknown
+  count?: number | null
+}
+
+/** Per-table queue (the last entry repeats) that records every (table, method, args). */
+function makeClient(byTable: Record<string, TableResp | TableResp[]>) {
+  const queues = new Map<string, TableResp[]>()
+  for (const [t, val] of Object.entries(byTable)) queues.set(t, Array.isArray(val) ? [...val] : [val])
+  const calls: Array<{ table: string; method: string; args: unknown[] }> = []
+  const buildChain = (key: string): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) => {
+              const q = queues.get(key)
+              resolve(q && q.length > 1 ? q.shift()! : (q?.[0] ?? { data: null, error: null }))
+            }
           }
-          return buildChain(table)
-        }
+          return (...args: unknown[]) => {
+            calls.push({ table: key, method: String(prop), args })
+            return buildChain(key)
+          }
+        },
       },
-    }
-    return new Proxy({}, handler)
-  }
-  return { from: vi.fn((table: string) => buildChain(table)), captured }
+    )
+  const updates = (table: string) => calls.filter((c) => c.table === table && c.method === 'update').map((c) => c.args[0])
+  return { calls, updates, from: vi.fn((table: string) => buildChain(table)), rpc: vi.fn(() => buildChain('rpc')) }
 }
 
-const COMPANY_ID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-const USER_ID = 'user-1'
+const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+const BASE = `https://x.test/api/v1/companies/${COMPANY_ID}/settings`
+const OWNER = { data: { company_id: COMPANY_ID, role: 'owner' }, error: null }
+const HAS_DEADLINES = { data: null, count: 5, error: null }
+const params = { params: Promise.resolve({ companyId: COMPANY_ID }) }
 
-function companyParams(companyId: string) {
-  return { params: Promise.resolve({ companyId }) }
+const STORED = {
+  company_id: COMPANY_ID,
+  entity_type: 'aktiebolag',
+  onboarding_complete: true,
+  bank_name: 'Testbanken',
+  bankgiro: '991-2346',
+  default_our_reference: 'Anna Andersson',
+  email: 'faktura@acme.test',
+  vat_registered: true,
+  vat_number: 'SE556677889901',
+  moms_period: 'quarterly',
+  accounting_method: 'accrual',
+  bookkeeping_locked_through: '2026-06-30',
+  reminder_days_level_1: 15,
+  reminder_days_level_2: 30,
+  reminder_days_level_3: 45,
 }
 
-function makePatchRequest(url: string, body: unknown, extraHeaders: Record<string, string> = {}): Request {
+function request(url: string, init: RequestInit & { body?: string } = {}): Request {
   return new Request(url, {
-    method: 'PATCH',
+    ...init,
     headers: {
       Authorization: 'Bearer test-fixture-not-a-real-key',
+      'Idempotency-Key': crypto.randomUUID(),
       'Content-Type': 'application/json',
-      'Idempotency-Key': 'abcd1234-4444-4abc-8def-1234567890ab',
-      ...extraHeaders,
+      ...((init.headers as Record<string, string>) ?? {}),
     },
-    body: JSON.stringify(body),
   })
 }
+const patch = (url: string, body: unknown, headers: Record<string, string> = {}) =>
+  request(url, { method: 'PATCH', body: JSON.stringify(body), headers })
 
-function withWriteScope() {
+function withScopes(scopes: string[]) {
   mockValidate.mockResolvedValue({
-    userId: USER_ID,
+    userId: 'user-1',
     companyId: COMPANY_ID,
     apiKeyId: 'ak_1',
     apiKeyName: 'CI key',
-    scopes: ['companies:write'],
+    scopes,
     mode: 'live',
   })
 }
 
-const SAMPLE_SETTINGS = {
-  bank_name: 'Testbanken',
-  clearing_number: null,
-  account_number: null,
-  // '991-2346' passes the Bankgiro Luhn check (see lib/bankgiro Luhn tests).
-  bankgiro: '991-2346',
-  plusgiro: null,
-  swish: null,
-  iban: null,
-  bic: null,
-  default_our_reference: 'Anna Andersson',
-  email: 'faktura@acme.test',
-  phone: null,
-  website: null,
-  invoice_email_texts: null,
-}
-
 beforeEach(() => {
   vi.clearAllMocks()
-  withWriteScope()
+  withScopes(['companies:read', 'companies:write'])
+})
+
+describe('GET /api/v1/companies/:companyId/settings', () => {
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(401)
+    expect((await res.json()).error.code).toBe('UNAUTHORIZED')
+  })
+
+  it('403 without companies:read', async () => {
+    withScopes(['reports:read'])
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(403)
+    expect((await res.json()).error.code).toBe('INSUFFICIENT_SCOPE')
+  })
+
+  it('returns the resource under public names, unset fields as null', async () => {
+    const client = makeClient({ company_members: OWNER, company_settings: { data: STORED } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data).toMatchObject({
+      company_id: COMPANY_ID,
+      contact_person: 'Anna Andersson',
+      bankgiro: '991-2346',
+      moms_period: 'quarterly',
+      accounting_method: 'accrual',
+      bookkeeping_locked_through: '2026-06-30',
+      website: null,
+    })
+    expect(data).not.toHaveProperty('default_our_reference')
+    // A literal column list, never '*'.
+    const select = client.calls.find((c) => c.table === 'company_settings' && c.method === 'select')
+    expect(select?.args[0]).not.toBe('*')
+  })
+
+  it('a viewer may read', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'viewer' } }, company_settings: { data: STORED } }),
+    )
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(200)
+  })
+
+  it('404 NOT_FOUND when the company has no settings row', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER, company_settings: { data: null } }))
+    const res = await getSettings(request(BASE), params)
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+  })
 })
 
 describe('PATCH /api/v1/companies/:companyId/settings', () => {
-  it('returns 401 UNAUTHORIZED for an invalid API key', async () => {
+  it('401 when the API key is rejected', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        bank_name: 'X',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
+    mockServiceClient.mockReturnValue(makeClient({}))
+    const res = await updateSettings(patch(BASE, { bank_name: 'X' }), params)
     expect(res.status).toBe(401)
-    const body = await res.json()
-    expect(body.error.code).toBe('UNAUTHORIZED')
   })
 
-  it('rejects keys without the companies:write scope', async () => {
-    mockValidate.mockResolvedValue({
-      userId: USER_ID,
-      companyId: COMPANY_ID,
-      apiKeyId: 'ak_1',
-      apiKeyName: 'CI key',
-      scopes: ['companies:read'],
-      mode: 'live',
-    })
-    mockServiceClient.mockReturnValue(makeFlexibleSupabase({}))
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        bank_name: 'X',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
+  it('403 INSUFFICIENT_SCOPE without companies:write', async () => {
+    withScopes(['companies:read'])
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const res = await updateSettings(patch(BASE, { bank_name: 'X' }), params)
     expect(res.status).toBe(403)
     const body = await res.json()
     expect(body.error.code).toBe('INSUFFICIENT_SCOPE')
     expect(body.error.details.required_scope).toBe('companies:write')
   })
 
-  it('returns 404 when the caller is not a member of the company in the URL', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: null, error: null },
-      }),
-    )
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        bank_name: 'X',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(404)
+  it('403 FORBIDDEN for a key whose user is a plain member: settings are owner/admin only', async () => {
+    const client = makeClient({
+      company_members: { data: { company_id: COMPANY_ID, role: 'member' } },
+      company_settings: { data: STORED },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(BASE, { phone: '08-1' }), params)
+    expect(res.status).toBe(403)
     const body = await res.json()
-    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(body.error.details.required_roles).toEqual(['owner', 'admin'])
+    expect(client.updates('company_settings')).toHaveLength(0)
   })
 
-  it('returns 404 when the company has no settings row', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        company_settings: { data: null, error: null },
-      }),
-    )
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        bank_name: 'X',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(404)
-    const body = await res.json()
-    expect(body.error.code).toBe('NOT_FOUND')
-    expect(body.error.details).toEqual({ resource: 'company_settings' })
-  })
-
-  it('rejects requests without an Idempotency-Key header', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
-    )
-
-    const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
+  it('400 without an Idempotency-Key', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const req = new Request(BASE, {
       method: 'PATCH',
-      headers: {
-        Authorization: 'Bearer test-fixture-not-a-real-key',
-        'Content-Type': 'application/json',
-      },
+      headers: { Authorization: 'Bearer test-fixture-not-a-real-key', 'Content-Type': 'application/json' },
       body: JSON.stringify({ bank_name: 'X' }),
     })
-
-    const res = await updateSettings(req, companyParams(COMPANY_ID))
+    const res = await updateSettings(req, params)
     expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
   })
 
-  it('returns 400 for a body that is not valid JSON', async () => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const req = new Request(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-      method: 'PATCH',
-      headers: {
-        Authorization: 'Bearer test-fixture-not-a-real-key',
-        'Content-Type': 'application/json',
-        'Idempotency-Key': 'abcd1234-4444-4abc-8def-1234567890ab',
-      },
-      body: '{"bank_name": not-json',
-    })
-
-    const res = await updateSettings(req, companyParams(COMPANY_ID))
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details).toEqual({ field: 'body', message: 'Body is not valid JSON.' })
-    expect(supabaseMock.captured.update).toHaveLength(0)
-  })
-
-  it.each([
-    ['a bare array', [{ bank_name: 'X' }]],
-    ['a bare string', 'bank_name=X'],
-    ['a bare number', 42],
-    ['null', null],
-  ])('returns 400 for a JSON body that is not an object (%s)', async (_label, jsonBody) => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, jsonBody),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details).toEqual({ field: 'body', message: 'Body must be a JSON object.' })
-    expect(supabaseMock.captured.update).toHaveLength(0)
-  })
-
-  it('rejects an empty body (at least one field required)', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
-    )
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {}),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-  })
-
-  it('rejects unknown fields, including the internal column name default_our_reference', async () => {
-    mockServiceClient.mockReturnValue(
-      makeFlexibleSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      }),
-    )
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        default_our_reference: 'Sneaky',
-        vat_registered: true,
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    const fields = body.error.details.issues.map((i: { field: string }) => i.field)
-    expect(fields).toContain('default_our_reference')
-    expect(fields).toContain('vat_registered')
-  })
-
-  it('returns 400 for a bankgiro that fails the Luhn check', async () => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        // Right shape (regex passes) but wrong check digit: 991-2346 is valid.
-        bankgiro: '991-2345',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    const issue = body.error.details.issues.find((i: { field: string }) => i.field === 'bankgiro')
-    expect(issue).toBeTruthy()
-    expect(issue.message).toBe('Invalid Bankgiro number')
-    // Nothing was written.
-    expect(supabaseMock.captured.update).toHaveLength(0)
-  })
-
-  it('returns 400 for an unknown invoice email placeholder', async () => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        invoice_email_texts: { sv: { body: 'Hej! Se faktura {faktura_nr}.' } },
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    const issue = body.error.details.issues.find(
-      (i: { field: string }) => i.field === 'invoice_email_texts.sv.body',
-    )
-    expect(issue).toBeTruthy()
-    expect(issue.message).toContain('{faktura_nr}')
-    expect(supabaseMock.captured.update).toHaveLength(0)
-  })
-
-  it('updates settings and maps contact_person onto default_our_reference', async () => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      company_settings: { data: SAMPLE_SETTINGS, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        contact_person: 'Anna Andersson',
-        bankgiro: '991-2346',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(200)
-    const body = await res.json()
-    // The response uses the public field name, mapped from the DB column.
-    expect(body.data.company_id).toBe(COMPANY_ID)
-    expect(body.data.contact_person).toBe('Anna Andersson')
-    expect(body.data.bankgiro).toBe('991-2346')
-    // The update payload carries the DB column name, not contact_person.
-    const updatePayload = supabaseMock.captured.update[0] as Record<string, unknown>
-    expect(updatePayload.default_our_reference).toBe('Anna Andersson')
-    expect(updatePayload.bankgiro).toBe('991-2346')
-    expect(updatePayload.contact_person).toBeUndefined()
-    // The response projection reads the column back.
-    expect(supabaseMock.captured.selects['company_settings']?.[0]).toContain('default_our_reference')
-  })
-
-  it('keeps unsupplied fields undefined (never null) in the update payload', async () => {
-    // The route builds a literal 13-column update payload where unsupplied
-    // fields are undefined; supabase-js JSON serialization drops them, so
-    // the stored values survive a partial PATCH. A future `?? null` on that
-    // payload would silently CLEAR every column the caller did not send
-    // (null is a real write that empties the column). This test pins the
-    // undefined-not-null contract and fails on any such regression.
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      company_settings: { data: { ...SAMPLE_SETTINGS, bank_name: 'Nya Banken' }, error: null },
-    })
-    mockServiceClient.mockReturnValue(supabaseMock)
-
-    const res = await updateSettings(
-      makePatchRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/settings`, {
-        bank_name: 'Nya Banken',
-      }),
-      companyParams(COMPANY_ID),
-    )
-
-    expect(res.status).toBe(200)
-    expect(supabaseMock.captured.update).toHaveLength(1)
-    const updatePayload = supabaseMock.captured.update[0] as Record<string, unknown>
-    expect(updatePayload.bank_name).toBe('Nya Banken')
-
-    const unsuppliedKeys = Object.keys(updatePayload).filter((key) => key !== 'bank_name')
-    // Guard the guard: the literal payload declares every column, so the
-    // unsupplied set must be non-empty for the loop below to prove anything.
-    expect(unsuppliedKeys.length).toBeGreaterThan(0)
-    for (const key of unsuppliedKeys) {
-      expect(
-        updatePayload[key],
-        `unsupplied column "${key}" must be undefined in the update payload, never null`,
-      ).toBeUndefined()
+  it('400 for an empty body, an invalid bankgiro, an unknown placeholder, and fields owned by another door', async () => {
+    for (const body of [
+      {},
+      { bankgiro: '991-2345' },
+      { invoice_email_texts: { sv: { body: 'Se faktura {faktura_nr}.' } } },
+      { default_our_reference: 'Sneaky' },
+      { vat_registered: true },
+      { bookkeeping_locked_through: '2026-01-31' },
+    ]) {
+      const client = makeClient({ company_members: OWNER, company_settings: { data: STORED } })
+      mockServiceClient.mockReturnValue(client)
+      const res = await updateSettings(patch(BASE, body), params)
+      expect(res.status, JSON.stringify(body)).toBe(400)
+      expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+      expect(client.updates('company_settings')).toHaveLength(0)
     }
-    // What actually reaches PostgREST after JSON serialization: only the
-    // supplied column remains.
-    expect(JSON.parse(JSON.stringify(updatePayload))).toEqual({ bank_name: 'Nya Banken' })
   })
 
-  it('dry-run merges the proposed changes with the current row and writes nothing', async () => {
-    const supabaseMock = makeFlexibleSupabase({
-      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-      company_settings: { data: SAMPLE_SETTINGS, error: null },
+  it('400 SETTINGS_REMINDER_DAYS_ORDER when the thresholds would stop increasing', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER, company_settings: { data: STORED } }))
+    const res = await updateSettings(patch(BASE, { reminder_days_level_2: 60 }), params)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('SETTINGS_REMINDER_DAYS_ORDER')
+  })
+
+  it('updates, maps contact_person onto default_our_reference and writes payment details through', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, bankgiro: '5050-1055', default_our_reference: 'Bo Berg' } }],
+      deadlines: HAS_DEADLINES,
     })
-    mockServiceClient.mockReturnValue(supabaseMock)
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(BASE, { contact_person: 'Bo Berg', bankgiro: '5050-1055' }), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data).toMatchObject({ company_id: COMPANY_ID, contact_person: 'Bo Berg', bankgiro: '5050-1055' })
+    // Only the supplied columns reach PostgREST, under the column name.
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      bankgiro: '5050-1055',
+      default_our_reference: 'Bo Berg',
+    })
+    expect(propagateLegacyPayeeWrite).toHaveBeenCalledTimes(1)
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
 
+  it('accepts the wider non-legal settings, e.g. invoice copy recipients and toggles', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, quotes_enabled: false } }],
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
     const res = await updateSettings(
-      makePatchRequest(
-        `https://x.test/api/v1/companies/${COMPANY_ID}/settings?dry_run=true`,
-        { contact_person: 'Bo Berg' },
-      ),
-      companyParams(COMPANY_ID),
+      patch(BASE, { quotes_enabled: false, invoice_email_cc_addresses: ['kopia@acme.test'] }),
+      params,
     )
+    expect(res.status).toBe(200)
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      quotes_enabled: false,
+      invoice_email_cc_addresses: ['kopia@acme.test'],
+    })
+  })
 
+  it('dry run: the merged resource plus what changes, and nothing written', async () => {
+    const client = makeClient({ company_members: OWNER, company_settings: { data: STORED }, deadlines: HAS_DEADLINES })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateSettings(patch(`${BASE}?dry_run=true`, { contact_person: 'Bo Berg' }), params)
     expect(res.status).toBe(200)
     expect(res.headers.get('X-Dry-Run')).toBe('true')
+    const { data } = await res.json()
+    expect(data.dry_run).toBe(true)
+    expect(data.preview).toMatchObject({
+      contact_person: 'Bo Berg',
+      bank_name: 'Testbanken',
+      changes: { contact_person: 'Bo Berg' },
+      previous: { contact_person: 'Anna Andersson' },
+      deadlines_will_regenerate: false,
+    })
+    expect(client.updates('company_settings')).toHaveLength(0)
+    expect(propagateLegacyPayeeWrite).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /api/v1/companies/:companyId/settings/tax-profile', () => {
+  const URL_ = `${BASE}/tax-profile`
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    const res = await updateTaxProfile(patch(URL_, { f_skatt: true }), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('403 FORBIDDEN for a plain member', async () => {
+    const client = makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'member' } }, company_settings: { data: STORED } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { moms_period: 'monthly' }), params)
+    expect(res.status).toBe(403)
+    expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('400 for a field outside the tax profile and for an invalid VAT number', async () => {
+    for (const body of [{ bankgiro: '991-2346' }, { vat_number: 'SE123' }, {}]) {
+      mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER, company_settings: { data: STORED } }))
+      const res = await updateTaxProfile(patch(URL_, body), params)
+      expect(res.status, JSON.stringify(body)).toBe(400)
+      expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+    }
+  })
+
+  it('refuses what the settings page refuses: a registered company without a VAT number', async () => {
+    const client = makeClient({ company_members: OWNER, company_settings: { data: { ...STORED, vat_registered: false, vat_number: null } } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { vat_registered: true, moms_period: 'quarterly' }), params)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('SETTINGS_VAT_NUMBER_REQUIRED')
+    expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('refuses a non-calendar fiscal year for an enskild firma (BFL 3 kap.)', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: OWNER, company_settings: { data: { ...STORED, entity_type: 'enskild_firma' } } }),
+    )
+    const res = await updateTaxProfile(patch(URL_, { fiscal_year_start_month: 7 }), params)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('SETTINGS_EF_CALENDAR_YEAR')
+  })
+
+  it('saves and regenerates the tax deadlines', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, moms_period: 'monthly' } }],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { moms_period: 'monthly' }), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data).toMatchObject({ moms_period: 'monthly', deadlines_regenerated: true })
+    expect(deadlineMocks.regenerate).toHaveBeenCalledTimes(1)
+    expect(deadlineMocks.regenerate.mock.calls[0][1]).toBe(COMPANY_ID)
+  })
+
+  it('switching to kontantmetoden turns deferred invoice booking off in the same write', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, accounting_method: 'cash' } }],
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { accounting_method: 'cash' }), params)
+    expect(res.status).toBe(200)
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      accounting_method: 'cash',
+      defer_invoice_booking: false,
+    })
+  })
+
+  it('dry run: previews the regeneration, regenerates nothing and writes nothing', async () => {
+    const client = makeClient({ company_members: OWNER, company_settings: { data: STORED } })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(`${URL_}?dry_run=true`, { moms_period: 'monthly' }), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.preview).toMatchObject({
+      moms_period: 'monthly',
+      changes: { moms_period: 'monthly' },
+      previous: { moms_period: 'quarterly' },
+      deadlines_will_regenerate: true,
+    })
+    expect(client.updates('company_settings')).toHaveLength(0)
+    expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+})
+
+describe('PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock', () => {
+  const URL_ = `${BASE}/bookkeeping-lock`
+
+  it('401 when the API key is rejected', async () => {
+    mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
+    mockServiceClient.mockReturnValue(makeClient({}))
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-07-31' }), params)
+    expect(res.status).toBe(401)
+  })
+
+  it('403 FORBIDDEN for a plain member', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({ company_members: { data: { company_id: COMPANY_ID, role: 'member' } }, company_settings: { data: STORED } }),
+    )
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-07-31' }), params)
+    expect(res.status).toBe(403)
+  })
+
+  it('400 for a malformed date and for an empty body', async () => {
+    for (const body of [{ bookkeeping_locked_through: '31/07/2026' }, {}, { auto_lock_period_days: 0 }]) {
+      mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+      const res = await updateLock(patch(URL_, body), params)
+      expect(res.status, JSON.stringify(body)).toBe(400)
+    }
+  })
+
+  it('moves the lock forward without a warning', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, bookkeeping_locked_through: '2026-07-31' } }],
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-07-31' }), params)
+    expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data.dry_run).toBe(true)
-    expect(body.data.preview.contact_person).toBe('Bo Berg')
-    // Unchanged fields from the current record are preserved.
-    expect(body.data.preview.bank_name).toBe('Testbanken')
-    expect(supabaseMock.captured.update).toHaveLength(0)
+    expect(body.data.bookkeeping_locked_through).toBe('2026-07-31')
+    expect(body.meta?.warnings ?? body.warnings ?? []).toEqual([])
+    expect(JSON.parse(JSON.stringify(client.updates('company_settings')[0]))).toEqual({
+      bookkeeping_locked_through: '2026-07-31',
+    })
+  })
+
+  it('moving it back is allowed, as on the settings page, and says it reopened dates', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [{ data: STORED }, { data: { ...STORED, bookkeeping_locked_through: '2026-03-31' } }],
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-03-31' }), params)
+    expect(res.status).toBe(200)
+    expect(JSON.stringify(await res.json())).toContain('BOOKKEEPING_LOCK_MOVED_BACKWARDS')
+  })
+
+  it('dry run of removing the lock warns and writes nothing', async () => {
+    const client = makeClient({ company_members: OWNER, company_settings: { data: STORED }, deadlines: HAS_DEADLINES })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(patch(`${URL_}?dry_run=true`, { bookkeeping_locked_through: null }), params)
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    expect(data.preview.bookkeeping_locked_through).toBeNull()
+    expect(data.preview.warnings).toEqual([expect.objectContaining({ code: 'BOOKKEEPING_LOCK_MOVED_BACKWARDS' })])
+    expect(client.updates('company_settings')).toHaveLength(0)
   })
 })

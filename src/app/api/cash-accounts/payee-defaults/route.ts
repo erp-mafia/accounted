@@ -2,15 +2,10 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { SetInvoicePayeeDefaultSchema } from '@/lib/api/schemas'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import {
-  isBankCashAccount,
-  isUsableInvoicePayee,
-  loadInvoicePayeeState,
-  setInvoicePayeeDefault,
-} from '@/lib/cash-accounts/invoice-payee'
-import type { CashAccount } from '@/types'
-import { getCompanyRole } from '@/lib/auth/require-write'
+import { errorResponse } from '@/lib/errors/get-structured-error'
+import { loadInvoicePayeeState } from '@/lib/cash-accounts/invoice-payee'
+import { setCashAccountPayeeDefault } from '@/lib/cash-accounts/manage'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 /**
  * GET /api/cash-accounts/payee-defaults
@@ -37,70 +32,20 @@ export const GET = withRouteContext(
  * Set (or clear with null) the default payee account for one currency.
  * Owner/admin only: this decides where every new invoice in that currency
  * tells the customer to pay. The mirror trigger rewrites the legacy
- * company_settings map from the chosen account.
+ * company_settings map from the chosen account. The rules live in
+ * lib/cash-accounts/manage.ts, shared with the v1 operation
+ * cash-accounts.set-payee-default and gnubok_set_invoice_payee_default.
  */
 export const PUT = withRouteContext(
   'cash_accounts.payee_defaults.set',
   async (request, { supabase, companyId, log, requestId, user }) => {
     const validation = await validateBody(request, SetInvoicePayeeDefaultSchema)
     if (!validation.success) return validation.response
-    const { currency, cash_account_id } = validation.data
 
-    const roleResult = await getCompanyRole(supabase, user.id, { companyId })
-    if (!roleResult.ok) return roleResult.response
-    if (!['owner', 'admin'].includes(roleResult.role)) {
-      return errorResponseFromCode('FORBIDDEN', log, {
-        requestId,
-        details: { required_roles: ['owner', 'admin'] },
-      })
-    }
-
-    if (cash_account_id) {
-      const { data: account, error } = await supabase
-        .from('cash_accounts')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('id', cash_account_id)
-        .maybeSingle()
-      if (error) {
-        log.error('invoice payee default account lookup failed', error)
-        return errorResponse(error, log, { requestId })
-      }
-      if (!account) {
-        return NextResponse.json(
-          {
-            error: {
-              code: 'CASH_ACCOUNT_NOT_FOUND',
-              message: 'Bankkontot hittades inte.',
-              message_en: 'Bank account not found.',
-            },
-          },
-          { status: 404 },
-        )
-      }
-      // A default must be printable for the currency: a bank-type account,
-      // enabled, flagged as payee, with the identifiers the currency needs.
-      const typed = account as CashAccount
-      if (!isBankCashAccount(typed) || !isUsableInvoicePayee(typed, currency)) {
-        return errorResponseFromCode('INVOICE_PAYEE_ACCOUNT_INVALID', log, {
-          requestId,
-          details: {
-            cash_account_id,
-            currency,
-            reason: !isBankCashAccount(typed) ? 'not_bank_account' : !typed.enabled ? 'disabled' : !typed.invoice_payee ? 'not_payee' : 'unusable_for_currency',
-          },
-        })
-      }
-    }
-
-    try {
-      await setInvoicePayeeDefault(supabase, companyId, currency, cash_account_id)
-      const state = await loadInvoicePayeeState(supabase, companyId)
-      return NextResponse.json({ data: state })
-    } catch (err) {
-      log.error('invoice payee default set failed', err as Error)
-      return errorResponse(err, log, { requestId })
-    }
+    const outcome = await setCashAccountPayeeDefault({ supabase, companyId, userId: user.id, log }, validation.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

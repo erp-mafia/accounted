@@ -71,6 +71,27 @@ function compact(node: unknown): unknown {
   return obj
 }
 
+/**
+ * The operation's output as a read tool's outputSchema. Left open at every
+ * level: clients cache tools/list and validate responses against it, so a
+ * closed object would make every connected session refuse a response the
+ * moment the resource gains a field (output-schema.test.ts).
+ */
+export function toolOutputSchema(output: z.ZodTypeAny): JsonSchema {
+  const raw = z.toJSONSchema(output, { io: 'output', unrepresentable: 'any' }) as JsonSchema
+  delete raw.$schema
+  return open(raw) as JsonSchema
+}
+
+function open(node: unknown): unknown {
+  if (Array.isArray(node)) return node.map(open)
+  if (typeof node !== 'object' || node === null) return node
+  const obj = { ...(node as Record<string, unknown>) }
+  if (obj.additionalProperties === false) delete obj.additionalProperties
+  for (const [k, v] of Object.entries(obj)) obj[k] = open(v)
+  return obj
+}
+
 export function createOperationTools(operations: readonly AnyOperation[], deps: Deps): McpTool[] {
   const tools: McpTool[] = []
   for (const op of operations) {
@@ -85,6 +106,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
         title: binding.title,
         description,
         inputSchema,
+        outputSchema: toolOutputSchema(op.output as unknown as z.ZodTypeAny),
         annotations: deps.readOnly,
         catalogVisibility: binding.visibility ?? 'search',
         keywords: binding.keywords,

@@ -48,7 +48,7 @@ A capability a user can perform (create, update, delete, a lifecycle verb) that 
 - v1: a route file is `export const POST = v1OperationHandler(op)` (registers the endpoint for openapi.json; `withApiV1` still does auth, scope, idempotency, test keys);
 - MCP: an `mcp` binding generates the tool (search-only by default, zero tools/list cost); writes stage and approval runs the same `run()` through `commitPendingOperation`;
 - dashboard: the session route calls the same service and maps failures with `sessionFailureResponse`.
-Add the op to `OPERATIONS` in `registry.ts`, then follow `operation-contract.test.ts` failures (scope maps, risk tier, approval label in sv/en, op-type CHECK migration pair). `session-route-parity.test.ts` fails when a new dashboard write route has no API decision: add it to `SESSION_ROUTE_PARITY` as covered, gap or ui-only. The rules belong in the service, never in a door: two copies of one capability is how v1 came to drop fields the dashboard honoured (#3082).
+Add the op to `OPERATIONS` in `registry.ts`, then follow `operation-contract.test.ts` failures (scope maps, risk tier, approval label in sv/en, op-type CHECK migration pair). `session-route-parity.test.ts` fails when a new dashboard write route has no API decision: add it to `SESSION_ROUTE_PARITY` as covered, gap or ui-only. Service-role doors skip RLS: an operation writing what the dashboard gates with `requireAdmin` must call `requireCompanyAdmin` (`lib/operations/access.ts`) in its service. The rules belong in the service, never in a door: two copies of one capability is how v1 came to drop fields the dashboard honoured (#3082).
 
 ## Endpoint map (`app/api/`)
 

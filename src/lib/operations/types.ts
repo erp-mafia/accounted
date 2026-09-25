@@ -21,6 +21,12 @@
  * copy of a list and not the other. The request contract, the rules and the
  * outcome now live in one place and the doors only translate envelopes.
  *
+ * Authorization: every door establishes that the caller is a non-viewer
+ * member of the company, and nothing more. v1 and MCP run on a service-role
+ * client where RLS does not apply, so an operation whose writes the
+ * dashboard reserves for owners and admins must call requireCompanyAdmin
+ * (./access.ts) in its service, on a dry run too.
+ *
  * Deliberately NOT here: anything the scope catalogue, the risk tiers and
  * the approval vocabulary hold. Those are client-imported data tables, so
  * they stay tables, and operation-contract.test.ts checks that every
@@ -125,6 +131,12 @@ export interface OperationMcpBinding {
     pendingType: PendingOperationType
     /** The one-line title the approver sees, in Swedish. */
     title: (input: Record<string, unknown>) => string
+    /**
+     * For a pending type that existed before its operation did: rewrites
+     * params staged in the old shape into the operation's input, so a row
+     * staged before the switch still commits. Runs before validation.
+     */
+    upgradeParams?: (params: Record<string, unknown>) => Record<string, unknown>
   }
 }
 

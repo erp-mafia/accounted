@@ -198,8 +198,72 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
       'The account number already exists in this company chart of accounts but is deactivated.',
     remediation: {
       description:
-        'Reactivate the existing account instead of creating it: POST /api/bookkeeping/accounts/activate with { account_numbers: [number] }.',
+        'Reactivate the existing account instead of creating it: POST /api/v1/companies/{companyId}/accounts/activate with { account_numbers: [number] }, or gnubok_update_account with is_active=true.',
       resource: 'Accounted://chart-of-accounts',
+    },
+  },
+  // Chart of accounts writes (lib/bookkeeping/chart-of-accounts-service.ts,
+  // operations accounts.*): one set of codes for the dashboard, v1 and MCP.
+  ACCOUNT_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Kontonumret finns redan i din kontoplan.',
+    message_en: 'The account number already exists in this company chart of accounts.',
+    remediation: {
+      description: 'Edit the existing account instead (PATCH /accounts/{number} or gnubok_update_account).',
+      tool: 'gnubok_update_account',
+    },
+  },
+  ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kontot hittades inte.',
+    message_en: 'The account is not in this company chart of accounts.',
+    remediation: {
+      description: 'List the chart with GET /accounts?active=false, or create the account first.',
+      tool: 'gnubok_list_accounts',
+    },
+  },
+  ACCOUNT_DETAILS_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Kontonumret finns inte i BAS 2026: ange kontonamn, kontotyp och normal balans.',
+    message_en:
+      'The account number is not in the BAS 2026 catalogue: account_name, account_type and normal_balance are required.',
+  },
+  ACCOUNT_TYPE_CLASS_CONFLICT: {
+    httpStatus: 400,
+    message_sv: 'Kontotypen passar inte kontoklassen för det här kontonumret.',
+    message_en:
+      'account_type does not fit the account class (the first digit of the number); details.reason names the allowed types.',
+  },
+  ACCOUNT_VAT_TREATMENT_CLASS: {
+    httpStatus: 400,
+    message_sv: 'Momskoden kan inte användas för den här kontoklassen.',
+    message_en:
+      'default_vat_treatment is not valid for this account class: sales treatments go on class 3, reverse-charge purchase treatments on classes 4-6.',
+  },
+  ACCOUNT_VAT_BOX_NOT_VAT_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Momsruta kan bara väljas för momskonton (26xx, inte 2650).',
+    message_en: 'vat_box is only valid on 26xx VAT accounts other than 2650.',
+  },
+  ACCOUNT_NOTHING_TO_UPDATE: {
+    httpStatus: 400,
+    message_sv: 'Inget att uppdatera.',
+    message_en: 'Nothing to update: send at least one account field.',
+  },
+  ACCOUNT_SYSTEM_DELETE: {
+    httpStatus: 400,
+    message_sv: 'Systemkonton kan inte tas bort. Inaktivera kontot istället.',
+    message_en: 'System accounts cannot be deleted. Deactivate the account instead (is_active=false).',
+  },
+  ACCOUNT_IN_USE: {
+    httpStatus: 409,
+    message_sv:
+      'Kontot kan inte tas bort eftersom det används i bokförda verifikationer. Inaktivera det istället.',
+    message_en:
+      'The account has journal lines in this company and cannot be deleted (BFL: verifikat are immutable). Deactivate it instead (is_active=false).',
+    remediation: {
+      description: 'Deactivate the account: PATCH /accounts/{number} with { is_active: false }, or gnubok_update_account.',
+      tool: 'gnubok_update_account',
     },
   },
   JOURNAL_ENTRY_NOT_BALANCED: {
@@ -1415,6 +1479,28 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kontot hör till en bankkoppling. Slå på eller av det under bankkopplingen i stället.',
     message_en: 'This account belongs to a bank connection. Turn it on or off from the bank connection instead.',
   },
+  // Cash account operations (lib/cash-accounts/manage.ts): the dashboard,
+  // v1 and MCP doors answer these same codes.
+  CASH_ACCOUNT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Bankkontot hittades inte.',
+    message_en: 'Bank account not found.',
+  },
+  CASH_ACCOUNT_LEDGER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett annat bankkonto i företaget. Välj ett annat konto eller låt systemet välja nästa lediga.',
+    message_en: 'The ledger account is already used by another bank account of the company. Pick another one or omit it to get the next free one.',
+  },
+  CASH_ACCOUNT_NO_FREE_LEDGER: {
+    httpStatus: 409,
+    message_sv: 'Det finns inget ledigt bokföringskonto i 1931-1959 för ett nytt bankkonto. Ange ett bokföringskonto (1920-1999) själv.',
+    message_en: 'No free ledger account in 1931-1959 is left for a new bank account. Pass a ledger_account (1920-1999) explicitly.',
+  },
+  CASH_ACCOUNT_IBAN_DUPLICATE: {
+    httpStatus: 409,
+    message_sv: 'Ett annat bankkonto i företaget har redan detta IBAN. Samma bankkonto ska bara finnas en gång: använd det befintliga kontot.',
+    message_en: 'Another bank account of the company already carries this IBAN. One physical account must exist once: use the existing cash account.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces
@@ -2203,6 +2289,131 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Räkenskapsåret stängdes med ett bokslut i Accounted och kan inte öppnas igen här.',
     message_en: 'The fiscal year was closed with a year-end run in Accounted and cannot be reopened here.',
+  },
+  // Creating and editing a räkenskapsår (lib/core/bookkeeping/fiscal-year-service.ts,
+  // operations fiscal-periods.create / .update). The shape rules are BFL 3 kap.
+  // Codes flagged thrown_message_sv carry a Swedish sentence naming the dates
+  // or the neighbouring year; details carry the same facts for agents.
+  FISCAL_PERIOD_INVALID_DATES: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsårets datum är ogiltiga: slutdatumet måste ligga efter startdatumet.',
+    message_en: 'The fiscal year dates are invalid: period_end must be after period_start. details.rule names the rule.',
+  },
+  FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH: {
+    httpStatus: 400,
+    message_sv:
+      'Räkenskapsåret måste börja den 1:a i en månad. Bara företagets första räkenskapsår får börja mitt i en månad (BFL 3 kap. 1 och 3 §§).',
+    message_en:
+      "period_start must be the 1st of a month: only the company's first fiscal year may start mid-month (BFL 3 kap. 1 and 3 §§).",
+  },
+  FISCAL_PERIOD_END_NOT_MONTH_END: {
+    httpStatus: 400,
+    message_sv: 'Räkenskapsåret måste sluta på sista dagen i en månad (BFL 3 kap.).',
+    message_en: 'period_end must be the last day of a month (BFL 3 kap.).',
+  },
+  FISCAL_PERIOD_TOO_LONG: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Ett räkenskapsår får vara högst 18 månader (BFL 3 kap.).',
+    message_en: 'A fiscal year may be at most 18 months (BFL 3 kap.). details.months holds the length requested.',
+  },
+  FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv:
+      'Enskild firma måste använda kalenderår: räkenskapsåret slutar 31 december och, efter det första året, börjar det 1 januari (BFL 3 kap.).',
+    message_en:
+      'An enskild firma must use the calendar year: the fiscal year ends on 31 December and, after the first year, starts on 1 January (BFL 3 kap.).',
+  },
+  FISCAL_PERIOD_NOT_CONTIGUOUS: {
+    httpStatus: 400,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsåren måste följa direkt på varandra, utan glapp.',
+    message_en:
+      'Fiscal years must be contiguous: a new year starts the day after the preceding year ends and ends the day before the following year starts. details.expected_start / details.expected_end hold the date that fits.',
+  },
+  FISCAL_PERIOD_OVERLAP: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsåret överlappar ett befintligt räkenskapsår.',
+    message_en:
+      'The fiscal year overlaps an existing one (details.overlapping_period_id / overlapping_period_name). Fiscal years never overlap.',
+    remediation: {
+      description:
+        'List the existing years with GET /fiscal-periods (gnubok_list_fiscal_periods) and choose dates that do not overlap any of them.',
+      tool: 'gnubok_list_fiscal_periods',
+    },
+  },
+  FISCAL_PERIOD_UPDATE_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Ett stängt räkenskapsår kan inte ändras.',
+    message_en: 'A closed fiscal year cannot be edited.',
+  },
+  FISCAL_PERIOD_UPDATE_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Ett låst räkenskapsår kan inte ändras. Lås upp det först om det behöver rättas.',
+    message_en: 'A locked fiscal year cannot be edited. Unlock it first if it needs correcting.',
+    remediation: {
+      description: 'Unlock the year (it must be locked, not closed), edit it, and lock it again.',
+      tool: 'gnubok_unlock_period',
+    },
+  },
+  FISCAL_PERIOD_HAS_POSTED_ENTRIES: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv:
+      'Datumen kan inte ändras eftersom det finns bokförda verifikationer i räkenskapsåret. Namnet kan fortfarande ändras.',
+    message_en:
+      'The dates cannot change while posted or reversed vouchers exist in the fiscal year (details.entry_count). The name can still be changed.',
+  },
+  FISCAL_PERIOD_CREATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte skapas. Försök igen.',
+    message_en: 'Failed to create the fiscal year.',
+  },
+  FISCAL_PERIOD_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Räkenskapsåret kunde inte sparas. Försök igen.',
+    message_en: 'Failed to update the fiscal year.',
+  },
+  // Klarmarkera (markPeriodClosedExternally): a migrated year closed in the
+  // previous bookkeeping system.
+  FISCAL_PERIOD_CLOSE_EXTERNAL_ALREADY_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret är redan stängt.',
+    message_en: 'The fiscal year is already closed.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_HAS_CLOSING_ENTRY: {
+    httpStatus: 409,
+    message_sv:
+      'Räkenskapsåret har ett bokslutsverifikat i Accounted: stäng det med det vanliga årsbokslutet i stället.',
+    message_en:
+      'The fiscal year has a closing entry in Accounted: close it through the normal year-end instead.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED: {
+    httpStatus: 409,
+    message_sv: 'Ett räkenskapsår som inte har tagit slut kan inte klarmarkeras.',
+    message_en: 'A fiscal year that has not ended yet cannot be marked as closed in a previous system.',
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv:
+      'Räkenskapsåret är bokfört i Accounted och ska stängas med det vanliga årsbokslutet, så att resultatet och balanserna förs över.',
+    message_en:
+      'The fiscal year was bookkept in Accounted, not migrated: close it with the normal year-end so the result and balances carry forward.',
+    remediation: {
+      description: 'Run the year-end instead (POST /fiscal-periods/{id}/year-end, gnubok_run_year_end).',
+      tool: 'gnubok_run_year_end',
+    },
+  },
+  FISCAL_PERIOD_CLOSE_EXTERNAL_CHECK_FAILED: {
+    httpStatus: 503,
+    thrown_message_sv: true,
+    retryable: true,
+    message_sv: 'Räkenskapsårets verifikat kunde inte kontrolleras. Året lämnas öppet. Försök igen.',
+    message_en: 'The fiscal year could not be checked, so it was left open. Retry the same request.',
   },
   FISCAL_YEAR_RESET_NOT_FOUND: {
     httpStatus: 404,
@@ -5188,6 +5399,53 @@ const RECONCILIATION_SIGNOFF: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Company settings (lib/company/settings-service.ts): the cross-field rules
+// every settings door applies. message_sv is the exact sentence the
+// dashboard's PUT /api/settings has always answered.
+const COMPANY_SETTINGS: Record<string, StructuredErrorEntry> = {
+  SETTINGS_REMINDER_DAYS_ORDER: {
+    httpStatus: 400,
+    message_sv: 'Påminnelsedagarna måste ligga i stigande ordning.',
+    message_en: 'reminder_days_level_1 < reminder_days_level_2 < reminder_days_level_3 must hold (stored values fill in the ones not sent).',
+  },
+  SETTINGS_EF_CALENDAR_YEAR: {
+    httpStatus: 400,
+    message_sv: 'Enskild firma måste använda kalenderår (BFL 3 kap.)',
+    message_en: 'An enskild firma must use the calendar year: fiscal_year_start_month must be 1 (BFL 3 kap.).',
+  },
+  SETTINGS_SHARE_CAPITAL_PAIR: {
+    httpStatus: 400,
+    message_sv: 'Aktiekapital och antal aktier måste anges tillsammans. Fyll i båda fälten eller lämna båda tomma.',
+    message_en: 'aktiekapital and antal_aktier are set (or cleared) together.',
+  },
+  SETTINGS_VACATION_BASIS_OPEN_BALANCES: {
+    httpStatus: 400,
+    message_sv: 'Semesterårets basis kan inte ändras medan öppna semestersaldon finns. Stäng semesteråret först.',
+    message_en: 'salary_vacation_year_basis cannot change while open vacation balances exist: close the vacation year first.',
+    remediation: { description: 'Close the vacation year first.', tool: 'gnubok_close_vacation_year' },
+  },
+  SETTINGS_VAT_NUMBER_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Momsregistreringsnummer krävs när företaget är momsregistrerat (ML 17 kap. 24 §)',
+    message_en: 'A VAT-registered company needs vat_number (SE + 12 digits; ML 17 kap. 24 §).',
+  },
+  SETTINGS_MOMS_PERIOD_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Momsperiod krävs när företaget är momsregistrerat (SFL 26 kap.)',
+    message_en: 'A VAT-registered company needs moms_period (SFL 26 kap.).',
+  },
+  SETTINGS_VAT_40M_REQUIRES_MONTHLY: {
+    httpStatus: 400,
+    message_sv: 'Företag med beskattningsunderlag över 40 miljoner kronor måste redovisa moms varje månad.',
+    message_en: 'With vat_taxable_base_over_40m the moms_period must be monthly.',
+  },
+  SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE: {
+    httpStatus: 400,
+    message_sv: 'Periodisk sammanställning kräver momsregistrering och EU-handel.',
+    message_en: 'periodisk_sammanstallning_enabled requires vat_registered and vat_has_eu_trade.',
+  },
+}
+
 const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
   ECONNREFUSED: NETWORK_TRANSIENT_ENTRY,
   ECONNRESET: NETWORK_TRANSIENT_ENTRY,
@@ -5296,6 +5554,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...BOLAGSVERKET,
   ...ASSETS,
   ...DIMENSION,
+  ...COMPANY_SETTINGS,
   ...WEBSHOP_ORDERS,
   ...RECONCILIATION_SIGNOFF,
   ...NODE_SYSTEM,

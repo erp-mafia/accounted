@@ -15,6 +15,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { createClient } from '@/lib/supabase/server'
 import { PATCH } from '../route'
 
+// Refusals answer the canonical { error: { code, message, details } } envelope
+// since the rules moved to lib/core/bookkeeping/fiscal-year-service.ts (they
+// used to be bare Swedish strings in { error }): the Swedish sentence is now
+// error.message.
+
 function patchRequest(body: unknown): Request {
   return createMockRequest('/api/bookkeeping/fiscal-periods/period-1', {
     method: 'PATCH',
@@ -179,7 +184,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/31 december/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/31 december/)
     })
 
     it('rejects EF subsequent period when startdatum is not 1 januari', async () => {
@@ -193,7 +199,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/kalenderår/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/kalenderår/)
     })
 
     it('accepts EF subsequent period running 1 jan to 31 dec', async () => {
@@ -222,7 +229,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/31 december/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/31 december/)
     })
 
     // Defense-in-depth: the EF end-date guard runs before validatePeriodDuration.
@@ -237,7 +245,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/18 months/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+      expect(body.error.details.months).toBe(24)
     })
   })
 })

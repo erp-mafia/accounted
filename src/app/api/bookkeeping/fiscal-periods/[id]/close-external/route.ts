@@ -1,26 +1,26 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { markPeriodClosedExternally } from '@/lib/core/bookkeeping/period-service'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { closeFiscalPeriodExternally } from '@/lib/core/bookkeeping/fiscal-year-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 // "Klarmarkera": mark an imported historical year as closed in a previous
-// bookkeeping system. Same legacy `{ error: string }` failure shape as the
-// sibling close route: the year-end UI reads it directly.
+// bookkeeping system. The rules live in period-service's
+// markPeriodClosedExternally; lib/core/bookkeeping/fiscal-year-service.ts
+// turns its refusals into registry codes, shared with the v1 operation
+// fiscal-periods.close-external. Failures answer the canonical
+// `{ error: { code, message } }` envelope (the year-end page and
+// FiscalYearsManager read error.message).
 export const POST = withRouteContext(
   'period.close_external',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { user, supabase, companyId } = ctx
+    const { user, supabase, companyId, log, requestId } = ctx
+    const opLog = log.child({ periodId: id })
 
-    try {
-      const period = await markPeriodClosedExternally(supabase, companyId, user.id, id)
-      return NextResponse.json({ data: period })
-    } catch (err) {
-      return NextResponse.json(
-        { error: err instanceof Error ? getUserErrorMessage(err) : 'Failed to mark period as closed' },
-        { status: 400 }
-      )
-    }
+    const outcome = await closeFiscalPeriodExternally({ supabase, companyId, userId: user.id, log: opLog }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

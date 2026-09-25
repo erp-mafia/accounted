@@ -199,6 +199,19 @@ import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/route'
+// Operation registry, wave 1: setup capabilities.
+import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/route'
+import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/set-primary/route'
+import '@/app/api/v1/companies/[companyId]/cash-accounts/payee-defaults/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/unlock/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/close-external/route'
+import '@/app/api/v1/companies/[companyId]/fiscal-periods/[id]/reopen-external/route'
+import '@/app/api/v1/companies/[companyId]/accounts/[number]/route'
+import '@/app/api/v1/companies/[companyId]/accounts/activate/route'
+import '@/app/api/v1/companies/[companyId]/accounts/deactivate/route'
+import '@/app/api/v1/companies/[companyId]/settings/tax-profile/route'
+import '@/app/api/v1/companies/[companyId]/settings/bookkeeping-lock/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
 // #895: value lifecycle (rename/archive/end-date + delete-unreferenced).
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/[valueId]/route'

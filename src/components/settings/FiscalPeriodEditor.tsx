@@ -164,7 +164,10 @@ export function FiscalPeriodEditor() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(body.error || t('fp_update_failed_title'))
+        // Canonical { error: { code, message } } envelope; a bare string is
+        // still read in case a proxy answers one.
+        const message = typeof body.error === 'string' ? body.error : body.error?.message
+        throw new Error(message || t('fp_update_failed_title'))
       }
       setPeriod(body.data as FiscalPeriod)
       // Every picker reads the shared list: refresh it with the new dates.

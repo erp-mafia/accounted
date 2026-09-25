@@ -47,8 +47,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies': 'companies:read',
   // Issue #1814: programmatic company creation (partner provisioning, agents).
   'POST /api/v1/companies': 'companies:write',
-  // Issue #1348: company-settings write (same field set as the MCP tool
-  // gnubok_update_company_settings; direct write, no staging).
+  // Issue #1348, widened by the operation registry: company settings
+  // (operation settings.update; the MCP tool of the same op stages).
   'PATCH /api/v1/companies/:companyId/settings': 'companies:write',
 
   // Operations (async long-running tasks)
@@ -301,6 +301,24 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Operation registry, wave 1 (src/lib/operations): setup capabilities.
+  'POST /api/v1/companies/:companyId/cash-accounts': 'companies:write',
+  'PATCH /api/v1/companies/:companyId/cash-accounts/:id': 'companies:write',
+  'POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary': 'companies:write',
+  'PUT /api/v1/companies/:companyId/cash-accounts/payee-defaults': 'companies:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/fiscal-periods/:id': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/unlock': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/close-external': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/accounts/:number': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/accounts/:number': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts/activate': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts/deactivate': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/settings': 'companies:read',
+  'PATCH /api/v1/companies/:companyId/settings/tax-profile': 'companies:write',
+  'PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock': 'companies:write',
   // Dimension registry writes (operations dimensions.create/update/delete).
   'POST /api/v1/companies/:companyId/dimensions': 'bookkeeping:write',
   'PATCH /api/v1/companies/:companyId/dimensions/:id': 'bookkeeping:write',
