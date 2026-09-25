@@ -31,7 +31,7 @@ Fyll i de markerade fälten. Radera denna instruktionssektion innan du arkiverar
 |---|---|
 | Programvara | Accounted ([DOMÄN, för den molnbaserade tjänsten app.accounted.se]) |
 | Leverantör | [BOLAGSNAMN], org.nr [ORG-NR] |
-| Lagringsplats | Molnbaserad tjänst, data lagrad i Sverige (Supabase på AWS, region eu-north-1, Stockholm) |
+| Lagringsplats | Molnbaserad tjänst, databas och filer lagrade i Sverige (Supabase på AWS, region eu-north-1, Stockholm) |
 | Åtkomst | Via webbläsare. Inloggning med e-post och lösenord; i den molnbaserade tjänsten krävs dessutom en andra faktor (engångskod från autentiseringsapp eller BankID). |
 | Kontoplan | BAS 2026 (konfigurerad i Accounted) |
 
@@ -122,7 +122,7 @@ Kundens kompletterande säkerhetskopiering:
 
 ## 7. Geografisk lagring
 
-7.1. All data i den molnbaserade tjänsten lagras i Sverige via Supabase (AWS-infrastruktur, region eu-north-1, Stockholm).
+7.1. Den molnbaserade tjänstens databas och filer, och därmed räkenskapsinformationen, lagras i Sverige via Supabase (AWS-infrastruktur, region eu-north-1, Stockholm).
 
 7.2. Maskinell behandling (kategorisering samt avläsning av underlag) sker inom EU via Amazon Bedrock; datan lämnar inte EU. Vilka underbiträden som behandlar uppgifter, och var, framgår av integritetspolicyn (avsnitt 4 och 6).
 

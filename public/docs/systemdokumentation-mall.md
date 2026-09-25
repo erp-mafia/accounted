@@ -213,7 +213,7 @@ Dokument som är kopplade till bokförda eller omförda verifikationer kan inte 
 | 25 % | Standardsats | 2611 | 2641 |
 | 12 % | Reducerad (restaurang och servering, hotell m.m.) | 2621 | 2641 |
 | 6 % | Reducerad (livsmedel tillfälligt, böcker, tidningar, persontransport, kultur m.m.) | 2631 | 2641 |
-| 0 % | Försäljning av tjänster till företag i andra länder (3305 utanför EU, 3308 inom EU) | - | - |
+| 0 % | Export av varor utanför EU (3105) och försäljning av tjänster till företag i andra länder (3305 utanför EU, 3308 inom EU) | - | - |
 | Omvänd skattskyldighet vid inköp | Tjänster från EU och från länder utanför EU, inrikes omvänd skattskyldighet (t.ex. byggtjänster) | 2614 / 2624 / 2634 (beräknad utgående moms 25 / 12 / 6 %) | 2645 (utland), 2647 (inrikes) |
 | Momsfri | Undantagna transaktioner | - | - |
 
@@ -296,7 +296,7 @@ Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och u
 
 12.2. Varje nyckel har avgränsade behörigheter (scopes), t.ex. enbart läsning av rapporter eller skrivning av transaktioner. En nyckel kan aldrig göra mer än sina tilldelade behörigheter.
 
-12.3. En nyckel med skrivbehörighet för bokföring kan bokföra direkt. En nyckel som både får förbereda och godkänna bokföring kan godkänna sina egna verifikationer utan mänsklig granskning; systemet varnar när en sådan nyckel skapas.
+12.3. En nyckel med skrivbehörighet för bokföring kan bokföra direkt. Om nyckeln har ett beloppstak för bokföring utan mänsklig granskning lämnas verifikationer över taket kvar som utkast för en användare att bokföra. En nyckel som både får förbereda och godkänna bokföring kan godkänna sina egna verifikationer utan mänsklig granskning; systemet varnar när en sådan nyckel skapas.
 
 12.4. Åtgärder som utförs via API-nyckel loggas i behandlingshistoriken med nyckeln som utförare.
 
