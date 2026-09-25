@@ -3606,6 +3606,8 @@
     "different_currencies": " (olika valutor)",
     "partial_payment_note": ": fakturan blir delbetald.",
     "ore_rounding_note": "Differens {amount} bokförs som öresavrundning (konto 3740). Fakturan markeras som betald.",
+    "bank_fee_note": "Differens {amount} bokförs som bankavgift (konto 6570). Fakturan markeras som betald.",
+    "overpayment_note": ": transaktionen är större än fakturans återstående belopp.",
     "target_settled_title": "Fakturan är redan slutbetald",
     "target_settled_description": "Ingen obetald summa återstår på fakturan, så den kan inte matchas igen. Stäng dialogen och välj rätt faktura, eller bokför transaktionen som vanligt.",
     "target_not_open_title": "Fakturan är inte öppen för betalning",

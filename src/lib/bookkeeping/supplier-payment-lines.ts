@@ -46,6 +46,7 @@
  */
 import type { CreateJournalEntryLineInput } from '@/types'
 import { roundOre, ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { RESIDUAL_KINDS } from '@/lib/reconciliation/residual'
 import {
   supplierInvoiceDisplayFigures,
   type SupplierInvoiceDisplayInput,
@@ -59,6 +60,8 @@ export interface SupplierClearingArgs {
   bankSek: number
   /** Bank/clearing account credited (e.g. 1930). */
   paymentAccount: string
+  /** Bank fee on top of the invoice (splitSupplierBankFee), booked on 6570. */
+  bankFeeSek?: number
 }
 
 export interface SupplierClearingResult {
@@ -92,6 +95,39 @@ export function supplierOreRoundingLine(residual: number): CreateJournalEntryLin
     credit_amount: residual > 0 ? residual : 0,
     line_description: 'Öresavrundning',
   }
+}
+
+/**
+ * Book a bank fee that left the bank together with a supplier payment
+ * (splitSupplierBankFee): Dr 6570 Bankavgift, and the payment-account credit
+ * grows by the same amount so it equals the whole bank row. Mutates `lines`.
+ * Shared by every supplier-match builder and the preview, so the fee is
+ * booked the same way on each path.
+ */
+export function addSupplierBankFeeLine(
+  lines: CreateJournalEntryLineInput[],
+  paymentAccount: string,
+  feeSek: number | undefined,
+): void {
+  const fee = roundOre(feeSek ?? 0)
+  if (fee <= 0) return
+  const bankLine = lines.find((l) => l.account_number === paymentAccount && l.credit_amount > 0)
+  if (bankLine) {
+    bankLine.credit_amount = roundOre(bankLine.credit_amount + fee)
+  } else {
+    lines.push({
+      account_number: paymentAccount,
+      debit_amount: 0,
+      credit_amount: fee,
+      line_description: 'Utbetalning från bank',
+    })
+  }
+  lines.push({
+    account_number: RESIDUAL_KINDS.bank_fee.account,
+    debit_amount: fee,
+    credit_amount: 0,
+    line_description: RESIDUAL_KINDS.bank_fee.label_sv,
+  })
 }
 
 export interface SupplierCashSettlementArgs {
@@ -181,6 +217,7 @@ export function buildSupplierPaymentClearingLines(
     })
     // Paid fewer kronor than owed → vinst → 3740 credit; more → förlust → debit.
     lines.push(supplierOreRoundingLine(diff))
+    addSupplierBankFeeLine(lines, args.paymentAccount, args.bankFeeSek)
     return { apSek, bankSek, oreDiffSek: diff, lines }
   }
 
@@ -199,5 +236,6 @@ export function buildSupplierPaymentClearingLines(
     credit_amount: amount,
     line_description: 'Utbetalning från bank',
   })
+  addSupplierBankFeeLine(lines, args.paymentAccount, args.bankFeeSek)
   return { apSek, bankSek, oreDiffSek: 0, lines }
 }

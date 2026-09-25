@@ -8,7 +8,7 @@ import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-pa
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
+import { planSupplierPayment, splitSupplierBankFee } from '@/lib/invoices/apply-supplier-payment'
 import { createJournalEntry, findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
@@ -105,10 +105,36 @@ export const POST = withRouteContext(
     // match as a full payment of whatever remains, rather than storing the
     // SEK number with the invoice's currency suffix: which would render
     // as "Betalt 239 USD" on a 25 USD invoice.
-    const paymentAmountInvoiceCurrency =
-      transaction.currency === invoice.currency
+    //
+    // A same-currency row that pays MORE than the remaining balance (the
+    // invoice plus a card or transfer fee) settles the invoice in full; the
+    // excess is booked on 6570 by the line builders (splitSupplierBankFee).
+    //
+    // SEK that left the bank for the whole row, when we know it. SEK
+    // transaction → the absolute amount; foreign transaction with a stored
+    // amount_sek → that value; foreign transaction WITHOUT amount_sek →
+    // unknown (null). The raw foreign amount must never stand in here: treating
+    // 19 USD as 19 SEK is exactly the bug that books "19 kr" on a ~175 kr payment.
+    const bankSekRow =
+      transaction.currency === 'SEK'
         ? txAmountAbs
-        : invoice.remaining_amount
+        : transaction.amount_sek != null
+          ? Math.abs(transaction.amount_sek)
+          : null
+    const feeSplit =
+      transaction.currency === invoice.currency
+        ? splitSupplierBankFee({
+            paymentAmount: txAmountAbs,
+            remaining: invoice.remaining_amount,
+            bankSek: bankSekRow,
+            invoiceRate: invoice.currency === 'SEK' ? 1 : (invoice.exchange_rate ?? null),
+            absorbOreRounding: isPureSek,
+          })
+        : null
+    const bankFeeSek = feeSplit?.feeSek ?? 0
+    const paymentAmountInvoiceCurrency = feeSplit
+      ? feeSplit.paymentAmount
+      : invoice.remaining_amount
 
     const { data: settings } = await supabase
       .from('company_settings')
@@ -159,17 +185,9 @@ export const POST = withRouteContext(
       })
     }
 
-    // SEK that actually left the bank, when we know it. SEK transaction → the
-    // absolute amount; foreign transaction with a stored amount_sek → that
-    // value; foreign transaction WITHOUT amount_sek → unknown (null). The raw
-    // foreign amount must never stand in here: treating 19 USD as 19 SEK is
-    // exactly the bug that books "19 kr" on a ~175 kr payment.
-    const bankSekStored =
-      transaction.currency === 'SEK'
-        ? txAmountAbs
-        : transaction.amount_sek != null
-          ? Math.abs(transaction.amount_sek)
-          : null
+    // SEK that left the bank for the invoice part: the whole row, net of any
+    // bank fee booked on its own line.
+    const bankSekStored = feeSplit ? feeSplit.bankSek : bankSekRow
 
     // SEK the invoice was booked at for this payment portion:
     //   - SEK invoice: face value = paymentAmountInvoiceCurrency
@@ -322,6 +340,7 @@ export const POST = withRouteContext(
             ? actualBankSek
             : undefined,
           transaction,
+          bankFeeSek,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       } else if (isPureSek) {
@@ -338,8 +357,9 @@ export const POST = withRouteContext(
         }
         const { lines } = buildSupplierPaymentClearingLines({
           apSek: invoice.remaining_amount,
-          bankSek: txAmountAbs,
+          bankSek: roundOre(txAmountAbs - bankFeeSek),
           paymentAccount,
+          bankFeeSek,
         })
         const journalEntry = await createJournalEntry(supabase, companyId!, user.id, {
           fiscal_period_id: fiscalPeriodId,
@@ -359,6 +379,7 @@ export const POST = withRouteContext(
           undefined, // supplierName (unchanged default)
           paymentAccount,
           transaction,
+          bankFeeSek,
         )
         if (journalEntry) journalEntryId = journalEntry.id
       }

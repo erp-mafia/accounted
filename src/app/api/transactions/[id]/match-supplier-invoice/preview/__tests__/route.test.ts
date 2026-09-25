@@ -282,3 +282,52 @@ describe('GET /api/transactions/[id]/match-supplier-invoice/preview: settlement 
     expect(body.lines.find((l) => l.account_number === '1940')?.credit_amount).toBe(500)
   })
 })
+
+describe('GET /api/transactions/[id]/match-supplier-invoice/preview: bank fee on top of the invoice', () => {
+  it('previews a EUR card overpayment as a full settlement with the fee on 6570', async () => {
+    // Same row as the POST test: 1 749,70 EUR (19 382,30 kr) drawn for a
+    // 1 739,43 EUR invoice booked at 11,055. The preview is what the user
+    // approves, so it must show the lines the POST books.
+    enqueue({
+      data: {
+        id: TX_UUID,
+        date: '2026-07-22',
+        amount: -1749.7,
+        currency: 'EUR',
+        amount_sek: -19382.3,
+        cash_account_id: null,
+      },
+      error: null,
+    })
+    enqueue({
+      data: {
+        id: SI_UUID,
+        currency: 'EUR',
+        exchange_rate: 11.055,
+        total: 1739.43,
+        remaining_amount: 1739.43,
+        registration_journal_entry_id: 'je-registered',
+        items: [],
+      },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
+
+    const res = await GET(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+      is_fully_paid: boolean
+      bank_fee_sek: number
+    }>(res)
+
+    expect(status).toBe(200)
+    expect(body.is_fully_paid).toBe(true)
+    expect(body.bank_fee_sek).toBe(113.77)
+    expect(body.lines).toEqual([
+      expect.objectContaining({ account_number: '2440', debit_amount: 19229.4 }),
+      expect.objectContaining({ account_number: '1930', credit_amount: 19382.3 }),
+      expect.objectContaining({ account_number: '7960', debit_amount: 39.13 }),
+      expect.objectContaining({ account_number: '6570', debit_amount: 113.77 }),
+    ])
+  })
+})
