@@ -897,3 +897,9 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .splitStart { display: inline-flex; align-items: center; gap: 4px; }
 .routineCreate { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid hsl(var(--border)); }
 .routineSwitch { align-self: center; }
+/* Accounted's review list (ReviewQueue.tsx) */
+.reviewList { display: flex; flex-direction: column; gap: 16px; margin: 0; padding: 0; list-style: none; }
+.reviewItem { display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
+.reviewHead b { display: block; font-size: 15px; font-weight: 500; }
+.reviewAlert { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: hsl(var(--destructive) / 0.08); color: hsl(var(--destructive)); font-size: 13px; line-height: 19px; }
+.reviewFile { max-height: 360px; overflow: auto; padding: 14px 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; font-size: 12.5px; line-height: 18px; white-space: pre-wrap; }

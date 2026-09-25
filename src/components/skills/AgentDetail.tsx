@@ -276,7 +276,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
                   <Button variant="outline" size="sm" onClick={() => void changeKnowledge('reset')}>{t('adv_reset')}</Button>
                 </ActionRow>
               )}
-              {COMMUNITY_OPEN && own && !own.draft && <ShareBox status={own.shareStatus ?? 'private'} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
+              {COMMUNITY_OPEN && own && !own.draft && <ShareBox status={own.shareStatus ?? 'private'} publishedUrl={own.publishedUrl} reviewNote={own.reviewNote} canWrite={canWrite} onShare={(share) => patchOwn(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} />}
               </div>
               {own && (own.shareStatus ?? 'private') === 'private' && <div className={styles.alist}><DeleteOwn canWrite={canWrite} onDelete={deleteOwn} /></div>}
             </SubView>
@@ -454,10 +454,13 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
 const HANDLE = /^[a-z0-9][a-z0-9-]{0,38}$/
 
 /** Share an own agent with the community: it waits for Accounted's review before anyone else sees it. */
-function ShareBox({ status, canWrite, onShare }: {
+/** Share an own item: Accounted reviews it, and a published one is open to everyone under MIT on accounted.se. */
+export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote }: {
   status: NonNullable<SkillSummary['shareStatus']>
   canWrite: boolean
   onShare: (share: { author_handle: string } | 'withdraw') => Promise<boolean>
+  publishedUrl?: string | null
+  reviewNote?: string | null
 }) {
   const t = useTranslations('skills_registry')
   const [open, setOpen] = useState(false)
@@ -471,14 +474,14 @@ function ShareBox({ status, canWrite, onShare }: {
   const failed = state === 'failed' ? t('share_failed') : undefined
   if (status === 'submitted' || status === 'published') {
     return (
-      <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed}>
+      <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed} below={status === 'published' && publishedUrl ? <a className={styles.catLink} href={publishedUrl} target="_blank" rel="noreferrer">{t('share_published_link')}</a> : undefined}>
         <Button variant="outline" size="sm" disabled={!canWrite} loading={state === 'sending'} onClick={() => void send('withdraw')}>{t('share_withdraw')}</Button>
       </ActionRow>
     )
   }
   if (status === 'withdrawn') return <ActionRow title={t('adv_share_title')} desc={t('share_status_withdrawn')} />
   return (
-    <ActionRow title={t('adv_share_title')} desc={t('adv_share_desc')} below={open && (
+    <ActionRow title={t('adv_share_title')} desc={reviewNote ? t('share_returned', { note: reviewNote }) : t('adv_share_desc')} below={open && (
     <form className={`${styles.share} ${styles.fadeIn}`} onSubmit={(e) => { e.preventDefault(); if (HANDLE.test(handle) && confirmed) void send({ author_handle: handle }) }}>
       <p>{t('share_body')}</p>
       <label htmlFor="agent-share-handle">

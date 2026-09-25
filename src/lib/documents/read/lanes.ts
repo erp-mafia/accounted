@@ -62,18 +62,27 @@ export function historyReaderTier(): AiTier {
   return process.env.ARKIV_HISTORY_READER_TIER === 'cheap' ? 'cheap' : 'extraction'
 }
 
+/** On a verifikat: booked, so read lazily (see PlanInput.tied). */
+export const isBooked = (doc: { journal_entry_id?: string | null; journal_entry_line_id?: string | null }): boolean => !!(doc.journal_entry_id || doc.journal_entry_line_id)
+
 export interface PlanInput {
   lane: ReadLane
   inRollout: boolean
   docType: string | null
   /** The document has been through a read pass before (pages_read_at is set). */
   pagesRead: boolean
+  /**
+   * It sits on a verifikat: already booked. Read lazily whatever its age (founder, 2026-09-25: the goal is agents
+   * answering correctly when asked, and 88 % of background model reads were booked imports nobody opened). The
+   * free text layer is read up front; the model reads the rest when someone opens it.
+   */
+  tied?: boolean
 }
 
 /** What to read now, or null when nothing more is read up front. */
 export function readPlanFor(input: PlanInput): ReadPlan | null {
-  const { lane, inRollout, docType, pagesRead } = input
-  if (lane === 'live') return { lane, allowModel: inRollout, maxModelPages: null }
+  const { lane, inRollout, docType, pagesRead, tied } = input
+  if (lane === 'live') return { lane, allowModel: inRollout && !tied, maxModelPages: null }
   const tier = historyReaderTier()
   if (lane === 'history_tied') return pagesRead ? null : { lane, allowModel: false, maxModelPages: null, tier }
   if (!pagesRead) return { lane, allowModel: inRollout, maxModelPages: 1, tier }

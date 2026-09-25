@@ -19,6 +19,10 @@ export interface CompanySkillRow {
   draft?: boolean
   /** A flow, knowledge or an analysis (company_skills.kind). */
   kind?: 'workflow' | 'rules' | 'analysis'
+  /** Where a published item lives in erp-mafia/accounted-skills. */
+  review_url?: string | null
+  /** Why Accounted sent a shared item back (it is private again). */
+  review_note?: string | null
 }
 
 /** Caller must already authorize company membership. Never cache tenant data. */

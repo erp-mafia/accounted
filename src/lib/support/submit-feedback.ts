@@ -8,6 +8,10 @@ export interface SubmitFeedbackInput {
    *  conversation API carries text, and the desk turns the mail into a
    *  ticket with the files attached. */
   files?: File[]
+  /** Force a separate ticket instead of continuing the SDK's current one.
+   *  Needed when the customer starts a new request while another is open:
+   *  without it the SDK appends the message to the open ticket. */
+  newTicket?: boolean
 }
 
 /**
@@ -131,14 +135,17 @@ function noteInAnalytics(
  * Never throws and never blocks: if conversations are unavailable (support
  * disabled, no analytics, older SDK) the user still gets the email path.
  */
-async function submitViaTicket({ message, subject }: SubmitFeedbackInput): Promise<ChannelOutcome> {
+async function submitViaTicket({ message, subject, newTicket }: SubmitFeedbackInput): Promise<ChannelOutcome> {
   if (!isAnalyticsEnabled()) return 'unavailable'
   try {
     const conversations = posthog.conversations
     if (!conversations?.isAvailable?.()) return 'unavailable'
     // The SDK resolves null (not a rejection) when the ticket could not be
     // created; that must count as failed so email takes over.
-    const res = await conversations.sendMessage(composeTicketBody(message, subject))
+    const body = composeTicketBody(message, subject)
+    const res = newTicket
+      ? await conversations.sendMessage(body, undefined, true)
+      : await conversations.sendMessage(body)
     return res ? 'ok' : 'failed'
   } catch {
     return 'failed'

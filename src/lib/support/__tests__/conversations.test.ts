@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { listTickets, loadThread, pickActiveTicket, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
+import { displayStatus, listTickets, loadThread, pickActiveTicket, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
 
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
@@ -30,6 +30,26 @@ describe('pickActiveTicket', () => {
   })
   it('is null when everything is resolved', () => {
     expect(pickActiveTicket([t('done', 'resolved', '2026-09-14')])).toBeNull()
+  })
+})
+
+describe('displayStatus', () => {
+  const me = { from: 'me' as const }
+  const support = { from: 'support' as const }
+  it('reads pending as open when the customer wrote last', () => {
+    expect(displayStatus('pending', [support, me])).toBe('open')
+    expect(displayStatus('pending', [support, me, me])).toBe('open')
+  })
+  it('keeps pending when support wrote last', () => {
+    expect(displayStatus('pending', [me, support])).toBe('pending')
+  })
+  it('keeps pending when there are no visible messages', () => {
+    expect(displayStatus('pending', [])).toBe('pending')
+  })
+  it('passes every other status through', () => {
+    for (const s of ['new', 'open', 'on_hold', 'resolved'] as const) {
+      expect(displayStatus(s, [support, me])).toBe(s)
+    }
   })
 })
 

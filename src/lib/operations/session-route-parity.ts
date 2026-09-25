@@ -499,6 +499,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/agent/memory/:id': covered(['gnubok_forget_fact'], 'dismiss only; edit and pin have no API'),
   'PATCH /api/agents/knowledge': gap('P3', 'attach knowledge packs to an agent'),
   'POST /api/agents/community/feedback': uiOnly('community upvote by a person'),
+  // Community review is Accounted staff moderating the shared instruction
+  // library, not a company capability; an agent must not approve its own text.
+  'POST /api/community/items/:slug/approve': uiOnly('staff review of a community item: reviewers only'),
+  'POST /api/community/submissions/:id/approve': uiOnly('staff review of a community submission: reviewers only'),
+  'POST /api/community/submissions/:id/send-back': uiOnly('staff review of a community submission: reviewers only'),
   'POST /api/skills': covered(['gnubok_create_skill']),
   'POST /api/skills/draft': covered(['gnubok_create_skill']),
   'PATCH /api/skills/:id': gap('P3'),
