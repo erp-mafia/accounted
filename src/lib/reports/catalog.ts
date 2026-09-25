@@ -342,6 +342,21 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     searchTerms:
       'bokslutsbilagor bilagor bilaga bokslutspärm pärm avstämning avstämningar underlag signering reko balanskonton specifikation kontoutdrag engagemangsbesked checklista',
   },
+  {
+    // Systemdokumentation (BFL 5 kap. 11 §, BFNAR 2013:2 kap. 9): how the
+    // company's bookkeeping is organised, generated from its configuration
+    // for one räkenskapsår. Sits with behandlingshistorik, its sibling in
+    // the same paragraph of the law.
+    slug: 'systemdokumentation',
+    labelKey: 'name_systemdokumentation',
+    descKey: 'desc_systemdokumentation',
+    category: 'export',
+    params: 'fiscal',
+    exports: ['pdf'],
+    libraryOnly: true,
+    searchTerms:
+      'systemdokumentation samlingsplan kontoplan verifikationsserier behandlingsregler delsystem bfnar 2013:2 systemdokument revisor dokumentation bokföringssystem',
+  },
 ]
 
 /** Reports that take a fiscal period + optional date sub-range. */

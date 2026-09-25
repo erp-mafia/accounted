@@ -11,7 +11,7 @@ Varje bokföringsskyldig ska upprätta en systemdokumentation som beskriver bokf
 
 Denna mall är förifylld med uppgifter som gäller för Accounted. Avsnitt markerade med hakparenteser ska anpassas till ditt företags förhållanden. Radera denna instruktionssektion innan du arkiverar dokumentet.
 
-Accounted tar också fram en systemdokumentation för just ditt företag, med aktuell kontoplan, verifikationsserier, detaljerade behandlingsregler och programversion. Den finns i filen `revision/systemdokumentation.json` i **Importera/Exportera > Exportera > Komplett arkiv**. Denna mall kompletterar den med företagets egna rutiner.
+Accounted tar också fram en färdig systemdokumentation för just ditt företag, med aktuell kontoplan, delsystem, verifikationsserier, behandlingsregler, behörigheter, integrationer och programversion: **Rapporter > Export & arkiv > Systemdokumentation**, som PDF per räkenskapsår. Samma uppgifter finns i filen `revision/systemdokumentation.json` i **Importera/Exportera > Exportera > Komplett arkiv**. Denna mall kompletterar den med företagets egna rutiner och ansvariga.
 
 Systemdokumentationen ska bevaras lika länge som den räkenskapsinformation den avser: till och med det sjunde året efter utgången av det kalenderår då räkenskapsåret avslutades (7 kap. 2 § BFL).
 
@@ -130,7 +130,7 @@ Följande delsystem matar journalen:
 
 **Öresavrundning på leverantörsfakturor.** Användaren väljer avrundning när den finns på leverantörens faktura. Avrundningen bokförs som en egen rad på konto 3740 utan moms och ändrar inte momsbeloppet. Vid betalning enligt kontantmetoden bokförs en skillnad under 1 krona mellan fakturabeloppet och det belopp som lämnade banken på 3740; en avvikelse på 1 krona eller mer godtas inte som slutbetalning.
 
-De fullständiga behandlingsreglerna finns i den genererade systemdokumentationen (`revision/systemdokumentation.json` i **Komplett arkiv**). Ändringar av behandlingsregler och nya programversioner registreras med datum i behandlingshistoriken (avsnitt 9).
+De fullständiga behandlingsreglerna finns i den genererade systemdokumentationen (**Rapporter > Export & arkiv > Systemdokumentation**, även som `revision/systemdokumentation.json` i **Komplett arkiv**). Ändringar av behandlingsregler och nya programversioner registreras med datum i behandlingshistoriken (avsnitt 9).
 
 ### 4.5 Dimensioner
 
