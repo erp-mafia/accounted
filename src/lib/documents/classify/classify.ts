@@ -146,6 +146,7 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
   try {
     const result = await getAiService().generateStructured({
       tier: 'cheap',
+      meter: { feature: 'arkiv_classify', companyId: row.company_id },
       system,
       prompt,
       maxTokens: 800,
@@ -317,6 +318,9 @@ export async function classifyUnclassifiedDocuments(
     .is('doc_type', null)
     .not('pages_read_at', 'is', null)
     .gt('page_count', 0)
+    // Booked documents are typed when someone opens them, not in the background (goal: agents answer when asked).
+    .is('journal_entry_id', null)
+    .is('journal_entry_line_id', null)
     .order('created_at', { ascending: false })
     .limit(limit * 10)
   if (error) throw new Error(`fetch unclassified failed: ${error.message}`)

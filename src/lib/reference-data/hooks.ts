@@ -28,12 +28,12 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type {
   Article,
   BASAccount,
-  CashAccount,
   Customer,
   FiscalPeriod,
   Supplier,
 } from '@/types'
 import type { DimensionDto } from '@/components/dimensions/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 import { refKeys } from './keys'
 import {
   fetchAccounts,
@@ -99,7 +99,7 @@ export function useFiscalPeriods(): ReferenceListState & { periods: FiscalPeriod
 
 export function useCashAccounts(
   options: { enabledOnly?: boolean } = {},
-): ReferenceListState & { cashAccounts: CashAccount[] } {
+): ReferenceListState & { cashAccounts: CashAccountWithBank[] } {
   const companyId = useActiveCompanyId()
   const { items, ...state } = useReferenceList(refKeys.cashAccounts(companyId), ([, id]) =>
     fetchCashAccounts(id),

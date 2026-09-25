@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
+import { planSupplierPayment, splitSupplierBankFee } from '@/lib/invoices/apply-supplier-payment'
 
 describe('planSupplierPayment', () => {
   const invoice = { total: 11231.25, paid_amount: 0, remaining_amount: 11231.25 }
@@ -70,5 +70,71 @@ describe('planSupplierPayment', () => {
       const r = planSupplierPayment(inv, 11231.25)
       expect(r.ok).toBe(false)
     })
+  })
+})
+
+describe('splitSupplierBankFee', () => {
+  it('splits a EUR card payment into the invoice and a fee at the bank row rate', () => {
+    // 1 749,70 EUR drawn (19 382,30 kr) for a 1 739,43 EUR invoice.
+    const r = splitSupplierBankFee({
+      paymentAmount: 1749.7,
+      remaining: 1739.43,
+      bankSek: 19382.3,
+      invoiceRate: 11.055,
+    })
+    expect(r).toEqual({ paymentAmount: 1739.43, bankSek: 19268.53, feeSek: 113.77 })
+  })
+
+  it('converts the fee at the invoice rate when the bank SEK is unknown', () => {
+    const r = splitSupplierBankFee({
+      paymentAmount: 110,
+      remaining: 100,
+      bankSek: null,
+      invoiceRate: 11,
+    })
+    expect(r).toEqual({ paymentAmount: 100, bankSek: null, feeSek: 110 })
+  })
+
+  it('leaves an exact or short payment untouched', () => {
+    const args = { remaining: 1000, bankSek: 1000, invoiceRate: 1 }
+    expect(splitSupplierBankFee({ ...args, paymentAmount: 1000 }).feeSek).toBe(0)
+    expect(splitSupplierBankFee({ ...args, paymentAmount: 400, bankSek: 400 })).toEqual({
+      paymentAmount: 400,
+      bankSek: 400,
+      feeSek: 0,
+    })
+  })
+
+  it('leaves a sub-krona SEK overshoot to öresavrundning', () => {
+    const r = splitSupplierBankFee({
+      paymentAmount: 11232,
+      remaining: 11231.25,
+      bankSek: 11232,
+      invoiceRate: 1,
+      absorbOreRounding: true,
+    })
+    expect(r.feeSek).toBe(0)
+    expect(r.paymentAmount).toBe(11232)
+  })
+
+  it('leaves an excess above the residual cap for planSupplierPayment to reject', () => {
+    const r = splitSupplierBankFee({
+      paymentAmount: 12000,
+      remaining: 5000,
+      bankSek: 12000,
+      invoiceRate: 1,
+    })
+    expect(r).toEqual({ paymentAmount: 12000, bankSek: 12000, feeSek: 0 })
+    expect(planSupplierPayment({ total: 5000, remaining_amount: 5000 }, r.paymentAmount).ok).toBe(false)
+  })
+
+  it('leaves the excess unconverted when no SEK figure exists at all', () => {
+    const r = splitSupplierBankFee({
+      paymentAmount: 110,
+      remaining: 100,
+      bankSek: null,
+      invoiceRate: null,
+    })
+    expect(r.feeSek).toBe(0)
   })
 })

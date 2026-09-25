@@ -303,9 +303,11 @@ export default async function DashboardLayout({
       .select('*')
       .eq('company_id', companyId)
       .order('period_start', { ascending: false }),
+    // The embed carries each account's bank for the Konto label; same select
+    // as fetchCashAccounts (lib/cash-accounts/labels.ts CashAccountWithBank).
     supabase
       .from('cash_accounts')
-      .select('*')
+      .select('*, bank_connection:bank_connections(bank_name)')
       .eq('company_id', companyId)
       .order('is_primary', { ascending: false })
       .order('ledger_account', { ascending: true }),

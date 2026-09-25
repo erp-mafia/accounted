@@ -21,6 +21,7 @@
  * The caller owns any conversion, keeping this helper FX-agnostic.
  */
 import { roundOre, ORE_TOLERANCE, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import { RESIDUAL_MAX_AMOUNT } from '@/lib/reconciliation/residual'
 
 export interface SupplierPaymentTotals {
   total: number
@@ -104,5 +105,59 @@ export function planSupplierPayment(
       newStatus: isFullyPaid ? 'paid' : 'partially_paid',
       oreSettled: false,
     },
+  }
+}
+
+export interface SupplierBankFeeSplit {
+  /** Amount applied to the invoice, in the invoice's currency. */
+  paymentAmount: number
+  /** SEK that left the bank for the invoice part; null when unknown. */
+  bankSek: number | null
+  /** SEK booked as a bank fee (6570); 0 when the row does not overpay. */
+  feeSek: number
+}
+
+/**
+ * Split a same-currency bank row that pays MORE than the remaining balance into
+ * the invoice part and a bank fee: the typical case is a card or transfer fee
+ * added on top of the invoice (1 749,70 EUR drawn for a 1 739,43 EUR invoice).
+ * The invoice then settles in full and the excess is booked on its own line
+ * (addSupplierBankFeeLine) instead of the match being refused, or 2440 being
+ * cleared by more than was owed.
+ *
+ * The excess is converted at the bank row's own rate when its SEK is known,
+ * else at `invoiceRate`. Returned unchanged (feeSek 0) when the row does not
+ * overpay past the same tolerance planSupplierPayment uses, when the fee's SEK
+ * cannot be determined, or when it exceeds RESIDUAL_MAX_AMOUNT (the cap the
+ * reconciliation residual uses: above it the excess is a missing booking, not
+ * a fee), so planSupplierPayment still rejects those as an overshoot.
+ */
+export function splitSupplierBankFee(args: {
+  /** Bank amount in the invoice's currency (same-currency match). */
+  paymentAmount: number
+  remaining: number
+  /** SEK that left the bank for the whole row; null when unknown. */
+  bankSek: number | null
+  /** SEK per unit of the invoice currency (1 for SEK); null when unknown. */
+  invoiceRate: number | null
+  absorbOreRounding?: boolean
+}): SupplierBankFeeSplit {
+  const unchanged = { paymentAmount: args.paymentAmount, bankSek: args.bankSek, feeSek: 0 }
+  const tolerance = args.absorbOreRounding ? ORE_ROUNDING_SETTLEMENT_MAX : ORE_TOLERANCE
+  if (args.paymentAmount <= args.remaining + tolerance) return unchanged
+
+  const excess = roundOre(args.paymentAmount - args.remaining)
+  const feeSek =
+    args.bankSek != null
+      ? roundOre((args.bankSek * excess) / args.paymentAmount)
+      : args.invoiceRate != null && args.invoiceRate > 0
+        ? roundOre(excess * args.invoiceRate)
+        : null
+  if (feeSek == null || feeSek <= 0 || feeSek > RESIDUAL_MAX_AMOUNT) return unchanged
+
+  return {
+    paymentAmount: roundOre(args.remaining),
+    bankSek: args.bankSek != null ? roundOre(args.bankSek - feeSek) : null,
+    feeSek,
   }
 }

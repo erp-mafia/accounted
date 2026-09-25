@@ -697,6 +697,10 @@ export type CashAccountSource = 'enable_banking' | 'manual' | 'sie_import'
  * default account per currency.
  */
 export interface CashAccountPayeeFields {
+  // The bank name printed with the payment details. Not the bank the account
+  // belongs to: that is bank_connections.bank_name, read through
+  // lib/cash-accounts/labels.ts. A backfill or an admin may put a payee on
+  // another account than the one it names.
   bank_name: string | null
   clearing_number: string | null
   account_number: string | null

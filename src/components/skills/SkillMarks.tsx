@@ -1,7 +1,7 @@
 'use client'
 
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import styles from './skills.module.css'
 
@@ -22,7 +22,7 @@ const MAX_BANKS = 3
 /** The company's connected banks, one mark per bank. */
 function useBankLogos(): string[] {
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
-  const logos = cashAccounts.map((a) => bankLogoUrl(a.bank_name, a.name)).filter((url): url is string => !!url)
+  const logos = cashAccounts.map(cashAccountLogoUrl).filter((url): url is string => !!url)
   return [...new Set(logos)].slice(0, MAX_BANKS)
 }
 

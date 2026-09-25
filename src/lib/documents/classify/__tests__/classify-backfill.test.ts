@@ -17,18 +17,20 @@ import { classifyUnclassifiedDocuments } from '../classify'
  */
 function makeSupabase(untyped: string[], alreadyAsked: string[]) {
   const tables: string[] = []
+  const nulls: string[] = []
   const from = (table: string) => {
     tables.push(table)
     const api: Record<string, unknown> = {}
     const chain = () => api
-    Object.assign(api, { select: chain, eq: chain, is: chain, not: chain, gt: chain, order: chain })
+    Object.assign(api, { select: chain, eq: chain, not: chain, gt: chain, order: chain })
+    api.is = (k: string) => { nulls.push(k); return api }
     api.limit = (n: number) => Promise.resolve({ data: untyped.slice(0, n).map((id) => ({ id })), error: null })
     api.in = (_k: string, ids: string[]) => Promise.resolve({ data: alreadyAsked.filter((id) => ids.includes(id)).map((document_id) => ({ document_id })), error: null })
     // Whatever else classifyDocument reads finds nothing: the document is skipped, and counted as processed.
     api.maybeSingle = () => Promise.resolve({ data: null, error: null })
     return api
   }
-  return { supabase: { from } as never, tables }
+  return { supabase: { from } as never, tables, nulls }
 }
 
 beforeEach(() => vi.clearAllMocks())
@@ -45,5 +47,11 @@ describe('classifyUnclassifiedDocuments', () => {
     const { supabase } = makeSupabase(['a', 'b', 'c', 'd'], ['a', 'c'])
     expect((await classifyUnclassifiedDocuments(supabase, 'co-1', 10)).processed).toBe(2)
     expect((await classifyUnclassifiedDocuments(makeSupabase(['a', 'b', 'c', 'd'], []).supabase, 'co-1', 3)).processed).toBe(3)
+  })
+
+  it('never types a booked document in the background: it is typed when someone opens it', async () => {
+    const { supabase, nulls } = makeSupabase(['a'], [])
+    await classifyUnclassifiedDocuments(supabase, 'co-1', 10)
+    expect(nulls).toEqual(expect.arrayContaining(['journal_entry_id', 'journal_entry_line_id']))
   })
 })

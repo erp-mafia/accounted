@@ -13,11 +13,14 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { cashPartialBlockReason } from '@/lib/bookkeeping/booking-mode'
 import { buildSupplierInvoiceCashLines } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { buildSupplierPaymentClearingLines } from '@/lib/bookkeeping/supplier-payment-lines'
+import {
+  addSupplierBankFeeLine,
+  buildSupplierPaymentClearingLines,
+} from '@/lib/bookkeeping/supplier-payment-lines'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { planSupplierPayment } from '@/lib/invoices/apply-supplier-payment'
-import { ORE_TOLERANCE } from '@/lib/money'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { planSupplierPayment, splitSupplierBankFee } from '@/lib/invoices/apply-supplier-payment'
+import { ORE_TOLERANCE, roundOre } from '@/lib/money'
+import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
 
 type PreviewLine = {
   account_number: string
@@ -108,20 +111,38 @@ export const GET = withRouteContext(
     // different one is booked.
     const txAmountAbs = Math.abs(transaction.amount)
     const remainingInvoiceCurrency = si.remaining_amount ?? si.total
-    // In the INVOICE's currency: a cross-currency match settles whatever
-    // remains rather than reading the bank figure as invoice currency.
-    const paymentAmountInvoiceCurrency =
-      transaction.currency === si.currency ? txAmountAbs : remainingInvoiceCurrency
-    // SEK that actually left the bank, when known. SEK bank line → the absolute
-    // amount; foreign line with a stored amount_sek → that value; foreign line
-    // WITHOUT amount_sek → unknown (null). The raw foreign amount must never
-    // stand in: that is what renders 19 USD as 19 kr.
-    const bankSekStored =
+    const isPureSek = transaction.currency === 'SEK' && si.currency === 'SEK'
+    // SEK that actually left the bank for the whole row, when known. SEK bank
+    // line → the absolute amount; foreign line with a stored amount_sek → that
+    // value; foreign line WITHOUT amount_sek → unknown (null). The raw foreign
+    // amount must never stand in: that is what renders 19 USD as 19 kr.
+    const bankSekRow =
       transaction.currency === 'SEK'
         ? txAmountAbs
         : transaction.amount_sek != null
           ? Math.abs(transaction.amount_sek)
           : null
+    // A same-currency row that pays MORE than the remaining balance (the
+    // invoice plus a card or transfer fee) settles the invoice in full, with
+    // the excess on 6570. Same split as the POST handler.
+    const feeSplit =
+      transaction.currency === si.currency
+        ? splitSupplierBankFee({
+            paymentAmount: txAmountAbs,
+            remaining: remainingInvoiceCurrency,
+            bankSek: bankSekRow,
+            invoiceRate: si.currency === 'SEK' ? 1 : (si.exchange_rate ?? null),
+            absorbOreRounding: isPureSek,
+          })
+        : null
+    const bankFeeSek = feeSplit?.feeSek ?? 0
+    // In the INVOICE's currency: a cross-currency match settles whatever
+    // remains rather than reading the bank figure as invoice currency.
+    const paymentAmountInvoiceCurrency = feeSplit
+      ? feeSplit.paymentAmount
+      : remainingInvoiceCurrency
+    // SEK that left the bank for the invoice part, net of any bank fee.
+    const bankSekStored = feeSplit ? feeSplit.bankSek : bankSekRow
     const invoiceFxRate = si.exchange_rate ?? null
     // SEK the invoice was booked at for this payment portion; null when the
     // invoice is foreign and carries no exchange_rate.
@@ -152,7 +173,6 @@ export const GET = withRouteContext(
     // absorption on pure SEK): a whole-krona bank row within the öre band of
     // the remaining balance settles in full, under both methods. An overshoot
     // the POST will reject still previews as a full settlement, as before.
-    const isPureSek = transaction.currency === 'SEK' && si.currency === 'SEK'
     const paymentPlan = planSupplierPayment(
       { total: si.total, paid_amount: si.paid_amount, remaining_amount: remainingInvoiceCurrency },
       paymentAmountInvoiceCurrency,
@@ -177,7 +197,7 @@ export const GET = withRouteContext(
       })
     }
 
-    const lines: PreviewLine[] = []
+    const lines: CreateJournalEntryLineInput[] = []
     let entryType: 'clearing' | 'cash' = 'clearing'
     // Drives the dialog's "markeras som betald" / öresavrundning copy. Cash
     // entries always book the full invoice, so they default to fully paid.
@@ -208,16 +228,10 @@ export const GET = withRouteContext(
               (isPureSek || exchangeRateDifference !== 0) && fullSettlement
                 ? actualBankSek
                 : undefined,
+            bankFeeSek,
           },
         )
-        for (const l of built.lines) {
-          lines.push({
-            account_number: l.account_number,
-            debit_amount: l.debit_amount,
-            credit_amount: l.credit_amount,
-            description: l.line_description ?? '',
-          })
-        }
+        lines.push(...built.lines)
         oreRounding = built.oreDiffSek !== 0
       } catch (err) {
         // The builder routes every leg through toSekOrThrow, which refuses a
@@ -239,21 +253,16 @@ export const GET = withRouteContext(
         // öresavrundning row) are byte-identical to what the POST commits.
         const { lines: clearingLines, oreDiffSek } = buildSupplierPaymentClearingLines({
           apSek: remainingInvoiceCurrency,
-          bankSek: txAmountAbs,
+          bankSek: roundOre(txAmountAbs - bankFeeSek),
           paymentAccount,
+          bankFeeSek,
         })
-        for (const l of clearingLines) {
-          lines.push({
-            account_number: l.account_number,
-            debit_amount: l.debit_amount,
-            credit_amount: l.credit_amount,
-            description: l.line_description ?? '',
-          })
-        }
+        lines.push(...clearingLines)
         oreRounding = oreDiffSek !== 0
         // Full settlement when the öre residual is absorbed or the bank covers
         // the whole remaining; a ≥1 kr short payment leaves a partial.
-        isFullyPaid = oreRounding || txAmountAbs >= remainingInvoiceCurrency - ORE_TOLERANCE
+        isFullyPaid =
+          oreRounding || paymentAmountInvoiceCurrency >= remainingInvoiceCurrency - ORE_TOLERANCE
       } else {
         // Foreign leg under faktureringsmetoden. createSupplierInvoicePaymentEntry
         // clears 2440 at the SEK the leverantörsskuld was BOOKED at and credits
@@ -267,27 +276,27 @@ export const GET = withRouteContext(
           account_number: '2440',
           debit_amount: Math.round(originalBookedSek * 100) / 100,
           credit_amount: 0,
-          description: 'Kvittning leverantörsskuld',
+          line_description: 'Kvittning leverantörsskuld',
         })
         lines.push({
           account_number: paymentAccount,
           debit_amount: 0,
           credit_amount: Math.round(actualBankSek * 100) / 100,
-          description: 'Utbetalning från bank',
+          line_description: 'Utbetalning från bank',
         })
         if (exchangeRateDifference > 0) {
           lines.push({
             account_number: '3960',
             debit_amount: 0,
             credit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
-            description: 'Valutakursvinst',
+            line_description: 'Valutakursvinst',
           })
         } else if (exchangeRateDifference < 0) {
           lines.push({
             account_number: '7960',
             debit_amount: Math.round(Math.abs(exchangeRateDifference) * 100) / 100,
             credit_amount: 0,
-            description: 'Valutakursförlust',
+            line_description: 'Valutakursförlust',
           })
         }
         // Mirrors planSupplierPayment without öre absorption (the accrual FX
@@ -296,16 +305,25 @@ export const GET = withRouteContext(
         // same-currency foreign match settles when the bank amount covers it.
         isFullyPaid =
           paymentAmountInvoiceCurrency >= remainingInvoiceCurrency - ORE_TOLERANCE
+        addSupplierBankFeeLine(lines, paymentAccount, bankFeeSek)
       }
     }
 
+    const previewLines: PreviewLine[] = lines.map((l) => ({
+      account_number: l.account_number,
+      debit_amount: l.debit_amount,
+      credit_amount: l.credit_amount,
+      description: l.line_description ?? '',
+    }))
+
     return NextResponse.json({
       entry_type: entryType,
-      lines,
+      lines: previewLines,
       invoice_already_booked: siAlreadyBooked,
       accounting_method: accountingMethod,
       is_fully_paid: isFullyPaid,
       ore_rounding: oreRounding,
+      bank_fee_sek: bankFeeSek,
     })
   },
 )

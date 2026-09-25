@@ -24,7 +24,7 @@ import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
 import { SKATTEKONTO_ACCOUNT } from '@/lib/skatteverket/manual-verifikat-prefill'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { cashAccountKontoLabel, cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { RowProposal } from '@/components/transactions/TransactionInboxCard'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import TransactionStatusBar from '@/components/transactions/TransactionStatusBar'
@@ -761,20 +761,18 @@ export default function TransactionsPage() {
   // and seeded by the dashboard layout (lib/reference-data), so the chooser
   // renders populated on the first paint. Bank sync invalidates the entry.
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
-  // v2 column texts. Konto = bank plus the account's last digits (or its
-  // ledger account); Kategori = the match hint the row already carries, or
-  // null so the cell prompts "Välj kategori".
+  // v2 column texts. Konto = the account's bank plus its last digits (or its
+  // ledger account), from lib/cash-accounts/labels.ts: the connection's bank,
+  // never the payee columns an invoice prints. Kategori = the match hint the
+  // row already carries, or null so the cell prompts "Välj kategori".
   const accountLabelFor = (tx: TransactionWithInvoice): string | null => {
     const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
-    if (!acct) return null
-    const bank = acct.bank_name || acct.name || ''
-    const tail = acct.account_number ? `••${acct.account_number.slice(-4)}` : acct.ledger_account
-    return `${bank} ${tail}`.trim()
+    return acct ? cashAccountKontoLabel(acct) : null
   }
   // The brand mark next to the Konto text (bank, Stripe, Skatteverket).
   const accountLogoFor = (tx: TransactionWithInvoice): string | null => {
     const acct = tx.cash_account_id ? cashAccounts.find((a) => a.id === tx.cash_account_id) : undefined
-    return acct ? bankLogoUrl(acct.bank_name, acct.name) : null
+    return acct ? cashAccountLogoUrl(acct) : null
   }
   // The top suggestion (counterparty template, then keyword/MCC)
   // stands in the Kategori cell so the person sees what Bokför will do
