@@ -622,8 +622,8 @@ export default function OnboardingJourney({
             attn={
               state.serverError === 'org_number_invalid'
                 ? t('journey_err_org_invalid')
-                : state.lookupNote === 'error'
-                  ? t('journey_lookup_error')
+                : state.lookupNote === 'searcherror'
+                  ? t('journey_search_error')
                   : state.lookupNote === 'nomatch'
                     ? t('journey_search_nomatch')
                     : undefined
@@ -788,11 +788,20 @@ export default function OnboardingJourney({
           t('journey_form_info_tail'),
         ].join(' ')
         const plannedLabel = plannedFormLabel(state.plannedForm)
+        // A failed orgnr lookup is why the picker is asked at all: the note
+        // belongs here, on the manual path the lookup handed over to, not on
+        // the orgnr step the user already left.
         return (
           <Question
             title={t('journey_form_title')}
             info={info}
-            attn={plannedLabel ? t('journey_planned_attn', { form: plannedLabel }) : undefined}
+            attn={
+              plannedLabel
+                ? t('journey_planned_attn', { form: plannedLabel })
+                : state.lookupNote === 'error'
+                  ? t('journey_lookup_error')
+                  : undefined
+            }
           >
             <ChipRow
               options={chips.map((key) => ({ key, label: t(FORM_LABEL_KEY[key]) }))}

@@ -153,7 +153,9 @@ describe('journeyReducer: name search', () => {
     expect(s.searchHits).toEqual([])
   })
 
-  it('error and disabled stay on the step with the error note', () => {
+  // The note must ask for the org number, never promise the orgnr path's
+  // "continue manually": this step has no way to continue without a number.
+  it('error and disabled stay on the step with the search-error note', () => {
     for (const status of ['error', 'disabled'] as const) {
       const s = run(
         initJourney(),
@@ -161,8 +163,26 @@ describe('journeyReducer: name search', () => {
         { type: 'SEARCH_RESULT', outcome: { status } },
       )
       expect(s.step).toBe('orgnr')
-      expect(s.lookupNote).toBe('error')
+      expect(s.lookupNote).toBe('searcherror')
     }
+  })
+
+  it('typing the org number is a way out of a failed name search', () => {
+    const stuck = run(
+      initJourney(),
+      { type: 'SEARCH_SUBMITTED', query: 'Testbrand' },
+      { type: 'SEARCH_RESULT', outcome: { status: 'error' } },
+    )
+    expect(stuck.lookupNote).toBe('searcherror')
+    const s = run(
+      stuck,
+      { type: 'ORG_SUBMITTED', orgNumber: '556677-8899' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'error' } },
+    )
+    // The lookup failed too, and the journey still moves on to the manual
+    // questions; only the name search dead-ended.
+    expect(s.step).toBe('form')
+    expect(s.lookupNote).toBe('error')
   })
 
   it('aborted only clears the pending flag', () => {

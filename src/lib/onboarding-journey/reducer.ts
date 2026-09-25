@@ -91,8 +91,15 @@ interface JourneySnapshot {
   settings: Partial<CompanySettings>
   ticLookup: CompanyLookupResult | null
   lookupRan: boolean
-  /** `nomatch`: a name search returned nothing; the user refines in place. */
-  lookupNote: 'none' | 'error' | 'nomatch'
+  /**
+   * The advisory note the step carries.
+   * - `error`: the orgnr lookup failed; shown on the manual path it lands on.
+   * - `nomatch`: a name search returned nothing; the user refines in place.
+   * - `searcherror`: the name search itself failed. Distinct from `error`
+   *   because the step cannot continue without an orgnr, so the note must
+   *   ask for the number instead of promising a manual path.
+   */
+  lookupNote: 'none' | 'error' | 'nomatch' | 'searcherror'
   addressAsked: boolean
   /** EF only: the verksamhetsnamn question was explicitly answered. */
   nameConfirmedForEf: boolean
@@ -446,9 +453,11 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
 
       // Without an orgnr there is no "continue manually" path from here:
       // the user refines the query or types the number. Both misses and
-      // failures stay on the step with an advisory note.
+      // failures stay on the step with an advisory note that says so; the
+      // orgnr path's "fortsätt manuellt" note would promise an exit this
+      // step does not have.
       return stay(cleared, {
-        lookupNote: outcome.status === 'not_found' ? ('nomatch' as const) : ('error' as const),
+        lookupNote: outcome.status === 'not_found' ? ('nomatch' as const) : ('searcherror' as const),
       })
     }
 

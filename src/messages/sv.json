@@ -1648,6 +1648,7 @@
     "journey_suggest_inactive": "Avregistrerat",
     "journey_err_org_invalid": "Organisationsnumret godkändes inte. Kontrollera och försök igen.",
     "journey_lookup_error": "Uppgifterna kunde inte hämtas just nu. Fortsätt manuellt.",
+    "journey_search_error": "Sökningen kunde inte göras just nu. Skriv organisationsnumret så fortsätter vi.",
     "journey_notfound_title": "Jag hittar inget företag på det numret.",
     "journey_notfound_sub": "Nystartade företag kan ta några dagar innan de syns hos Bolagsverket.",
     "journey_notfound_continue": "Fortsätt manuellt",
