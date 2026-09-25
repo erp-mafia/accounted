@@ -87,7 +87,7 @@ export const BEHANDLINGSHISTORIK_RULES = {
  * Stated as the system behaves, not as policy: what is not checked is said.
  */
 export const CORRECTION_AND_LOCK_RULES: readonly string[] = [
-  'Bokförda verifikationer kan inte ändras eller raderas; databastriggrar avvisar varje sådan skrivning (varaktighet, BFNAR 2013:2 punkt 2.1).',
+  'Bokförda verifikationer kan inte ändras eller raderas utanför de två loggade rättelsevägarna nedan; databastriggrar avvisar varje annan skrivning (varaktighet, BFNAR 2013:2 punkt 2.1).',
   'Stornobokning: en ny verifikation omför den felaktiga posten och länkas till originalet, som i sin tur visar rättelseposten. Alltid tillåten.',
   'Rättelse i samma verifikat: uppgifter eller rader stryks och ersätts inom verifikatet; ursprungsvärdet förblir läsbart och vem som rättade och när loggas oföränderligt i rättelseloggen. Tillåten bara i ett öppet, olåst räkenskapsår och för datum efter företagets låsdatum.',
   'Rättelse i samma verifikat spärras dessutom för stornoposter, rader i utländsk valuta, rader med kopplat underlag och rader som hör till en banktransaktion eller betalning; där återstår stornobokning.',

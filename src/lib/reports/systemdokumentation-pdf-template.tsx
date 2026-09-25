@@ -178,7 +178,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
                 report.system.hosted
                   ? 'Programmet drivs som molntjänst av leverantören; databas och filer lagras i Sverige (AWS, Stockholm).'
                   : 'Programmet drivs i egen regi; var databasen finns och vem som ansvarar för drift och säkerhetskopiering anges i företagets egen dokumentation.'
-              } Bokföringslagens krav på balans, varaktighet, löpande verifikationsnummer och periodlåsning upprätthålls av databasen själv, inte enbart av programkoden. Programversionen anges ovan; varje ny version registreras med datum i behandlingshistoriken.`,
+              } Bokföringslagens krav på balans, varaktighet, löpande verifikationsnummer och periodlåsning upprätthålls av databasen själv, inte enbart av programkoden. Programversionen anges ovan; varje ny version registreras med datum i behandlingshistoriken. Kontoplan, inställningar, behörigheter och integrationer beskrivs som de är vid framtagningen; hur de såg ut tidigare under räkenskapsåret, och varje ändring med datum och utförare, framgår av behandlingshistoriken för året.`,
             )}
           </Text>
           <Text style={styles.para}>
@@ -266,7 +266,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           ))}
         </Section>
 
-        <Section title="7. Behörigheter och åtkomst" note={`All data är knuten till företaget och isolerad i databasen (Row Level Security). ${report.behorigheter.mfa_required ? 'Inloggning kräver en andra faktor (engångskod eller BankID).' : 'Ingen andra faktor krävs vid inloggning i denna installation.'}`}>
+        <Section title="7. Behörigheter och åtkomst" note={`Läget vid framtagningen; tilldelningar och återkallelser under året finns i behandlingshistoriken. All data är knuten till företaget och isolerad i databasen (Row Level Security). ${report.behorigheter.mfa_required ? 'Inloggning kräver en andra faktor (engångskod eller BankID).' : 'Ingen andra faktor krävs vid inloggning i denna installation.'}`}>
           <Head cols={[{ label: 'Användare', width: 260 }, { label: 'Roll', width: 120 }, { label: 'Sedan', width: 100 }]} />
           {report.behorigheter.members.map((m, i) => (
             <View key={`${m.label}-${i}`} style={styles.row} wrap={false}>
@@ -298,7 +298,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           )}
         </Section>
 
-        <Section title="8. Integrationer" note="System som lämnar eller tar emot uppgifter. Underbiträden och behandlingsplatser framgår av integritetspolicyn.">
+        <Section title="8. Integrationer" note="Anslutna vid framtagningen. System som lämnar eller tar emot uppgifter. Underbiträden och behandlingsplatser framgår av integritetspolicyn.">
           <Head cols={[{ label: 'Integration', width: 190 }, { label: 'Beskrivning', width: 320 }]} />
           {activeIntegrations.map((i) => (
             <View key={i.key} style={styles.row} wrap={false}>

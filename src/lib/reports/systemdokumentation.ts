@@ -356,6 +356,13 @@ async function optional<T>(companyId: string, what: string, query: PromiseLike<R
   }
 }
 
+/** A read the document cannot do without: members, series, bank accounts. An empty section would be a wrong document, not a degraded one. */
+async function required<T>(what: string, query: PromiseLike<Rows<T>>): Promise<T[]> {
+  const { data, error } = await query
+  if (error) throw new Error(`Kunde inte hämta ${what}: ${error.message}`)
+  return data ?? []
+}
+
 /** Reads the company's configuration; null when the räkenskapsår is not the company's. */
 export async function loadSystemdokumentationFacts(
   supabase: SupabaseClient,
@@ -382,9 +389,9 @@ export async function loadSystemdokumentationFacts(
     fetchAllRows<SystemdokumentationAccount>(({ from, to }) =>
       supabase.from('chart_of_accounts').select('account_number, account_name, account_class, sru_code').eq('company_id', companyId).eq('is_active', true).order('account_number').range(from, to),
     ),
-    optional<{ voucher_series: string; last_number: number }>(companyId, 'voucher_sequences', supabase.from('voucher_sequences').select('voucher_series, last_number').eq('company_id', companyId).eq('fiscal_period_id', periodId)),
-    optional<SystemdokumentationFacts['cashAccounts'][number]>(companyId, 'cash_accounts', supabase.from('cash_accounts').select('name, ledger_account, voucher_series, source, enabled').eq('company_id', companyId)),
-    optional<{ user_id: string; role: CompanyRole; joined_at: string }>(companyId, 'company_members', supabase.from('company_members').select('user_id, role, joined_at').eq('company_id', companyId)),
+    required<{ voucher_series: string; last_number: number }>('verifikationsserier', supabase.from('voucher_sequences').select('voucher_series, last_number').eq('company_id', companyId).eq('fiscal_period_id', periodId)),
+    required<SystemdokumentationFacts['cashAccounts'][number]>('bankkonton', supabase.from('cash_accounts').select('name, ledger_account, voucher_series, source, enabled').eq('company_id', companyId)),
+    required<{ user_id: string; role: CompanyRole; joined_at: string }>('medlemmar', supabase.from('company_members').select('user_id, role, joined_at').eq('company_id', companyId)),
     optional<{ name: string }>(companyId, 'dimensions', supabase.from('dimensions').select('name').eq('company_id', companyId).eq('is_active', true).order('sie_dim_no')),
     optional<{ id: string }>(companyId, 'stripe_connections', supabase.from('stripe_connections').select('id').eq('company_id', companyId).eq('status', 'active').limit(1)),
     optional<{ id: string }>(companyId, 'peppol_registrations', supabase.from('peppol_registrations').select('id').eq('company_id', companyId).is('deregistered_at', null).limit(1)),

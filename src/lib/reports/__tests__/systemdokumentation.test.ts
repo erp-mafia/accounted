@@ -222,6 +222,15 @@ describe('loadSystemdokumentationFacts', () => {
     }
   })
 
+  it('refuses the document when the member read fails: an empty access section would be wrong, not degraded', async () => {
+    const db = tableMock({
+      fiscal_periods: { data: PERIOD },
+      companies: { data: { name: 'Test AB', org_number: null } },
+      company_members: { error: { message: 'permission denied' } },
+    })
+    await expect(loadSystemdokumentationFacts(db.client, 'company-1', 'p1')).rejects.toThrow('medlemmar')
+  })
+
   it('skips the API key lookup without a service client and reads mfa/self-hosted from the flags', async () => {
     vi.stubEnv('NEXT_PUBLIC_REQUIRE_MFA', 'true')
     vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')

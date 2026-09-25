@@ -1689,17 +1689,13 @@ async function buildSystemDoc(
     // cash_accounts.voucher_series); changes to both are in behandlingshistorik.
     verifikationsserier_regler: VOUCHER_SERIES_RULES,
     leverantorsbetalningar_regler: SUPPLIER_PAYMENT_RULES,
-    behorighetskontroll: {
-      description: 'Rollbaserad atkomstkontroll med owner/admin/member/viewer',
-      mfa_stod: true,
-      rls_aktiv: true,
-    },
     arkivering: ARCHIVE_RULES,
     arsredovisning: ANNUAL_REPORT_RULES,
-    integrationer: {
-      bank: 'Enable Banking (PSD2)',
-      email: 'Resend',
-      export_format: 'SIE4',
+    // Access, delsystem and integrations are company state, not archive
+    // constants: the generated Systemdokumentation report carries them.
+    fullstandig_dokumentation: {
+      rapport: 'Rapporter > Export & arkiv > Systemdokumentation: kontoplan, delsystem, verifikationsserier, behandlingsregler, behörigheter och integrationer per räkenskapsår, som PDF eller JSON',
+      api: '/api/reports/systemdokumentation?period_id=<räkenskapsår>&format=pdf',
     },
     // BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced.
     behandlingshistorik: BEHANDLINGSHISTORIK_RULES,
