@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { makeNotice } from '@/lib/import/notices'
+import { pickDefaultOpeningBalancePeriod } from '@/lib/import/opening-balance/period-selection'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -38,8 +39,9 @@ export default function OpeningBalancePeriodStep({
   // Session-cached period list (lib/reference-data).
   const { periods, isLoading: loadingPeriods } = useFiscalPeriods()
   const [selectedPeriodId, setSelectedPeriodId] = useState<string>('')
-  // Auto-select the first open period without OB once per load, never again
-  // on a background refresh of the list (that would override a user pick).
+  // Auto-select once per load, never again on a background refresh of the list
+  // (that would override a user pick). A period that already has an IB is a
+  // valid pick: selecting it is what makes the replace path reachable.
   const autoSelectedRef = useRef(false)
 
   // Compute totals
@@ -58,9 +60,7 @@ export default function OpeningBalancePeriodStep({
   useEffect(() => {
     if (loadingPeriods || autoSelectedRef.current) return
     autoSelectedRef.current = true
-    const openPeriod = periods.find(
-      (p) => !p.is_closed && !p.locked_at && !p.opening_balances_set,
-    )
+    const openPeriod = pickDefaultOpeningBalancePeriod(periods)
     if (openPeriod) setSelectedPeriodId(openPeriod.id)
   }, [periods, loadingPeriods])
 
