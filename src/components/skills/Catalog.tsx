@@ -150,7 +150,9 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   // Own items: a flow opens the flow page; own knowledge and analyses open the item page (egen.<id>).
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
-    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: 0 }
+    // A draft your AI saved waits for you: say so on the card, not only on its page.
+    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
+      ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   const all = [...flows, ...packs, ...shared]
   const ofKind = all.filter((i) => i.kind === kind)

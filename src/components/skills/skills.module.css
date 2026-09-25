@@ -517,6 +517,12 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .stageTile b { font-size: 15px; font-weight: 500; line-height: 21px; }
 .stageTile small { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
 .stageFoot { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* On a phone the start buttons wrap onto two rows: the stage grows to hold the tile and them, one under the other, instead of covering the tile. */
+@media (max-width: 560px) {
+  .stage { height: auto; display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 40px 16px 16px; }
+  .stageTile { position: relative; left: auto; top: auto; transform: none; }
+  .stageFoot { position: relative; left: auto; right: auto; bottom: auto; align-self: stretch; }
+}
 .stageStatus { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 9999px; background: hsl(var(--background) / 0.94); font-size: 12.5px; }
 .apanel { display: flex; flex-direction: column; gap: 20px; height: var(--agent-page-h); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 28px 32px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
 .apHead { display: flex; flex-direction: column; gap: 6px; }
