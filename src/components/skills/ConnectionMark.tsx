@@ -3,7 +3,7 @@
 import { FileText, Globe, Landmark } from 'lucide-react'
 import { useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
-import { bankLogoUrl } from '@/lib/reconciliation/bank-logos'
+import { cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
 import type { AgentConnection } from '@/lib/agent-skills/agents'
 import { GmailMark } from './SkillMarks'
 import styles from './skills.module.css'
@@ -11,7 +11,7 @@ import styles from './skills.module.css'
 export /** A connection with its brand mark: the company's bank, Skatteverket, Peppol, or what lives in the AI. */
 function ConnectionMark({ kind }: { kind: AgentConnection }) {
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
-  const bank = cashAccounts.map((a) => bankLogoUrl(a.bank_name, a.name)).find((url): url is string => !!url)
+  const bank = cashAccounts.map(cashAccountLogoUrl).find((url): url is string => !!url)
   /* eslint-disable @next/next/no-img-element */
   if (kind === 'skatteverket') return <img src="/logos/skatteverket_color.svg" alt="" />
   if (kind === 'mail') return <GmailMark />
