@@ -23,12 +23,12 @@ import type {
   Article,
   BASAccount,
   BookingTemplateLibrary,
-  CashAccount,
   Customer,
   FiscalPeriod,
   Supplier,
 } from '@/types'
 import type { DimensionDto } from '@/components/dimensions/types'
+import type { CashAccountWithBank } from '@/lib/cash-accounts/labels'
 
 export class ReferenceFetchError extends Error {
   readonly status: number
@@ -63,16 +63,19 @@ export async function fetchFiscalPeriods(companyId: string): Promise<FiscalPerio
   return (data ?? []) as FiscalPeriod[]
 }
 
-export async function fetchCashAccounts(companyId: string): Promise<CashAccount[]> {
+// Each row carries its connection's bank name (the Konto cell and brand
+// marks read it through lib/cash-accounts/labels.ts); the dashboard layout
+// seeds the cache with the same select, mirrored like the order() clauses.
+export async function fetchCashAccounts(companyId: string): Promise<CashAccountWithBank[]> {
   const supabase = createClient()
   const { data, error } = await supabase
     .from('cash_accounts')
-    .select('*')
+    .select('*, bank_connection:bank_connections(bank_name)')
     .eq('company_id', companyId)
     .order('is_primary', { ascending: false })
     .order('ledger_account', { ascending: true })
   if (error) throw error
-  return (data ?? []) as CashAccount[]
+  return (data ?? []) as unknown as CashAccountWithBank[]
 }
 
 async function getJson<T>(url: string, pick: (body: Record<string, unknown>) => unknown): Promise<T> {

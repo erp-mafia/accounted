@@ -688,15 +688,16 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(input.lines.find((l) => l.account_number === '3740')?.credit_amount).toBe(0.25)
   })
 
-  it('returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING when tx exceeds invoice remaining (same currency)', async () => {
-    // Tx pays out 6 000 SEK, invoice has 5 000 SEK remaining. Legacy code path
-    // would push paid_amount past invoice.total. The new guard rejects so the
-    // user routes the excess through the split-payment flow.
+  it('returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING when tx exceeds invoice remaining past the bank fee cap', async () => {
+    // Tx pays out 12 000 SEK, invoice has 5 000 SEK remaining. The 7 000 kr
+    // excess is above RESIDUAL_MAX_AMOUNT, so it is a missing booking rather
+    // than a bank fee: the guard rejects so the user routes the excess through
+    // the split-payment flow instead of pushing paid_amount past the total.
     enqueue({
       data: {
         id: TX_UUID,
         company_id: 'company-1',
-        amount: -6000,
+        amount: -12000,
         currency: 'SEK',
         amount_sek: null,
         supplier_invoice_id: null,
@@ -723,9 +724,9 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
     expect(status).toBe(400)
     expect((body.error as { code: string }).code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
     const details = (body.error as { details: Record<string, number> }).details
-    expect(details.transaction_amount).toBe(6000)
+    expect(details.transaction_amount).toBe(12000)
     expect(details.remaining_amount).toBe(5000)
-    expect(details.excess).toBe(1000)
+    expect(details.excess).toBe(7000)
   })
 
   it('succeeds for an overdue invoice (status is a valid CAS target)', async () => {
@@ -869,17 +870,17 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: cash method + FX',
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
-  it('an overshoot of a krona or more under the cash method is still rejected', async () => {
+  it('an overshoot of a krona or more under the cash method settles in full with the excess as a bank fee', async () => {
     enqueueHappyPath({
       transaction: { amount: -1236, currency: 'SEK' },
       invoice: { currency: 'SEK', remaining_amount: 1234.56 },
       accountingMethod: 'cash',
     })
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('MATCH_SI_AMOUNT_EXCEEDS_REMAINING')
-    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+    expect(res.status).toBe(200)
+    const args = mockCreateCashEntry.mock.calls[0]
+    expect(args[9]).toBe(1234.56) // settledBankSek: the invoice part
+    expect(args[11]).toBe(1.44) // bankFeeSek
   })
 
   it('a previously part-paid kontantmetoden invoice stays blocked even when the row is within the öre band', async () => {
@@ -993,5 +994,52 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: payment JE failure
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
     expect(status).toBe(500)
     expect(body.error.code).toBe('MATCH_SI_JE_FAILED')
+  })
+})
+
+describe('POST /api/transactions/[id]/match-supplier-invoice: bank fee on top of the invoice', () => {
+  it('settles a EUR invoice in full and passes the card fee to the payment entry', async () => {
+    // Invoice 1 739,43 EUR booked at 11,055 (19 229,40 kr on 2440). The card
+    // drew 1 749,70 EUR = 19 382,30 kr: the invoice plus a 10,27 EUR fee.
+    // Fee at the bank row's rate: 19 382,30 × 10,27 / 1 749,70 = 113,77 kr.
+    // Invoice part: 19 268,53 kr, so kursförlust 19 229,40 − 19 268,53 = −39,13.
+    enqueueHappyPath({
+      transaction: { amount: -1749.7, currency: 'EUR', amount_sek: -19382.3 },
+      invoice: { currency: 'EUR', exchange_rate: 11.055, remaining_amount: 1739.43 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      invoice_status: string
+      paid_amount: number
+      remaining_amount: number
+    }>(res)
+    expect(status).toBe(200)
+    expect(body.invoice_status).toBe('paid')
+    expect(body.paid_amount).toBe(1739.43)
+    expect(body.remaining_amount).toBe(0)
+    const args = mockCreatePaymentEntry.mock.calls[0]
+    expect(args[4]).toBe(19229.4) // 2440 at the booked SEK
+    expect(args[6]).toBe(-39.13) // kursförlust on the invoice part only
+    expect(args[10]).toBe(113.77) // bank fee
+    expect(findCalls('supplier_invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({
+      amount: 1739.43,
+    })
+  })
+
+  it('books a SEK overpayment as 2440 in full, the whole bank row on 1930 and the excess on 6570', async () => {
+    enqueueHappyPath({
+      transaction: { amount: -1050, currency: 'SEK' },
+      invoice: { currency: 'SEK', remaining_amount: 1000 },
+    })
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(200)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines).toEqual([
+      expect.objectContaining({ account_number: '2440', debit_amount: 1000, credit_amount: 0 }),
+      expect.objectContaining({ account_number: '1930', debit_amount: 0, credit_amount: 1050 }),
+      expect.objectContaining({ account_number: '6570', debit_amount: 50, credit_amount: 0 }),
+    ])
   })
 })
