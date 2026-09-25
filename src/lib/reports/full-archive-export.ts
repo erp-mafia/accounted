@@ -13,6 +13,7 @@ import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
 import { generateBokslutsbilagor } from './bokslutsbilagor'
+import { generateSystemdokumentation } from './systemdokumentation'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getBranding } from '@/lib/branding/service'
 import {
@@ -212,6 +213,12 @@ async function buildFullArchive(
 
   const systemDoc = await buildSystemDoc(supabase, companyId, periods, options.scope)
   revision.file('systemdokumentation.json', JSON.stringify(systemDoc, null, 2))
+  // The snapshot per räkenskapsår (BFNAR 2013:2 kap. 9): the report as it
+  // stood when the archive was made, since members, keys and integrations
+  // change later and the live report would then differ from the archive.
+  for (const period of periods) {
+    await writeSystemdokumentation(revision, supabase, companyId, period)
+  }
 
   zip.file(
     'LÄSMIG.txt',
@@ -593,6 +600,33 @@ async function writeDocuments(
  * readiness-derived items are left as stored. Best-effort like the reports:
  * a failure is logged into the folder rather than aborting the archive.
  */
+/**
+ * The systemdokumentation for one räkenskapsår as it stands at archive time,
+ * JSON and PDF under revision/systemdokumentation/. Never fails the archive:
+ * a failure leaves an .error.txt beside the other files, like the pärm.
+ */
+async function writeSystemdokumentation(
+  revision: JSZip,
+  supabase: SupabaseClient,
+  companyId: string,
+  period: FiscalPeriodRow
+): Promise<void> {
+  const base = `systemdokumentation/${periodLabel(period)}`
+  try {
+    const report = await generateSystemdokumentation(supabase, companyId, period.id, { appVersion: currentAppVersion() })
+    if (!report) return
+    revision.file(`${base}.json`, JSON.stringify(report, null, 2))
+    const [{ SystemdokumentationPDF }, { renderToBuffer }] = await Promise.all([
+      import('./systemdokumentation-pdf-template'),
+      import('@react-pdf/renderer'),
+    ])
+    const pdf = await renderToBuffer(SystemdokumentationPDF({ report }))
+    revision.file(`${base}.pdf`, new Uint8Array(pdf))
+  } catch (err) {
+    revision.file(`${base}.error.txt`, err instanceof Error ? err.message : 'Unknown error')
+  }
+}
+
 async function writeBokslutsbilagor(
   folder: JSZip,
   supabase: SupabaseClient,
@@ -1694,8 +1728,8 @@ async function buildSystemDoc(
     // Access, delsystem and integrations are company state, not archive
     // constants: the generated Systemdokumentation report carries them.
     fullstandig_dokumentation: {
-      rapport: 'Rapporter > Export & arkiv > Systemdokumentation: kontoplan, delsystem, verifikationsserier, behandlingsregler, behörigheter och integrationer per räkenskapsår, som PDF eller JSON',
-      api: '/api/reports/systemdokumentation?period_id=<räkenskapsår>&format=pdf',
+      arkiverad_kopia: 'revision/systemdokumentation/<räkenskapsår>.json och .pdf i detta arkiv: kontoplan, delsystem, verifikationsserier, behandlingsregler, behörigheter och integrationer som de var när arkivet skapades',
+      aktuell_rapport: 'Rapporter > Export & arkiv > Systemdokumentation: samma dokument framtaget ur företagets inställningar just nu, inte en ögonblicksbild',
     },
     // BFNAR 2013:2 p. 9.15: where and how the behandlingshistorik is produced.
     behandlingshistorik: BEHANDLINGSHISTORIK_RULES,

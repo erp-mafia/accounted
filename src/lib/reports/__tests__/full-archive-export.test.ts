@@ -12,6 +12,7 @@ import { getAuditLog } from '@/lib/core/audit/audit-service'
 import { generateTrialBalance } from '../trial-balance'
 import { generateSIEExport } from '../sie-export'
 import { generateJournalRegister } from '../journal-register'
+import { generateSystemdokumentation } from '../systemdokumentation'
 import type { AuditLogEntry } from '@/types'
 
 vi.mock('../sie-export', () => ({
@@ -61,6 +62,13 @@ vi.mock('../journal-register', () => ({
 vi.mock('../bokslutsbilagor', () => ({
   generateBokslutsbilagor: vi.fn().mockResolvedValue(null),
 }))
+// The per-period systemdokumentation snapshot: null keeps the queued-mock
+// order intact; one test below returns a report and checks the files.
+vi.mock('../systemdokumentation', () => ({
+  generateSystemdokumentation: vi.fn().mockResolvedValue(null),
+}))
+vi.mock('../systemdokumentation-pdf-template', () => ({ SystemdokumentationPDF: () => null }))
+vi.mock('@react-pdf/renderer', () => ({ renderToBuffer: vi.fn().mockResolvedValue(Buffer.from('%PDF-1.4 stub')) }))
 vi.mock('@/lib/reconciliation/attachments-store', () => ({
   listAttachmentRowsInRange: vi.fn().mockResolvedValue([]),
 }))
@@ -181,6 +189,21 @@ describe('generateFullArchive', () => {
   })
 
   describe('scope: period', () => {
+    it('archives the systemdokumentation snapshot of the year as JSON and PDF beside the archive-wide JSON', async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      vi.mocked(generateSystemdokumentation).mockResolvedValueOnce({ period: { id: PERIOD_2024.id, name: 'Räkenskapsår 2024' }, behorigheter: { members: [] } } as never)
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const label = `${PERIOD_2024.period_start}_${PERIOD_2024.period_end}`
+      expect(zip.file(`revision/systemdokumentation/${label}.json`)).not.toBeNull()
+      expect(zip.file(`revision/systemdokumentation/${label}.pdf`)).not.toBeNull()
+      expect(generateSystemdokumentation).toHaveBeenCalledWith(supabase, 'company-1', PERIOD_2024.id, expect.any(Object))
+      const documentation = JSON.parse(await zip.file('revision/systemdokumentation.json')!.async('text'))
+      expect(documentation.fullstandig_dokumentation.arkiverad_kopia).toContain('revision/systemdokumentation/')
+    })
+
     it('exports supplier settlement rules and their legacy limitation for audit interpretation', async () => {
       enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
       const buffer = await generateFullArchive(supabase as any, 'company-1', {
