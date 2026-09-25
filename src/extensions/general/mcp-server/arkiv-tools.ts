@@ -928,25 +928,22 @@ export function createArkivTools(deps: Deps): McpTool[] {
         const d = doc as { id: string; file_name: string; doc_type: string | null; page_count: number | null }
         let unreadable: string | null = null
         const readPages = () => supabase.from('document_pages').select('page_no, text').eq('document_id', documentId).gte('page_no', from).lte('page_no', to).order('page_no', { ascending: true })
-        let { data: pages, error: pagesError } = await readPages()
+        // Read in full before answering, like ask_document: a document read only in part (a scan whose first page
+        // had typed text, a photo the background left for later) returned just the pages it had, and an agent
+        // answered from half a document. ensureDocumentRead does nothing when the document is already complete.
+        const read = await ensureDocumentRead(supabase, companyId, documentId)
+        const { data: pages, error: pagesError } = await readPages()
         if (pagesError) throw dbError(pagesError)
         let pageCount = d.page_count
+        if (read.status === 'read') {
+          const { data: again } = await supabase.from('document_attachments').select('page_count').eq('id', documentId).maybeSingle()
+          pageCount = (again as { page_count: number | null } | null)?.page_count ?? pageCount
+        }
         if (((pages ?? []) as unknown[]).length === 0) {
-          // History the lanes left unread: the agent asking is what it waited for.
-          const read = await ensureDocumentRead(supabase, companyId, documentId)
-          if (read.status !== 'read') {
-            // Said plainly, so an agent never takes an empty answer for an empty document.
-            const { data: stamp } = await supabase.from('document_attachments').select('read_error').eq('id', documentId).maybeSingle()
-            // Read, with nothing printed on it (a photo of an object, a logo, a QR code): say so, not "already_read".
-            const reason = (stamp as { read_error: string | null } | null)?.read_error ?? (read.status === 'skipped' ? read.reason : read.status)
-            unreadable = reason === 'already_read' ? 'no_text' : reason
-          }
-          if (read.status === 'read') {
-            ;({ data: pages, error: pagesError } = await readPages())
-            if (pagesError) throw dbError(pagesError)
-            const { data: again } = await supabase.from('document_attachments').select('page_count').eq('id', documentId).maybeSingle()
-            pageCount = (again as { page_count: number | null } | null)?.page_count ?? pageCount
-          }
+          // Said plainly, so an agent never takes an empty answer for an empty document.
+          const { data: stamp } = await supabase.from('document_attachments').select('read_error').eq('id', documentId).maybeSingle()
+          const reason = (stamp as { read_error: string | null } | null)?.read_error ?? (read.status === 'skipped' ? read.reason : read.status === 'read' ? null : read.status)
+          unreadable = !reason || reason === 'already_read' ? 'no_text' : reason
         }
         const list = (pages ?? []) as Array<{ page_no: number; text: string }>
         const last = list.length ? list[list.length - 1].page_no : to

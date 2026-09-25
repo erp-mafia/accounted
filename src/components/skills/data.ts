@@ -126,5 +126,6 @@ export function rulesSegment(atomId: string): string {
   return `kunskap.${atomId.replace('/', '.')}`
 }
 export function communitySegment(slug: string): string {
-  return `community.${slug.replaceAll('/', '.')}`
+  // community/<name> -> community.<name>: the address accounted.se links to for "Lägg till i Accounted".
+  return `community.${slug.replace(/^community\//, '').replaceAll('/', '.')}`
 }

@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { AGENTS } from '@/lib/agent-skills/agents'
+import { AGENTS, COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
@@ -23,7 +23,7 @@ import { RoutinePanel } from './RoutinePanel'
 import { parseRoutineQuery } from '@/lib/agent-skills/routine'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
-import { DeleteOwn, Field, Row, SubView } from './AgentDetail'
+import { DeleteOwn, Field, Row, ShareBox, SubView } from './AgentDetail'
 import { FlowSymbol } from './FlowSymbol'
 import { CopyIcon } from './CopyIcon'
 import { ItemSymbol } from './ItemSymbol'
@@ -113,6 +113,18 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const bodySlug = pack?.id ?? shared?.slug ?? mine?.slug ?? null
   const body = useSWR(bodySlug ? ['/api/skills', companyId, bodySlug] : null, ([url, , slug]) => readBody(`${url}?slug=${encodeURIComponent(slug)}`))
   // Gone only once a fresh list says so: a cached one can predate an item just saved.
+  async function patchMine(payload: object): Promise<boolean> {
+    const installation = mine?.installations[0]
+    if (!installation) return false
+    try {
+      const response = await fetch(`/api/skills/${installation.installation_id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!response.ok) return false
+      await catalog.mutate()
+      return true
+    } catch {
+      return false
+    }
+  }
   async function addMine(): Promise<void> {
     const installation = mine?.installations[0]
     if (!installation) return
@@ -239,6 +251,9 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                 </Field>}
                 {mine?.draft && (
                   <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
+                )}
+                {COMMUNITY_OPEN && mine?.installations[0] && !mine.draft && (
+                  <div className={styles.alist}><ShareBox status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
                 )}
                 {mine?.installations[0] && (mine.shareStatus ?? 'private') === 'private' && (
                   <div className={styles.alist}><DeleteOwn kind={item.kind} canWrite={canWrite} onDelete={deleteMine} /></div>
