@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { DimensionValidationError, MandatoryDimensionMissingError } from './dimension-errors'
+import { conflictCode } from '@/lib/errors/structured-errors'
 
 // ============================================================================
 // Dimension validation errors: the classes live in ./dimension-errors.ts
@@ -422,7 +423,7 @@ export type BookkeepingOperation =
   | 'resolve_settlement_account'
 
 export class BookkeepingDatabaseError extends Error {
-  readonly code: typeof BOOKKEEPING_DATABASE_ERROR | 'CONFLICT'
+  readonly code: typeof BOOKKEEPING_DATABASE_ERROR | ReturnType<typeof conflictCode>
   constructor(
     public readonly operation: BookkeepingOperation,
     public readonly cause: string | undefined,
@@ -430,7 +431,9 @@ export class BookkeepingDatabaseError extends Error {
   ) {
     super(cause ? `Database operation "${operation}" failed: ${cause}` : `Database operation "${operation}" failed`)
     this.name = 'BookkeepingDatabaseError'
-    this.code = pgCode === 'PT409' ? 'CONFLICT' : BOOKKEEPING_DATABASE_ERROR
+    // A PT409 refusal keeps the name the database raised it with, so the
+    // user reads what was refused rather than a generic conflict.
+    this.code = pgCode === 'PT409' ? conflictCode(cause) : BOOKKEEPING_DATABASE_ERROR
   }
 }
 
@@ -828,7 +831,7 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
           details: { operation: err.operation },
         },
       },
-      { status: err.code === 'CONFLICT' ? 409 : 500 }
+      { status: err.code === BOOKKEEPING_DATABASE_ERROR ? 500 : 409 }
     )
   }
 

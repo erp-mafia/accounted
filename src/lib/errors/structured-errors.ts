@@ -449,6 +449,16 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
 // ─────────────────────────────────────────────────────────────────
 
 const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
+  // The route composes the message with the account and the amount; this is
+  // the fallback for an envelope without one.
+  TRANSACTION_BOOK_BANK_LINE_DIRECTION: {
+    httpStatus: 400,
+    message_sv:
+      'Bankkontot står på fel sida i verifikationen. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The bank ledger is on the wrong side of the voucher: a withdrawal must credit the bank ledger, a deposit must debit it.',
+    thrown_message_sv: true,
+  },
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
@@ -5178,11 +5188,63 @@ const NODE_SYSTEM: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Database refusals raised by name with SQLSTATE PT409
+// ─────────────────────────────────────────────────────────────────
+
+// The bank-booking guards raise `RAISE EXCEPTION '<NAME>' USING ERRCODE =
+// 'PT409'`. The name is the only part that says what went wrong, so a
+// registered name becomes the response code (see conflictCode) instead of
+// the catch-all CONFLICT, whose "reload the page" advice fits only some.
+const DB_CONFLICTS = {
+  BANK_BOOKING_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll. Ett uttag ska stå i kredit på bankkontot och en insättning i debet. Har bankkontots inställningar nyss ändrats, ladda om sidan och försök igen.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction: a withdrawal must credit the bank ledger, a deposit must debit it. If the bank account settings just changed, reload and try again.',
+  },
+  BANK_BOOKING_SOURCE_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionen har ändrats sedan du öppnade den. Ladda om sidan och bokför igen.',
+    message_en: 'The transaction changed after the booking was prepared. Reload it and book again.',
+  },
+  BANK_ANCHOR_SETTLEMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen bokför inte transaktionens belopp på bankkontot åt rätt håll, så transaktionen kan inte kopplas till den. Ett uttag ska stå i kredit på bankkontot och en insättning i debet.',
+    message_en:
+      'The voucher does not book the transaction amount on the bank ledger in the bank direction, so the transaction cannot be linked to it: a withdrawal must credit the bank ledger, a deposit must debit it.',
+  },
+  BANK_ANCHOR_CASH_ACCOUNT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Transaktionens bankkonto har ändrats eller tagits bort. Ladda om sidan och försök igen.',
+    message_en: 'The bank account of the transaction was changed or removed. Reload and try again.',
+  },
+  CASH_ACCOUNT_OPERATION_BUSY: {
+    httpStatus: 409,
+    message_sv: 'En annan ändring av bankkontona pågår just nu. Vänta en stund och försök igen.',
+    message_en: 'Another change to the bank accounts is in progress. Wait a moment and retry.',
+    retryable: true,
+  },
+} satisfies Record<string, StructuredErrorEntry>
+
+/**
+ * The response code for a PT409 database refusal: its own code when the
+ * raised name is registered above, else the generic CONFLICT.
+ */
+export function conflictCode(dbMessage: unknown): keyof typeof DB_CONFLICTS | 'CONFLICT' {
+  return typeof dbMessage === 'string' && Object.hasOwn(DB_CONFLICTS, dbMessage)
+    ? (dbMessage as keyof typeof DB_CONFLICTS)
+    : 'CONFLICT'
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Combined registry
 // ─────────────────────────────────────────────────────────────────
 
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
+  ...DB_CONFLICTS,
   ...BOOKKEEPING,
   ...TRANSACTIONS,
   ...MATCH_INVOICE,

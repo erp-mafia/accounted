@@ -5,12 +5,22 @@ import { dbError } from '../db-error'
 
 describe('getStructuredError', () => {
   it.each([
-    { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' },
-    { error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } },
-    new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'),
-  ])('requires refreshed input for a bank conflict rather than an automatic retry', error => {
-    expect(getStructuredError(error)).toMatchObject({
+    [{ code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' }, 'BANK_ANCHOR_SETTLEMENT_CHANGED'],
+    [{ error: { code: 'PT409', message: 'BANK_ANCHOR_SETTLEMENT_CHANGED' } }, 'BANK_ANCHOR_SETTLEMENT_CHANGED'],
+    [new BookkeepingDatabaseError('commit_entry', 'BANK_BOOKING_SOURCE_CHANGED', 'PT409'), 'BANK_BOOKING_SOURCE_CHANGED'],
+  ])('names a bank refusal and requires refreshed input rather than an automatic retry', (error, code) => {
+    expect(getStructuredError(error)).toMatchObject({ code, retryable: false })
+  })
+
+  it('keeps the generic conflict for an unregistered refusal name', () => {
+    expect(getStructuredError({ code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' })).toMatchObject({
       code: 'CONFLICT', retryable: false, message_sv: 'En konflikt uppstod. Ladda om sidan och försök igen.',
+    })
+  })
+
+  it('marks a busy bank-account lock as retryable', () => {
+    expect(getStructuredError({ code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY' })).toMatchObject({
+      code: 'CASH_ACCOUNT_OPERATION_BUSY', retryable: true,
     })
   })
   it('extracts code from structured bookkeeping error', () => {
