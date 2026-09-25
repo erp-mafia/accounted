@@ -211,6 +211,57 @@ describe('Extension Catch-All Route', () => {
     }))
   })
 
+  // A Swedish JSON body sent without a declared charset is read as Latin-1 by
+  // clients that fall back that way, and "är" arrives as "Ã¤r". The bytes were
+  // always right; only the declaration was missing.
+  it('declares charset=utf-8 on JSON so Swedish text cannot be read as Latin-1', async () => {
+    // The feature flag is checked after the extension is found, so the
+    // disabled path needs a registered skatteverket to reach.
+    extensionRegistry.register({
+      id: 'skatteverket',
+      name: 'Skatteverket',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/status', handler: vi.fn() }],
+    })
+
+    const request = createMockRequest('/api/extensions/ext/skatteverket/status')
+    const response = await GET(request, createPathParams(['skatteverket', 'status']))
+
+    expect(response.status).toBe(503)
+    expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+
+    // The body still decodes as UTF-8, and reading those same bytes as Latin-1
+    // is what produced the reported mojibake.
+    const bytes = new Uint8Array(await response.clone().arrayBuffer())
+    expect(new TextDecoder('utf-8').decode(bytes)).toContain('miljö')
+    expect(new TextDecoder('latin1').decode(bytes)).toContain('miljÃ¶')
+  })
+
+  it('leaves a non-JSON content-type alone', async () => {
+    const handler = vi.fn().mockResolvedValue(
+      new NextResponse('%PDF-1.7', { headers: { 'content-type': 'application/pdf' } })
+    )
+
+    extensionRegistry.register({
+      id: 'test-ext',
+      name: 'Test',
+      version: '1.0.0',
+      apiRoutes: [{ method: 'GET', path: '/file', handler }],
+    })
+
+    const { supabase } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({
+      data: { user: { id: 'user-1' } },
+      error: null,
+    })
+    mockCreateClient.mockResolvedValue(supabase as never)
+
+    const request = createMockRequest('/api/extensions/ext/test-ext/file')
+    const response = await GET(request, createPathParams(['test-ext', 'file']))
+
+    expect(response.headers.get('content-type')).toBe('application/pdf')
+  })
+
   it('dispatches POST requests correctly', async () => {
     const handler = vi.fn().mockResolvedValue(
       NextResponse.json({ ok: true })
