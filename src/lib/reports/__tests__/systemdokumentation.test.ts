@@ -211,6 +211,8 @@ describe('loadSystemdokumentationFacts', () => {
     expect(f!.sequences).toEqual([{ voucher_series: 'A', last_number: 3 }])
     expect(f!.apiKeys).toHaveLength(1)
     expect(service.calls.find((c) => c.table === 'api_keys' && c.method === 'in')?.args).toEqual(['user_id', ['u1']])
+    // Keys bound to another company never enter this company's document.
+    expect(service.calls.find((c) => c.table === 'api_keys' && c.method === 'eq')?.args).toEqual(['company_id', 'company-1'])
     expect(resolveUserLabels).toHaveBeenCalledWith(['u1'])
     expect(f!.labels.get('u1')).toBe('anna@example.se')
     expect(f!.env).toMatchObject({ appVersion: 'v1', generatedAt: '2026-09-25T10:00:00.000Z', appName: 'Accounted' })

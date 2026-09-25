@@ -123,9 +123,9 @@ export interface SystemdokumentationOptions {
   /** Resolves user ids to e-mail/name labels (service-role lookup on profiles). */
   resolveUserLabels?: (userIds: string[]) => Promise<Map<string, string>>
   /**
-   * Service-role client for `api_keys`, whose RLS is self-only: the document
-   * lists every active key held by a member, since a key can reach every
-   * company its holder belongs to. Omitted: the key list is empty.
+   * Service-role client for `api_keys`, whose RLS is self-only. The document
+   * lists the active keys bound to THIS company and held by its members: a
+   * byrå member's key for another client is that client's business. Omitted: the key list is empty.
    */
   serviceClient?: Pick<SupabaseClient, 'from'>
   appVersion?: string | null
@@ -404,7 +404,7 @@ export async function loadSystemdokumentationFacts(
     apiKeys = await optional<SystemdokumentationApiKeyRow>(
       companyId,
       'api_keys',
-      options.serviceClient.from('api_keys').select('name, key_prefix, user_id, scopes, created_at, last_used_at, unattended_commit_limit').in('user_id', memberIds).is('revoked_at', null),
+      options.serviceClient.from('api_keys').select('name, key_prefix, user_id, scopes, created_at, last_used_at, unattended_commit_limit').eq('company_id', companyId).in('user_id', memberIds).is('revoked_at', null),
     )
   }
 

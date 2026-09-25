@@ -281,7 +281,7 @@ export function SystemdokumentationPDF({ report }: SystemdokumentationPDFProps) 
           ) : (
             <View>
               <Text style={styles.sectionNote}>
-                Nycklar som medlemmar i företaget håller och som därmed kan nå bokföringen. Åtgärder via nyckel loggas i behandlingshistoriken med nyckeln som utförare.
+                Aktiva nycklar knutna till detta företag och hållna av dess medlemmar. Åtgärder via nyckel loggas i behandlingshistoriken med nyckeln som utförare.
               </Text>
               <Head cols={[{ label: 'Namn', width: 140 }, { label: 'Innehavare', width: 130 }, { label: 'Behörigheter', width: 170 }, { label: 'Tak utan granskning', width: 70 }]} />
               {report.behorigheter.api_keys.map((k, i) => (
