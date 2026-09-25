@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommunityKind } from './community'
-import { communitySlug, githubNewFileUrl, privacyFindings, publicBody, toCommunitySkillMd, type PrivacyFinding } from './community-repo'
+import { communityRepoUrl, communitySlug, githubNewFileUrl, privacyFindings, publicBody, toCommunitySkillMd, type PrivacyFinding } from './community-repo'
+import { communityBodySha } from './community-approval'
 
 /**
  * Accounted's review of shared own items, before anything is public: the
@@ -77,4 +78,84 @@ export async function sendBackSubmission(service: SupabaseClient, id: string, re
     .eq('id', id).eq('share_status', 'submitted').select('id')
   if (error) throw new Error(`Failed to send back ${id}: ${error.message}`)
   return (data ?? []).length > 0
+}
+
+/**
+ * Records the reviewer's approval of a submission's exact SKILL.md, when they
+ * open it as a pull request. The hash is computed here from the file the
+ * server builds, never taken from the browser. False when it is not waiting.
+ */
+export async function approveSubmission(service: SupabaseClient, id: string): Promise<boolean> {
+  const submission = (await loadSubmissionsForReview(service)).find((s) => s.id === id)
+  if (!submission) return false
+  const { data, error } = await service.from('company_skills')
+    .update({ approved_body_sha: communityBodySha(submission.skill_md) })
+    .eq('id', id).eq('share_status', 'submitted').select('id')
+  if (error) throw new Error(`Failed to approve ${id}: ${error.message}`)
+  return (data ?? []).length > 0
+}
+
+/** A merged text no reviewer has approved: an edit made on GitHub, or a contribution straight from GitHub. */
+export interface PendingItem {
+  slug: string
+  title: string
+  description: string
+  kind: CommunityKind
+  author: string
+  body: string
+  /** The fingerprint the reviewer approves: the page sends it back, so a text that changed since cannot be approved blind. */
+  sha: string
+  source: string
+  privacy: PrivacyFinding[]
+}
+
+export async function loadPendingItems(service: SupabaseClient): Promise<PendingItem[]> {
+  const { data, error } = await service.from('agent_atom_registry')
+    .select('id, title, description, body, trigger_signals')
+    .eq('tier', 'community').eq('is_active', true).eq('mcp_exposed', false).is('parent_atom_id', null).order('id')
+  if (error) throw new Error(`Failed to read pending items: ${error.message}`)
+  return ((data ?? []) as Array<{ id: string; title: string; description: string; body: string | null; trigger_signals: Record<string, unknown> | null }>)
+    .filter((row) => row.body)
+    .map((row) => {
+      const slug = row.id.replace(/^community\//, '')
+      const signals = row.trigger_signals ?? {}
+      return {
+        slug,
+        title: row.title,
+        description: row.description,
+        kind: (signals.kind as CommunityKind) ?? 'workflow',
+        author: typeof signals.author === 'string' ? signals.author : '',
+        body: row.body!,
+        sha: communityBodySha(row.body!),
+        source: communityRepoUrl(slug),
+        privacy: privacyFindings(row.body!),
+      }
+    })
+}
+
+/**
+ * "Godkänn och publicera": exposes a merged text to every company's AI, if
+ * it is still the text the reviewer read (same fingerprint). Marks the
+ * submission it came from published. False when it changed or is not pending.
+ */
+export async function approvePendingItem(service: SupabaseClient, slug: string, sha: string): Promise<boolean> {
+  const id = `community/${slug}`
+  const { data: row, error } = await service.from('agent_atom_registry')
+    .select('id, body, trigger_signals').eq('id', id).eq('tier', 'community').eq('is_active', true).eq('mcp_exposed', false).maybeSingle()
+  if (error) throw new Error(`Failed to read ${id}: ${error.message}`)
+  const atom = row as { id: string; body: string | null; trigger_signals: Record<string, unknown> | null } | null
+  if (!atom?.body || communityBodySha(atom.body) !== sha) return false
+  const now = new Date().toISOString()
+  const { error: updateError } = await service.from('agent_atom_registry')
+    .update({ mcp_exposed: true, reviewed_at: now, updated_at: now, trigger_signals: { ...(atom.trigger_signals ?? {}), approved_sha: sha } })
+    .eq('id', id)
+  if (updateError) throw new Error(`Failed to publish ${id}: ${updateError.message}`)
+  const submission = atom.trigger_signals?.submission
+  if (typeof submission === 'string') {
+    const { error: linkError } = await service.from('company_skills')
+      .update({ share_status: 'published', published_atom_id: id, reviewed_at: now, review_url: communityRepoUrl(slug) })
+      .eq('id', submission).eq('share_status', 'submitted')
+    if (linkError) throw new Error(`Failed to mark submission ${submission} published: ${linkError.message}`)
+  }
+  return true
 }

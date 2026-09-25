@@ -1,15 +1,22 @@
 -- Community publishing through the public repository erp-mafia/accounted-skills
 -- (community/<slug>/SKILL.md, MIT). Accounted reviews a shared own item in the
--- app, opens it there as a pull request, and a merge publishes it: an hourly
--- sync (src/lib/agent-skills/community-sync.ts) upserts a tier 'community' atom
--- and marks the submission published. Items contributed straight on GitHub
--- have no submission row, so their kind, author and industries travel on the
--- atom (trigger_signals) and community_item_stats() falls back to them.
+-- app and opens it there as a pull request; an hourly sync
+-- (src/lib/agent-skills/community-sync.ts) upserts merged files as tier
+-- 'community' atoms. Nothing is exposed to an AI until an Accounted reviewer
+-- approved that exact text (company_skills.approved_body_sha, or
+-- trigger_signals.approved_sha on the atom): the repository is public and a
+-- push to main is not a review. Items contributed straight on GitHub have no
+-- submission row, so their kind, author and industries travel on the atom
+-- (trigger_signals) and community_item_stats() falls back to them.
 
--- 1. The reviewer's reason when a submission is sent back (it returns to
---    'private' so the author can fix it and share again). Review evidence:
---    set by Accounted only, never by the author.
+-- 1. Review evidence, set by Accounted only, never by the author:
+--    review_note: why a submission was sent back (it returns to 'private' so
+--      the author can fix it and share again);
+--    approved_body_sha: the SHA-256 of the exact SKILL.md the reviewer approved
+--      when opening it as a pull request; a merged file with another hash
+--      (edited on GitHub after review) waits for a new approval.
 ALTER TABLE public.company_skills ADD COLUMN review_note text;
+ALTER TABLE public.company_skills ADD COLUMN approved_body_sha text;
 
 CREATE OR REPLACE FUNCTION public.guard_company_skill_change()
  RETURNS trigger
@@ -24,12 +31,12 @@ BEGIN
   END IF;
   IF current_user = 'authenticated' THEN
     IF TG_OP = 'INSERT' THEN
-      IF NEW.share_status <> 'private' OR NEW.published_atom_id IS NOT NULL OR NEW.reviewed_at IS NOT NULL OR NEW.review_url IS NOT NULL OR NEW.review_note IS NOT NULL THEN
+      IF NEW.share_status <> 'private' OR NEW.published_atom_id IS NOT NULL OR NEW.reviewed_at IS NOT NULL OR NEW.review_url IS NOT NULL OR NEW.review_note IS NOT NULL OR NEW.approved_body_sha IS NOT NULL THEN
         RAISE EXCEPTION 'New skills must be private' USING ERRCODE = '42501';
       END IF;
     ELSE
-      IF ROW(NEW.company_id, NEW.team_id, NEW.created_by, NEW.created_at, NEW.atom_id, NEW.published_atom_id, NEW.reviewed_at, NEW.review_url, NEW.review_note)
-        IS DISTINCT FROM ROW(OLD.company_id, OLD.team_id, OLD.created_by, OLD.created_at, OLD.atom_id, OLD.published_atom_id, OLD.reviewed_at, OLD.review_url, OLD.review_note) THEN
+      IF ROW(NEW.company_id, NEW.team_id, NEW.created_by, NEW.created_at, NEW.atom_id, NEW.published_atom_id, NEW.reviewed_at, NEW.review_url, NEW.review_note, NEW.approved_body_sha)
+        IS DISTINCT FROM ROW(OLD.company_id, OLD.team_id, OLD.created_by, OLD.created_at, OLD.atom_id, OLD.published_atom_id, OLD.reviewed_at, OLD.review_url, OLD.review_note, OLD.approved_body_sha) THEN
         RAISE EXCEPTION 'Skill ownership and review evidence are immutable' USING ERRCODE = '42501';
       END IF;
       IF OLD.share_status <> 'private' AND ROW(NEW.name, NEW.description, NEW.body, NEW.author_handle, NEW.share_confirmed_at, NEW.submission_body_hash)
