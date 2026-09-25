@@ -219,6 +219,7 @@ import {
   normalizeVatRateToDecimal,
   treatmentDeductsInputVat,
 } from '@/lib/vat/supplier-invoice-line-checks'
+import { deriveVatLinesFromBreakdown } from '@/lib/vat/vat-breakdown-lines'
 import {
   COUNTRY_CONSISTENCY_MESSAGES,
   checkCountryConsistency,
@@ -14817,6 +14818,55 @@ export const tools: McpTool[] = [
         rawLineOverrides.map((o, i) => [o.line_number, parseDimensionsArg(o.dimensions, `line_overrides[${i}].dimensions`)]),
       )
 
+      // An extracted invoice carries two partitions of the same net: the
+      // supplier's itemisation, and the VAT bases it reports. On a mixed
+      // invoice they differ, so the extractor answers vatRate: null per line
+      // and all the VAT lives in vatBreakdown. Summing the per-line VAT then
+      // yields 0, and createSupplierInvoiceRegistrationEntry gates the 2641
+      // posting on vat_amount > 0: every öre of deductible ingående moms was
+      // dropped in silence. When that happens, the breakdown becomes the line
+      // source; when it cannot explain the document, staging refuses instead.
+      // Placed before the dimension bags so everything downstream sees one
+      // partition, the final one.
+      // A line that states a rate or an amount, zero included, has answered
+      // the question: an exempt pension premium says 0 and means it. Only
+      // silence across every line opens the recovery below.
+      const linesStateVat = lineItemsExt.some(
+        (li) => (li.vat_rate ?? li.vatRate) != null || (li.vat_amount ?? li.vatAmount) != null,
+      )
+      const breakdownOutcome = deriveVatLinesFromBreakdown({
+        linesStateVat,
+        documentVat: Number(totalsExt?.vat ?? totalsExt?.vatAmount) || 0,
+        subtotal,
+        breakdown: extracted.vatBreakdown,
+        deductsInputVat: !noDeductibleSellerVat,
+      })
+      if (breakdownOutcome.status === 'unreconciled') {
+        const err = new Error(
+          `Underlagets moms går inte att härleda till raderna: ${breakdownOutcome.reason} `
+          + 'Fakturan stagas inte, eftersom den annars hade bokförts utan ingående moms. '
+          + 'Rätta raderna eller totals på inkorgsposten med gnubok_set_inbox_extracted_data och försök igen. / '
+          + "The document's VAT cannot be derived from its lines, so staging refused rather than booking the invoice with no input VAT.",
+        ) as Error & { code?: string }
+        err.code = 'SI_VAT_BREAKDOWN_UNRECONCILED'
+        throw err
+      }
+      // The itemised descriptions are the casualty of the rebuild, so they go
+      // to the notes: nothing the underlag said is lost, it just stops being
+      // the line partition.
+      const rebuiltFromBreakdown = breakdownOutcome.status === 'rebuilt'
+      const sourceLineItems: Array<Record<string, unknown>> = rebuiltFromBreakdown
+        ? breakdownOutcome.lines.map((line) => ({ ...line }))
+        : breakdownOutcome.status === 'uniform_rate'
+          // One rate over the whole net: the itemisation is right, it was
+          // only missing the rate. Descriptions and accounts stay put.
+          ? lineItemsExt.map((li) => ({ ...li, vat_rate: breakdownOutcome.rate }))
+          : lineItemsExt
+      const rebuildNote = rebuiltFromBreakdown
+        ? `Rader uppdelade efter underlagets momsredovisning. Leverantörens radtext: ${lineItemsExt
+            .map((li) => String(li.description ?? '')).filter(Boolean).join(', ')}.`
+        : null
+
       // Resolve-don't-select: parse the invoice-level default bag + each line's
       // own bag, then resolve codes AND natural-language names against the
       // registry in ONE pass (zero queries when nothing is tagged; free-text
@@ -14827,13 +14877,13 @@ export const tools: McpTool[] = [
       const { bags: resolvedDimBags, resolutions: dimensionResolutions } = await resolveDimensionBags(
         supabase,
         companyId,
-        [defaultDimensions, ...lineItemsExt.map((_li, idx) => lineDimensionsMap.get(idx + 1))],
+        [defaultDimensions, ...sourceLineItems.map((_li, idx) => lineDimensionsMap.get(idx + 1))],
       )
       const resolvedDefaultDimensions = resolvedDimBags[0]
 
       // Translate extracted line items into the supplier_invoice_items shape.
       // Priority: line_overrides → per-line accountSuggestion → supplier.default_expense_account → 4000.
-      const extractedLineItems = lineItemsExt.map((li, idx) => {
+      const extractedLineItems = sourceLineItems.map((li, idx) => {
         const lineNumber = idx + 1
         const dimensions = resolvedDimBags[idx + 1]
         const lineTotal = Number(li.line_total ?? li.lineTotal ?? li.amount) || 0
@@ -14947,7 +14997,7 @@ export const tools: McpTool[] = [
         subtotal: noDeductibleSellerVat ? payableNet : Math.round(subtotal * 100) / 100,
         vat_amount: noDeductibleSellerVat ? 0 : Math.round(vatAmount * 100) / 100,
         total: noDeductibleSellerVat ? payableNet : Math.round(total * 100) / 100,
-        notes: (args.notes as string | undefined) ?? null,
+        notes: [rebuildNote, args.notes as string | undefined].filter(Boolean).join(' ') || null,
         items: lineItems,
         ...(resolvedDefaultDimensions && Object.keys(resolvedDefaultDimensions).length > 0
           ? { default_dimensions: resolvedDefaultDimensions }

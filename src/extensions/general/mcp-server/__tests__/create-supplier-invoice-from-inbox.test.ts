@@ -257,6 +257,121 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.vat_amount).toBe(250)
   })
 
+  // Real Telenor invoice from the document inbox. The itemised lines and the
+  // VAT bases are different partitions of the same net, so the extractor
+  // answers vatRate: null per line and puts the VAT in vatBreakdown. Summing
+  // the per-line VAT gave 0, and vat_amount 0 gates the whole 2641 posting
+  // off: 776.99 kr of deductible ingående moms was dropped in silence.
+  const telenorExtracted = {
+    supplier: { name: 'Telenor Sverige AB', organizationNumber: '5564210309' },
+    invoice: { invoiceNumber: '526263966024', invoiceDate: '2026-01-25', dueDate: '2026-02-24', currency: 'SEK' },
+    totals: { subtotal: 4035.96, vatAmount: 776.99, total: 4813, roundingAmount: 0.05 },
+    lineItems: [
+      { description: 'Abonnemang', quantity: 1, unitPrice: 1785, lineTotal: 1785, vatRate: null },
+      { description: 'Trafik', quantity: 1, unitPrice: 2250.96, lineTotal: 2250.96, vatRate: null },
+    ],
+    vatBreakdown: [
+      { base: 3107.96, rate: 25, amount: 776.99 },
+      { base: 928, rate: 0, amount: 0 },
+    ],
+  }
+
+  it('splits a mixed-rate invoice along its VAT bases instead of dropping the VAT', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-telenor',
+        status: 'received',
+        extracted_data: telenorExtracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-telenor',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-telenor' },
+      'company-1', 'user-1', supabase,
+    )) as { staged: boolean; preview: { vat_amount: number; subtotal: number; total: number; line_count: number } }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.vat_amount).toBe(776.99)
+    expect(result.preview.subtotal).toBe(4035.96)
+    expect(result.preview.total).toBe(4813)
+    expect(result.preview.line_count).toBe(2)
+
+    const params = inserts[0].params as {
+      vat_amount: number
+      notes: string | null
+      items: Array<{ line_total: number; vat_rate: number; vat_amount: number }>
+    }
+    expect(params.vat_amount).toBe(776.99)
+    expect(params.items.map((i) => [i.line_total, i.vat_rate, i.vat_amount])).toEqual([
+      [3107.96, 0.25, 776.99],
+      [928, 0, 0],
+    ])
+    // The supplier's own wording is not lost, it stops being the partition.
+    expect(params.notes).toContain('Abonnemang')
+    expect(params.notes).toContain('Trafik')
+  })
+
+  it('refuses to stage when the charged VAT cannot be traced to a rate', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-unreconciled',
+        status: 'received',
+        extracted_data: {
+          ...telenorExtracted,
+          // The breakdown no longer explains the document: 500 of the charged
+          // 776.99 has no base. Staging must stop rather than book 0.
+          vatBreakdown: [{ base: 1107.84, rate: 25, amount: 276.96 }],
+        },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-unreconciled',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    await expect(
+      tool.execute({ inbox_item_id: 'inbox-unreconciled', dry_run: true }, 'company-1', 'user-1', supabase),
+    ).rejects.toThrow(/går inte att härleda/)
+  })
+
+  it('keeps the itemised lines when one rate covers the whole net', async () => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-uniform',
+        status: 'received',
+        extracted_data: {
+          ...telenorExtracted,
+          totals: { subtotal: 4035.96, vatAmount: 1008.99, total: 5044.95 },
+          vatBreakdown: [{ base: 4035.96, rate: 25, amount: 1008.99 }],
+        },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-uniform',
+      },
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const result = (await tool.execute(
+      { inbox_item_id: 'inbox-uniform' },
+      'company-1', 'user-1', supabase,
+    )) as { preview: { vat_amount: number } }
+
+    expect(result.preview.vat_amount).toBe(1008.99)
+    const params = inserts[0].params as {
+      notes: string | null
+      items: Array<{ description: string; vat_rate: number; vat_amount: number }>
+    }
+    // Descriptions survive: only the missing rate was supplied.
+    expect(params.items.map((i) => i.description)).toEqual(['Abonnemang', 'Trafik'])
+    expect(params.items.map((i) => i.vat_rate)).toEqual([0.25, 0.25])
+    expect(params.notes).toBeNull()
+  })
+
   it('resolves a foreign supplier by VAT number when the document carries no org number', async () => {
     // The extractor leaves orgNumber null for non-Swedish entities by design,
     // so momsregistreringsnumret is the only exact key an EU supplier has.
