@@ -2679,7 +2679,7 @@
   "settings_period_locking": {
     "heading": "Period locking",
     "locked_through_label": "Bookkeeping locked through",
-    "locked_through_help": "Vouchers dated before this date cannot be created or modified.",
+    "locked_through_help": "Vouchers dated on or before this date cannot be created or modified.",
     "auto_lock_label": "Automatic locking after",
     "auto_lock_none": "No automatic locking",
     "auto_lock_30": "30 days after period end",

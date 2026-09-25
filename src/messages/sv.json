@@ -2679,7 +2679,7 @@
   "settings_period_locking": {
     "heading": "Periodlåsning",
     "locked_through_label": "Bokföring låst t.o.m.",
-    "locked_through_help": "Verifikationer med datum före detta datum kan inte skapas eller ändras.",
+    "locked_through_help": "Verifikationer med datum till och med detta datum kan inte skapas eller ändras.",
     "auto_lock_label": "Automatisk låsning efter",
     "auto_lock_none": "Ingen automatisk låsning",
     "auto_lock_30": "30 dagar efter periodens slut",
