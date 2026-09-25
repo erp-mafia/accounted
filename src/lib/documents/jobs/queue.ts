@@ -7,7 +7,7 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
-import { isActingType } from '@/lib/documents/read/lanes'
+import { isActingType, isBooked } from '@/lib/documents/read/lanes'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { createLogger } from '@/lib/logger'
 
@@ -166,7 +166,8 @@ async function runRead(supabase: SupabaseClient, job: ClaimedJob): Promise<strin
   if (out.status === 'error') throw new Error(out.reason)
   if (out.status === 'skipped') return `skipped: ${out.reason}`
   if (isArkivEnabled(job.company_id)) {
-    if (!doc.doc_type) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
+    // A booked document is typed when someone opens it (goal: agents answer correctly when asked).
+    if (!doc.doc_type && !isBooked(doc)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'classify')
     else if (finishing && doc.admission_state === 'admitted' && isArkivBrainEnabled(job.company_id)) await enqueueDocumentJob(supabase, job.company_id, job.document_id, 'extract')
   }
   return `read ${out.pages} pages (${out.reader}, ${plan.lane})${out.partial ? `, partial: ${out.partial}` : ''}`

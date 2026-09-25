@@ -29,6 +29,8 @@ describe('readPlanFor', () => {
   it('reads live documents as before: the model inside the rollout, every page', () => {
     expect(readPlanFor({ lane: 'live', inRollout: true, docType: null, pagesRead: false })).toEqual({ lane: 'live', allowModel: true, maxModelPages: null })
     expect(readPlanFor({ lane: 'live', inRollout: false, docType: null, pagesRead: false })).toEqual({ lane: 'live', allowModel: false, maxModelPages: null })
+    // Booked (on a verifikat), however new: the free text layer now, the model when someone opens it.
+    expect(readPlanFor({ lane: 'live', inRollout: true, docType: null, pagesRead: false, tied: true })).toEqual({ lane: 'live', allowModel: false, maxModelPages: null })
   })
 
   it('reads voucher-tied history for its text layer only, once', () => {
