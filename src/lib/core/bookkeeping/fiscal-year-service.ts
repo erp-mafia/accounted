@@ -449,6 +449,39 @@ export async function updateFiscalPeriod(
     if (overlapping && overlapping.length > 0) {
       return overlapFailure(overlapping[0] as { id: string; name: string })
     }
+
+    // Re-dating keeps the years contiguous (BFNAR 2013:2 continuity): the
+    // year must still start the day after its predecessor ends and end the
+    // day before its successor starts, so previous_period_id stays true
+    // without a relink. In practice only the first and the latest year can
+    // move, and a gap can never open behind an API caller's back.
+    const { data: neighbours } = await supabase
+      .from('fiscal_periods')
+      .select('id, period_start, period_end')
+      .eq('company_id', companyId)
+      .neq('id', fiscalPeriodId)
+      .order('period_start', { ascending: true })
+    const others = (neighbours ?? []) as Array<{ id: string; period_start: string; period_end: string }>
+    const predecessor = [...others].reverse().find((p) => p.period_end < newStart) ?? null
+    const successor = others.find((p) => p.period_start > newEnd) ?? null
+    if (predecessor && newStart !== addDaysIso(predecessor.period_end, 1)) {
+      const expectedStart = addDaysIso(predecessor.period_end, 1)
+      return {
+        ok: false,
+        code: 'FISCAL_PERIOD_NOT_CONTIGUOUS',
+        details: { expected_start: expectedStart, preceding_period_id: predecessor.id },
+        messageSv: `Räkenskapsåret måste börja ${expectedStart}, dagen efter att föregående räkenskapsår slutar.`,
+      }
+    }
+    if (successor && newEnd !== addDaysIso(successor.period_start, -1)) {
+      const expectedEnd = addDaysIso(successor.period_start, -1)
+      return {
+        ok: false,
+        code: 'FISCAL_PERIOD_NOT_CONTIGUOUS',
+        details: { expected_end: expectedEnd, following_period_id: successor.id },
+        messageSv: `Räkenskapsåret måste sluta ${expectedEnd}, dagen innan nästa räkenskapsår börjar.`,
+      }
+    }
   }
 
   const updates: { name?: string; period_start?: string; period_end?: string } = {}
