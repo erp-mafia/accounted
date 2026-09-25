@@ -136,7 +136,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const usedByFlows = (atomId: string) => overview?.agents.filter((a) => a.knowledge.some((k) => k.id === atomId)).length ?? 0
   const shared: Item[] = catalog.filter((s) => COMMUNITY_OPEN && s.tier === 'community').map((s) => {
     const meta = communityMeta(s)
-    return { key: s.slug, kind: kindOf(s), title: s.name, desc: s.summary, href: `${hrefBase}/${communitySegment(s.slug)}`, source: 'community', meta, categories: [], popularity: meta?.used_by ?? meta?.votes ?? 0 }
+    return { key: s.slug, kind: kindOf(s), title: s.name, desc: s.summary, href: `${hrefBase}/${communitySegment(s.slug)}`, source: 'community', meta, categories: (meta?.industries ?? []).map((i) => `vertical/${i}`), popularity: meta?.used_by ?? meta?.votes ?? 0 }
   })
   const flows: Item[] = SHOWN_FLOWS.map((id) => ({ id })).map((s) => ({
     key: s.id, kind: 'workflow', title: t(`skills.${s.id}.name`), desc: t(`skills.${s.id}.short`), href: `${hrefBase}/${agentSegment(s.id)}`,

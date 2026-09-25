@@ -123,12 +123,12 @@ describe('skills HTTP routes', () => {
       { slug: 'community/stang-dagskassan', tier: 'community', name: 'Stäng dagskassan', body: 'B', reviewedAt: '2026-09-18' },
       { slug: 'bookkeep', tier: 'workflow', name: 'Bokför', body: 'B' },
     ] as never)
-    enqueue({ data: [{ atom_id: 'community/stang-dagskassan', kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, used_by: 12 }] })
+    enqueue({ data: [{ atom_id: 'community/stang-dagskassan', kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, used_by: 12, industries: ['restaurang-cafe'] }] })
     enqueue({ data: [{ id: 'f1', atom_id: 'community/stang-dagskassan', vote: true }] })
     const data = (await (await GET(request('GET'), staticParams)).json()).data
     expect(data[0].community).toEqual({
       kind: 'workflow', author: 'kafe-norr', author_shared: 4, author_verified: false, votes: 48, voted: true,
-      reviewed_at: '2026-09-18', used_by: 12,
+      reviewed_at: '2026-09-18', used_by: 12, industries: ['restaurang-cafe'],
     })
     expect(data[1].community).toBeUndefined()
     expect(supabase.rpc).toHaveBeenCalledWith('community_item_stats')

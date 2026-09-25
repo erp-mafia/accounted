@@ -9,6 +9,10 @@ export interface CatalogSkill extends Skill {
   active: boolean
   installations: Array<{ installation_id: string; scope: 'company' | 'team' }>
   shareStatus?: CompanySkillRow['share_status']
+  /** A published own item: its public page. */
+  publishedUrl?: string | null
+  /** A shared own item Accounted sent back, and why. */
+  reviewNote?: string | null
   /** Saved by an AI, waiting for a person to add it on the Skills page. */
   draft?: boolean
 }
@@ -39,6 +43,8 @@ export async function loadSkillCatalog(supabase: SupabaseClient, companyId: stri
       return [{
         ...(skill ?? { slug: `own/${row.id}`, name: row.name!, summary: row.description ?? '', body: row.body!, tags: ['own'], tier: 'own' as const, source: 'own' as const, itemKind: row.kind ?? 'workflow' }),
         active: row.share_status !== 'withdrawn' && !row.draft, shareStatus: row.share_status,
+        ...(row.share_status === 'published' && row.published_atom_id ? { publishedUrl: `https://accounted.se/instruktioner/${row.published_atom_id.replace(/^community\//, '')}` } : {}),
+        ...(row.share_status === 'private' && row.review_note ? { reviewNote: row.review_note } : {}),
         ...(row.draft ? { draft: true } : {}),
         installations: [{ installation_id: row.id, scope: row.team_id ? 'team' : 'company' }],
       }]
