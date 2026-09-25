@@ -347,6 +347,24 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(mockedSync).not.toHaveBeenCalled()
   })
 
+  it.each([
+    [{ code: 'PT409', message: 'BANK_CONFIGURATION_CHANGED' }, 409, /ändrades medan du valde konton/],
+    [{ code: '23514', message: 'CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT' }, 409, /annat bankkonto/],
+    [{ code: '23514', message: 'BANK_SELECTION_LEDGER_CONFLICT' }, 400, /samma bokföringskonto/],
+    [{ code: '23505', message: 'CASH_ACCOUNT_LEDGER_CLAIMED' }, 409, /annan bankanslutning/],
+  ])('answers a refused save (%o) with its own code and a readable Swedish message', async (selectionError, status, message) => {
+    const stub: SupabaseStub = { authUser: { id: 'user-1' }, selectionError,
+      connectionRow: { id: 'conn-1', status: 'active', accounts_data: [{ uid: 'acc-1', currency: 'SEK', enabled: true, ledger_account: '1930' }] } }
+    const ctx = makeContext(buildSupabase(stub))
+    const res = await accountsRoute.handler(makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-1'] }), ctx)
+    expect(res.status).toBe(status)
+    const body = await res.json()
+    expect(body.error).toMatchObject({ code: selectionError.message })
+    expect(body.error.message).toMatch(message)
+    expect(ctx.emit).not.toHaveBeenCalled()
+    expect(mockedSync).not.toHaveBeenCalled()
+  })
+
   it.each(['exhausted', 'failed'])('does not save or sync when ledger preparation is %s', async failure => {
     if (failure === 'exhausted') mockAllocate.mockResolvedValue(null)
     else mockAllocate.mockRejectedValue(new Error('Lookup unavailable'))
