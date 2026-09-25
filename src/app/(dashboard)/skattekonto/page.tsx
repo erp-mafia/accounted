@@ -179,18 +179,26 @@ export default function SkattekontoPage() {
     try {
       const [saldoRes, txRes] = await Promise.all([
         fetch('/api/extensions/ext/skatteverket/skattekonto/saldo'),
-        fetch('/api/extensions/ext/skatteverket/skattekonto/transaktioner?include_ignored=1'),
+        fetch('/api/skatteverket/skattekonto/transaktioner?include_ignored=1'),
       ])
 
-      if (saldoRes.status === 401) {
+      // The list comes from the core route because the rows are core data: a
+      // skattekontoutdrag file import writes them with no SKV connection at
+      // all. It is therefore read BEFORE any saldo branch returns, so the
+      // rows render whatever the saldo fetch did. The StartCard only shows
+      // when the table is empty too.
+      if (txRes.ok) {
+        const txJson = (await txRes.json()) as TransaktionerEnvelope
+        setTx(txJson.data)
+      }
+
+      // 401: this company has not connected Skatteverket. 503: the
+      // integration is switched off in this installation, so the dispatcher
+      // refuses every route of the extension before looking at which one was
+      // asked for. Neither is an error to show over rows the company
+      // imported itself; both mean there is simply no saldo to display.
+      if (saldoRes.status === 401 || saldoRes.status === 503) {
         setNotConnected(true)
-        // A skattekontoutdrag file import populates the table without any
-        // SKV connection: keep rendering those rows. The StartCard only
-        // shows when the table is empty too.
-        if (txRes.ok) {
-          const txJson = (await txRes.json()) as TransaktionerEnvelope
-          setTx(txJson.data)
-        }
         return
       }
       // A non-401 response proves a connection now exists: clear a stale
@@ -208,11 +216,6 @@ export default function SkattekontoPage() {
 
       const saldoJson = (await saldoRes.json()) as SaldoEnvelope
       setSaldo(saldoJson)
-
-      if (txRes.ok) {
-        const txJson = (await txRes.json()) as TransaktionerEnvelope
-        setTx(txJson.data)
-      }
     } catch {
       setLoadError(true)
     } finally {

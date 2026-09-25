@@ -66,7 +66,7 @@ export default function SkattekontoBookDialog({
     setIsBooking(true)
     try {
       const res = await fetch(
-        '/api/extensions/ext/skatteverket/skattekonto/transaktioner/bokfor-batch',
+        '/api/skatteverket/skattekonto/transaktioner/bokfor-batch',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -125,7 +125,7 @@ export default function SkattekontoBookDialog({
     setIsOpeningDraft(true)
     try {
       const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
+        `/api/skatteverket/skattekonto/transaktioner/${row.id}/bokfor`,
         { method: 'POST' },
       )
       const json = await res.json()
