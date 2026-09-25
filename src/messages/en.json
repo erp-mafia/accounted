@@ -3606,7 +3606,7 @@
     "different_currencies": " (different currencies)",
     "partial_payment_note": ": the invoice will become partially paid.",
     "ore_rounding_note": "The {amount} difference is booked as rounding (account 3740). The invoice is marked as paid.",
-    "bank_fee_note": "The {amount} difference is booked as a bank fee (account 6570). The invoice is marked as paid.",
+    "bank_fee_note": "The {amount} difference is assumed to be a bank fee and is booked on account 6570. The invoice is marked as paid. If it is something else, change the line under Edit.",
     "overpayment_note": ": the transaction is larger than the invoice's remaining amount.",
     "target_settled_title": "This invoice is already fully paid",
     "target_settled_description": "No unpaid amount remains on this invoice, so it cannot be matched again. Close this dialog and select the right invoice, or book the transaction as usual.",
