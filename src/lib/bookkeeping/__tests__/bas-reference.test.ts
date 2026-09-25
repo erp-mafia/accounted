@@ -192,6 +192,36 @@ describe('Contra accounts have opposite normal_balance', () => {
     expect(account).toBeDefined()
     expect(account!.normal_balance).toBe('debit')
   })
+
+  // The named cases above are examples. They passed while 29 sibling accounts
+  // carried the wrong sign, because sampling two accounts says nothing about
+  // the other 45. These two assert the rule over the whole family instead.
+
+  /** Class-1 accounts that reduce an asset, and therefore carry a credit balance. */
+  const CONTRA_ASSET_NAME = /^(Ackumulerade (av|ned)skrivningar|Nedskrivning(ar)? av|Värdereglering)/i
+
+  it('every contra-asset account in class 1 has credit balance', () => {
+    const contra = BAS_REFERENCE.filter(
+      (a) => a.account_class === 1 && CONTRA_ASSET_NAME.test(a.account_name),
+    )
+    expect(contra.length).toBeGreaterThan(40)
+
+    const wrong = contra.filter((a) => a.normal_balance !== 'credit').map((a) => a.account_number)
+    expect(wrong).toEqual([])
+  })
+
+  it('every equity account has credit balance except the owner-withdrawal accounts', () => {
+    // Enskild firma / handelsbolag: uttagskontona minskar eget kapital.
+    const withdrawals = new Set(['2011', '2013', '2021', '2023', '2031', '2033', '2041', '2043'])
+
+    const equity = BAS_REFERENCE.filter((a) => a.account_type === 'equity')
+    expect(equity.length).toBeGreaterThan(0)
+
+    const wrong = equity
+      .filter((a) => !withdrawals.has(a.account_number) && a.normal_balance !== 'credit')
+      .map((a) => a.account_number)
+    expect(wrong).toEqual([])
+  })
 })
 
 describe('K2-excluded accounts', () => {

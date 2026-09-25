@@ -529,7 +529,7 @@ export const CLASS_2_ACCOUNTS: BASReferenceAccount[] = [
     account_class: 2,
     account_group: '20',
     account_type: 'equity',
-    normal_balance: 'debit',
+    normal_balance: 'credit',
     description: 'Ackumulerade vinster eller förluster från tidigare är som inte delats ut.',
     sru_code: '7302',
     k2_excluded: false,
