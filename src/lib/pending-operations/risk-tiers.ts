@@ -32,6 +32,11 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // payment-routing surface. Staged (agents never silently mint reporting
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
+  create_dimension: 'low',
+  update_dimension: 'low',
+  // Deleting is refused by the DB guard when anything is booked on the
+  // dimension, but it removes the dimension and its values for good.
+  delete_dimension: 'medium',
   // Kontoplan reference data: adding an account has no journal impact (a
   // wrong account only becomes bookable, nothing is booked), and update is
   // limited to name/description/VAT-default/SRU/is_active: the same surface

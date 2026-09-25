@@ -42,6 +42,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 - API-key auth (`/api/v1/*`) uses `createServiceClientNoCookies()` + `v1ErrorResponse`; every query still filters by `company_id`.
 - Journal entries a route creates: when the entry IS the accounting record (mark paid, mark sent under kontantmetoden, payout settle), a failed commit fails the request, otherwise AP/AR diverges from the ledger. When the entry is a side effect of the primary action (e.g. categorizing a transaction), log the failure with `log` and let the primary action succeed.
 
+## New public capability: define an operation, don't hand-write doors
+
+A capability a user can perform (create, update, delete, a lifecycle verb) that should be reachable by API is an **operation** (`src/lib/operations/`, contract in `types.ts`): one Zod input, one output, docs, scope, risk, and a `run(ctx, input, { dryRun })` that calls a service in `lib/`. From that single definition:
+- v1: a route file is `export const POST = v1OperationHandler(op)` (registers the endpoint for openapi.json; `withApiV1` still does auth, scope, idempotency, test keys);
+- MCP: an `mcp` binding generates the tool (search-only by default, zero tools/list cost); writes stage and approval runs the same `run()` through `commitPendingOperation`;
+- dashboard: the session route calls the same service and maps failures with `sessionFailureResponse`.
+Add the op to `OPERATIONS` in `registry.ts`, then follow `operation-contract.test.ts` failures (scope maps, risk tier, approval label in sv/en, op-type CHECK migration pair). `session-route-parity.test.ts` fails when a new dashboard write route has no API decision: add it to `SESSION_ROUTE_PARITY` as covered, gap or ui-only. The rules belong in the service, never in a door: two copies of one capability is how v1 came to drop fields the dashboard honoured (#3082).
+
 ## Endpoint map (`app/api/`)
 
 Per-family `route.ts` counts in parentheses are a 2026-08-26 snapshot and drift; regenerate with `find app/api -name route.ts | awk -F/ '{print $3}' | sort | uniq -c`.

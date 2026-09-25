@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 173 endpoints.
+  pagination, scopes), and all 176 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 173 operations. Paths are shown without
+API version `2026-05-12`, 176 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (5)
@@ -173,7 +173,7 @@ POST /companies/{companyId}/journal-entries/batch-create : Create up to 50 draft
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (13)
+### Periods and registers (16)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -181,6 +181,9 @@ Full detail: [references/periods.md](references/periods.md)
 GET /companies/{companyId}/accounts : List chart-of-accounts entries (BAS chart) [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/compliance/check : Run a structured compliance pre-flight check [scope:compliance:read risk:low idempotent]
 GET /companies/{companyId}/dimensions : List dimensions (kostnadsställe/projekt) with their values [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/dimensions : Create a custom dimension (e.g. Avdelning, Kund, Fordon) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/dimensions/{id} : Rename, archive or reorder a dimension [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/dimensions/{id} : Delete a custom dimension nobody has booked on [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/dimensions/{id}/values : Create a dimension value (kostnadsställe/projekt code) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 PATCH /companies/{companyId}/dimensions/{id}/values/{valueId} : Update a dimension value (rename, archive, set start/end date) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/dimensions/{id}/values/{valueId} : Delete an unreferenced dimension value [scope:bookkeeping:write risk:medium idempotent]

@@ -2603,6 +2603,10 @@ export type PendingOperationType =
   // Dimensions PR3: stage a new dimension value (kostnadsställe/projekt object
   // code, SIE #OBJEKT): agents never silently mint reporting values.
   | 'create_dimension_value'
+  // Dimension registry operations (src/lib/operations/dimensions.ts).
+  | 'create_dimension'
+  | 'update_dimension'
+  | 'delete_dimension'
   // Dimensions PR6: bulk retag of posted-line dimensions via the audited
   // retag_line_dimensions RPC (gnubok_tag_journal_lines).
   | 'retag_line_dimensions'

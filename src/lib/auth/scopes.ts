@@ -301,6 +301,10 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Dimension registry writes (operations dimensions.create/update/delete).
+  'POST /api/v1/companies/:companyId/dimensions': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/dimensions/:id': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/dimensions/:id': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/dimensions/:id/values': 'bookkeeping:write',
   // Value lifecycle (#895): rename/archive/end-date via PATCH; DELETE only
   // succeeds for unreferenced values (BFL retention trigger guards the rest).

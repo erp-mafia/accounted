@@ -247,6 +247,8 @@ import { BulkBookInboxSchema, OpeningBalancesBulkSchema } from '@/lib/api/schema
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
+import { operationForPendingType } from '@/lib/operations/registry'
+import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
   TransactionCategory,
@@ -409,6 +411,48 @@ type ExecutorResult = {
   // the dispatcher then lands the op in 'failed_partial' instead of
   // 'rejected' and persists these ids in result_data.posted_ids (issue #842).
   partialPostedIds?: Record<string, string>
+}
+
+/**
+ * Executor for an operation from the registry: re-validates the staged input
+ * at the commit boundary (a tampered pending_operations row must not reach
+ * the books with fields the staging tool never accepted) and runs it for
+ * real. A BookkeepingError is rethrown so the dispatcher's catch handles it
+ * exactly as for a hand-written executor.
+ */
+async function commitRegisteredOperation(
+  operation: AnyOperation,
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(params)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      error: `Invalid ${issue?.path?.join('.') || 'params'}: ${issue?.message ?? 'validation failed'}`,
+      errorCode: 'VALIDATION_ERROR',
+      status: 400,
+    }
+  }
+  const outcome = await operation.run(
+    { supabase, companyId, userId, log: log.child({ operation: operation.id }) },
+    parsed.data,
+    { dryRun: false },
+  )
+  if (!outcome.ok) {
+    if (outcome.error) throw outcome.error
+    const entry = getErrorEntry(outcome.code)
+    return {
+      // Never an empty string: an empty error reads as success downstream.
+      error: outcome.messageSv || entry?.message_en || outcome.code,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
+    }
+  }
+  if (outcome.dryRun) return { data: outcome.preview }
+  return { data: outcome.data as Record<string, unknown> }
 }
 
 /**
@@ -7968,12 +8012,20 @@ async function commitPendingOperationInner(
       case 'submit_agi':
         result = await commitSubmitAgi(supabase, userId, companyId, pendingOp.params)
         break
-      default:
-        return {
-          status: 'failed',
-          error: `Unknown operation type: ${pendingOp.operation_type}`,
-          http_status: 400,
+      default: {
+        // Operations defined once in lib/operations run through the same
+        // run() the v1 and MCP doors use; everything else is unknown.
+        const operation = operationForPendingType(pendingOp.operation_type)
+        if (!operation) {
+          return {
+            status: 'failed',
+            error: `Unknown operation type: ${pendingOp.operation_type}`,
+            http_status: 400,
+          }
         }
+        result = await commitRegisteredOperation(operation, supabase, userId, companyId, pendingOp.params)
+        break
+      }
     }
   } catch (err) {
     // Partial commit (issue #842): the executor already posted an

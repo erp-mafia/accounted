@@ -198,6 +198,7 @@ import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/
 
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
+import '@/app/api/v1/companies/[companyId]/dimensions/[id]/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
 // #895: value lifecycle (rename/archive/end-date + delete-unreferenced).
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/[valueId]/route'

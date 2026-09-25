@@ -198,7 +198,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimensions: { id: string, sie_dim_no: number, name: string, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
+    dimensions: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -221,6 +221,7 @@ Example response `200`:
         "id": "0e9c…",
         "sie_dim_no": 1,
         "name": "Kostnadsställe",
+        "parent_sie_dim_no": null,
         "resets_annually": true,
         "is_system": true,
         "is_active": true,
@@ -237,6 +238,211 @@ Example response `200`:
         ]
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/dimensions`
+
+**Create a custom dimension (e.g. Avdelning, Kund, Fordon).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Adds a dimension to the registry (SIE #DIM). Omit sie_dim_no and the next free number from 20 is used: SIE reserves 1-19 for standardized meanings (1 Kostnadsställe, 6 Projekt, 7 Anställd, ...). parent_sie_dim_no declares an #UNDERDIM hierarchy and must name an existing dimension. Add values afterwards with POST /dimensions/{id}/values. Idempotent. Dry-runnable.
+
+**Use when:** The company wants to follow up on something beyond kostnadsställe and projekt, and no existing dimension fits.
+**Do not use for:** Adding a cost centre or project code: those are values of the system dimensions 1 and 6 (POST /dimensions/{id}/values).
+
+**Pitfalls:**
+- An explicit sie_dim_no that is taken returns 409 DIMENSION_NUMBER_TAKEN; omit it to get the next free number.
+- Numbers 1-19 have standardized SIE meanings: only use one when the dimension really is that (e.g. 7 Anställd).
+- resets_annually defaults to true (balances reset each fiscal year, like kostnadsställe); set false for things that accumulate, like projekt.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name: string, sie_dim_no?: number, resets_annually?: boolean, parent_sie_dim_no?: number | null }
+```
+
+Example request:
+```json
+{
+  "name": "Avdelning"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dimension: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dimension": {
+      "id": "3c1d…",
+      "sie_dim_no": 20,
+      "name": "Avdelning",
+      "parent_sie_dim_no": null,
+      "resets_annually": true,
+      "is_system": false,
+      "is_active": true,
+      "sort_order": 100
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/dimensions/{id}`
+
+**Rename, archive or reorder a dimension.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update of a dimension: name, is_active (false archives it, hiding it from pickers while history keeps its tags) and sort_order. The system dimensions 1 (Kostnadsställe) and 6 (Projekt) can be archived and reordered but not renamed. sie_dim_no is immutable. Idempotent. Dry-runnable.
+
+**Use when:** A dimension needs a clearer name, should stop being offered for new tags, or should move in the pickers.
+**Do not use for:** Changing a value (use PATCH /dimensions/{id}/values/{valueId}) or removing a dimension (DELETE).
+
+**Pitfalls:**
+- Renaming a system dimension returns 400 DIMENSION_SYSTEM_RENAME.
+- At least one of name, is_active, sort_order must be sent.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name?: string, is_active?: boolean, sort_order?: number }
+```
+
+Example request:
+```json
+{
+  "is_active": false
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    sie_dim_no: number,
+    name: string,
+    parent_sie_dim_no: number | null,
+    resets_annually: boolean,
+    is_system: boolean,
+    is_active: boolean,
+    sort_order: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "3c1d…",
+    "sie_dim_no": 20,
+    "name": "Avdelning",
+    "parent_sie_dim_no": null,
+    "resets_annually": true,
+    "is_system": false,
+    "is_active": false,
+    "sort_order": 100
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/dimensions/{id}`
+
+**Delete a custom dimension nobody has booked on.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Removes a custom dimension and its values. Refused for the system dimensions and for any dimension whose number is tagged on a posted or reversed verifikat line (BFL 7 kap: booked history is never pulled out from under a verifikat). Archive it with PATCH is_active=false instead. Idempotent. Dry-runnable.
+
+**Use when:** A dimension was created by mistake and nothing has been booked on it.
+**Do not use for:** Retiring a dimension that has been used: archive it (PATCH is_active=false).
+
+**Pitfalls:**
+- A dimension used on any posted line returns 409 DIMENSION_REFERENCED naming it.
+- System dimensions return 400 DIMENSION_SYSTEM_DELETE.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, dimension_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "dimension_id": "3c1d…"
   },
   "meta": {
     "request_id": "req_…",
