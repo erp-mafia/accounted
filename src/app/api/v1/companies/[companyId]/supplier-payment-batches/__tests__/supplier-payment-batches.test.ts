@@ -605,7 +605,8 @@ describe('GET /supplier-payment-batches/:id', () => {
     expect(body.data).toMatchObject({
       supplier_payment_batch_id: BATCH_ID,
       settled_count: 1,
-      debtor: { name: 'Testbolaget AB', iban: 'SE3550000000054910000003', bic: 'ESSESESS' },
+      // The debtor IBAN is masked on this suppliers:read door; the file carries it in full.
+      debtor: { name: 'Testbolaget AB', iban: 'SE35 **** 0003', bic: 'ESSESESS' },
       file: { filename: 'betalfil_20260810_b1111111.xml', content_type: 'application/xml', available: true },
     })
     expect(body.data.items).toEqual([
