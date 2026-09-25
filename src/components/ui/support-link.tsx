@@ -31,6 +31,7 @@ import { isShrinkableImage } from '@/lib/documents/upload-size'
 import {
   conversationsAvailable,
   currentTicketId,
+  displayStatus,
   isResolved,
   listTickets,
   loadThread,
@@ -59,7 +60,9 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 /**
  * loading  fetching tickets or a thread
  * thread   the conversation with support (reply box when it is the active ticket)
- * compose  no open ticket: write a new one, attachments allowed
+ * compose  write a new ticket, attachments allowed: when nothing is open, or
+ *          on "Nytt ärende" beside an open one (the thread stays loaded, so
+ *          the customer can go back to it)
  * email    conversations unavailable (self-hosted, analytics off): same form, mail delivery
  * sent     delivered by mail (attachments, or the fallback)
  */
@@ -289,6 +292,8 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       subject,
       message: message.trim(),
       files: attachments,
+      // With a ticket still open, the SDK would otherwise append this to it.
+      newTicket: active !== null,
     })
     setIsSending(false)
 
@@ -331,6 +336,14 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso))
 
   const statusLabel = (s: TicketStatus) => t(`status_${s}`)
+
+  // One draft for the dialog, not one per ticket: text typed as a reply moves
+  // along to "Nytt ärende" (and back), which is what the customer who realises
+  // mid-sentence that this is a separate matter wants.
+  function startNewTicket() {
+    setShowEarlier(false)
+    setView('compose')
+  }
 
   const canReply = Boolean(thread && active && thread.ticketId === active.id && !isResolved(thread.status))
   const earlier = tickets.filter((x) => x.id !== viewingId)
@@ -516,23 +529,44 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           </div>
         )}
 
+        {view === 'compose' && thread && (
+          <button
+            type="button"
+            onClick={() => setView('thread')}
+            className="self-start text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {t('back_to_ticket')}
+          </button>
+        )}
+
         {(view === 'compose' || view === 'email') && composeForm}
 
         {view === 'thread' && (
           <div>
             <div className="flex items-center justify-between gap-2">
               <span className="inline-flex h-5 items-center rounded-full border border-border px-2 text-[11px] text-muted-foreground">
-                {thread ? statusLabel(thread.status) : ''}
+                {thread ? statusLabel(displayStatus(thread.status, thread.messages)) : ''}
               </span>
-              {earlier.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setShowEarlier((v) => !v)}
-                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showEarlier ? t('hide_earlier') : t('earlier_tickets', { count: earlier.length })}
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {earlier.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowEarlier((v) => !v)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showEarlier ? t('hide_earlier') : t('earlier_tickets', { count: earlier.length })}
+                  </button>
+                )}
+                {canReply && (
+                  <button
+                    type="button"
+                    onClick={startNewTicket}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {t('new_ticket')}
+                  </button>
+                )}
+              </div>
             </div>
 
             {showEarlier && (
@@ -579,12 +613,14 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               replyForm
             ) : (
               <div className="mt-4 flex items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">{t('resolved_hint')}</p>
+                <p className="text-xs text-muted-foreground">
+                  {thread && !isResolved(thread.status) ? t('other_open_hint') : t('resolved_hint')}
+                </p>
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setView('compose')}
+                  onClick={startNewTicket}
                 >
                   {t('new_ticket')}
                 </Button>

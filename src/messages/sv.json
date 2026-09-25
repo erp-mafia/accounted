@@ -5612,6 +5612,8 @@
     "reply": "Svara",
     "reply_failed": "Kunde inte skicka svaret. Försök igen.",
     "new_ticket": "Nytt ärende",
+    "back_to_ticket": "Tillbaka till ärendet",
+    "other_open_hint": "Ärendet är öppet, vi svarar här.",
     "earlier_tickets": "Tidigare ärenden ({count})",
     "hide_earlier": "Dölj tidigare ärenden",
     "no_messages": "(inget meddelande)",

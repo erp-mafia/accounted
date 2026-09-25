@@ -160,6 +160,14 @@ describe('submitFeedback', () => {
       expect(sendMessageMock).toHaveBeenCalledWith('bara text')
     })
 
+    // A customer with an open ticket who starts a new request must get a
+    // separate ticket, not another message in the open one.
+    it('forces a new ticket when asked to', async () => {
+      stubFetchOk()
+      await submitFeedback({ message: 'ett nytt ärende', newTicket: true })
+      expect(sendMessageMock).toHaveBeenCalledWith('ett nytt ärende', undefined, true)
+    })
+
     // Since 2026-09-14 the founders answer in PostHog and the reply shows in
     // the app, so the ticket IS the delivery; email is not even attempted.
     it('reports success on the ticket alone and leaves email untouched', async () => {
