@@ -5508,6 +5508,16 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dimensionen kunde inte tas bort.',
     message_en: 'Failed to delete dimension.',
   },
+  ACCOUNTING_METHOD_CHANGE_MID_YEAR: {
+    httpStatus: 409,
+    message_sv: 'Bokföringsmetoden kan inte bytas mitt i ett räkenskapsår som har bokförda verifikationer.',
+    message_en: 'The accounting method cannot change in the middle of a fiscal year that has posted vouchers: it governs the whole year. A person changes it in the settings before the next fiscal year.',
+  },
+  BOOKKEEPING_LOCK_REOPENS_FILED_VAT: {
+    httpStatus: 409,
+    message_sv: 'Låsdatumet skulle öppna momsperioder som redan är deklarerade till Skatteverket.',
+    message_en: 'The lock date would reopen VAT periods already filed with Skatteverket. Send acknowledge_filed_vat_periods: true if a correction must be booked there (then file a corrected return).',
+  },
   DIMENSION_NUMBER_TAKEN: {
     httpStatus: 409,
     message_sv: 'Dimensionsnumret finns redan i registret.',
