@@ -4,8 +4,10 @@
  * reports.kpi (lib/operations/filing-reports.ts). Moved here unchanged from
  * the route, so the two cannot disagree about the same company.
  *
- * The MCP tool gnubok_get_kpi_report predates this module and computes a
- * smaller, differently named subset; it is left as it is.
+ * The MCP tool gnubok_get_kpi_report returns a smaller, differently named
+ * subset (and takes a date range), but reads the same inputs from
+ * lib/reports/kpi.ts: account overrides, receivables as of the period end,
+ * payment days over payments inside the period.
  */
 import {
   generateIncomeStatement,
@@ -32,14 +34,15 @@ import {
   calculateVatLiability,
   aggregateTopSuppliers,
   fetchTopSupplierInvoices,
+  fetchKpiAccountOverrides,
+  fetchPaidInvoicesInRange,
+  kpiReceivablesAsOf,
   type KpiSupplierInvoiceRow,
 } from '@/lib/reports/kpi'
-import { mergeWithDefaults } from '@/lib/reports/kpi-definitions'
 import { roundOre } from '@/lib/money'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type {
   KPIReport,
-  KPIPreferences,
   IncomeStatementReport,
   TrialBalanceRow,
 } from '@/types'
@@ -101,32 +104,25 @@ async function buildReport(
 
   // The company-wide queries both paths share. Factories, not promises, so
   // each Promise.all issues them inside its own single round-trip wave.
-  const prefsQuery = () =>
-    supabase
-      .from('extension_data')
-      .select('value')
-      .eq('company_id', companyId)
-      .eq('extension_id', 'core/kpi')
-      .eq('key', 'preferences')
-      .single()
+  const prefsQuery = () => fetchKpiAccountOverrides(supabase, companyId)
+  // Payments inside the period only: the KPI describes the reported period,
+  // and the MCP tool reads the same helper so the two cannot disagree.
   const paidInvoicesQuery = () =>
-    supabase
-      .from('invoices')
-      .select('invoice_date, paid_at')
-      .eq('company_id', companyId)
-      .eq('status', 'paid')
-      .not('paid_at', 'is', null)
+    fetchPaidInvoicesInRange(supabase, companyId, period.period_start, period.period_end)
+  // Receivables as they stood at period end for a past period (live state
+  // for the current one), never today's for last year's report.
+  const receivablesAsOf = kpiReceivablesAsOf(period.period_end)
   // Paginated: awaiting the bare query capped the rows at PostgREST's 1000
   // default and silently corrupted the supplier totals for large companies.
   const topSuppliersQuery = () =>
     fetchTopSupplierInvoices(supabase, companyId, period.period_start, period.period_end)
 
-  let prefsValue: unknown
+  let accountOverrides: Record<string, string[]>
   let incomeStatement: IncomeStatementReport
   let trialBalanceResult: { rows: TrialBalanceRow[] }
   let arLedger: ARLedgerReport
   let monthlyBreakdown: MonthlyBreakdown
-  let paidInvoicesResult: { data: Array<{ invoice_date: string; paid_at: string }> | null }
+  let paidInvoices: Array<{ invoice_date: string; paid_at: string }>
   let topSuppliersResult: { data: unknown[] | null; error: unknown }
   let filteredTrialBalance: { rows: TrialBalanceRow[] } | null
 
@@ -143,18 +139,18 @@ async function buildReport(
       // for every company that ran bokslut, which is Stage 2 of #1051
       // (DECISIONS.md archive 2026-07-29), so it is recorded as a follow-up rather than done here.
       generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include' }),
-      generateARLedger(supabase, companyId),
+      generateARLedger(supabase, companyId, receivablesAsOf),
       generateMonthlyBreakdown(supabase, companyId, periodId, { dimensions }),
       paidInvoicesQuery(),
       topSuppliersQuery(),
       generateTrialBalance(supabase, companyId, periodId, { closingEntry: 'include', dimensions }),
     ])
-    prefsValue = prefsRes.data?.value
+    accountOverrides = prefsRes
     incomeStatement = is
     trialBalanceResult = tb
     arLedger = ar
     monthlyBreakdown = mb
-    paidInvoicesResult = paid
+    paidInvoices = paid
     topSuppliersResult = sup
     filteredTrialBalance = filteredTb
   } else {
@@ -186,7 +182,7 @@ async function buildReport(
           .range(from, to)
       ),
       prefsQuery(),
-      generateARLedger(supabase, companyId),
+      generateARLedger(supabase, companyId, receivablesAsOf),
       paidInvoicesQuery(),
       topSuppliersQuery(),
     ])
@@ -221,40 +217,24 @@ async function buildReport(
         expenses: m.expenses,
       }))
     )
-    prefsValue = prefsRes.data?.value
+    accountOverrides = prefsRes
     arLedger = ar
-    paidInvoicesResult = paid
+    paidInvoices = paid
     topSuppliersResult = sup
     filteredTrialBalance = null
   }
 
-  const preferences = mergeWithDefaults(
-    (prefsValue as Partial<KPIPreferences>) ?? {}
+  // Cash position: account overrides when set, else 19xx
+  const cashPosition = calculateCashPosition(
+    trialBalanceResult.rows,
+    accountOverrides['cashPosition']
   )
-
-  // Cash position: use account overrides if set
-  const cashOverrides = preferences.accountOverrides['cashPosition']
-  let cashPosition: number
-  if (cashOverrides && cashOverrides.length > 0) {
-    const cashRows = trialBalanceResult.rows.filter((r) =>
-      cashOverrides.includes(r.account_number)
-    )
-    cashPosition = roundOre(cashRows.reduce((sum, r) => sum + (r.closing_debit - r.closing_credit), 0))
-  } else {
-    cashPosition = calculateCashPosition(trialBalanceResult.rows)
-  }
 
   // VAT liability: use account overrides if set
   const vatLiability = calculateVatLiability(
     trialBalanceResult.rows,
-    preferences.accountOverrides['vatLiability']
+    accountOverrides['vatLiability']
   )
-
-  // Avg payment days from paid invoices
-  const paidInvoices = (paidInvoicesResult.data ?? []).map((inv) => ({
-    invoice_date: inv.invoice_date as string,
-    paid_at: inv.paid_at as string,
-  }))
 
   // Expense composition by BAS class (4-7). Expense accounts have a debit
   // normal balance, so amount = closing_debit - closing_credit. Negative

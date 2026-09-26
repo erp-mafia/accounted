@@ -124,7 +124,11 @@ import {
   calculateExpenseRatio,
   calculateAvgPaymentDays,
   calculateVatLiability,
+  fetchKpiAccountOverrides,
+  fetchPaidInvoicesInRange,
+  kpiReceivablesAsOf,
 } from '@/lib/reports/kpi'
+import { KPI_REPORT_OUTPUT_SCHEMA, parseKpiMetrics, pickKpiMetrics } from './kpi-report'
 import { generateTrialBalance } from '@/lib/reports/trial-balance'
 import {
   detectMomsredovisning,
@@ -269,6 +273,7 @@ import {
   resolveMcpCompanyContext,
 } from './company-routing'
 import { findUnknownArgKeys, listArgKeys, shortestExampleFor } from './arg-guard'
+import { normalizeReportArgAliases, suggestArgKey } from './report-arg-aliases'
 import { decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import {
@@ -1827,7 +1832,7 @@ const STAGED_OPERATION_SCHEMA = {
   type: 'object',
   properties: {
     staged: { type: 'boolean' },
-    operation_id: { type: 'string', description: 'Staged operation UUID, once persisted' },
+    operation_id: { type: 'string', description: 'Set once persisted' },
     risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
     actor: { type: 'object' },
     dry_run: { type: 'boolean' },
@@ -3859,11 +3864,11 @@ const ASSET_WRITE_PROPERTIES = {
 const STAGING_ARGS_PROPERTIES = {
   dry_run: {
     type: 'boolean',
-    description: 'If true, validate inputs and return the would-be preview without staging. No DB writes, no side-effects.',
+    description: 'If true, return the preview without staging or writing anything.',
   },
   idempotency_key: {
     type: 'string',
-    description: 'Random per-operation UUID. Repeat calls with the same key + same payload return the original response (24h TTL). Different payload → IDEMPOTENCY_KEY_REUSE error.',
+    description: 'Per-operation UUID. Same key + payload returns the original response (24h); another payload fails IDEMPOTENCY_KEY_REUSE.',
   },
 } as const
 
@@ -8710,69 +8715,81 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_kpi_report',
     keywords: ['nyckeltal'],
     title: 'Business KPI Report',
-    description: 'Business KPIs for a fiscal period: gross margin, net result, cash position, receivables, expense ratio, payment days, VAT liability, monthly trend.',
+    description: 'Business KPIs (margin, result, cash, receivables, payment days, VAT, monthly trend) for a fiscal period or a from_date/to_date range in it. metrics: output keys to return (default all).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
+        from_date: { type: 'string' },
+        to_date: { type: 'string' },
+        // No enum: the valid names are the outputSchema keys, and the tool
+        // rejects an unknown one with the full list (kpi-report.ts). An enum
+        // here would cost default-catalog budget to repeat them.
+        metrics: { type: 'array', items: { type: 'string' } },
       },
-      // period_id is the whole surface. Callers have shipped `metric` here for
-      // days at a time (604 rejected calls, 2026-08-24 to 08-31): the empty
-      // object is the example that says there is nothing else to pass.
-      examples: [{}, { period_id: '7c2b...' }],
+      // Callers sent `metric` for weeks (2,460 rejected calls by 2026-09-23)
+      // because the tool took nothing but a period. `metrics` is now the real
+      // filter, and the singular `metric` is accepted as an alias
+      // (report-arg-aliases.ts) without appearing in this schema.
+      examples: [{}, { metrics: ['cash_position'] }],
     },
-    outputSchema: { type: 'object' },
+    outputSchema: KPI_REPORT_OUTPUT_SCHEMA,
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      const period = await resolveReportPeriod(supabase, companyId, args.period_id, 'No fiscal periods found. Categorize some transactions first.')
+      rejectUnknownArgs(args, ['period_id', 'from_date', 'to_date', 'metrics'])
+      const metrics = parseKpiMetrics(args.metrics)
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found. Categorize some transactions first.',
+        args.from_date ?? args.to_date,
+      )
+      const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
+      const rangeStart = range.fromDate ?? period.period_start
+      const rangeEnd = range.toDate ?? period.period_end
+      const receivablesAsOf = kpiReceivablesAsOf(rangeEnd)
 
-      // Run queries in parallel (same as the KPI API route)
-      const [incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
+      // Same inputs as the KPI page (src/app/api/reports/kpi/route.ts): the
+      // company's account overrides, receivables as of the range end and
+      // payment days over payments inside the range.
+      const [accountOverrides, incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices] =
         await Promise.all([
-          generateIncomeStatement(supabase, companyId, period.id),
-          generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include' }),
-          generateARLedger(supabase, companyId),
+          fetchKpiAccountOverrides(supabase, companyId),
+          generateIncomeStatement(supabase, companyId, period.id, range),
+          generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include', ...range }),
+          generateARLedger(supabase, companyId, receivablesAsOf),
           generateMonthlyBreakdown(supabase, companyId, period.id),
-          supabase
-            .from('invoices')
-            .select('invoice_date, paid_at')
-            .eq('company_id', companyId)
-            .eq('status', 'paid')
-            .not('paid_at', 'is', null),
+          fetchPaidInvoicesInRange(supabase, companyId, rangeStart, rangeEnd),
         ])
 
-      const grossMargin = calculateGrossMargin(incomeStatement)
-      const cashPosition = calculateCashPosition(trialBalance.rows)
-      const expenseRatio = calculateExpenseRatio(incomeStatement)
-      const avgPaymentDays = calculateAvgPaymentDays(
-        (paidInvoices.data ?? []) as { invoice_date: string; paid_at: string }[]
-      )
-
-      // AR ledger uses entries, each with invoices that have outstanding amounts
-      const outstandingReceivables = arLedger.total_outstanding
-      const overdueReceivables = arLedger.total_overdue
-
-      // VAT liability from trial balance (same accounts as momsdeklaration ruta 49)
-      const vatLiability = calculateVatLiability(trialBalance.rows)
-
-      return {
+      const report = {
         period_name: period.name,
         period_start: period.period_start,
         period_end: period.period_end,
-        gross_margin: grossMargin,
+        range: { start: rangeStart, end: rangeEnd },
+        receivables_as_of: receivablesAsOf ?? null,
+        gross_margin: calculateGrossMargin(incomeStatement),
         net_result: incomeStatement.net_result,
-        cash_position: cashPosition,
-        outstanding_receivables: Math.round(outstandingReceivables * 100) / 100,
-        overdue_receivables: Math.round(overdueReceivables * 100) / 100,
-        expense_ratio: expenseRatio,
-        avg_payment_days: avgPaymentDays,
-        paid_invoice_count: paidInvoices.data?.length ?? 0,
-        vat_liability: vatLiability,
+        cash_position: calculateCashPosition(
+          trialBalance.rows,
+          accountOverrides['cashPosition'],
+        ),
+        outstanding_receivables: Math.round(arLedger.total_outstanding * 100) / 100,
+        overdue_receivables: Math.round(arLedger.total_overdue * 100) / 100,
+        expense_ratio: calculateExpenseRatio(incomeStatement),
+        avg_payment_days: calculateAvgPaymentDays(paidInvoices),
+        paid_invoice_count: paidInvoices.length,
+        vat_liability: calculateVatLiability(
+          trialBalance.rows,
+          accountOverrides['vatLiability'],
+        ),
         total_revenue: incomeStatement.total_revenue,
         total_expenses: incomeStatement.total_expenses,
         months: monthlyBreakdown.months,
       }
+      return pickKpiMetrics(report, metrics)
     },
   },
 
@@ -24158,6 +24175,20 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // text that only a logged rättelse can change (unicode-escape-guard.ts).
         toolArgs = decodeToolArgs(extracted.toolArgs)
 
+        // Read-only report tools accept the synonyms agents actually send
+        // (fiscal_period_id, date_from, metric, ...), mapped onto their own
+        // parameter names before the guard below. See report-arg-aliases.ts.
+        const aliasResult = normalizeReportArgAliases(toolName, toolArgs)
+        if (aliasResult.conflicts.length > 0) {
+          throw codedError(
+            'VALIDATION_ERROR',
+            `Conflicting parameters for ${requestedToolName}: ` +
+              aliasResult.conflicts.map((c) => `"${c.alias}" and "${c.canonical}"`).join(', ') +
+              ` mean the same thing. Pass only ${aliasResult.conflicts.map((c) => `"${c.canonical}"`).join(', ')}.`,
+          )
+        }
+        toolArgs = aliasResult.args
+
         // Hosts do not reliably enforce inputSchema, so a misspelled
         // parameter used to be dropped silently (see arg-guard.ts). Thrown
         // inside this try so it reaches the caller as the structured
@@ -24166,11 +24197,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         if (unknownArgKeys.length > 0) {
           // Name the shape, not just the mistake: a caller that already sent a
           // wrong key has no way to guess the right one from a key list alone.
+          const validArgKeys = listArgKeys(tool.inputSchema as Record<string, unknown>)
           const example = shortestExampleFor(tool.inputSchema as Record<string, unknown>)
+          const hints = unknownArgKeys
+            .map((k) => {
+              const suggestion = suggestArgKey(k, validArgKeys)
+              return suggestion ? `"${k}" -> "${suggestion}"` : null
+            })
+            .filter((h): h is string => h !== null)
           throw codedError(
             'VALIDATION_ERROR',
             `Unknown parameter${unknownArgKeys.length > 1 ? 's' : ''} ${unknownArgKeys.map((k) => `"${k}"`).join(', ')} for ${requestedToolName}. ` +
-              `Valid parameters: ${listArgKeys(tool.inputSchema as Record<string, unknown>).join(', ') || '(none)'}. Unknown keys are rejected, not ignored.` +
+              (hints.length > 0 ? `Did you mean: ${hints.join(', ')}? ` : '') +
+              `Valid parameters: ${validArgKeys.join(', ') || '(none)'}. Unknown keys are rejected, not ignored.` +
               (example ? ` A working call looks like: ${example}` : ''),
           )
         }

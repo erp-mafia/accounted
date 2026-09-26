@@ -24,9 +24,15 @@ export function calculateGrossMargin(incomeStatement: IncomeStatementReport): nu
 /**
  * Calculate cash position from trial balance rows.
  * Sums closing balances for accounts matching 19xx (bank + cash accounts).
+ *
+ * `accounts` overrides the default 19xx range (user KPI preferences, the
+ * `cashPosition` account override), mirroring calculateVatLiability.
  */
-export function calculateCashPosition(rows: TrialBalanceRow[]): number {
-  const cashRows = rows.filter((r) => r.account_number.startsWith('19'))
+export function calculateCashPosition(rows: TrialBalanceRow[], accounts?: string[]): number {
+  const cashRows =
+    accounts && accounts.length > 0
+      ? rows.filter((r) => accounts.includes(r.account_number))
+      : rows.filter((r) => r.account_number.startsWith('19'))
   const total = cashRows.reduce(
     (sum, r) => sum + (r.closing_debit - r.closing_credit),
     0
@@ -245,4 +251,66 @@ export function calculateAvgPaymentDays(
   }, 0)
 
   return Math.round(totalDays / paidInvoices.length)
+}
+
+/**
+ * The company's KPI account overrides (cashPosition, vatLiability), `{}`
+ * when none are stored. Shared by the KPI route and the MCP KPI tool so both
+ * read the same overrides: the MCP tool used to ignore them, so an agent
+ * could report a different cash position than the page. Only the overrides
+ * affect figures; visibility and order are display preferences.
+ */
+export async function fetchKpiAccountOverrides(
+  supabase: SupabaseClient,
+  companyId: string
+): Promise<Record<string, string[]>> {
+  const { data } = await supabase
+    .from('extension_data')
+    .select('value')
+    .eq('company_id', companyId)
+    .eq('extension_id', 'core/kpi')
+    .eq('key', 'preferences')
+    .single()
+  const value = data?.value as { accountOverrides?: Record<string, string[]> } | null | undefined
+  return value?.accountOverrides ?? {}
+}
+
+/**
+ * The date the receivables KPI is measured at: the report range end when it
+ * lies in the past, otherwise undefined (live open-invoice state). Without
+ * it a report for last year showed today's receivables.
+ */
+export function kpiReceivablesAsOf(rangeEnd: string, today: string = new Date().toISOString().slice(0, 10)): string | undefined {
+  return rangeEnd < today ? rangeEnd : undefined
+}
+
+function nextIsoDate(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Paid customer invoices whose payment landed inside the range, for the
+ * average payment days KPI. Scoped to the range so the figure describes the
+ * reported period, not every invoice the company ever had paid. Paginated
+ * past PostgREST's 1000-row cap.
+ */
+export async function fetchPaidInvoicesInRange(
+  supabase: SupabaseClient,
+  companyId: string,
+  fromDate: string,
+  toDate: string
+): Promise<{ invoice_date: string; paid_at: string }[]> {
+  return fetchAllRows<{ invoice_date: string; paid_at: string }>(({ from, to }) =>
+    supabase
+      .from('invoices')
+      .select('invoice_date, paid_at')
+      .eq('company_id', companyId)
+      .eq('status', 'paid')
+      .gte('paid_at', fromDate)
+      .lt('paid_at', nextIsoDate(toDate))
+      .order('id', { ascending: true })
+      .range(from, to)
+  )
 }

@@ -88,15 +88,44 @@ describe('MCP tools/call unknown-parameter guard', () => {
   })
 
   it('rejects a misspelled parameter with a structured VALIDATION_ERROR naming the valid keys', async () => {
-    const response = await handleMcpRequest(mcpToolCall('gnubok_query_journal', { query: 'hyra' }))
+    const response = await handleMcpRequest(mcpToolCall('gnubok_query_journal', { searchterm: 'hyra' }))
     const { isError, payload } = await parsedToolResult(response)
 
     expect(isError).toBe(true)
     const error = payload.error as { code: string; message_en: string; retryable: boolean }
     expect(error.code).toBe('VALIDATION_ERROR')
     expect(error.retryable).toBe(false)
-    expect(error.message_en).toContain('"query"')
+    expect(error.message_en).toContain('"searchterm"')
     expect(error.message_en).toContain('text')
+  })
+
+  // report-arg-aliases.ts: the {query} call that feedback seq 261545 saw
+  // silently return the whole journal now searches, instead of failing.
+  it('maps a known report-tool synonym onto the canonical parameter', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_query_journal', { query: 'hyra' }))
+    const { payload } = await parsedToolResult(response)
+    const error = payload.error as { code?: string; message_en?: string } | undefined
+    expect(error?.message_en ?? '').not.toContain('Unknown parameter')
+  })
+
+  it('refuses an alias given together with its canonical parameter', async () => {
+    const response = await handleMcpRequest(
+      mcpToolCall('gnubok_get_kpi_report', { metric: 'cash_position', metrics: ['net_result'] }),
+    )
+    const { isError, payload } = await parsedToolResult(response)
+    expect(isError).toBe(true)
+    const error = payload.error as { code: string; message_en: string }
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toContain('Conflicting parameters')
+  })
+
+  it('names the likely parameter for an unknown synonym on a non-aliased tool', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_get_ar_ledger', { as_of: '2026-01-01' }))
+    const { isError, payload } = await parsedToolResult(response)
+    expect(isError).toBe(true)
+    const error = payload.error as { code: string; message_en: string }
+    expect(error.code).toBe('VALIDATION_ERROR')
+    expect(error.message_en).toContain('Did you mean: "as_of" -> "as_of_date"?')
   })
 
   it('does not fire for a well-formed call (the tool itself runs)', async () => {
