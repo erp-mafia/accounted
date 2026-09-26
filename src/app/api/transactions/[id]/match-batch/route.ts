@@ -2,48 +2,11 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { MatchBatchSchema } from '@/lib/api/schemas'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { eventBus } from '@/lib/events/bus'
-import { clearSettledBatchAllocationSuggestions } from '@/lib/invoices/clear-settled-batch-allocations'
-import {
-  alreadyExplainedDetails,
-  guardAlreadyExplained,
-  recordExplainedOverride,
-} from '@/lib/invoices/already-explained-guard'
-import { findCashMethodUnbookedAllocations } from '@/lib/invoices/batch-cash-method-guard'
 import { ensureInitialized } from '@/lib/init'
-import type { Invoice, SupplierInvoice, Transaction } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { matchTransactionBatch } from '@/lib/transactions/match-batch'
 
 ensureInitialized()
-
-interface RpcAllocationResult {
-  kind: 'customer_invoice' | 'supplier_invoice'
-  invoice_id?: string
-  supplier_invoice_id?: string
-  payment_id: string
-  status: 'paid' | 'partially_paid'
-  paid_amount: number
-  remaining_amount: number
-  amount: number
-}
-
-interface RpcOk {
-  ok: true
-  journal_entry_id: string
-  voucher_series: string
-  voucher_number: number
-  tx_id: string
-  allocations: RpcAllocationResult[]
-  total_allocated: number
-  leftover: number
-}
-
-interface RpcErr {
-  ok: false
-  code: string
-  details?: Record<string, unknown>
-}
 
 /**
  * POST /api/transactions/[id]/match-batch
@@ -52,16 +15,10 @@ interface RpcErr {
  * Builds a single combined verifikat (samlingsverifikation) and inserts N
  * payment rows via the match_batch_allocate PL/pgSQL RPC.
  *
- * The RPC is the atomicity boundary; this route is a thin wrapper that:
- *   1. Validates the request body via MatchBatchSchema.
- *   2. Invokes the RPC.
- *   3. Maps the structured RPC error (jsonb { ok: false, code }) to an
- *      errorResponseFromCode call.
- *   4. On success, refetches the per-allocation invoice/supplier_invoice rows
- *      to emit the same per-allocation events the legacy single-tx routes
- *      emit (invoice.match_confirmed, invoice.paid, supplier_invoice.*).
- *      Event emission is best-effort: a failure here does not roll back
- *      the booking; the RPC commit is the source of truth.
+ * The rules (invoice document type, already-explained guard, kontantmetoden,
+ * the RPC, the per-allocation events and suggestion cleanup) live in
+ * lib/transactions/match-batch.ts, shared with
+ * POST /api/v1/companies/{companyId}/transactions/{id}/match-batch.
  */
 export const POST = withRouteContext(
   'transaction.match_batch',
@@ -75,211 +32,16 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
 
-    const txLog = log.child({ transactionId })
-
-    // PR #607 round 3: p_user_id removed: RPC resolves caller from
-    // auth.uid() directly. Keeps the attack surface off the API boundary.
-    // Only fakturor carry a receivable. The RPC gates on status alone, so a
-    // sent proforma or quote in the allocation list is refused here, as the
-    // single-invoice match route does.
-    const customerInvoiceIds = Array.from(
-      new Set(
-        validation.data.allocations.flatMap((a) =>
-          a.kind === 'customer_invoice' && a.invoice_id ? [a.invoice_id] : [],
-        ),
-      ),
-    )
-    if (customerInvoiceIds.length > 0) {
-      const { data: docRows, error: docError } = await supabase
-        .from('invoices')
-        .select('id, document_type')
-        .in('id', customerInvoiceIds)
-        .eq('company_id', companyId)
-      if (docError) {
-        txLog.error('match-batch: document lookup failed', docError)
-        return errorResponse(docError, txLog, { requestId })
-      }
-      const offender = (docRows ?? []).find((r) => r.document_type && r.document_type !== 'invoice')
-      if (offender) {
-        return errorResponseFromCode('MATCH_INVOICE_NOT_INVOICE_TYPE', txLog, {
-          requestId,
-          details: { invoiceId: offender.id, documentType: offender.document_type },
-        })
-      }
-    }
-
-    // Already-explained guard. A bank feed can deliver several affärshändelser
-    // as ONE row (a Bankgirot daily aggregate covering two customers'
-    // invoices), and each may already be booked on its own via "Markera som
-    // betald". The RPC only knows the invoices in the request: it correctly
-    // refuses the PAID ones, and then books the money a second time against
-    // whatever open invoices the user picked (the next period's identical
-    // ones, in the case that prompted this). The vouchers that explain the
-    // row are on the ledger, so refuse here and hand them back; the dialog
-    // links the row to them (1:N, /api/reconciliation/bank/link) instead of
-    // creating a new voucher. The detect + force-binding decision is the
-    // shared helper the MCP staging tool and the pending-operation commit
-    // run too (issue #2294), so the doors cannot drift. Fail-open on a
-    // detection error: the guard is advisory, the RPC remains the atomicity
-    // boundary.
-    const explained = await guardAlreadyExplained(supabase, companyId!, transactionId, validation.data, {
-      onDetectError: (err) => txLog.warn('match-batch: explaining-voucher detection failed', err as Error),
-    })
-    if (explained.status === 'blocked') {
-      return errorResponseFromCode('BATCH_TX_POSSIBLE_DUPLICATE', txLog, {
-        requestId,
-        details: alreadyExplainedDetails(explained),
-      })
-    }
-    if (explained.status === 'unverifiable') {
-      // force=true but the check could not run: the override cannot be
-      // re-verified, so it is refused rather than waved through.
-      return errorResponseFromCode('BATCH_TX_EXPLAINED_CHECK_FAILED', txLog, {
-        requestId,
-        details: { reason: 'detector_failed', force_rejected: true },
-      })
-    }
-    if (explained.status === 'overridden') {
-      txLog.warn('match-batch: already-explained guard bypassed', {
-        reason: 'force=true',
-        journalEntryIds: explained.set.vouchers.map((v) => v.journal_entry_id),
-        userId: user.id,
-      })
-    }
-
-    // Kontantmetoden: the RPC clears 1510/2440 only, so an invoice with no
-    // booking yet would never get its revenue/cost + moms on the ledger.
-    // Refuse and route to the per-invoice paths that book the cash entry
-    // (lib/invoices/batch-cash-method-guard.ts). Fail closed on a lookup
-    // error: booking the wrong shape is worse than a retry. Runs after the
-    // already-explained guard so a row whose vouchers already exist (the
-    // invoices were marked paid one by one) is offered the link instead.
-    const cashCheck = await findCashMethodUnbookedAllocations(
-      supabase,
-      companyId!,
-      validation.data.allocations,
-    )
-    if (!cashCheck.ok) {
-      txLog.error('match-batch: kontantmetoden check failed', cashCheck.error as Error)
-      return errorResponse(cashCheck.error, txLog, { requestId })
-    }
-    if (cashCheck.unbooked.length > 0) {
-      return errorResponseFromCode('BATCH_CASH_METHOD_UNBOOKED_INVOICE', txLog, {
-        requestId,
-        details: { invoices: cashCheck.unbooked },
-      })
-    }
-
-    const { data, error } = await supabase.rpc('match_batch_allocate', {
-      p_tx_id: transactionId,
-      p_allocations: validation.data.allocations,
-      p_company_id: companyId,
-    })
-
-    if (error) {
-      txLog.error('match_batch_allocate RPC error', error)
-      return errorResponseFromCode('BATCH_RPC_FAILED', txLog, {
-        requestId,
-        details: { message: getUserErrorMessage(error) },
-      })
-    }
-
-    const result = data as RpcOk | RpcErr | null
-    if (!result || !result.ok) {
-      const code = (result as RpcErr | null)?.code ?? 'BATCH_RPC_FAILED'
-      const details = (result as RpcErr | null)?.details
-      return errorResponseFromCode(code, txLog, { requestId, details })
-    }
-
-    // Re-fetch the transaction row for event payloads (the RPC has already
-    // updated it). Lookup is non-critical: events fail open on miss.
-    const { data: tx } = await supabase
-      .from('transactions')
-      .select('*')
-      .eq('id', transactionId)
-      .eq('company_id', companyId)
-      .maybeSingle()
-
-    // Emit one event per allocation so existing subscribers (reminder
-    // cancellation, automation, processing-history) keep working without a
-    // new event channel. Loop sequentially so a single failure logs cleanly.
-    for (const alloc of result.allocations) {
-      try {
-        if (alloc.kind === 'customer_invoice' && alloc.invoice_id) {
-          const { data: invoice } = await supabase
-            .from('invoices')
-            .select('*')
-            .eq('id', alloc.invoice_id)
-            .eq('company_id', companyId)
-            .maybeSingle()
-          if (invoice && tx) {
-            await eventBus.emit({
-              type: 'invoice.match_confirmed',
-              payload: {
-                invoice: invoice as Invoice,
-                transaction: tx as Transaction,
-                userId: user.id,
-                companyId,
-              },
-            })
-          }
-        } else if (alloc.kind === 'supplier_invoice' && alloc.supplier_invoice_id) {
-          const { data: supplierInvoice } = await supabase
-            .from('supplier_invoices')
-            .select('*')
-            .eq('id', alloc.supplier_invoice_id)
-            .eq('company_id', companyId)
-            .maybeSingle()
-          if (supplierInvoice && tx) {
-            await eventBus.emit({
-              type: 'supplier_invoice.match_confirmed',
-              payload: {
-                supplierInvoice: supplierInvoice as SupplierInvoice,
-                transaction: tx as Transaction,
-                userId: user.id,
-                companyId,
-              },
-            })
-          }
-        }
-      } catch (err) {
-        txLog.warn('match_batch event emission failed', err as Error)
-      }
-    }
-
-    // Every allocation the RPC settled in full retires its suggestion pointer
-    // from the company's OTHER transactions (issue #1259). This request's own
-    // row is linked by the RPC, so it is excluded there. Shared with the MCP
-    // executor for the same RPC (commitMatchBatchAllocate).
-    await clearSettledBatchAllocationSuggestions(
-      supabase,
-      companyId!,
-      result.allocations,
+    const outcome = await matchTransactionBatch(
+      { supabase, companyId: companyId!, userId: user.id, log },
       transactionId,
+      validation.data,
+      { via: 'dashboard_force' },
     )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log.child({ transactionId }), requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
-    // The override was acted on: leave the durable behandlingshistorik
-    // record (same event the categorize guard writes), never just a log line.
-    if (explained.status === 'overridden') {
-      await recordExplainedOverride(
-        companyId!,
-        transactionId,
-        explained.set,
-        { actor: { type: 'user', id: user.id }, via: 'dashboard_force' },
-        (err) => txLog.warn('match-batch: failed to record override behandlingshistorik', err as Error),
-      )
-    }
-
-    return NextResponse.json({
-      data: {
-        journal_entry_id: result.journal_entry_id,
-        voucher_series: result.voucher_series,
-        voucher_number: result.voucher_number,
-        allocations: result.allocations,
-        total_allocated: result.total_allocated,
-        leftover: result.leftover,
-      },
-    })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

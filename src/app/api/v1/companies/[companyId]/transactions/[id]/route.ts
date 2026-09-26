@@ -9,6 +9,8 @@ import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { transactionsDelete, transactionsUpdate } from '@/lib/operations/transactions'
 
 const TransactionDetail = z.object({
   id: z.string().uuid(),
@@ -109,3 +111,12 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     return ok(data, { requestId: ctx.requestId })
   },
 )
+
+/**
+ * DELETE: delete an unbooked, hand-added transaction (operation
+ * transactions.delete). PATCH: edit the working title or move the row to
+ * another cash account (operation transactions.update). Contracts, docs and
+ * rules in src/lib/operations/transactions.ts.
+ */
+export const DELETE = v1OperationHandler(transactionsDelete)
+export const PATCH = v1OperationHandler(transactionsUpdate)

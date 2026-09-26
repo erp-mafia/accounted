@@ -181,10 +181,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // PR-2 operations substrate.
   // JSON reports: all share `reports:read` (or `payroll:read` for the
   // salary-scoped ones). kpi, audit-trail, periodisk-sammanstallning,
-  // ne-bilaga, and ink2 are deferred to a follow-up PR: kpi composes
-  // multiple lib generators rather than wrapping one; audit-trail lives in
-  // lib/core/audit/ rather than lib/reports/; ne-bilaga + ink2 + periodisk
-  // each have their own lib subdir structure that needs more care.
+  // ne-bilaga and ink2 are operation-registry reads (wave 3, below).
   'GET /api/v1/companies/:companyId/reports/trial-balance': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/balance-sheet': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/income-statement': 'reports:read',
@@ -208,8 +205,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/salary-journal': 'payroll:read',
   'GET /api/v1/companies/:companyId/reports/avgifter-basis': 'payroll:read',
   'GET /api/v1/companies/:companyId/reports/vacation-liability': 'payroll:read',
-  // Binary report: SIE4 text/plain export. JSON variants of INK2 / NE-bilaga
-  // are deferred (see above).
+  // Binary report: SIE4 text/plain export.
   'GET /api/v1/companies/:companyId/reports/sie-export': 'reports:read',
   // Imports: async via the Phase 4 PR-2 operations substrate. Multipart
   // uploads (the file is the request body).
@@ -301,6 +297,52 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Operation registry, wave 3: documents and inbox, transaction actions and
+  // import undo, verifikat rättelse, filing reports and the VAT settlement.
+  'GET /api/v1/companies/:companyId/documents': 'documents:read',
+  'GET /api/v1/companies/:companyId/documents/:id': 'documents:read',
+  'DELETE /api/v1/companies/:companyId/documents/:id': 'documents:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/attach-document': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/detach-document': 'transactions:write',
+  'GET /api/v1/companies/:companyId/inbox-items': 'documents:read',
+  'GET /api/v1/companies/:companyId/inbox-items/:id': 'documents:read',
+  'PATCH /api/v1/companies/:companyId/inbox-items/:id': 'documents:write',
+  'DELETE /api/v1/companies/:companyId/inbox-items/:id': 'documents:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/unmatch-transaction': 'documents:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/convert': 'suppliers:write',
+  'DELETE /api/v1/companies/:companyId/transactions/:id': 'transactions:write',
+  'PATCH /api/v1/companies/:companyId/transactions/:id': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/refresh-exchange-rate': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/link-journal-entry': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/match-batch': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/bulk-book': 'transactions:write',
+  'POST /api/v1/companies/:companyId/imports/bank/:id/undo': 'transactions:write',
+  'POST /api/v1/companies/:companyId/imports/sie/:id/undo': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/imports/sie/:id/resume': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/correct-metadata': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/strike-lines': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/redate': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/journal-entries/:id': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/journal-entries/:id/notes': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/no-document-required': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/journal-entries/:id/no-document-required': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/no-document-required': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/journal-entries/:id/rattelse-log': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ink2': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ink2/sru': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ne-bilaga': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ne-bilaga/sru': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/periodisk-sammanstallning': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/periodisk-sammanstallning/csv': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/eskd': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/settlement-proposal': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/kassaflodesanalys': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/behandlingshistorik': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/bokslutsbilagor': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/kpi': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/dimension-pnl': 'reports:read',
+  'GET /api/v1/companies/:companyId/audit-trail': 'reports:read',
+  'POST /api/v1/companies/:companyId/vat/settlement': 'bookkeeping:write',
   // Operation registry, wave 2: deferred booking, supplier payment files,
   // expense claims (utlägg), payroll lifecycle.
   'POST /api/v1/companies/:companyId/salary-runs/:id/send-payslips': 'payroll:write',

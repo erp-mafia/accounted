@@ -2607,6 +2607,17 @@ export type PendingOperationType =
   | 'create_dimension'
   | 'update_dimension'
   | 'delete_dimension'
+  // Operation registry, wave 3: documents, transactions, rättelse, filing.
+  | 'delete_document'
+  | 'delete_inbox_item'
+  | 'detach_document_from_transaction'
+  | 'unmatch_inbox_item_transaction'
+  | 'undo_bank_import'
+  | 'correct_entry_metadata'
+  | 'correct_entry_lines_inline'
+  | 'redate_entry'
+  | 'mark_no_document_required'
+  | 'book_vat_settlement'
   // Operation registry, wave 2: booking, payment files, utlägg, payroll.
   | 'send_payslips'
   | 'revert_salary_run'

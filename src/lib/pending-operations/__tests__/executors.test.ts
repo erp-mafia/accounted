@@ -1372,7 +1372,9 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
     enqueue({ data: [], error: null }) // voucher-link resolution: not bulk-booked either
     enqueue({ data: null, error: null }) // dispatcher commit update
 
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    // The executor now runs lib/transactions/document-attach.ts, which logs
+    // the failure through the structured logger (coded cause) instead of
+    // console.error, so the assertion is on the outcome only.
     const result = await commitPendingOperation(
       supabase as never,
       'user-1',
@@ -1380,11 +1382,6 @@ describe('commitPendingOperation: attach_document_to_transaction', () => {
       makePendingOp(baseOp),
     )
     expect(result.status).toBe('committed')
-    expect(spy).toHaveBeenCalledWith(
-      '[commitAttach] Failed to link inbox item:',
-      expect.objectContaining({ message: 'inbox row missing or RLS-blocked' }),
-    )
-    spy.mockRestore()
   })
 
   it('touches the invoice_inbox_items table to sync matched_transaction_id', async () => {

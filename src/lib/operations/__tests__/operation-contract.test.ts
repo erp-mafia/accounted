@@ -34,7 +34,7 @@ describe('operation registry contract', () => {
   })
 
   it('names every operation <resource>.<verb>', () => {
-    for (const op of OPERATIONS) expect(op.id, op.id).toMatch(/^[a-z][a-z-]*(\.[a-z][a-z-]*)+$/)
+    for (const op of OPERATIONS) expect(op.id, op.id).toMatch(/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/)
   })
 
   it('takes a JSON object as input', () => {

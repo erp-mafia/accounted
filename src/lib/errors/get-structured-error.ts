@@ -27,6 +27,7 @@ import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
   CannotCancelNonDraftError,
+  CannotEditNonDraftError,
   CannotCorrectNonPostedError,
   CannotReverseNonPostedError,
   CannotReverseStornoError,
@@ -531,6 +532,11 @@ function extractBookkeepingDetails(err: unknown): { code: string; details?: unkn
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
   if (err instanceof CannotCancelNonDraftError) {
+    return { code: err.code, details: { currentStatus: err.currentStatus } }
+  }
+  // Without this arm a draft edit of a posted entry fell through to the
+  // INTERNAL_ERROR default (500) instead of the registry's 409.
+  if (err instanceof CannotEditNonDraftError) {
     return { code: err.code, details: { currentStatus: err.currentStatus } }
   }
   if (err instanceof EntryAlreadyReversedError) return { code: err.code }

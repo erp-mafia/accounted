@@ -6,8 +6,7 @@ import {
 } from '@/lib/reports/ink2/sru-generator'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { encodeISO88591 } from '@/lib/reports/sru-encoding'
-import JSZip from 'jszip'
+import { buildSruZip } from '@/lib/reports/filing-report-service'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 /**
@@ -36,20 +35,12 @@ export const GET = withRouteContext(
       const declaration = await generateINK2Declaration(supabase, companyId!, periodId)
 
       if (format === 'sru') {
-        const submission = generateSRUSubmission(declaration)
-
-        // Skatteverket requires ISO 8859-1 (Latin-1)
-        const infoBytes = encodeISO88591(submission.infoSru)
-        const blanketterBytes = encodeISO88591(submission.blanketterSru)
-
-        const zip = new JSZip()
-        zip.file('INFO.SRU', infoBytes)
-        zip.file('BLANKETTER.SRU', blanketterBytes)
-
-        const zipArrayBuffer = await zip.generateAsync({ type: 'arraybuffer' })
+        // The two SRU files, ISO 8859-1 and zipped: the same builder as the v1
+        // /reports/ink2/sru download.
+        const zipBytes = await buildSruZip(generateSRUSubmission(declaration))
         const filename = getZipFilename(declaration)
 
-        return new NextResponse(zipArrayBuffer, {
+        return new NextResponse(new Uint8Array(zipBytes), {
           status: 200,
           headers: {
             'Content-Type': 'application/zip',

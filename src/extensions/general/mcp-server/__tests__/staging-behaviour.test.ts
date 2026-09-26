@@ -32,6 +32,33 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+// The momsredovisning proposal reads its totals through the STABLE RPC
+// get_vat_declaration_totals, whose jsonb payload this generic client cannot
+// shape (it answers every query with rows). The builder is replaced by a
+// fixed, non-empty proposal so gnubok_book_vat_settlement reaches its staging
+// insert; everything after it (lock check, fiscal period, preview) runs for real.
+vi.mock('@/lib/reports/vat-settlement', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reports/vat-settlement')>()
+  return {
+    ...actual,
+    buildVatSettlementProposal: async () => ({
+      period: { type: 'quarterly', year: 2026, period: 1, start: '2026-01-01', end: '2026-03-31' },
+      period_label: 'Kvartal 1 2026',
+      entry_date: '2026-03-31',
+      description: 'Momsredovisning Kvartal 1 2026',
+      lines: [
+        { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+        { account_number: '2641', debit_amount: 0, credit_amount: 50 },
+        { account_number: '2650', debit_amount: 0, credit_amount: 200, line_description: 'Moms att betala' },
+      ],
+      filed_net: 200,
+      rounding_amount: 0,
+      is_empty: false,
+      existing_entries: [],
+    }),
+  }
+})
+
 import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
 
 type Tool = (typeof tools)[number]
@@ -326,12 +353,78 @@ const DEFERRED_BOOKING_ROWS: Record<string, Record<string, unknown>> = {
 }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Bank file undo: a completed import the owner undoes; the preview counts
+  // the batch rows it would delete and skip (reads only).
+  gnubok_undo_bank_import: {
+    rows: { bank_file_imports: { status: 'completed' }, company_members: { role: 'owner' } },
+  },
+  // Inline rättelse and redate of a posted verifikat in an open, unlocked
+  // 2026 (lib/core/bookkeeping/journal-entry-corrections.ts): the previews
+  // replay the RPC rules as reads and never call correct_entry_* or the engine.
+  gnubok_correct_entry_metadata: {
+    args: { description: 'Hyra lokal januari 2026' },
+    rows: {
+      journal_entries: { status: 'posted', description: 'Hyra', entry_date: '2026-01-15', source_type: 'manual', voucher_series: 'A', voucher_number: 1 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+  },
+  // One 5410 line struck, replaced by a balanced 5420 / 2440 pair; nothing
+  // anchored to a bank row or payment, no underlag on the struck line.
+  gnubok_correct_entry_lines: {
+    args: {
+      strike_line_ids: [SOME_UUID],
+      lines: [
+        { account_number: '5420', debit_amount: 500, credit_amount: 0 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 500 },
+      ],
+    },
+    rows: {
+      journal_entries: { status: 'posted', description: 'Programvara', entry_date: '2026-01-15', source_type: 'manual', voucher_series: 'A', voucher_number: 1 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null, opening_balance_entry_id: null },
+      company_settings: { bookkeeping_locked_through: null },
+      journal_entry_lines: { account_number: '5410', debit_amount: 500, credit_amount: 0, currency: 'SEK', line_description: null, dimensions: {}, sort_order: 0 },
+    },
+    empty: ['document_attachments', 'transactions', 'transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'],
+  },
+  gnubok_redate_entry: {
+    args: { new_entry_date: '2026-02-15' },
+    rows: {
+      journal_entries: {
+        status: 'posted',
+        description: 'Hyra',
+        entry_date: '2026-01-15',
+        voucher_series: 'A',
+        voucher_number: 1,
+        correction_of_id: null,
+        reverses_id: null,
+        lines: [
+          { account_number: '5010', debit_amount: 1000, credit_amount: 0, line_description: null, currency: 'SEK', dimensions: {}, sort_order: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: 'SEK', dimensions: {}, sort_order: 1 },
+        ],
+      },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+      chart_of_accounts: { account_number: '5010', is_active: true },
+    },
+  },
+  // Every synthesized id "belongs" to the company as a posted verifikat.
+  gnubok_mark_no_document_required: { args: { reason: 'Avskrivning enligt plan' } },
   // Deferred Bokför (#967): a sent/registered, unbooked invoice under
   // faktureringsmetoden in an open, unlocked year. The preview builds the
   // real generator's lines, which reads the fiscal period and writes nothing.
   gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
   gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // Momsredovisning: the (mocked, see top) Q1 proposal in an open, unlocked
+  // 2026 with no company lock date.
+  gnubok_book_vat_settlement: {
+    args: { period_type: 'quarterly', year: 2026, period: 1 },
+    rows: {
+      company_settings: { bookkeeping_locked_through: null },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+    },
+  },
   // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing
   // on a payslip, both payout accounts in the chart, an unbooked SEK outflow
   // equal to the claim for the bank match.
@@ -470,6 +563,19 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       links: [{ document_id: SOME_UUID, voucher_series: 'A', voucher_number: 1, fiscal_year: 2026 }],
     },
     rows: { fiscal_periods: FISCAL_YEAR_2026, journal_entries: { voucher_series: 'A', voucher_number: 1, status: 'posted' } },
+  },
+  // Documents and the invoice inbox (wave 3): an unlinked document, an
+  // unbooked transaction whose pin is not räkenskapsinformation, and inbox
+  // items never converted or booked.
+  gnubok_delete_document: { rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } } },
+  gnubok_detach_document_from_transaction: {
+    rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
+  },
+  gnubok_delete_inbox_item: {
+    rows: { invoice_inbox_items: { document_id: SOME_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null } },
+  },
+  gnubok_unmatch_inbox_item_transaction: {
+    rows: { invoice_inbox_items: { document_id: SOME_UUID, matched_transaction_id: SOME_UUID } },
   },
 }
 

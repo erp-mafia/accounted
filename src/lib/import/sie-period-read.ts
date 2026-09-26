@@ -7,6 +7,11 @@ const EXTERNAL_LEDGER_REPORTS = new Set([
   'gnubok_query_journal','gnubok_get_reconciliation_status','gnubok_year_end_readiness',
   'gnubok_preview_arsredovisning','gnubok_validate_arsredovisning',
   'gnubok_vat_declaration_validate',
+  // Filing reports served by the operation registry (lib/operations/filing-reports.ts,
+  // vat-settlement.ts): the v1 doors hold the lease by their reports.* id.
+  'gnubok_get_ink2_declaration','gnubok_get_ne_bilaga','gnubok_get_periodisk_sammanstallning',
+  'gnubok_get_cash_flow_statement','gnubok_get_bokslutsbilagor','gnubok_get_behandlingshistorik',
+  'gnubok_get_vat_settlement_proposal',
 ])
 
 /** An external report has no persistent dashboard banner. Hold the complete

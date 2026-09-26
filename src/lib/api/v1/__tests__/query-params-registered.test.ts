@@ -74,10 +74,11 @@ describe('v1 query parameters are registered', () => {
     for (const [file, endpoints] of byFile) {
       const source = readFileSync(file, 'utf8')
       const read = paramsReadBy(source)
-      // An operation's GET door (v1OperationHandler) forwards the whole query
-      // string into the operation's input schema, and registers exactly that
-      // schema as the query: what it registers is what it reads.
-      if (/\bGET\s*=\s*v1OperationHandler\(/.test(source)) {
+      // An operation's GET door (v1OperationHandler) and a report file door
+      // (v1ReportFileHandler) forward the whole query string into one schema
+      // and register exactly that schema as the query: what they register is
+      // what they read.
+      if (/\bGET\s*=\s*(?:v1OperationHandler|v1ReportFileHandler)\(/.test(source)) {
         for (const ep of endpoints.filter((e) => e.method === 'GET')) {
           for (const p of queryParameters(ep)) read.add(p.name)
         }

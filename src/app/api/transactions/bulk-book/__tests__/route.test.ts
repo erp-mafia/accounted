@@ -183,6 +183,9 @@ describe('POST /api/transactions/bulk-book', () => {
           { account: '2611', label: 'Utg moms 25%', side: 'credit', type: 'vat', vat_rate: 0.25 },
         ],
         is_active: true,
+        // The service re-applies the btl_select visibility rule (the v1 door
+        // runs as the service role), so the fixture carries its owner.
+        is_system: true,
       },
       error: null,
     })

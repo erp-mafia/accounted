@@ -74,6 +74,10 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   create_expense_claim: ['amount_sek'],
   record_expense_payout: ['total_sek'],
   match_expense_payout: ['total_sek'],
+  // Operation registry, wave 3.
+  redate_entry: ['total_debit'],
+  correct_entry_lines_inline: ['changed_amount_sek'],
+  book_vat_settlement: ['journal_entry.total_debit'],
 }
 
 /**

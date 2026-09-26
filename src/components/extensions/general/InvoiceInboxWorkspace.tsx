@@ -1271,7 +1271,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         deletable.map((it) =>
           fetch(`/api/extensions/ext/invoice-inbox/items/${it.id}`, { method: 'DELETE' })
             .then(async (res) => {
-              if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'fail')
+              if (!res.ok) throw await resolveFailure(res)
             })
         )
       )
@@ -1885,10 +1885,10 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   { method: 'POST' },
                 )
                 if (!res.ok) {
-                  const json = await res.json().catch(() => ({}))
+                  const failure = await resolveFailure(res)
                   toast({
                     title: 'Kunde inte avbryta matchningen',
-                    description: json.error ?? `HTTP ${res.status}`,
+                    description: failure.message,
                     variant: 'destructive',
                   })
                   return
