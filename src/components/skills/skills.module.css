@@ -192,8 +192,6 @@
 .gate { display: flex; flex-direction: column; align-items: center; gap: 20px; max-width: calc(100% - 32px); padding: 32px 40px; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--popover)); text-align: center; box-shadow: var(--shadow-lg); }
 .gate h2 { max-width: 460px; font-family: var(--font-display); font-weight: 400; font-size: 28px; line-height: 34px; text-wrap: balance; }
 .gateClients { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
-/* the AI clients' own logos sit on a white plate: they are drawn for white */
-.clientLogo { width: 18px; height: 18px; border-radius: 99px; background: #fff; object-fit: contain; }
 
 .btns { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .addr { display: flex; align-items: center; gap: 8px; max-width: 520px; width: 100%; padding: 6px 6px 6px 14px; border: 1px solid hsl(var(--border)); border-radius: 99px; background: hsl(var(--background)); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 12.5px; }
@@ -578,18 +576,13 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .chipLink:hover { text-decoration: underline; text-underline-offset: 3px; }
 
 /* ── first visit: what a flow is, what knowledge is ── */
-.kindsIntro { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 20px; padding: 20px 22px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
-@media (max-width: 960px) { .kindsIntro { grid-template-columns: 1fr; } .kindsIntroPlus { display: none; } }
-.kindsIntroPart { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.kindsIntroPart b { font-size: 14px; font-weight: 500; }
-.kindsIntroPart p, .kindsIntroEnd p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
 .kindsIntroPic { display: grid; place-items: center; width: 56px; height: 56px; flex: none; }
-.kindsIntroPlus { font-size: 20px; color: hsl(var(--muted-foreground)); }
+/* The first visit's explanation (KindsIntro.tsx), a dialog: one row per kind. The dialog keeps .kindsIntro so hovering it sets the pictures moving. */
+.introRows { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
+.introRows li { display: flex; align-items: center; gap: 14px; }
+.introRows b { font-size: 14px; font-weight: 500; }
+.introRows p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
 /* an analysis stands on its own: set off from the flow + knowledge pair by a rule, not a plus */
-.kindsIntroApart { padding-left: 20px; border-left: 1px solid hsl(var(--border)); }
-@media (max-width: 960px) { .kindsIntroApart { padding-left: 0; border-left: 0; } }
-.kindsIntroEnd { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding-left: 20px; border-left: 1px solid hsl(var(--border)); }
-@media (max-width: 960px) { .kindsIntroEnd { padding-left: 0; border-left: 0; } }
 
 /* the source switch sits in the content, left-aligned, the same control as the top bar's */
 .sourceSwitch { align-self: flex-start; }
@@ -636,6 +629,9 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .connectHeroText h2 { max-width: 20ch; font-family: var(--font-display); font-size: 32px; line-height: 38px; font-weight: 400; text-wrap: balance; }
 .connectHeroText p { max-width: 56ch; font-size: 15px; line-height: 22px; color: hsl(var(--foreground) / 0.75); }
 .connectHeroText .gateClients { justify-content: flex-start; margin-top: 6px; }
+/* The three AIs as one set: every pill as wide as the widest (Koppla Claude). */
+.connectClients { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; width: fit-content; max-width: 100%; }
+@media (max-width: 520px) { .connectClients { grid-auto-flow: row; width: 100%; } }
 .connectHeroText small { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
 .connectKicker { font-size: 12px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
 .connectExamples { display: flex; flex-direction: column; gap: 12px; padding: 20px 22px; border-radius: 14px; background: hsl(var(--background)); box-shadow: 0 0 0 1px hsl(var(--border)); }
