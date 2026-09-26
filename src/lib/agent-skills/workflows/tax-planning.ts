@@ -105,7 +105,7 @@ When the owner has decided:
 
 ## When a tool call fails
 
-- **Validation error / unknown argument:** fix the arguments from the tool description and try once more. \`gnubok_get_kpi_report\` takes only \`period_id\`.
+- **Validation error / unknown argument:** fix the arguments from the tool description and try once more. \`gnubok_get_kpi_report\` takes \`period_id\`, optional \`from_date\`/\`to_date\` and \`metrics\` (its output keys).
 - **"Fiscal period not found" / "No fiscal periods found":** re-read \`gnubok_list_fiscal_periods\` and use a real \`id\`; if none exists, stop (Step 0.2).
 - **\`EF_DECLARATION_WRONG_LEGAL_FORM\`:** the company is not an enskild firma. Go back to Step 0.1; do not force the EF track.
 - **\`gnubok_propose_dispositioner\` returns empty \`proposals\`:** for an EF this is expected (no corporate dispositions). For an AB, check that the result is positive and the books are up to date before concluding there is nothing to do.

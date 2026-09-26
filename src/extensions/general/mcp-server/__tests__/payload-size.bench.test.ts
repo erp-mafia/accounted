@@ -557,6 +557,13 @@ describe('tools/list payload size guard', () => {
     //     only flows. Paid for by a shorter title and description. Measured
     //     63 498: two tokens of headroom, so the next default-catalog addition
     //     has to trim first. Ceiling unchanged.
+    //   * KPI report correctness (fix/mcp-kpi-report-correctness):
+    //     gnubok_get_kpi_report gains from_date/to_date, a metrics filter and
+    //     a real outputSchema (bare types, metric keys only; the keys double
+    //     as the valid metrics values, so no input enum). Paid for by trims
+    //     on shared text every default-catalog write repeats: the staged
+    //     envelope's operation_id note and the generated tools' dry_run and
+    //     idempotency_key notes. Measured 63 311. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(63_500)
   })
 
