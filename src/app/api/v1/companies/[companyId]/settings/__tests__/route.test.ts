@@ -319,6 +319,39 @@ describe('PATCH /api/v1/companies/:companyId/settings', () => {
 describe('PATCH /api/v1/companies/:companyId/settings/tax-profile', () => {
   const URL_ = `${BASE}/tax-profile`
 
+  it('409 ACCOUNTING_METHOD_CHANGE_MID_YEAR when the current fiscal year has posted verifikat', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: { data: { ...STORED, accounting_method: 'accrual' } },
+      fiscal_periods: { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } },
+      journal_entries: { data: null, count: 12, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { accounting_method: 'cash' }), params)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('ACCOUNTING_METHOD_CHANGE_MID_YEAR')
+    expect(body.error.details).toMatchObject({ fiscal_period_id: 'fp-2026', posted_entries: 12 })
+    expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('lets the method change while the current fiscal year has no posted verifikat (the onboarding fix)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, accounting_method: 'accrual' } },
+        { data: { ...STORED, accounting_method: 'accrual' } },
+        { data: { ...STORED, accounting_method: 'cash' } },
+      ],
+      fiscal_periods: { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } },
+      journal_entries: { data: null, count: 0, error: null },
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(patch(URL_, { accounting_method: 'cash' }), params)
+    expect(res.status).toBe(200)
+  })
+
   it('401 when the API key is rejected', async () => {
     mockValidate.mockResolvedValue({ error: 'Invalid API key', status: 401 })
     mockServiceClient.mockReturnValue(makeClient({}))
@@ -453,13 +486,80 @@ describe('PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock', () => {
   it('moving it back is allowed, as on the settings page, and says it reopened dates', async () => {
     const client = makeClient({
       company_members: OWNER,
-      company_settings: [{ data: STORED }, { data: { ...STORED, bookkeeping_locked_through: '2026-03-31' } }],
+      // The lock op reads the current lock date first (filed-VAT check).
+      company_settings: [{ data: STORED }, { data: STORED }, { data: { ...STORED, bookkeeping_locked_through: '2026-03-31' } }],
       deadlines: HAS_DEADLINES,
     })
     mockServiceClient.mockReturnValue(client)
     const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-03-31' }), params)
     expect(res.status).toBe(200)
     expect(JSON.stringify(await res.json())).toContain('BOOKKEEPING_LOCK_MOVED_BACKWARDS')
+  })
+
+  // A filed momsdeklaration period: 2026 Q2 (april-june), filed in august.
+  const FILED_Q2 = {
+    data: [
+      {
+        id: 'dl-q2',
+        tax_deadline_type: 'moms_quarterly',
+        tax_period: '2026-Q2',
+        is_completed: true,
+        completed_at: '2026-08-12T10:00:00Z',
+        status: 'completed',
+        notes: null,
+        due_date: '2026-08-12',
+      },
+    ],
+    error: null,
+  }
+
+  it('409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT when a move would reopen a filed period, naming it', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: { data: { ...STORED, bookkeeping_locked_through: '2026-06-30' } },
+      deadlines: FILED_Q2,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-04-30' }), params)
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('BOOKKEEPING_LOCK_REOPENS_FILED_VAT')
+    expect(JSON.stringify(body.error.details)).toContain('2026-Q2')
+    expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('acknowledge_filed_vat_periods lets it through and warns what was reopened', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, bookkeeping_locked_through: '2026-06-30' } },
+        { data: { ...STORED, bookkeeping_locked_through: '2026-06-30' } },
+        { data: { ...STORED, bookkeeping_locked_through: '2026-04-30' } },
+      ],
+      deadlines: [FILED_Q2, HAS_DEADLINES],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(
+      patch(URL_, { bookkeeping_locked_through: '2026-04-30', acknowledge_filed_vat_periods: true }),
+      params,
+    )
+    expect(res.status).toBe(200)
+    expect(JSON.stringify(await res.json())).toContain('BOOKKEEPING_LOCK_REOPENED_FILED_VAT')
+  })
+
+  it('a lock move that stays behind every filed period needs no acknowledgement', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, bookkeeping_locked_through: '2026-09-30' } },
+        { data: { ...STORED, bookkeeping_locked_through: '2026-09-30' } },
+        { data: { ...STORED, bookkeeping_locked_through: '2026-07-31' } },
+      ],
+      deadlines: [FILED_Q2, HAS_DEADLINES],
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateLock(patch(URL_, { bookkeeping_locked_through: '2026-07-31' }), params)
+    expect(res.status).toBe(200)
   })
 
   it('dry run of removing the lock warns and writes nothing', async () => {
