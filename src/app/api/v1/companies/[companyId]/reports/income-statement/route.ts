@@ -39,6 +39,7 @@ registerEndpoint({
   doNotUseFor:
     'Per-account drill (use /reports/general-ledger). VAT figures (use /reports/vat-declaration). Balance position (use /reports/balance-sheet).',
   pitfalls: [
+    'Statutory revenue (nettoomsättning, BAS 3000-3799) is `nettoomsattning`; `total_revenue` is all of class 3 and also includes aktiverat arbete (38xx) and övriga rörelseintäkter (39xx). `definitions` lists the accounts behind every figure.',
     '`period_id` is required; `from_date`/`to_date` are optional and must lie within that fiscal period.',
     'Unknown query parameters are rejected with VALIDATION_ERROR, not silently ignored.',
     'Net result on the income statement equals the period\'s equity-line delta on the balance sheet: they\'re derived from the same posted entries.',

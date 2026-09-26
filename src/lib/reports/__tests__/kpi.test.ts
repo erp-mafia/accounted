@@ -23,6 +23,11 @@ function makeIncomeStatement(
     financial_sections: [],
     total_financial: 0,
     net_result: 40000,
+    nettoomsattning: 0,
+    aktiverat_arbete: 0,
+    ovriga_rorelseintakter: 0,
+    rorelseresultat: 0,
+    definitions: {},
     period: { start: '2025-01-01', end: '2025-12-31' },
     ...overrides,
   }
