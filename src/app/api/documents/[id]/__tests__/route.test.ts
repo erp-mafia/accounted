@@ -249,6 +249,8 @@ describe('DELETE /api/documents/[id]', () => {
     expect(serviceRemoveMock).toHaveBeenCalledWith([
       'documents/user-1/kvitto.pdf',
       'documents/company-1/user-1/kvitto.pdf',
+      // The viewer's preview goes with the file it was made from.
+      'previews/company-1/doc-1-v1.jpg',
     ])
     expect(mockSupabase.storage.from).not.toHaveBeenCalled()
 

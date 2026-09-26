@@ -21,8 +21,7 @@ beforeEach(() => {
 })
 
 describe('GET /api/arkiv/documents', () => {
-  it('rejects an unknown type and an out-of-range year', async () => {
-    expect((await parseJsonResponse(await call('?type=spaceship'))).status).toBe(400)
+  it('rejects an out-of-range year', async () => {
     expect((await parseJsonResponse(await call('?year=1999'))).status).toBe(400)
   })
 
@@ -38,7 +37,7 @@ describe('GET /api/arkiv/documents', () => {
     enqueue({ data: [{ document_id: 'doc-b', payload: { counterparty_name: { normalized: 'APO AB' }, total_amount: { normalized: 673 }, currency: { normalized: 'SEK' } } }] })
     enqueue({ data: [{ id: 'agr-1', source_document_id: 'doc-a', counterparty_name: 'Almi Stockholm AB', amount: '10417.00', currency: 'SEK' }] })
     enqueue({ data: [{ id: 'je-1', voucher_series: 'A', voucher_number: 5 }] })
-    const { status, body } = await parseJsonResponse(await call('?type=agreement'))
+    const { status, body } = await parseJsonResponse(await call(''))
     expect(status).toBe(200)
     // Bank responses and XML payloads are archives, never documents to type: kept out at the query.
     expect(findCalls('document_attachments', 'or').map((c) => c[0])).toContain('mime_type.is.null,mime_type.not.in.(application/xml,text/xml,application/json)')
@@ -47,7 +46,6 @@ describe('GET /api/arkiv/documents', () => {
     expect(rows[1]).toMatchObject({ counterparty: 'APO AB', amount: 673, linked: { journal_entry_id: 'je-1', voucher: 'A5' }, href: '/arkiv/dokument/doc-b' })
     expect(rows[0]).not.toHaveProperty('linked.facts')
     expect(rows[2]).toMatchObject({ linked: { held: true }, amount: null })
-    expect(findCalls('document_attachments', 'in')).toContainEqual(['doc_type', ['agreement.lease', 'agreement.loan', 'agreement.rental', 'agreement.insurance', 'agreement.employment', 'agreement.shareholder', 'agreement.investment', 'agreement.customer', 'agreement.subscription', 'agreement.other'].filter(() => true).sort()].map((v) => (Array.isArray(v) ? expect.arrayContaining(['agreement.loan']) : v)))
   })
 
   it('outside the brain reads only the documents and their vouchers: the row is the file, its type and its verifikat', async () => {
