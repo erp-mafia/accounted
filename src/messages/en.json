@@ -11223,6 +11223,8 @@
     "folder_customer_invoices": "Customer invoices",
     "folder_bank_statements": "Statements",
     "folder_other": "Other",
+    "folder_booked": "Booked documents",
+    "folder_booked_hint": "belong to a voucher",
     "folder_untyped": "Untyped",
     "folder_untyped_hint": "typed as they are read",
     "tree_show_more": "Show {count} more",

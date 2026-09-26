@@ -9,6 +9,7 @@ import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { folderQuery, isFolderKey } from '@/lib/arkiv/folders'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 
 /**
  * GET /api/arkiv/documents?q=&year=
@@ -120,6 +121,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
   if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
+  // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
+  await fillTypeFromClassification(ctx.supabase, docs)
 
   const entryIds = docs.map((d) => d.journal_entry_id).filter((id): id is string => !!id)
   // Extractions and agreements are the brain's records: outside it the row is the document, its type and its verifikat.
@@ -221,9 +224,9 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         held: d.admission_state === 'held',
         // A person is asked only about what the model read and could not name. A document with no type yet is
         // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
-        // Never for a booked document: the verifikat already says what it is.
+        // Never for a booked document: the verifikat already says what it is, and nothing reads or types it in the background.
         unclassified: d.admission_state === 'admitted' && d.doc_type === 'other' && !d.journal_entry_id && !d.journal_entry_line_id,
-        reading: d.admission_state === 'admitted' && d.doc_type == null,
+        reading: d.admission_state === 'admitted' && d.doc_type == null && !d.journal_entry_id && !d.journal_entry_line_id,
       },
       href: agreement ? `/arkiv/avtal/${agreement.id}` : `/arkiv/dokument/${d.id}`,
     }

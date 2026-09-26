@@ -29,7 +29,7 @@ export const GET = withRouteContext('arkiv.documents.folders', async (request, c
   if (!parsed.success) return parsed.response
   const { data, error } = await ctx.supabase.rpc('arkiv_document_type_counts', { p_company_id: ctx.companyId, p_year: parsed.data.year ?? null })
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const counts = ((data ?? []) as Array<{ doc_type: string | null; n: number | string }>).map((r) => ({ doc_type: r.doc_type, n: Number(r.n) }))
+  const counts = ((data ?? []) as Array<{ doc_type: string | null; booked?: boolean | null; n: number | string }>).map((r) => ({ doc_type: r.doc_type, booked: !!r.booked, n: Number(r.n) }))
   const folders = foldersFromCounts(counts)
   const body: ArkivFoldersResponse = { total: folders.reduce((a, f) => a + f.count, 0), folders }
   return NextResponse.json({ data: body })

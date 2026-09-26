@@ -8,6 +8,7 @@ import type { Payload } from '@/lib/documents/extract/fields'
 import { schemaForType } from '@/lib/documents/extract/schemas'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { needsReadOnDemand, readLaneFor, type ReadLane } from '@/lib/documents/read/lanes'
+import { hasStoredPages, isBookedRow } from '@/lib/documents/locked-period'
 
 /**
  * GET /api/arkiv/documents/[id]
@@ -76,7 +77,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const none = Promise.resolve({ data: null, error: null })
   const noneList = Promise.resolve({ data: [], error: null })
   const [classification, extraction, facts, links, agreement, entry] = await Promise.all([
-    ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals, suggested_type').eq('document_id', id).eq('is_current', true).maybeSingle(),
+    ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals, suggested_type, doc_type').eq('document_id', id).eq('is_current', true).maybeSingle(),
     brain ? ctx.supabase.from('document_extractions').select('id, schema_type, pass, payload, review_fields').eq('document_id', id).eq('is_current', true).maybeSingle() : none,
     brain ? ctx.supabase
       .from('company_facts')
@@ -112,23 +113,27 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const partyName = new Map(((parties.data ?? []) as Array<{ id: string; display_name: string }>).map((p) => [p.id, p.display_name]))
   const factRows = (facts.data ?? []) as FactRow[]
   const e = entry.data as { id: string; voucher_series: string | null; voucher_number: number | null } | null
+  // A document tied to a closed or locked period keeps its type on the classification and its pages without a
+  // stamp (lib/documents/locked-period.ts): shown typed and read all the same.
+  const docType = d.doc_type ?? (isBookedRow(d) ? ((classification.data as { doc_type?: string | null } | null)?.doc_type ?? null) : null)
+  const storedPages = !d.pages_read_at && (await hasStoredPages(ctx.supabase, id))
 
   const view: DocumentRecordView = {
     document_id: d.id,
     file_name: d.file_name,
     mime_type: d.mime_type ?? null,
     title: documentTitle({
-      docType: d.doc_type,
+      docType,
       fileName: d.file_name,
-      payload: ext?.payload ?? underlagPayload(d.extracted_data as Record<string, unknown> | null, d.doc_type),
+      payload: ext?.payload ?? underlagPayload(d.extracted_data as Record<string, unknown> | null, docType),
       agreementTitle: (agreement.data as { title: string } | null)?.title ?? null,
     }),
     created_at: d.created_at,
     page_count: d.page_count,
-    doc_type: d.doc_type,
+    doc_type: docType,
     admission_state: d.admission_state,
     read: {
-      state: !d.pages_read_at ? 'unread' : d.read_error?.startsWith('partial:') ? 'partial' : d.read_error ? (needsReadOnDemand(d) ? 'unread' : 'skipped') : 'read',
+      state: !d.pages_read_at ? (storedPages ? 'read' : 'unread') : d.read_error?.startsWith('partial:') ? 'partial' : d.read_error ? (needsReadOnDemand(d) ? 'unread' : 'skipped') : 'read',
       lane: readLaneFor(d),
     },
     journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
