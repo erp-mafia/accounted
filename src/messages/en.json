@@ -11215,8 +11215,6 @@
     "folder_untyped": "Untyped",
     "folder_untyped_hint": "typed as they are read",
     "tree_show_more": "Show {count} more",
-    "tree_show_fewer": "Show fewer",
-    "tree_capped": "Showing the {count} most recent documents.",
     "tree_pages": "{count} p.",
     "tree_count": "{count, plural, one {1 document} other {# documents}}",
     "tree_untyped_count": "{count} untyped",
