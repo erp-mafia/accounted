@@ -370,12 +370,15 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
   const [ran, setRan] = useState(false)
   const hue = itemHue(item.kind, item.source === 'own' ? item.title : item.key, item.source === 'accounted' && item.kind === 'workflow' ? item.key as never : null)
   const ai = AI_CLIENTS.find((c) => c.id === client)!
-  const runnable = item.kind === 'workflow' && item.source === 'accounted' && aiReady
+  // Accounted's flows and analyses start from the banner; community items open their page first.
+  const runnable = (item.kind === 'workflow' || item.kind === 'analysis') && item.source === 'accounted' && aiReady
   const states = overview?.agents.find((a) => a.id === item.key)?.connections ?? []
   function run(target: ClaudeTarget = 'web') {
     const id = item.key as RegistrySkillId
-    trackInstructions('instructions_start_clicked', { item: id, kind: 'workflow', client, surface: 'banner', target: client === 'claude' ? target : 'web' })
-    const prompt = t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
+    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? target : 'web' })
+    const prompt = item.kind === 'analysis'
+      ? t('skill_prompt', { name: item.title, slug: item.key, client })
+      : t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
     void (client === 'claude' ? openInClaude(target, prompt, true) : copyPromptAndOpen(prompt, client, true)).then(() => setRan(true))
   }
   return (
