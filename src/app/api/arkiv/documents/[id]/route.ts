@@ -29,7 +29,6 @@ export interface DocumentRecordView {
   read: { state: 'read' | 'partial' | 'unread' | 'skipped'; lane: ReadLane }
   journal_entry: { id: string; voucher: string } | null
   classification: { summary: string | null; confidence: number | null; decided_by: string; signals: string[]; suggested_type?: string | null } | null
-  mime_type: string | null
   /** The rows of a receipt or invoice as the Underlag reader saw them; empty for anything else. */
   line_items: Array<{ description: string; quantity: number | null; unit_price: number | null; line_total: number | null; vat_rate: number | null }>
   record: {
@@ -133,7 +132,6 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
       lane: readLaneFor(d),
     },
     journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
-    mime_type: d.mime_type ?? null,
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
     line_items: (d.extracted_data?.lineItems ?? [])
       .filter((li) => li && typeof li === 'object')
