@@ -18,6 +18,8 @@ import { needsReadOnDemand, readLaneFor, type ReadLane } from '@/lib/documents/r
 export interface DocumentRecordView {
   document_id: string
   file_name: string
+  /** So the viewer picks <object> or <img> without a second round trip for it. */
+  mime_type: string | null
   title: string
   created_at: string
   page_count: number | null
@@ -114,6 +116,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const view: DocumentRecordView = {
     document_id: d.id,
     file_name: d.file_name,
+    mime_type: d.mime_type ?? null,
     title: documentTitle({
       docType: d.doc_type,
       fileName: d.file_name,
