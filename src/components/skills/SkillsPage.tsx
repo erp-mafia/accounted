@@ -111,9 +111,39 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
     else openAiConnector(aiPrefilledChatLink(client, t(`create_prompt_${kind}`)))
   }
 
-  const rowsLocked = state === 'locked' || state === 'waiting'
   const pendingName = waitingFor ? AI_CLIENTS.find((c) => c.id === waitingFor)!.name : ''
   const address = waitingFor && waitingFor !== 'claude' ? connectAction(waitingFor).copy : null
+  // The connection being made: its address and steps, in whichever view the connect started from.
+  const waitingBanner = state === 'waiting' && waitingFor ? (
+    <section className={styles.gateBanner}>
+      <div className={styles.pin}>
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
+        <h2>{waitingFor === 'claude' ? t('wait_claude_title') : t('wait_title', { client: pendingName })}</h2>
+        {waitingFor === 'claude' ? <p>{t('wait_claude_body')}</p> : (
+          <>
+            {address && (
+              <div className={styles.addr}>
+                <code aria-label={t('server_address')}>{address}</code>
+                <Button size="sm" onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
+              </div>
+            )}
+            {addressCopy === 'failed' && <p role="status">{t('copy_failed')}</p>}
+            <ol className={styles.stepsl}>
+              <li>{t('step_1')}</li>
+              <li>{t(`step_2_${waitingFor}`, { appName })}</li>
+              <li>{t('step_3')}</li>
+            </ol>
+          </>
+        )}
+        <div className={styles.btns}>
+          <Button variant="outline" onClick={() => reopen(waitingFor)}>{t('open_client', { client: pendingName })}</Button>
+          <Button onClick={() => { setCheckedOnce(true); pollerRef.current?.check() }}>{t('check_again')}</Button>
+        </div>
+        {checkedOnce && <p role="status">{t('still_waiting', { client: pendingName })}</p>}
+        <button type="button" className="text-xs text-muted-foreground underline underline-offset-4" onClick={() => setPending(null)}>{t('cancel')}</button>
+      </div>
+    </section>
+  ) : null
 
   return (
     <div ref={pageRef} className={styles.page} data-state={state}>
@@ -131,36 +161,8 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
         aiReady={isConnected}
         canWrite={canWrite}
         onCreate={createAgent}
-        gate={state === 'locked' ? <ConnectHero onConnect={connect} /> : rowsLocked ? <section className={styles.gateBanner}>
-                    {state === 'waiting' && waitingFor && (
-                      <div className={styles.pin}>
-                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
-                        <h2>{waitingFor === 'claude' ? t('wait_claude_title') : t('wait_title', { client: pendingName })}</h2>
-                        {waitingFor === 'claude' ? <p>{t('wait_claude_body')}</p> : (
-                          <>
-                            {address && (
-                              <div className={styles.addr}>
-                                <code aria-label={t('server_address')}>{address}</code>
-                                <Button size="sm" onClick={() => void copyAddress(address)}>{t(addressCopy === 'copied' ? 'copied' : 'copy')}</Button>
-                              </div>
-                            )}
-                            {addressCopy === 'failed' && <p role="status">{t('copy_failed')}</p>}
-                            <ol className={styles.stepsl}>
-                              <li>{t('step_1')}</li>
-                              <li>{t('step_2', { client: pendingName })}</li>
-                              <li>{t('step_3')}</li>
-                            </ol>
-                          </>
-                        )}
-                        <div className={styles.btns}>
-                          <Button variant="outline" onClick={() => reopen(waitingFor)}>{t('open_client', { client: pendingName })}</Button>
-                          <Button onClick={() => { setCheckedOnce(true); pollerRef.current?.check() }}>{t('check_again')}</Button>
-                        </div>
-                        {checkedOnce && <p role="status">{t('still_waiting', { client: pendingName })}</p>}
-                        <button type="button" className="text-xs text-muted-foreground underline underline-offset-4" onClick={() => setPending(null)}>{t('cancel')}</button>
-                      </div>
-                    )}
-        </section> : null}
+        gate={state === 'locked' ? <ConnectHero onConnect={connect} /> : waitingBanner}
+        pending={waitingBanner}
       />
       {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
       {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
