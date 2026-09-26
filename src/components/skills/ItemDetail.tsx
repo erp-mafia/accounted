@@ -173,7 +173,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const back = item.own ? `${listHref}${listHref.includes('?') ? '&' : '?'}vy=egna` : listHref
   const isFlow = item.kind === 'workflow' && !!item.community
   // Accounted's knowledge packs lead with what they cover in plain words; the text the AI reads is one click away.
-  const isPack = !builtIn && !mine && !!pack
+  const isPack = !builtIn && !mine && !!pack && pack.tier !== 'community'
   // Flows and analyses run in the company's AI; knowledge is given to flows instead.
   // An AI-saved draft is not loadable until it is added, so it cannot run yet.
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
