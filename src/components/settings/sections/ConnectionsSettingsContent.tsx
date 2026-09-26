@@ -82,6 +82,7 @@ export function ConnectionsSettingsContent() {
   const hasStripe = ENABLED_EXTENSION_IDS.has('stripe')
   const hasShopify = ENABLED_EXTENSION_IDS.has('shopify')
   const hasWooCommerce = ENABLED_EXTENSION_IDS.has('woocommerce')
+  const hasZettle = ENABLED_EXTENSION_IDS.has('zettle')
 
   useEffect(() => {
     if (!companyId) return
@@ -213,7 +214,7 @@ export function ConnectionsSettingsContent() {
           })}
       </SettingsGroup>
 
-      {hasStripe || hasShopify || hasWooCommerce ? (
+      {hasStripe || hasShopify || hasWooCommerce || hasZettle ? (
         <SettingsGroup label={t('group_payments_shop')}>
           {hasStripe &&
             row({
@@ -237,6 +238,14 @@ export function ConnectionsSettingsContent() {
               name: t('woocommerce'),
               help: t('shop_help'),
               href: '/import?mode=woocommerce',
+              connected: null,
+            })}
+          {hasZettle &&
+            row({
+              logo: <ImgLogo src="/logos/zettle.svg" />,
+              name: t('zettle'),
+              help: t('zettle_help'),
+              href: '/import?mode=zettle',
               connected: null,
             })}
         </SettingsGroup>
