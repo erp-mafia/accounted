@@ -80,4 +80,19 @@ describe('/api/agents/knowledge', () => {
     expect(findCalls('company_agent_knowledge', 'upsert')).toEqual([])
     expect(findCalls('company_agent_knowledge', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-a'], ['agent_id', 'quarterly-vat-review'], ['atom_id', 'horizontal/swedish-vat']]))
   })
+
+  it('lists the company\'s own knowledge and gives it to a flow as its own row', async () => {
+    const rules = { id: '00000000-0000-4000-8000-0000000000aa', company_id: 'company-a', team_id: null, atom_id: null, name: 'Våra regler', description: 'Hur vi gör.', body: '# Regler', share_status: 'private', draft: false, kind: 'rules' }
+    enqueue({ data: OPTIONS }); enqueue({ data: { team_id: null } }); enqueue({ data: [rules] })
+    const listed = await (await GET(new Request('http://localhost/api/agents/knowledge'), ctx)).json()
+    expect(listed.data.at(-1)).toMatchObject({ id: `own/${rules.id}`, tier: 'own', title: 'Våra regler' })
+
+    enqueue({ data: OPTIONS }); enqueue({ data: { team_id: null } }); enqueue({ data: [rules] }); enqueue({ data: null })
+    expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: `own/${rules.id}` })).status).toBe(200)
+    expect(findCalls('company_agent_knowledge', 'upsert').map((c) => c[0])).toEqual([
+      { company_id: 'company-a', agent_id: 'bookkeep', own_skill_id: rules.id, included: true },
+    ])
+    enqueue({ data: OPTIONS }); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    expect((await patch({ action: 'add', agent_id: 'bookkeep', atom_id: 'own/00000000-0000-4000-8000-0000000000bb' })).status).toBe(404)
+  })
 })

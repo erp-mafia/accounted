@@ -211,6 +211,14 @@ export const ReconciliationProposalSchema = z.object({
    * column only.
    */
   vouchers: z.array(ReconciliationProposalVoucherSchema).min(1).optional(),
+  /**
+   * Skattekonto only: present when several open Skatteverket rows settle this
+   * verifikat together (one combined 1630 line for avdragen skatt +
+   * arbetsgivaravgift, crm#128). Every row id of the group, this one
+   * included; apply them as ONE pair (external_ids = this list), all or
+   * nothing. use_proposals groups them the same way.
+   */
+  external_ids: z.array(z.string()).min(2).optional(),
 })
 export type ReconciliationProposal = z.infer<typeof ReconciliationProposalSchema>
 

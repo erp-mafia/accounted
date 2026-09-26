@@ -99,14 +99,16 @@ function meta(row: AtomRow, source: KnowledgeMeta['source'] = 'default'): Knowle
 interface KnowledgeChoice { added: string[]; removed: Set<string> }
 
 async function loadKnowledgeChoices(supabase: SupabaseClient, companyId: string): Promise<Map<string, KnowledgeChoice>> {
-  const { data, error } = await supabase.from('company_agent_knowledge').select('agent_id, atom_id, included, created_at')
+  const { data, error } = await supabase.from('company_agent_knowledge').select('agent_id, atom_id, own_skill_id, included, created_at')
     .eq('company_id', companyId).order('created_at', { ascending: true })
   if (error) throw new Error(`Failed to load agent knowledge choices: ${error.message}`)
   const choices = new Map<string, KnowledgeChoice>()
-  for (const row of (data ?? []) as Array<{ agent_id: string; atom_id: string; included: boolean }>) {
+  for (const row of (data ?? []) as Array<{ agent_id: string; atom_id: string | null; own_skill_id: string | null; included: boolean }>) {
     const choice = choices.get(row.agent_id) ?? { added: [], removed: new Set<string>() }
-    if (row.included) choice.added.push(row.atom_id)
-    else choice.removed.add(row.atom_id)
+    // The company's own knowledge goes by `own/<id>`, as it does everywhere else.
+    const id = row.own_skill_id ? `own/${row.own_skill_id}` : row.atom_id!
+    if (row.included) choice.added.push(id)
+    else choice.removed.add(id)
     choices.set(row.agent_id, choice)
   }
   return choices
@@ -132,6 +134,22 @@ async function loadAtoms(supabase: SupabaseClient, ids: string[], withBody: bool
   if (error) throw new Error(`Failed to load agent knowledge: ${error.message}`)
   const rows = (data ?? []) as unknown as AtomRow[]
   return new Map(rows.filter((row) => row.is_active && row.mcp_exposed).map((row) => [row.id, row]))
+}
+
+/**
+ * The company's own knowledge items among `ids`, shaped as registry rows so
+ * they list and inline like packs. Only what a person added and has not
+ * withdrawn (ownSkill); anything else is simply not there.
+ */
+async function loadOwnKnowledge(supabase: SupabaseClient, companyId: string, ids: string[], withBody: boolean): Promise<Map<string, AtomRow>> {
+  const wanted = new Set(ids.filter((id) => id.startsWith('own/')))
+  if (wanted.size === 0) return new Map()
+  const rows = await loadCompanySkillRows(supabase, companyId)
+  return new Map(rows.flatMap((row): Array<[string, AtomRow]> => {
+    const skill = ownSkill(row)
+    if (!skill || skill.itemKind !== 'rules' || !wanted.has(skill.slug)) return []
+    return [[skill.slug, { id: skill.slug, tier: 'own', title: skill.name, description: skill.summary, version: null, reviewed_at: null, is_active: true, mcp_exposed: true, parent_atom_id: null, ...(withBody ? { body: skill.body } : {}) }]]
+  }))
 }
 
 async function loadProfileAtoms(supabase: SupabaseClient, companyId: string): Promise<string[]> {
@@ -201,8 +219,9 @@ export async function loadAgentsOverview(supabase: SupabaseClient, companyId: st
   const [profileIds, choices] = await Promise.all([loadProfileAtoms(supabase, companyId), loadKnowledgeChoices(supabase, companyId)])
   const chosen = [...choices.values()].flatMap((c) => c.added)
   const ids = [...new Set([...Object.values(AGENTS).flatMap((a) => [...a.knowledge, ...a.references]), ...profileIds, ...chosen])]
-  const [atoms, states, facts, agreements, remembered, documents, sections] = await Promise.all([
+  const [registryAtoms, ownAtoms, states, facts, agreements, remembered, documents, sections] = await Promise.all([
     loadAtoms(supabase, ids, false),
+    loadOwnKnowledge(supabase, companyId, ids, false),
     loadConnectionStates(supabase, companyId),
     supabase.from('company_facts').select('predicate').eq('company_id', companyId).eq('subject_kind', 'company').is('sys_to', null).neq('rank', 'deprecated').eq('status', 'confirmed').limit(500),
     supabase.from('agreements').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'active'),
@@ -211,6 +230,7 @@ export async function loadAgentsOverview(supabase: SupabaseClient, companyId: st
     // Every tagged section once; each agent keeps those in its areas below.
     loadIndustrySections(supabase, profileIds, AREAS, false),
   ])
+  const atoms = new Map([...registryAtoms, ...ownAtoms])
   const company = companyAtoms(atoms, profileIds)
   const livePacks = new Set(company.map((c) => c.id))
   const sectionsFor = (areas: readonly Area[]) => sections
@@ -367,15 +387,16 @@ export async function loadAgentBundle(supabase: SupabaseClient, companyId: strin
 
   const [profileIds, choices] = await Promise.all([loadProfileAtoms(supabase, companyId), loadKnowledgeChoices(supabase, companyId)])
   const list = effectiveKnowledge(curated?.knowledge ?? OWN_AGENT_KNOWLEDGE, choices.get(id))
-  const [bodies, metaRows, states, companyKnowledge, sectionRows] = await Promise.all([
+  const [bodies, ownBodies, metaRows, states, companyKnowledge, sectionRows] = await Promise.all([
     loadAtoms(supabase, list.map((k) => k.id), true),
+    loadOwnKnowledge(supabase, companyId, list.map((k) => k.id), true),
     loadAtoms(supabase, [...(curated?.references ?? []), ...profileIds], false),
     loadConnectionStates(supabase, companyId),
     loadCompanyKnowledge(supabase, companyId, { facts: curated?.facts ?? null, agreements: curated?.agreements ?? true }),
     // Own agents name no areas, so they get no sections (the query is skipped).
     loadIndustrySections(supabase, profileIds, curated?.areas ?? [], true),
   ])
-  const { inline, overflow, used } = splitByBudget([...bodies.values()], list)
+  const { inline, overflow, used } = splitByBudget([...bodies.values(), ...ownBodies.values()], list)
   const company = companyAtoms(metaRows, profileIds)
   const livePacks = new Set(company.map((c) => c.id))
   const sections = splitSections(sectionRows.filter((s) => livePacks.has(s.parent_atom_id!)), used)

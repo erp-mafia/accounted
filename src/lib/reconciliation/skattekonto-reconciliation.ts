@@ -226,7 +226,8 @@ async function sumLedgerAmountForEntries(
   return total
 }
 
-function proposalFrom(head: EntryHead, row: SkattekontoRow): ReconciliationProposal {
+function proposalFrom(head: EntryHead, row: SkattekontoRow, groupIds: string[]): ReconciliationProposal {
+  const combined = groupIds.length > 1
   return {
     journal_entry_id: head.id,
     voucher_number: head.voucher_number,
@@ -234,11 +235,12 @@ function proposalFrom(head: EntryHead, row: SkattekontoRow): ReconciliationPropo
     entry_date: head.entry_date,
     description: head.description ?? '',
     entry_status: head.status,
-    confidence: head.status === 'posted' ? 0.95 : 0.8,
+    confidence: head.status === 'posted' ? (combined ? 0.9 : 0.95) : 0.8,
     reasons: [
-      'exakt belopp på 1630',
+      combined ? `summan av ${groupIds.length} händelser är exakt beloppet på 1630` : 'exakt belopp på 1630',
       `${Math.abs(daysBetweenIso(row.transaktionsdatum, head.entry_date))} dagars avstånd`,
     ],
+    ...(combined ? { external_ids: groupIds } : {}),
   }
 }
 
@@ -368,6 +370,16 @@ export async function getSkattekontoReconciliationStatus(
   let olderUnmatched = 0
   const counts = { proposed: 0, unmatched_external: 0, unmatched_ledger: 0, matched: 0, ignored: 0 }
 
+  // A combined proposal (crm#128) is persisted as the same suggested
+  // verifikat on every row of the group; the group is what gets linked.
+  const openRowsBySuggestion = new Map<string, string[]>()
+  for (const row of booked) {
+    if (row.is_ignored || row.journal_entry_id || !row.suggested_journal_entry_id) continue
+    const list = openRowsBySuggestion.get(row.suggested_journal_entry_id) ?? []
+    list.push(row.id)
+    openRowsBySuggestion.set(row.suggested_journal_entry_id, list)
+  }
+
   const pushCapped = (bucket: keyof SkattekontoReconciliationItems, item: ReconciliationItem) => {
     if (items[bucket].length < MAX_ITEMS_PER_BUCKET) items[bucket].push(item)
   }
@@ -432,7 +444,11 @@ export async function getSkattekontoReconciliationStatus(
       : undefined
     const proposal =
       suggestedHead && suggestedHead.status !== 'reversed' && !liveLinkedEntryIds.has(suggestedHead.id)
-        ? proposalFrom(suggestedHead, row)
+        ? proposalFrom(
+            suggestedHead,
+            row,
+            row.journal_entry_id ? [row.id] : openRowsBySuggestion.get(suggestedHead.id) ?? [row.id],
+          )
         : null
 
     if (proposal) {

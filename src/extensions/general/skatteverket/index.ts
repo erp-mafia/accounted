@@ -2485,6 +2485,7 @@ export const skatteverketExtension: Extension = {
           booked.map(r => ({
             id: r.id,
             transaktionsdatum: r.transaktionsdatum,
+            transaktionstext: r.transaktionstext,
             belopp_skatteverket: Number(r.belopp_skatteverket),
             journal_entry_id: r.journal_entry_id,
           })),
@@ -2685,9 +2686,9 @@ export const skatteverketExtension: Extension = {
         if (!id) {
           return NextResponse.json({ error: 'Saknar transaktions-id' }, { status: 400 })
         }
-        let body: { journal_entry_id?: string }
+        let body: { journal_entry_id?: string; also_transaction_ids?: unknown }
         try {
-          body = (await request.json()) as { journal_entry_id?: string }
+          body = (await request.json()) as { journal_entry_id?: string; also_transaction_ids?: unknown }
         } catch {
           return NextResponse.json({ error: 'Ogiltig request body' }, { status: 400 })
         }
@@ -2697,12 +2698,27 @@ export const skatteverketExtension: Extension = {
             { status: 400 },
           )
         }
+        // A combined candidate (crm#128) names the other rows that settle the
+        // verifikat together with this one; they are linked all or nothing.
+        const also = body.also_transaction_ids
+        if (
+          also !== undefined &&
+          (!Array.isArray(also) ||
+            also.length > 49 ||
+            !also.every((v): v is string => typeof v === 'string' && v.length > 0))
+        ) {
+          return NextResponse.json(
+            { error: 'also_transaction_ids måste vara en lista med högst 49 transaktions-id.' },
+            { status: 400 },
+          )
+        }
         try {
           await matchSkattekontoToEntry(
             ctx.supabase,
             ctx.companyId,
             id,
             body.journal_entry_id,
+            (also as string[] | undefined) ?? [],
           )
           return NextResponse.json({ data: { ok: true } })
         } catch (err) {

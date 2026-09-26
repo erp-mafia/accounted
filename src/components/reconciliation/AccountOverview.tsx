@@ -199,14 +199,15 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         item.proposal.journal_entry_id,
       ]
       const data = await postJson(`${base}/links`, {
-        pairs: [{ external_ids: [item.item_id], journal_entry_ids: journalEntryIds }],
+        // A combined skattekonto proposal links every row of its group at once.
+        pairs: [{ external_ids: item.proposal.external_ids ?? [item.item_id], journal_entry_ids: journalEntryIds }],
       })
       if (data) {
         const skipped = data.skipped as Array<{ message: string }>
         if (skipped.length > 0) {
           toast({ title: t('toast_failed'), description: skipped[0].message, variant: 'destructive' })
         } else {
-          toast({ title: t('toast_matched', { applied: 1 }) })
+          toast({ title: t('toast_matched', { applied: (data.applied as unknown[] | undefined)?.length ?? 1 }) })
         }
         await refresh()
       }

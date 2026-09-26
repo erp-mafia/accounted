@@ -9,8 +9,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { AGENTS, COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
-import type { RegistrySkillId } from '@/lib/agent-skills/registry'
+import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
 import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
@@ -30,7 +29,7 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
+import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
@@ -78,7 +77,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const knowledgeDesc = useKnowledgeDesc()
   const isRules = segment.startsWith('kunskap.')
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
-  const catalog = useSWR(isRules ? null : ['/api/skills', companyId], ([url]) => readCatalog(url))
+  // Always read: a pack's page lists the company's own flows it can be given to.
+  const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const agents = useSWR(['/api/agents', companyId, 'claude'], ([url, , c]) => readAgents(`${url}?client=${c}`))
   // A routine chosen in Skriv själv arrives as ?rutin=… and opens its panel filled in.
   const handedRoutine = parseRoutineQuery(new URLSearchParams(useSearchParams().toString()))
@@ -96,10 +96,15 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
 
   const pack: KnowledgeOption | undefined = options.data?.find((o) => rulesSegment(o.id) === segment)
   const shared = catalog.data?.find((s) => s.tier === 'community' && communitySegment(s.slug) === segment)
+  const builtIn = segment.startsWith('analys.') ? catalog.data?.find((s) => s.source === 'accounted' && s.itemKind === 'analysis' && analysisSegment(s.slug) === segment) : undefined
   const mine = segment.startsWith('egen.') ? catalog.data?.find((s) => s.tier === 'own' && s.slug === `own/${segment.slice(5)}`) : undefined
-  const item: Item | null = mine ? {
+  const item: Item | null = builtIn ? {
+    kind: 'analysis', key: builtIn.slug, name: builtIn.name, desc: builtIn.summary, body: builtIn.summary,
+    atomId: null, version: builtIn.version ?? null, reviewedAt: null, level: null, community: null,
+  } : mine ? {
     kind: mine.itemKind ?? 'rules', key: mine.slug, name: mine.name, desc: mine.summary, body: mine.summary,
-    atomId: null, version: null, reviewedAt: null, level: null, community: null, own: true,
+    // Own knowledge a person added can be given to flows, as a pack can (own/<id>).
+    atomId: (mine.itemKind ?? 'rules') === 'rules' && !mine.draft ? mine.slug : null, version: null, reviewedAt: null, level: null, community: null, own: true,
   } : pack ? {
     kind: 'rules', key: pack.id, name: knowledgeName(pack.id, pack.title), desc: knowledgeDesc(pack.id, pack.summary), body: pack.summary,
     atomId: pack.id, version: pack.version, reviewedAt: pack.reviewed_at, level: pack.tier === 'community' ? null : pack.tier, community: null,
@@ -110,7 +115,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   } : null
 
   // What the AI actually reads: the pack's own text from the registry, fetched when the page opens.
-  const bodySlug = pack?.id ?? shared?.slug ?? mine?.slug ?? null
+  const bodySlug = pack?.id ?? shared?.slug ?? mine?.slug ?? builtIn?.slug ?? null
   const body = useSWR(bodySlug ? ['/api/skills', companyId, bodySlug] : null, ([url, , slug]) => readBody(`${url}?slug=${encodeURIComponent(slug)}`))
   // Gone only once a fresh list says so: a cached one can predate an item just saved.
   async function patchMine(payload: object): Promise<boolean> {
@@ -168,16 +173,24 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
   const steps = isFlow && body.data ? ownSkillSteps(body.data) : []
   function runShared(target: ClaudeTarget = 'web') {
-    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
+    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
     // A shared item's text carries what its author wrote, so the prompt is copied rather than typed into the chat.
     const prompt = t('skill_prompt', { name: item!.name, slug: item!.key, client })
     void (client === 'claude' ? openInClaude(target, prompt, false) : copyPromptAndOpen(prompt, client, false)).then(() => setRan(true))
   }
-  const flowsWith = (atomId: string) => SHOWN_FLOWS.map((id) => ({ id })).filter((s) => agents.data?.agents.find((a) => a.id === s.id)?.knowledge.some((k) => k.id === atomId))
-  const holders = item.atomId ? flowsWith(item.atomId) : []
+  // Every flow the company can give knowledge to: Accounted's, then its own.
+  const ownFlows = (catalog.data ?? []).filter((s) => s.tier === 'own' && (s.itemKind ?? 'workflow') === 'workflow' && !s.draft && s.shareStatus !== 'withdrawn' && s.installations[0])
+  const givable = [
+    ...SHOWN_FLOWS.map((id) => ({ id: id as string, name: t(`skills.${id}.name`), task: t(`skills.${id}.short`), hue: itemHue('workflow', id, id), defaults: AGENTS[id].knowledge as readonly string[] })),
+    ...ownFlows.map((s) => ({ id: s.slug, name: s.name, task: s.summary, hue: itemHue('workflow', s.name), defaults: OWN_AGENT_KNOWLEDGE as readonly string[] })),
+  ]
+  const knowledgeOf = (flowId: string) => flowId.startsWith('own/')
+    ? agents.data?.own_knowledge[flowId] ?? agents.data?.own_default
+    : agents.data?.agents.find((a) => a.id === flowId)?.knowledge
+  const holders = item.atomId ? givable.filter((f) => knowledgeOf(f.id)?.some((k) => k.id === item.atomId)) : []
   const reviewed = item.reviewedAt ? formatDateLong(item.reviewedAt, locale) : null
 
-  async function toggle(flow: RegistrySkillId, has: boolean): Promise<void> {
+  async function toggle(flow: string, has: boolean): Promise<void> {
     if (!item?.atomId) return
     const response = await fetch('/api/agents/knowledge', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: has ? 'remove' : 'add', agent_id: flow, atom_id: item.atomId }) })
     if (response.ok) await agents.mutate()
@@ -239,7 +252,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                   {item.atomId && (
                     <Row label={t('row_used_by')} onAdd={canWrite ? () => setView('give') : undefined} addLabel={t('give_to_flow')}>
                       {holders.length === 0 ? <span className={styles.muted}>{t('used_by_none')}</span> : (
-                        <>{holders.slice(0, 2).map((s) => <span key={s.id} className={styles.chip}>{t(`skills.${s.id}.name`)}</span>)}{holders.length > 2 && <span className={styles.chip}>+{holders.length - 2}</span>}</>
+                        <>{holders.slice(0, 2).map((s) => <span key={s.id} className={styles.chip}>{s.name}</span>)}{holders.length > 2 && <span className={styles.chip}>+{holders.length - 2}</span>}</>
                       )}
                     </Row>
                   )}
@@ -253,7 +266,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                   <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
                 )}
                 {COMMUNITY_OPEN && mine?.installations[0] && !mine.draft && (
-                  <div className={styles.alist}><ShareBox status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
+                  <div className={styles.alist}><ShareBox preview={{ title: item.name, desc: item.desc, kind: item.kind, hue, symbolKey: item.key }} status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
                 )}
                 {mine?.installations[0] && (mine.shareStatus ?? 'private') === 'private' && (
                   <div className={styles.alist}><DeleteOwn kind={item.kind} canWrite={canWrite} onDelete={deleteMine} /></div>
@@ -261,18 +274,18 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               </>
             )}
             {view === 'routine' && (
-              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
+              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
             )}
             {view === 'give' && item.atomId && (
               <SubView title={t('give_to_flow')} onBack={() => setView('main')}>
                 <p className={styles.muted}>{t('give_hint')}</p>
                 <ul className={styles.kgrid2}>
-                  {SHOWN_FLOWS.map((id) => ({ id })).map((s) => {
+                  {givable.map((s) => {
                     const has = holders.some((h) => h.id === s.id)
-                    const isDefault = AGENTS[s.id].knowledge.includes(item.atomId!)
+                    const isDefault = s.defaults.includes(item.atomId!)
                     return (
                       <li key={s.id}>
-                        <GiveCard name={t(`skills.${s.id}.name`)} task={t(`skills.${s.id}.short`)} hue={itemHue('workflow', s.id, s.id)} has={has} note={isDefault ? t('knowledge_default') : undefined} disabled={!canWrite || !agents.data} onToggle={() => toggle(s.id, has)} />
+                        <GiveCard name={s.name} task={s.task} hue={s.hue} has={has} note={isDefault ? t('knowledge_default') : undefined} disabled={!canWrite || !agents.data} onToggle={() => toggle(s.id, has)} />
                       </li>
                     )
                   })}
