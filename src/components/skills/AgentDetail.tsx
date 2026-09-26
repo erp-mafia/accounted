@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useState, type ReactNode } from 'react'
+import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Plus, Search, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Pencil, Plus, Search, X } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -35,9 +36,11 @@ import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { isPeriodFlow, parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
-import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, type SkillSummary } from './data'
+import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, KNOWLEDGE_FAILED_PARAM, KNOWLEDGE_FAILED_VALUE, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
+// Skriv själv, loaded when an own flow is edited (it imports this file's fields, so not statically).
+const CreateItem = dynamic(() => import('./CreateItem').then((m) => m.CreateItem))
 
 type View = 'main' | 'knowledge' | 'company' | 'advanced' | 'routine'
 type Own = SkillSummary & { installations: [{ installation_id: string }] }
@@ -96,8 +99,13 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   const handedParams = new URLSearchParams(useSearchParams().toString())
   const handedRoutine = parseRoutineQuery(handedParams)
   const handedSent = parseRoutineSent(handedParams)
-  const [view, setView] = useState<View>(handedRoutine ? 'routine' : 'main')
+  // Knowledge chosen in Skriv själv that did not save arrives as ?kunskap=fel and opens the knowledge, saying so.
+  const knowledgeFailed = handedParams.get(KNOWLEDGE_FAILED_PARAM) === KNOWLEDGE_FAILED_VALUE
+  const [view, setView] = useState<View>(handedRoutine ? 'routine' : knowledgeFailed ? 'knowledge' : 'main')
   const [outcome, setOutcome] = useState<StartOutcome | null>(null)
+  const [editing, setEditing] = useState(false)
+  // The failed-save notice shows the first time the knowledge opens, not every time after.
+  const [knowledgeNotice, setKnowledgeNotice] = useState(knowledgeFailed)
 
   // Gone only once a fresh catalog says so: a cached list can predate the item.
   if (!curated && catalog.data && !catalog.isValidating && !own) {
@@ -128,6 +136,19 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
     formatDate: (iso) => formatDateLong(iso, locale),
   }) : undefined
   const canEdit = canWrite && !own?.draft
+  // Shared text is frozen for review: only a private own flow can be edited (PATCH action 'edit').
+  const frozen = !!own && (own.shareStatus ?? 'private') !== 'private'
+
+  // "Redigera": Skriv själv, filled in from the saved flow, saving over it so its id (and every routine using it) stays.
+  if (editing && own && body.data !== undefined) {
+    return (
+      <CreateItem backHref={backHref} edit={{
+        installationId: own.installations[0].installation_id, kind: 'workflow', name: own.name, description: own.summary ?? '', body: body.data,
+        onCancel: () => setEditing(false),
+        onSaved: async () => { await Promise.all([catalog.mutate(), body.mutate()]); setEditing(false) },
+      }} />
+    )
+  }
 
   /**
    * The change shows at once (optimistic), then the server's answer replaces it;
@@ -194,6 +215,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
       <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={name}>
           <StrataField seed={seedOf(agentId)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
@@ -228,12 +250,15 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
             <>
               <div className={styles.apAvatar}><FlowSymbol hue={hue} size={56} /></div>
 
+              {/* Read as text, not drawn as input boxes: nothing here is typed into. An own flow changes through Redigera. */}
               <Field label={t('field_name')}>
-                <div className={styles.fieldBox} data-ph-mask={own ? '' : undefined}>{name}</div>
+                <p className={styles.fieldText} data-ph-mask={own ? '' : undefined}>{name}</p>
               </Field>
 
-              <Field label={t('section_instructions')} copy={<CopyIcon text={body.data} label={t('copy_instructions')} />} note={own ? t('instructions_own') : [t('instructions_source'), overview?.workflow.version ? t('instructions_version', { version: overview.workflow.version }) : null].filter(Boolean).join(' · ')}>
-                <div className={styles.instrBox}><ol data-ph-mask={own ? '' : undefined}>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol></div>
+              <Field label={t('section_instructions')}
+                copy={<>{own && !frozen && <EditOwnButton disabled={!canWrite || body.data === undefined} onClick={() => setEditing(true)} />}<CopyIcon text={body.data} label={t('copy_instructions')} /></>}
+                note={own ? t(frozen ? 'edit_frozen' : 'instructions_own') : [t('instructions_source'), overview?.workflow.version ? t('instructions_version', { version: overview.workflow.version }) : null].filter(Boolean).join(' · ')}>
+                <ol className={styles.stepsText} data-ph-mask={own ? '' : undefined}>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol>
               </Field>
 
               {own?.draft && (
@@ -296,7 +321,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
             </SubView>
           )}
           {view === 'knowledge' && (
-            <KnowledgePanel held={knowledge} options={options.data ?? []} onBack={() => setView('main')} onChange={changeKnowledge} />
+            <KnowledgePanel held={knowledge} options={options.data ?? []} onBack={() => { setKnowledgeNotice(false); setView('main') }} onChange={changeKnowledge} initialFailed={knowledgeNotice} />
           )}
           </div>
         </section>
@@ -322,14 +347,36 @@ export function Row({ label, children, onAdd, addLabel, onOpen }: { label: strin
     : <div className={styles.srow}>{inner}</div>
 }
 
-/** A labelled field, label above its box. */
-export function Field({ label, note, copy, children }: { label: string; note?: string; copy?: ReactNode; children: ReactNode }) {
+/**
+ * A labelled field, label above its box. A form control takes its ids from
+ * `children({ id, labelId, describedBy })`: the visible label is then a real
+ * <label> that names the control (read once, and a click on it focuses the
+ * control), and the note describes it.
+ */
+export function Field({ label, note, copy, children }: {
+  label: string
+  note?: string
+  copy?: ReactNode
+  children: ReactNode | ((control: { id: string; labelId: string; describedBy?: string }) => ReactNode)
+}) {
+  const id = useId()
+  const control = typeof children === 'function'
+  const noteId = note ? `${id}-note` : undefined
   return (
     <div className={styles.field}>
-      <div className={styles.fieldHead}><span className={styles.rowLabel}>{label}</span><span className={styles.fieldTools}>{note && <span className={styles.partNote}>{note}</span>}{copy}</span></div>
-      {children}
+      <div className={styles.fieldHead}>
+        {control ? <label id={`${id}-label`} htmlFor={id} className={styles.rowLabel}>{label}</label> : <span className={styles.rowLabel}>{label}</span>}
+        <span className={styles.fieldTools}>{note && <span id={noteId} className={styles.partNote}>{note}</span>}{copy}</span>
+      </div>
+      {control ? children({ id, labelId: `${id}-label`, describedBy: noteId }) : children}
     </div>
   )
+}
+
+/** "Redigera" on an own item: opens Skriv själv filled in with what was saved. */
+export function EditOwnButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  const t = useTranslations('skills_registry')
+  return <Button variant="outline" size="sm" className="gap-2" disabled={disabled} onClick={onClick}><Pencil className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
 }
 
 /** A panel sub-view: back to the agent, a title, its content. `backLabel` names the way out where "Klar" would read as saved. */
@@ -379,7 +426,8 @@ function CopyInstruction({ body }: { body: string | undefined }) {
   )
 }
 
-export function KnowledgeChip({ knowledge, href, canEdit, onRemove }: { knowledge: KnowledgeMeta; href: string; canEdit: boolean; onRemove: () => Promise<boolean> }) {
+/** A piece of knowledge a flow carries. Without `href` it is not a link: on a form, leaving the page would lose what was typed. */
+export function KnowledgeChip({ knowledge, href, canEdit, onRemove }: { knowledge: KnowledgeMeta; href?: string; canEdit: boolean; onRemove: () => Promise<boolean> }) {
   const t = useTranslations('skills_registry')
   const name = useKnowledgeName()
   const describe = useKnowledgeDesc()
@@ -387,7 +435,7 @@ export function KnowledgeChip({ knowledge, href, canEdit, onRemove }: { knowledg
   const label = name(knowledge.id, knowledge.title)
   return (
     <span className={`${styles.chip} ${styles.chipKnow} ${knowledge.source === 'added' ? styles.chipAdded : ''}`} title={describe(knowledge.id, knowledge.summary)}>
-      <Link href={href} className={styles.chipLink}>{label}</Link>
+      {href ? <Link href={href} className={styles.chipLink}>{label}</Link> : <span>{label}</span>}
       {knowledge.source === 'added' && <small>{t('knowledge_added_tag')}</small>}
       {canEdit && (
         <button type="button" className={styles.chipX} aria-label={t('knowledge_remove', { name: label })} disabled={busy} onClick={() => { setBusy(true); void onRemove().finally(() => setBusy(false)) }}>
@@ -409,11 +457,13 @@ function ConnectionChip({ connection }: { connection: AgentConnectionState }) {
 const GROUPS = ['horizontal', 'vertical', 'modifier'] as const
 
 /** Kunskap, as in Oasis's skill picker: Accounted or community, a search, and cards to add or take away. */
-export function KnowledgePanel({ held, options, onBack, onChange }: {
+export function KnowledgePanel({ held, options, onBack, onChange, initialFailed = false }: {
   held: KnowledgeMeta[]
   options: KnowledgeOption[]
   onBack: () => void
   onChange: (action: KnowledgeAction, atomId?: string) => Promise<boolean>
+  /** Opened because knowledge chosen in Skriv själv did not all save. */
+  initialFailed?: boolean
 }) {
   const t = useTranslations('skills_registry')
   const name = useKnowledgeName()
@@ -421,7 +471,7 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
   const [source, setSource] = useState<'accounted' | 'own' | 'community'>('accounted')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [failed, setFailed] = useState(initialFailed)
   const holds = new Set(held.map((k) => k.id))
   const q = query.trim().toLowerCase()
   const shown = options
@@ -443,7 +493,7 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
       ]} />
       <label className={styles.search}>
         <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
-        <input id="agent-knowledge-search" type="search" value={query} placeholder={t('knowledge_search')} onChange={(e) => setQuery(e.target.value)} />
+        <input id="agent-knowledge-search" type="search" value={query} placeholder={t('knowledge_search')} aria-label={t('knowledge_search')} onChange={(e) => setQuery(e.target.value)} />
       </label>
       {failed && <p role="alert" className={styles.muted}>{t('knowledge_save_failed')}</p>}
       {shown.length === 0 ? <p className={styles.muted}>{t(q ? 'knowledge_no_match' : source === 'community' ? 'knowledge_community_empty' : source === 'own' ? 'knowledge_own_empty' : 'knowledge_all_added')}</p> : (
