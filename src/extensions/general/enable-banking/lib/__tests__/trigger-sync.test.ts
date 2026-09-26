@@ -22,6 +22,7 @@ import {
 } from '../api-client'
 import { DAILY_QUOTA_COOLDOWN_MS } from '../sync-lease'
 import { SYNC_COOLDOWN_MS, triggerConnectionSync } from '../trigger-sync'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const CONNECTION_ID = '11111111-1111-4111-8111-111111111111'
@@ -50,7 +51,7 @@ function makeClient(state: State) {
       let updatePayload: Record<string, unknown> | null = null
       let lteFilter: { column: string; value: string } | null = null
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in']
+      const passthrough = ['select', 'eq', 'gte', 'order', 'limit', 'in', 'is']
       for (const m of passthrough) chain[m] = vi.fn(() => chain)
       chain.lte = vi.fn((column: string, value: string) => {
         lteFilter = { column, value }
@@ -150,6 +151,14 @@ describe('triggerConnectionSync', () => {
     expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status })
     expect(mocks.rpc).not.toHaveBeenCalled()
     expect(state.updates.every(update => Object.keys(update).join() === 'sync_lease_until')).toBe(true)
+  })
+
+  it('stores the account selection advice on an unresolved route, keeping status and cursor', async () => {
+    mocks.syncAccountTransactions.mockRejectedValue(Object.assign(new Error('BANK_INGEST_ROUTE_UNRESOLVED'), { code: 'PT409' }))
+    expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED', status: 'active' })
+    expect(mocks.rpc).not.toHaveBeenCalled()
+    expect(state.updates.filter(update => !('sync_lease_until' in update)))
+      .toEqual([{ error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE }])
   })
 
   it('syncs only the enabled accounts over the gap-aware window and stamps last_synced_at', async () => {

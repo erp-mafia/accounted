@@ -721,6 +721,13 @@ describe('getErrorMessage: PT409 database refusals', () => {
       .toBe(getErrorEntry('BANK_BOOKING_SETTLEMENT_CHANGED')!.message_sv)
   })
 
+  it('tells the user to save the account picker again when the bank route cannot be resolved', () => {
+    const err = { code: 'PT409', message: 'BANK_INGEST_ROUTE_UNRESOLVED' }
+    expect(getErrorMessage(err)).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_sv)
+    expect(getErrorMessage(err)).toContain('Välj konton')
+    expect(getErrorMessage(err, { locale: 'en' })).toBe(getErrorEntry('BANK_INGEST_ROUTE_UNRESOLVED')!.message_en)
+  })
+
   it('keeps the generic conflict for an unregistered name, never echoing it', () => {
     const message = getErrorMessage({ code: 'PT409', message: 'SOME_UNREGISTERED_REFUSAL' })
     expect(message).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
