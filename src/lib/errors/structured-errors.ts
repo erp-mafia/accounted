@@ -1169,6 +1169,122 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Beloppet stämmer inte med de valda utläggen. Välj de utlägg som överföringen täcker.',
     message_en: 'The amount does not match the selected expense claims. Pick the claims this transfer covers.',
   },
+  // Expense claims (utlägg): register, delete, payout (lib/expenses/expense-claim-actions.ts).
+  EXPENSE_CLAIM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Utlägget hittades inte.',
+    message_en: 'Expense claim not found.',
+  },
+  EXPENSE_CLAIM_CLAIMANT_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Ange vem utlägget avser: välj anställd eller skriv ett namn.',
+    message_en: 'Say who the expense claim is for: pick an employee or give a name.',
+  },
+  EXPENSE_CLAIM_VAT_EXCEEDS_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Momsen måste vara mindre än totalbeloppet.',
+    message_en: 'The VAT must be less than the total amount.',
+  },
+  EXPENSE_CLAIM_INVALID_LINES: {
+    httpStatus: 400,
+    message_sv: 'Verifikatraderna är ogiltiga: kontrollera att raderna balanserar och att skuldraden matchar beloppet.',
+    message_en: 'The voucher lines are invalid: they must balance and carry exactly one credit on the liability account equal to the amount.',
+  },
+  EXPENSE_CLAIM_RATE_UNAVAILABLE: {
+    httpStatus: 400,
+    message_sv: 'Ingen växelkurs kunde hämtas för datumet. Ange kursen manuellt och försök igen.',
+    message_en: 'No exchange rate could be fetched for the date. Pass exchange_rate and retry.',
+  },
+  EXPENSE_CLAIM_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker datumet.',
+    message_en: 'No open fiscal year covers the date.',
+  },
+  EXPENSE_CLAIM_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Underlaget hittades inte i företaget.',
+    message_en: 'The document was not found in this company.',
+  },
+  EXPENSE_CLAIM_INBOX_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Inkorgsposten hittades inte i företaget.',
+    message_en: 'The inbox item was not found in this company.',
+  },
+  EXPENSE_CLAIM_SAVE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget kunde inte sparas.',
+    message_en: 'The expense claim could not be saved.',
+  },
+  EXPENSE_CLAIM_LINK_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget bokfördes men kunde inte kopplas till sin verifikation. Kontakta supporten innan du försöker igen.',
+    message_en: 'The expense claim was booked but could not be linked to its voucher. Contact support before retrying.',
+  },
+  EXPENSE_CLAIM_ALREADY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Utlägget är redan utbetalt och kan inte tas bort.',
+    message_en: 'The expense claim is already paid out and cannot be deleted.',
+  },
+  EXPENSE_CLAIM_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Utlägget ligger på ett lönebesked som är under behandling. Ta bort raden från lönebeskedet först.',
+    message_en: 'The expense claim is on a payslip that has left draft. Remove the line from the payslip first.',
+  },
+  EXPENSE_CLAIM_DELETE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utlägget kunde inte tas bort.',
+    message_en: 'The expense claim could not be deleted.',
+  },
+  EXPENSE_PAYOUT_NO_CLAIMS: {
+    httpStatus: 400,
+    message_sv: 'Välj minst ett utlägg att betala ut.',
+    message_en: 'Pick at least one expense claim to pay out.',
+  },
+  EXPENSE_PAYOUT_CLAIMS_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Något av utläggen hittades inte.',
+    message_en: 'One or more of the expense claims were not found.',
+  },
+  EXPENSE_PAYOUT_ALREADY_PAID: {
+    httpStatus: 409,
+    message_sv: 'Något av utläggen är redan utbetalt.',
+    message_en: 'One or more of the expense claims are already paid out.',
+  },
+  EXPENSE_PAYOUT_MIXED_CLAIMANTS: {
+    httpStatus: 400,
+    message_sv: 'En utbetalning kan bara avse en person. Dela upp per person.',
+    message_en: 'A payout covers one person only. Split it per person.',
+  },
+  EXPENSE_PAYOUT_MIXED_LIABILITY: {
+    httpStatus: 400,
+    message_sv: 'Utläggen har olika skuldkonton och kan inte betalas ut tillsammans.',
+    message_en: 'The expense claims sit on different liability accounts and cannot be paid out together.',
+  },
+  EXPENSE_PAYOUT_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget öppet räkenskapsår täcker utbetalningsdatumet.',
+    message_en: 'No open fiscal year covers the payout date.',
+  },
+  EXPENSE_PAYOUT_ACCOUNT_NOT_IN_CHART: {
+    httpStatus: 400,
+    message_sv: 'Kontot finns inte i kontoplanen.',
+    message_en: 'The account is not active in the chart of accounts.',
+  },
+  EXPENSE_PAYOUT_INVALID_CASH_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Utbetalningen måste göras från ett likvidkonto i 19xx-serien (bank eller kassa).',
+    message_en: 'The payout must come from a cash account in the 19xx range (bank or cash).',
+  },
+  EXPENSE_PAYOUT_ON_PAYSLIP: {
+    httpStatus: 409,
+    message_sv: 'Något av utläggen ligger på ett lönebesked och betalas ut via lön. Ta bort raden från lönebeskedet först.',
+    message_en: 'One or more of the expense claims are on a payslip and are repaid through payroll. Remove the line from the payslip first.',
+  },
+  EXPENSE_PAYOUT_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Utbetalningen kunde inte bokföras.',
+    message_en: 'The payout could not be booked.',
+  },
   // Reclaim: Skatteverkets avslag booked back onto the customer
   ROT_RUT_RECLAIM_NO_BESLUT: {
     httpStatus: 400,
@@ -3764,6 +3880,17 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kunde inte skapa betalfilen.',
     message_en: 'Failed to create the payment batch.',
   },
+  SI_BATCH_PAYEE_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Leverantörens betalningsuppgifter eller belopp har ändrats sedan betalfilen förbereddes. Förbered betalfilen igen och kontrollera mottagaren.',
+    message_en:
+      "The supplier's payment details or amount changed after the payment batch was staged. Stage the batch again and check the payee.",
+    remediation: {
+      description:
+        "Check the supplier's bankgiro, plusgiro or bank account, then stage the batch again (gnubok_preview_supplier_payment_batch, then gnubok_create_supplier_payment_batch). details.invoices names each supplier and what changed.",
+    },
+  },
   SI_DELETE_IN_PAYMENT_BATCH: {
     httpStatus: 409,
     message_sv:
@@ -3941,7 +4068,7 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       'The dates fall inside the deviation period of a salary run that is already calculated, approved or booked. Revert that run to draft, or run a correction, before changing absence or worked hours.',
     remediation: {
       description:
-        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted from the dashboard.',
+        'details.salary_run_id names the run and details.locked_dates the dates it reads. Draft runs never lock; a run in review can be reverted to draft (POST /salary-runs/{id}/revert, gnubok_revert_salary_run).',
     },
   },
   SALARY_RUN_DEVIATION_PERIOD_INVALID: {
@@ -4024,6 +4151,47 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Inga anställda i lönekörningen.',
     message_en: 'No employees in the salary run.',
+  },
+  // Salary-run lifecycle operations (lib/salary/payslips/send.ts,
+  // lib/salary/run-status-recall.ts), shared by the dashboard, v1 and MCP.
+  SALARY_PAYSLIPS_SEND_SANDBOX: {
+    httpStatus: 403,
+    message_sv: 'Lönebesked kan inte skickas från sandlådan. Skapa ett konto för att skicka e-post.',
+    message_en: 'Payslips cannot be sent from the sandbox. Create an account to send email.',
+  },
+  SALARY_PAYSLIPS_SEND_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Att skicka lönebesked med e-post kräver en betald prenumeration.',
+    message_en: 'Emailing payslips requires a paid subscription.',
+  },
+  SALARY_RUN_REVERT_NOT_REVIEW: {
+    httpStatus: 400,
+    message_sv: 'Lönekörningen måste vara i granskningsstatus för att återställas till utkast.',
+    message_en: 'The salary run must be in review status to revert it to draft.',
+  },
+  SALARY_RUN_UNAPPROVE_NOT_APPROVED: {
+    httpStatus: 400,
+    message_sv:
+      'Bara en godkänd lönekörning kan låsas upp. En betald eller bokförd körning korrigeras via korrigeringsflödet.',
+    message_en:
+      'Only an approved salary run can be unlocked. A paid or booked run is corrected through the correction flow.',
+  },
+  SALARY_RUN_UNAPPROVE_AGI_FILED: {
+    httpStatus: 409,
+    message_sv:
+      'AGI har redan skickats till Skatteverket för denna period. Ändra genom att lämna in en korrigerad AGI (samma specifikationsnummer) i stället.',
+    message_en:
+      'The AGI for this period has already been sent to Skatteverket. Change it by filing a corrected AGI (same specifikationsnummer) instead.',
+  },
+  SALARY_RUN_UNAPPROVE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kunde inte återkalla godkännandet.',
+    message_en: 'Could not recall the approval.',
+  },
+  SALARY_RUN_STATUS_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Lönekörningens status har ändrats: ladda om sidan och försök igen.',
+    message_en: 'The salary run status changed in the meantime: reload and try again.',
   },
   AGI_GENERATE_NOT_BOOKABLE: {
     httpStatus: 400,

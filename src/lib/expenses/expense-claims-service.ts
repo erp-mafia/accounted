@@ -110,12 +110,33 @@ export type RegisterExpenseClaimResult =
       detail?: string
     }
 
-export async function registerExpenseClaim(
+export type RegisterExpenseClaimFailure = Extract<RegisterExpenseClaimResult, { ok: false }>
+
+/**
+ * Everything registration decides before it writes: who the claimant is and
+ * which liability account they are owed on, the SEK amounts, the fiscal year
+ * and the verifikat lines. Reads only (the company, the employee, the fiscal
+ * year, an exchange rate), so it is also the dry run of a registration.
+ */
+export interface ExpenseClaimPlan {
+  claimantName: string
+  employeeId: string | null
+  liabilityAccount: string
+  rate: number
+  amountSek: number
+  vatSek: number
+  fiscalPeriodId: string
+  /** The verifikat text, also each generated line's text. */
+  entryDescription: string
+  lines: CreateJournalEntryLineInput[]
+}
+
+export async function planExpenseClaim(
   supabase: SupabaseClient,
   companyId: string,
-  userId: string,
   input: RegisterExpenseClaimInput,
-): Promise<RegisterExpenseClaimResult> {
+  options: { dryRun?: boolean } = {},
+): Promise<{ ok: true; plan: ExpenseClaimPlan } | RegisterExpenseClaimFailure> {
   if (!input.lines && (input.vat_amount < 0 || input.vat_amount >= input.amount)) {
     return { ok: false, code: 'VAT_EXCEEDS_AMOUNT' }
   }
@@ -188,10 +209,12 @@ export async function registerExpenseClaim(
     if (input.exchange_rate && input.exchange_rate > 0) {
       rate = input.exchange_rate
     } else {
+      // A dry run reads the rate without the client, so the rate cache is
+      // not written either.
       const fetched = await fetchExchangeRate(
         input.currency,
         new Date(input.expense_date),
-        supabase,
+        options.dryRun ? undefined : supabase,
       )
       if (!fetched) return { ok: false, code: 'RATE_UNAVAILABLE' }
       rate = fetched.rate
@@ -214,40 +237,14 @@ export async function registerExpenseClaim(
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, input.expense_date)
   if (!fiscalPeriodId) return { ok: false, code: 'FISCAL_PERIOD_NOT_FOUND' }
 
-  // Claim row first, then the verifikat with source_id pointing back at it;
-  // a failed booking removes the orphan row again.
-  const { data: claim, error: insertError } = await supabase
-    .from('expense_claims')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      employee_id: employeeId,
-      claimant_name: claimantName,
-      description: input.description,
-      expense_date: input.expense_date,
-      amount_sek: amountSek,
-      vat_sek: vatSek,
-      currency: input.currency,
-      amount_in_currency: input.currency === 'SEK' ? null : roundOre(input.amount),
-      exchange_rate: input.currency === 'SEK' ? null : rate,
-      expense_account: input.expense_account,
-      liability_account: liability,
-      document_id: input.document_id ?? null,
-      status: 'registered',
-    })
-    .select('*')
-    .single()
-  if (insertError || !claim) {
-    return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: insertError?.message }
-  }
-
   const desc = `Utlägg: ${input.description} (${claimantName})`
 
-  let customLines: CreateJournalEntryLineInput[] | null = null
   if (input.lines) {
     // Convert each custom line at the claim rate; the per-line öre rounding
     // can leave a residual, which lands on the largest non-liability line so
     // the liability credit stays exactly amount_sek (the payout contract).
+    // Decided before the claim row is written, so a refusal here leaves no
+    // orphan row behind.
     const converted = input.lines.map((l) => ({
       account_number: l.account_number,
       debit_amount: (l.debit_amount || 0) > 0 ? roundOre(l.debit_amount * rate) : 0,
@@ -274,16 +271,29 @@ export async function registerExpenseClaim(
         return { ok: false, code: 'INVALID_LINES', detail: 'rounding residual exceeds line' }
       }
     }
-    customLines = converted.map((l) => ({
-      account_number: l.account_number,
-      debit_amount: l.debit_amount,
-      credit_amount: l.credit_amount,
-      line_description: l.line_description,
-      ...(l.dimensions ? { dimensions: l.dimensions } : {}),
-      ...(input.currency !== 'SEK' && l.account_number === liability
-        ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
-        : {}),
-    }))
+    return {
+      ok: true,
+      plan: {
+        claimantName,
+        employeeId,
+        liabilityAccount: liability,
+        rate,
+        amountSek,
+        vatSek,
+        fiscalPeriodId,
+        entryDescription: desc,
+        lines: converted.map((l) => ({
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+          line_description: l.line_description,
+          ...(l.dimensions ? { dimensions: l.dimensions } : {}),
+          ...(input.currency !== 'SEK' && l.account_number === liability
+            ? { currency: input.currency, amount_in_currency: roundOre(input.amount), exchange_rate: rate }
+            : {}),
+        })),
+      },
+    }
   }
 
   const lines: CreateJournalEntryLineInput[] = [
@@ -316,13 +326,66 @@ export async function registerExpenseClaim(
     line_description: desc,
   })
 
+  return {
+    ok: true,
+    plan: {
+      claimantName,
+      employeeId,
+      liabilityAccount: liability,
+      rate,
+      amountSek,
+      vatSek,
+      fiscalPeriodId,
+      entryDescription: desc,
+      lines,
+    },
+  }
+}
+
+export async function registerExpenseClaim(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: RegisterExpenseClaimInput,
+): Promise<RegisterExpenseClaimResult> {
+  const planned = await planExpenseClaim(supabase, companyId, input)
+  if (!planned.ok) return planned
+  const { plan } = planned
+
+  // Claim row first, then the verifikat with source_id pointing back at it;
+  // a failed booking removes the orphan row again.
+  const { data: claim, error: insertError } = await supabase
+    .from('expense_claims')
+    .insert({
+      company_id: companyId,
+      user_id: userId,
+      employee_id: plan.employeeId,
+      claimant_name: plan.claimantName,
+      description: input.description,
+      expense_date: input.expense_date,
+      amount_sek: plan.amountSek,
+      vat_sek: plan.vatSek,
+      currency: input.currency,
+      amount_in_currency: input.currency === 'SEK' ? null : roundOre(input.amount),
+      exchange_rate: input.currency === 'SEK' ? null : plan.rate,
+      expense_account: input.expense_account,
+      liability_account: plan.liabilityAccount,
+      document_id: input.document_id ?? null,
+      status: 'registered',
+    })
+    .select('*')
+    .single()
+  if (insertError || !claim) {
+    return { ok: false, code: 'CLAIM_INSERT_FAILED', detail: insertError?.message }
+  }
+
   const entryInput: CreateJournalEntryInput = {
-    fiscal_period_id: fiscalPeriodId,
+    fiscal_period_id: plan.fiscalPeriodId,
     entry_date: input.expense_date,
-    description: desc,
+    description: plan.entryDescription,
     source_type: 'expense_claim',
     source_id: claim.id,
-    lines: customLines ?? lines,
+    lines: plan.lines,
   }
 
   let journalEntryId: string
@@ -617,7 +680,13 @@ export type CreatePayoutBatchResult =
       total_sek: number
       claim_count: number
     }
-  | { ok: false; code: CreatePayoutBatchFailureCode; detail?: string }
+  | {
+      ok: false
+      code: CreatePayoutBatchFailureCode
+      detail?: string
+      /** The RPC's own error (a period-lock trigger, say), for the structured error mapping. */
+      error?: unknown
+    }
 
 const PAYOUT_RPC_CODES: ReadonlySet<string> = new Set<CreatePayoutBatchFailureCode>([
   'NO_CLAIMS',
@@ -690,7 +759,7 @@ export async function createPayoutBatch(
       code: (error as { code?: string }).code,
       message: error.message,
     })
-    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: error.message }
+    return { ok: false, code: 'BATCH_INSERT_FAILED', detail: error.message, error }
   }
 
   const row = (data ?? null) as PayoutRpcRow | null

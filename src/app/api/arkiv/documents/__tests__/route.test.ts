@@ -93,6 +93,54 @@ describe('GET /api/arkiv/documents', () => {
     expect(rows.find((r) => r.document_id === 'doc-booked')?.linked).toMatchObject({ unclassified: false, voucher: 'A9' })
   })
 
+  it('rejects an unknown folder', async () => {
+    expect((await parseJsonResponse(await call('?folder=attic'))).status).toBe(400)
+  })
+
+  it('pages one folder over the whole archive in the database order, with where the next page starts', async () => {
+    delete process.env.ARKIV_BRAIN_COMPANY_IDS
+    // arkiv_document_page: one more row than asked says there is a next page.
+    enqueue({ data: [{ id: 'doc-b' }, { id: 'doc-a' }, { id: 'doc-c' }] })
+    enqueue({
+      data: [
+        { id: 'doc-a', created_at: '2026-09-15T10:00:00Z', file_name: 'a.pdf', doc_type: 'receipt', admission_state: 'admitted', journal_entry_id: null },
+        { id: 'doc-b', created_at: '2026-09-14T10:00:00Z', file_name: 'b.pdf', doc_type: 'receipt', admission_state: 'admitted', journal_entry_id: null },
+      ],
+    })
+    const { status, body } = await parseJsonResponse(await call('?folder=receipts&limit=2&offset=40&year=2025'))
+    expect(status).toBe(200)
+    const out = body as { data: Array<{ document_id: string }>; next_offset: number | null }
+    expect(out.data.map((r) => r.document_id)).toEqual(['doc-b', 'doc-a'])
+    expect(out.next_offset).toBe(42)
+    expect(vi.mocked(mockSupabase.rpc)).toHaveBeenCalledWith('arkiv_document_page', {
+      p_company_id: 'company-1',
+      p_mode: 'in',
+      p_types: ['receipt'],
+      p_year: 2025,
+      p_offset: 40,
+      p_limit: 3,
+    })
+    expect(findCalls('document_attachments', 'in')).toContainEqual(['id', ['doc-b', 'doc-a']])
+  })
+
+  it('pages the other folder as every type no folder names, and the last page has no next', async () => {
+    enqueue({ data: [{ id: 'doc-x' }] })
+    enqueue({ data: [{ id: 'doc-x', created_at: '2026-09-15T10:00:00Z', file_name: 'x.pdf', doc_type: 'something_new', admission_state: 'admitted', journal_entry_id: null }] })
+    const { body } = await parseJsonResponse(await call('?folder=other'))
+    expect((body as { next_offset: number | null }).next_offset).toBeNull()
+    const args = vi.mocked(mockSupabase.rpc).mock.calls.find((c) => c[0] === 'arkiv_document_page')?.[1] as { p_mode: string; p_types: string[] }
+    expect(args.p_mode).toBe('not_in')
+    expect(args.p_types).toEqual(expect.arrayContaining(['receipt', 'agreement.loan', 'supplier_invoice']))
+    expect(args.p_types).not.toContain('other')
+  })
+
+  it('answers an empty folder page without reading documents', async () => {
+    enqueue({ data: [] })
+    const { body } = await parseJsonResponse(await call('?folder=untyped'))
+    expect(body).toEqual({ data: [], next_offset: null })
+    expect(findCalls('document_attachments', 'in')).toEqual([])
+  })
+
   it('searches page text and file names and answers empty when nothing matches', async () => {
     enqueue({ data: [] }) // search_document_pages
     enqueue({ data: [] }) // file names

@@ -19,6 +19,7 @@
  * works. Generating or downloading a file books nothing and settles nothing.
  */
 
+import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
@@ -36,7 +37,7 @@ import {
   type BatchInvoiceFacts,
   type BatchItemWarning,
 } from './batch-eligibility'
-import { formatPayeeLabel, type SupplierPayeeSource } from './supplier-payee'
+import { formatPayeeLabel, type SupplierPayee, type SupplierPayeeSource } from './supplier-payee'
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
 
@@ -234,10 +235,44 @@ export interface CreateBatchItemInput {
   payment_date?: string
 }
 
+/**
+ * What a line was expected to pay, pinned when a create was staged for
+ * approval (MCP) or copied from a dry run (v1). The payee is a fingerprint,
+ * never the account itself: a Swedish personkonto number IS the owner's
+ * personnummer, and staged params are stored and shown verbatim.
+ */
+export interface ExpectedBatchPayee {
+  supplier_invoice_id: string
+  payee_fingerprint: string
+  amount: number
+}
+
 export interface CreateBatchInput {
   format: 'pain001'
   items: CreateBatchItemInput[]
   confirm_already_batched?: boolean
+  /**
+   * When present, every line with a pin must still pay the same payee and
+   * amount, or the whole create is refused (payee_changed). The dashboard
+   * never sends it: its preview and create are seconds apart.
+   */
+  expected_payees?: ExpectedBatchPayee[]
+}
+
+/**
+ * Exact identity of a payee as a lowercase hex SHA-256 over its type and
+ * canonical digits. Equal fingerprints mean the same bankgiro, plusgiro or
+ * clearing + account number; any edit to the supplier's payment details
+ * changes it.
+ */
+export function payeeFingerprint(payee: SupplierPayee): string {
+  const canonical =
+    payee.type === 'bankgiro'
+      ? `bankgiro:${payee.bankgiro}`
+      : payee.type === 'plusgiro'
+        ? `plusgiro:${payee.plusgiro}`
+        : `bank_account:${payee.clearing}:${payee.account}`
+  return createHash('sha256').update(canonical, 'utf8').digest('hex')
 }
 
 export type CreateBatchResult =
@@ -247,6 +282,11 @@ export type CreateBatchResult =
   | { ok: false; code: 'amount_exceeds_remaining'; details: Array<{ id: string }> }
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
   | { ok: false; code: 'already_batched'; details: Array<{ id: string; batch_id: string }> }
+  | {
+      ok: false
+      code: 'payee_changed'
+      details: Array<{ id: string; supplier_name: string; changed: Array<'payee' | 'amount'> }>
+    }
   | { ok: false; code: 'create_failed' }
 
 /** Shape returned by the create_supplier_payment_batch RPC. */
@@ -254,12 +294,32 @@ type CreateBatchRpcResult =
   | { ok: true; batch: SupplierPaymentBatch }
   | { ok: false; code: string; details?: unknown }
 
-export async function createSupplierPaymentBatch(
+/** One planned batch line: the item row to insert plus the warnings the preview showed for it. */
+export type PlannedBatchItem = Omit<SupplierPaymentBatchItem, 'id' | 'batch_id' | 'created_at'>
+
+export interface SupplierPaymentBatchPlan {
+  debtor: BatchDebtor
+  items: PlannedBatchItem[]
+  /** Parallel to items: the non-blocking warnings each line carries. */
+  warnings: BatchItemWarning[][]
+  total_amount: number
+}
+
+export type PlanBatchResult =
+  | { ok: true; plan: SupplierPaymentBatchPlan }
+  | Exclude<CreateBatchResult, { ok: true }>
+
+/**
+ * Everything create checks, and nothing it writes: resolve the debtor,
+ * re-read and re-evaluate every invoice, and build the item rows. Reads
+ * only, so it is also the dry run (an MCP stage, ?dry_run=true); no batch id
+ * or MsgId is minted here.
+ */
+export async function planSupplierPaymentBatch(
   supabase: SupabaseClient,
   companyId: string,
-  userId: string,
   input: CreateBatchInput,
-): Promise<CreateBatchResult> {
+): Promise<PlanBatchResult> {
   const today = getSwedishLocalDate()
   const ids = input.items.map((item) => item.supplier_invoice_id)
 
@@ -284,7 +344,10 @@ export async function createSupplierPaymentBatch(
   const excessive: Array<{ id: string }> = []
   const invalidAmount: Array<{ id: string }> = []
   const alreadyBatched: Array<{ id: string; batch_id: string }> = []
-  const itemRows: Array<Omit<SupplierPaymentBatchItem, 'id' | 'batch_id' | 'created_at'>> = []
+  const payeeChanged: Array<{ id: string; supplier_name: string; changed: Array<'payee' | 'amount'> }> = []
+  const pins = new Map((input.expected_payees ?? []).map((pin) => [pin.supplier_invoice_id, pin]))
+  const itemRows: PlannedBatchItem[] = []
+  const itemWarnings: BatchItemWarning[][] = []
 
   for (const item of input.items) {
     const invoice = byId.get(item.supplier_invoice_id)
@@ -321,6 +384,21 @@ export async function createSupplierPaymentBatch(
     const paymentDate = requestedDate > today ? requestedDate : today
 
     const { payee } = evaluation
+
+    // A line staged for approval pays exactly what the approver saw: a
+    // supplier whose payment details (or remaining amount) changed since
+    // is refused, never silently paid to the new account.
+    const pin = pins.get(invoice.id)
+    if (pin) {
+      const changed: Array<'payee' | 'amount'> = []
+      if (pin.payee_fingerprint !== payeeFingerprint(payee)) changed.push('payee')
+      if (Math.abs(roundOre(pin.amount) - amount) > ORE_TOLERANCE) changed.push('amount')
+      if (changed.length > 0) {
+        payeeChanged.push({ id: invoice.id, supplier_name: invoice.supplier.name, changed })
+        continue
+      }
+    }
+
     itemRows.push({
       company_id: companyId,
       supplier_invoice_id: invoice.id,
@@ -336,13 +414,36 @@ export async function createSupplierPaymentBatch(
       reference_type: evaluation.reference.type,
       reference: evaluation.reference.value,
     })
+    itemWarnings.push(evaluation.warnings)
   }
 
   if (ineligible.length > 0) return { ok: false, code: 'ineligible', details: ineligible }
   if (invalidAmount.length > 0) return { ok: false, code: 'invalid_amount', details: invalidAmount }
   if (excessive.length > 0) return { ok: false, code: 'amount_exceeds_remaining', details: excessive }
+  if (payeeChanged.length > 0) return { ok: false, code: 'payee_changed', details: payeeChanged }
   if (alreadyBatched.length > 0) return { ok: false, code: 'already_batched', details: alreadyBatched }
   if (itemRows.length === 0) return { ok: false, code: 'create_failed' }
+
+  return {
+    ok: true,
+    plan: {
+      debtor,
+      items: itemRows,
+      warnings: itemWarnings,
+      total_amount: sumOre(itemRows.map((row) => row.amount)),
+    },
+  }
+}
+
+export async function createSupplierPaymentBatch(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateBatchInput,
+): Promise<CreateBatchResult> {
+  const planned = await planSupplierPaymentBatch(supabase, companyId, input)
+  if (!planned.ok) return planned
+  const { debtor, items: itemRows } = planned.plan
 
   // The id is minted here (not by the DB default) because msg_id derives from
   // it and both must land in the same transaction.
@@ -484,11 +585,16 @@ export function renderSupplierPaymentBatchFile(
     { messageId: batch.msg_id, createdAt: batch.created_at },
   )
 
-  const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
-  const shortId = batch.id.replace(/-/g, '').slice(0, 8)
   return {
     content,
     contentType: 'application/xml; charset=utf-8',
-    filename: `betalfil_${datePart}_${shortId}.xml`,
+    filename: supplierPaymentBatchFilename(batch),
   }
+}
+
+/** The download filename of a batch's file: betalfil_<yyyymmdd>_<first 8 of the id>.xml. */
+export function supplierPaymentBatchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): string {
+  const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
+  const shortId = batch.id.replace(/-/g, '').slice(0, 8)
+  return `betalfil_${datePart}_${shortId}.xml`
 }

@@ -55,6 +55,9 @@ const READ_ONLY_RPCS = new Set([
   'sales_order_invoiced_quantities',
   // The kontoplan usage count: the account delete/deactivate previews read it.
   'get_account_usage_counts',
+  // The entitlement read (hasCapability): the payslip send preview checks
+  // the email_send capability before listing recipients.
+  'company_capability_grant_rows',
 ])
 
 /**
@@ -289,7 +292,74 @@ const SETTLED_SKATTEKONTO_ROW = {
 const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
+const DEFERRED_BOOKING_ROWS: Record<string, Record<string, unknown>> = {
+  company_settings: { accounting_method: 'accrual', entity_type: 'aktiebolag', bookkeeping_locked_through: null },
+  fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+  invoices: {
+    status: 'sent',
+    journal_entry_id: null,
+    credited_invoice_id: null,
+    document_type: 'invoice',
+    invoice_number: 'F-1',
+    invoice_date: '2026-01-15',
+    currency: 'SEK',
+    subtotal: 100,
+    vat_amount: 25,
+    total: 125,
+    vat_treatment: 'standard_25',
+    items: [],
+    customer: { name: 'Kunden AB' },
+  },
+  supplier_invoices: {
+    status: 'registered',
+    registration_journal_entry_id: null,
+    is_credit_note: false,
+    invoice_date: '2026-01-15',
+    currency: 'SEK',
+    total: 125,
+    vat_treatment: 'standard_25',
+    reverse_charge: false,
+    arrival_number: 1,
+    items: [{ account_number: '6110', line_total: 100, vat_rate: 0.25, vat_amount: 25 }],
+    supplier: { id: SOME_UUID, name: 'Leverantören AB', supplier_type: 'swedish_business' },
+  },
+}
+
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Deferred Bokför (#967): a sent/registered, unbooked invoice under
+  // faktureringsmetoden in an open, unlocked year. The preview builds the
+  // real generator's lines, which reads the fiscal period and writes nothing.
+  gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
+  gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing
+  // on a payslip, both payout accounts in the chart, an unbooked SEK outflow
+  // equal to the claim for the bank match.
+  gnubok_create_expense_claim: {
+    args: { description: 'USB-hubb', amount: 500, vat_amount: 100, expense_account: '5410', claimant_name: 'Anna Svensson', currency: 'SEK' },
+    rows: { companies: { entity_type: 'aktiebolag' } },
+  },
+  gnubok_delete_expense_claim: {
+    rows: { expense_claims: { status: 'registered', journal_entry_id: SOME_UUID }, journal_entries: { status: 'posted' } },
+    empty: ['salary_line_items'],
+  },
+  gnubok_record_expense_payout: {
+    args: { cash_account: '1930' },
+    rows: {
+      expense_claims: { status: 'registered', employee_id: null, claimant_name: 'Anna Svensson', liability_account: '2893', amount_sek: 500 },
+      chart_of_accounts: { is_active: true },
+    },
+    empty: ['salary_line_items'],
+  },
+  gnubok_match_expense_payout: {
+    rows: {
+      transactions: { date: '2026-01-15', amount: -500, currency: 'SEK', journal_entry_id: null, cash_account_id: null, transaction_voucher_links: [] },
+      cash_accounts: { ledger_account: '1930' },
+      expense_claims: { status: 'registered', employee_id: null, claimant_name: 'Anna Svensson', liability_account: '2893', amount_sek: 500 },
+      chart_of_accounts: { is_active: true },
+    },
+    empty: ['salary_line_items'],
+  },
   // Operation registry, wave 1: bank accounts and settings are owner/admin
   // only on every door, so the preview reads the caller's role.
   gnubok_update_company_tax_profile: { args: { f_skatt: true }, rows: { company_members: { role: 'owner' } } },
@@ -310,9 +380,39 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     counts: { transactions: 0 },
     empty: ['transactions'],
   },
+  // Salary-run lifecycle: each needs the run in the status its verb starts from.
+  gnubok_send_payslips: {
+    rows: {
+      salary_runs: { status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' },
+      'rpc:company_capability_grant_rows': { expires_at: null },
+      salary_run_employees: { employee_id: SOME_UUID, employee: { first_name: 'Anna', last_name: 'Andersson', email: null } },
+    },
+  },
+  gnubok_revert_salary_run: { rows: { salary_runs: { status: 'review' } } },
+  gnubok_unapprove_salary_run: {
+    rows: { salary_runs: { status: 'approved', agi_submitted_at: null }, agi_declarations: { status: 'generated' } },
+  },
+  gnubok_attach_salary_expense_claims: {
+    rows: { expense_claims: { description: 'Tågbiljett', expense_date: '2026-09-03', amount_sek: 450, liability_account: '2820' } },
+  },
   gnubok_reopen_fiscal_period_external: {
     rows: { fiscal_periods: { is_closed: true, closed_externally: true, closing_entry_id: null } },
   },
+  // Betalfil: a payable SEK invoice with a valid bankgiro, complete company
+  // bank details, and no active batch holding the invoice.
+  gnubok_create_supplier_payment_batch: {
+    rows: {
+      companies: { name: 'Testbolaget AB', org_number: '556677-8899' },
+      company_settings: { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: null },
+      supplier_invoices: {
+        status: 'approved', approved_at: '2026-08-01T10:00:00Z', due_date: '2099-08-20', remaining_amount: 737.5, currency: 'SEK',
+        is_credit_note: false, payment_reference: null, supplier_invoice_number: 'CD3014794407',
+        supplier: { id: SOME_UUID, name: 'Derome Bygg AB', city: 'Varberg', bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null },
+      },
+    },
+    empty: ['supplier_payment_batch_items'],
+  },
+  gnubok_cancel_supplier_payment_batch: { rows: { supplier_payment_batches: { status: 'created', item_count: 1, total_amount: 737.5, download_count: 0 } } },
   // A custom (non-system) dimension: system dimensions are never deleted.
   gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.

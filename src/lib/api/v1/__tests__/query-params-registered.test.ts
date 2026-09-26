@@ -72,7 +72,16 @@ describe('v1 query parameters are registered', () => {
   it('every parameter a route reads is registered, and every registered parameter is read', () => {
     const problems: string[] = []
     for (const [file, endpoints] of byFile) {
-      const read = paramsReadBy(readFileSync(file, 'utf8'))
+      const source = readFileSync(file, 'utf8')
+      const read = paramsReadBy(source)
+      // An operation's GET door (v1OperationHandler) forwards the whole query
+      // string into the operation's input schema, and registers exactly that
+      // schema as the query: what it registers is what it reads.
+      if (/\bGET\s*=\s*v1OperationHandler\(/.test(source)) {
+        for (const ep of endpoints.filter((e) => e.method === 'GET')) {
+          for (const p of queryParameters(ep)) read.add(p.name)
+        }
+      }
       const registered = new Set(
         endpoints.flatMap((ep) => queryParameters(ep).map((p) => p.name)).filter((n) => !WRAPPER_PARAMS.has(n)),
       )

@@ -167,7 +167,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
         {/* The document itself, first: what was read from it sits beside it. */}
         <div className="lg:sticky lg:top-4 lg:self-start">
-          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} page={initialPage} className="h-[72vh]" />
+          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} mime={view.mime_type ?? 'application/octet-stream'} page={initialPage} className="h-[72vh]" />
         </div>
         <div className="space-y-8">
         {view.record && (

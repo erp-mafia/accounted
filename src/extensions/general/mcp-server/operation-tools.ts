@@ -150,14 +150,20 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
           { dryRun: true },
         )
         if (!preview.ok) throwOutcomeFailure(preview)
+        const previewData = preview.dryRun ? preview.preview : {}
+        // Pinned params (e.g. the payee each payment goes to) make the
+        // commit refuse when what the approver saw no longer holds.
+        const params = stage.pinParams
+          ? stage.pinParams(input as Record<string, unknown>, previewData)
+          : (input as Record<string, unknown>)
         return deps.stagePendingOperation(
           supabase,
           companyId,
           userId,
           stage.pendingType,
           stage.title(input as Record<string, unknown>),
-          input as Record<string, unknown>,
-          preview.dryRun ? preview.preview : {},
+          params,
+          previewData,
           actor,
           undefined,
           {

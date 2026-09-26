@@ -29,7 +29,7 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
+import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
@@ -96,8 +96,12 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
 
   const pack: KnowledgeOption | undefined = options.data?.find((o) => rulesSegment(o.id) === segment)
   const shared = catalog.data?.find((s) => s.tier === 'community' && communitySegment(s.slug) === segment)
+  const builtIn = segment.startsWith('analys.') ? catalog.data?.find((s) => s.source === 'accounted' && s.itemKind === 'analysis' && analysisSegment(s.slug) === segment) : undefined
   const mine = segment.startsWith('egen.') ? catalog.data?.find((s) => s.tier === 'own' && s.slug === `own/${segment.slice(5)}`) : undefined
-  const item: Item | null = mine ? {
+  const item: Item | null = builtIn ? {
+    kind: 'analysis', key: builtIn.slug, name: builtIn.name, desc: builtIn.summary, body: builtIn.summary,
+    atomId: null, version: builtIn.version ?? null, reviewedAt: null, level: null, community: null,
+  } : mine ? {
     kind: mine.itemKind ?? 'rules', key: mine.slug, name: mine.name, desc: mine.summary, body: mine.summary,
     // Own knowledge a person added can be given to flows, as a pack can (own/<id>).
     atomId: (mine.itemKind ?? 'rules') === 'rules' && !mine.draft ? mine.slug : null, version: null, reviewedAt: null, level: null, community: null, own: true,
@@ -111,7 +115,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   } : null
 
   // What the AI actually reads: the pack's own text from the registry, fetched when the page opens.
-  const bodySlug = pack?.id ?? shared?.slug ?? mine?.slug ?? null
+  const bodySlug = pack?.id ?? shared?.slug ?? mine?.slug ?? builtIn?.slug ?? null
   const body = useSWR(bodySlug ? ['/api/skills', companyId, bodySlug] : null, ([url, , slug]) => readBody(`${url}?slug=${encodeURIComponent(slug)}`))
   // Gone only once a fresh list says so: a cached one can predate an item just saved.
   async function patchMine(payload: object): Promise<boolean> {
@@ -169,7 +173,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
   const steps = isFlow && body.data ? ownSkillSteps(body.data) : []
   function runShared(target: ClaudeTarget = 'web') {
-    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
+    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
     // A shared item's text carries what its author wrote, so the prompt is copied rather than typed into the chat.
     const prompt = t('skill_prompt', { name: item!.name, slug: item!.key, client })
     void (client === 'claude' ? openInClaude(target, prompt, false) : copyPromptAndOpen(prompt, client, false)).then(() => setRan(true))
@@ -270,7 +274,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               </>
             )}
             {view === 'routine' && (
-              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
+              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
             )}
             {view === 'give' && item.atomId && (
               <SubView title={t('give_to_flow')} onBack={() => setView('main')}>

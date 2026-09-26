@@ -2,10 +2,420 @@
 
 # Suppliers (AP) endpoints
 
-Accounts payable: supplier register and received supplier invoices (register -> approve -> mark-paid, or credit).
+Accounts payable: supplier register, received supplier invoices (register -> approve -> book if deferred -> pay via a supplier payment file or mark-paid, or credit), and expense claims (utlägg) with their payouts.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
+
+### `GET /api/v1/companies/{companyId}/expense-claims`
+
+**List expense claims (utlägg): what the company owes owners and employees for private purchases.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the utlägg register newest first: each claim's claimant, SEK amount, VAT, cost and liability account, status (registered = still owed, paid = repaid) and the verifikat that booked it. Filter by status or employee_id. Cursor pagination: pass next_cursor back as cursor; next_cursor is null on the last page.
+
+**Use when:** You need the open claims before paying someone back or matching a bank transfer, or you are reconciling 2893/2820/2890 against who is owed what.
+**Do not use for:** Supplier invoices (GET /supplier-invoices) or salary (the payroll endpoints); an utlägg put on a payslip is still listed here as registered until the salary run is booked.
+
+**Pitfalls:**
+- amount_sek is gross incl. VAT: the amount owed, not the cost.
+- A claim on 2018 (enskild firma owner) is an egen insättning, not a debt; it is listed but is not normally paid back.
+- The page is in data.expense_claims with data.next_cursor; a cursor that no longer decodes starts from the first page.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"registered" \| "paid"` | no | registered = still owed, paid = repaid. |
+| `employee_id` | query | `string` | no | Only this employee's claims. |
+| `cursor` | query | `string` | no | next_cursor from the previous page. Omit for the first page. |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). |
+
+Response `200`:
+```ts
+{
+  data: {
+    expense_claims: { expense_claim_id: string, employee_id: string | null, claimant_name: string, description: string, expense_date: string, amount_sek: number, vat_sek: number, currency: string, amount_in_currency: number | null, exchange_rate: number | null, expense_account: string, liability_account: string, document_id: string | null, status: "registered" | "paid", journal_entry_id: string | null, payout_batch_id: string | null, created_at: string }[],
+    next_cursor: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "expense_claims": [
+      {
+        "expense_claim_id": "5a0a…",
+        "employee_id": null,
+        "claimant_name": "Anna Svensson",
+        "description": "USB-hubb",
+        "expense_date": "2026-09-01",
+        "amount_sek": 500,
+        "vat_sek": 100,
+        "currency": "SEK",
+        "amount_in_currency": null,
+        "exchange_rate": null,
+        "expense_account": "5410",
+        "liability_account": "2893",
+        "document_id": null,
+        "status": "registered",
+        "journal_entry_id": "9c1e…",
+        "payout_batch_id": null,
+        "created_at": "2026-09-01T09:12:00Z"
+      }
+    ],
+    "next_cursor": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/expense-claims`
+
+**Register an expense claim (utlägg) and post its verifikat.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
+
+Books a business cost someone paid privately: Debit the cost account (net), Debit 2641 (vat_amount), Credit the person's liability account (gross), in one verifikat posted immediately. The liability account follows the claimant: employee_id books 2820; otherwise the owner's account for the legal form (2893 aktiebolag, 2018 enskild firma as egen insättning, 2890 förening member) with claimant_name. Foreign currency converts at exchange_rate or Riksbanken's rate for expense_date. lines replaces the generated rows (reverse charge, templates) and must credit the liability account with exactly amount. document_id attaches the receipt to the verifikat; inbox_item_id marks the inbox item booked. Idempotent. Dry-runnable.
+
+**Use when:** A receipt was paid with a private card or cash: the answer to "Vem betalade?" is the owner or an employee, not the company account.
+**Do not use for:** A purchase the company paid itself (categorize the bank transaction or register a supplier invoice), an unpaid supplier invoice (POST /supplier-invoices) or mileage (körjournal).
+
+**Pitfalls:**
+- amount is gross incl. VAT and vat_amount must be below it; foreign VAT is not deductible on 2641, so send vat_amount 0 for a foreign receipt.
+- The verifikat is posted at once and is immutable: undo it with DELETE /expense-claims/{id}, which posts a storno.
+- employee_id wins over claimant_name: the employee's own name is stored.
+- A date in a locked period or behind the company lock date returns 400 PERIOD_LOCKED; no open fiscal year returns EXPENSE_CLAIM_NO_FISCAL_PERIOD.
+- expense_account is a STRING in class 4-8 ("5410"), never a number.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  description: string,
+  expense_date: string,
+  amount: number,
+  vat_amount?: number,
+  currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  exchange_rate?: number,
+  expense_account: string,
+  employee_id?: string | null,
+  claimant_name?: string,
+  document_id?: string | null,
+  inbox_item_id?: string | null,
+  lines?: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string | null }[]
+}
+```
+
+Example request:
+```json
+{
+  "description": "USB-hubb",
+  "expense_date": "2026-09-01",
+  "amount": 500,
+  "vat_amount": 100,
+  "expense_account": "5410",
+  "claimant_name": "Anna Svensson"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    expense_claim_id: string,
+    employee_id: string | null,
+    claimant_name: string,
+    description: string,
+    expense_date: string,
+    amount_sek: number,
+    vat_sek: number,
+    currency: string,
+    amount_in_currency: number | null,
+    exchange_rate: number | null,
+    expense_account: string,
+    liability_account: string,
+    document_id: string | null,
+    status: "registered" | "paid",
+    journal_entry_id: string | null,
+    payout_batch_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "expense_claim_id": "5a0a…",
+    "employee_id": null,
+    "claimant_name": "Anna Svensson",
+    "description": "USB-hubb",
+    "expense_date": "2026-09-01",
+    "amount_sek": 500,
+    "vat_sek": 100,
+    "currency": "SEK",
+    "amount_in_currency": null,
+    "exchange_rate": null,
+    "expense_account": "5410",
+    "liability_account": "2893",
+    "document_id": null,
+    "status": "registered",
+    "journal_entry_id": "9c1e…",
+    "payout_batch_id": null,
+    "created_at": "2026-09-01T09:12:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/expense-claims/{id}`
+
+**Read one expense claim (utlägg).**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns one claim: who is owed, the SEK amount and VAT, the cost and liability accounts, its status and the verifikat that booked it (journal_entry_id) and, once paid, the payout batch.
+
+**Use when:** You hold an expense_claim_id (from the list or a create) and need its current status.
+**Do not use for:** Finding claims: list them with GET /expense-claims?status=registered.
+
+**Pitfalls:**
+- An id from another company answers 404 EXPENSE_CLAIM_NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    expense_claim_id: string,
+    employee_id: string | null,
+    claimant_name: string,
+    description: string,
+    expense_date: string,
+    amount_sek: number,
+    vat_sek: number,
+    currency: string,
+    amount_in_currency: number | null,
+    exchange_rate: number | null,
+    expense_account: string,
+    liability_account: string,
+    document_id: string | null,
+    status: "registered" | "paid",
+    journal_entry_id: string | null,
+    payout_batch_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "expense_claim_id": "5a0a…",
+    "employee_id": null,
+    "claimant_name": "Anna Svensson",
+    "description": "USB-hubb",
+    "expense_date": "2026-09-01",
+    "amount_sek": 500,
+    "vat_sek": 100,
+    "currency": "SEK",
+    "amount_in_currency": null,
+    "exchange_rate": null,
+    "expense_account": "5410",
+    "liability_account": "2893",
+    "document_id": null,
+    "status": "registered",
+    "journal_entry_id": "9c1e…",
+    "payout_batch_id": null,
+    "created_at": "2026-09-01T09:12:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/expense-claims/{id}`
+
+**Delete a registered expense claim; its verifikat is reversed by storno, never deleted.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Removes an unpaid claim from the register. The verifikat that booked it stays (BFL 5 kap 5 §): a storno verifikat reverses it and the receipt stays on the original. A claim scheduled on a draft payslip has that line removed first. Paid claims and claims on a payslip past draft are refused. Answers reversal_entry_id (null when the original verifikat no longer exists). Idempotent. Dry-runnable.
+
+**Use when:** A claim was registered by mistake (wrong person, duplicate receipt) and has not been paid back.
+**Do not use for:** Correcting an amount or account on a booked claim (delete and register again, or correct the verifikat), or undoing a payout.
+
+**Pitfalls:**
+- A paid claim returns 409 EXPENSE_CLAIM_ALREADY_PAID; a claim on a payslip past draft returns 409 EXPENSE_CLAIM_ON_PAYSLIP.
+- The storno is a new verifikat with its own number: the original number is never freed.
+- A locked period for the storno date surfaces as PERIOD_LOCKED from the engine.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, expense_claim_id: string, reversal_entry_id: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "expense_claim_id": "5a0a…",
+    "reversal_entry_id": "b7d2…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/expense-claims/payouts`
+
+**Record that the company paid a person back for their expense claims.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Books one repayment of N registered claims of ONE person: Debit the liability account (2013 eget uttag for an enskild firma owner's 2018), Credit cash_account (19xx), for the claims' total, and marks them paid, all in one transaction that locks the claims. No money moves: this records a transfer made outside Accounted. Idempotent. Dry-runnable.
+
+**Use when:** The person was paid back from an account without a bank feed, or the transfer cannot be matched to a bank row.
+**Do not use for:** A repayment that is a bank transaction in Accounted: match it (POST /transactions/{id}/match-expense-payout), or the row gets booked twice. Repayment through salary is the payroll flow.
+
+**Pitfalls:**
+- All claims must belong to one person and one liability account (400 EXPENSE_PAYOUT_MIXED_CLAIMANTS / MIXED_LIABILITY).
+- A paid claim returns 409 EXPENSE_PAYOUT_ALREADY_PAID; one on a payslip returns 409 EXPENSE_PAYOUT_ON_PAYSLIP.
+- cash_account is a STRING 19xx ("1930") that must be active in the chart.
+- Partial payouts are not supported: pay whole claims.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ claim_ids: string[], payout_date: string, cash_account: string, notes?: string }
+```
+
+Example request:
+```json
+{
+  "claim_ids": [
+    "5a0a…"
+  ],
+  "payout_date": "2026-09-05",
+  "cash_account": "1930"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    batch_id: string,
+    journal_entry_id: string,
+    voucher_number: number | null,
+    total_sek: number,
+    claim_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "batch_id": "e1f0…",
+    "journal_entry_id": "4d2a…",
+    "voucher_number": 118,
+    "total_sek": 500,
+    "claim_count": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
 
 ### `GET /api/v1/companies/{companyId}/supplier-invoices`
 
@@ -90,7 +500,7 @@ Example response `200`:
 **Register a new supplier invoice.**
 `scope:suppliers:write · risk:medium · idempotent · dry-run · reversible`
 
-Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
 **Use when:** You're registering an incoming leverantörsfaktura. Use dry-run first to validate VAT calculations + period-lock state before committing.
 **Do not use for:** Marking an existing SI as paid (use POST /:id/mark-paid). Issuing a credit note (use POST /:id/credit). Customer invoices (different resource).
@@ -405,7 +815,7 @@ Example response `200`:
 **Approve a registered or overdue supplier invoice.**
 `scope:suppliers:write · risk:low · idempotent · dry-run`
 
-Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`). The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual, or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.
+Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`). The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual (or, under defer_invoice_booking, is posted by POST /supplier-invoices/{id}/book), or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.
 
 **Use when:** A registered SI has been reviewed and you want to mark it ready for payment. Many AP workflows gate :mark-paid behind an explicit approval step.
 **Do not use for:** Posting a journal entry (already done at :create under accrual). Paying the SI (use :mark-paid). Re-approving an already-approved SI (returns 400 SI_APPROVE_NOT_REGISTERED).
@@ -450,6 +860,75 @@ Example response `200`:
     "status": "approved",
     "arrival_number": 42,
     "supplier_invoice_number": "2026-1234"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/book`
+
+**Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step).**
+`scope:suppliers:write · risk:high · idempotent · dry-run`
+
+For companies with defer_invoice_booking=true (Registrera men bokför inte): POST /supplier-invoices registers the invoice without posting anything, and this step posts the registration verifikat afterwards (Debit cost accounts per line + 2641 ingående moms, or fiktiv moms for reverse charge; Credit 2440 Leverantörsskulder; periodiserade lines on 17xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The retained source document is anchored to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.
+
+**Use when:** A supplier invoice is registered, approved or overdue, has no registration_journal_entry_id, and the company books supplier invoices in a separate step (defer_invoice_booking).
+**Do not use for:** Paid or partially paid invoices (their payment booked them in full), credit notes, or any supplier invoice under kontantmetoden (booked at payment via :mark-paid).
+
+**Pitfalls:**
+- An invoice that already has a registration_journal_entry_id answers 400 SI_BOOK_ALREADY_BOOKED.
+- Status other than registered, approved or overdue answers 400 SI_BOOK_INVALID_STATUS with details.currentStatus.
+- Under kontantmetoden answers 400 SI_BOOK_CASH_METHOD.
+- A locked or closed period, or an invoice date on or before the company lock date (bookkeeping_locked_through), answers 400 PERIOD_LOCKED with details.reason, details.fiscal_period_id and details.invoice_date. Nothing is generated, so no voucher number is spent: unlock the period (only if the user asked for that correction) and retry.
+- No open fiscal year covering the invoice date answers 400 SI_BOOK_NO_FISCAL_PERIOD.
+- Booking does not attest the invoice: :approve is a separate step and may come before or after.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_invoice: { id: string, arrival_number: number | null, supplier_invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, registration_journal_entry_id: string | null },
+    journal_entry_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice": {
+      "id": "3b4c…",
+      "arrival_number": 118,
+      "supplier_invoice_number": "55012",
+      "status": "approved",
+      "invoice_date": "2026-09-03",
+      "due_date": "2026-10-03",
+      "currency": "SEK",
+      "total": 6250,
+      "registration_journal_entry_id": "6d7e…"
+    },
+    "journal_entry_id": "6d7e…"
   },
   "meta": {
     "request_id": "req_…",
@@ -604,6 +1083,519 @@ Example response `200`:
     "remaining_amount": 0,
     "paid_at": "2026-05-13",
     "payment_journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-payment-batches`
+
+**List supplier payment batches (betalfiler), newest first, with settlement progress.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the company's payment batches, newest first, cursor-paginated: status, total, item count, how many member invoices are settled (derived from the live invoices), download count and the member supplier_invoice_ids. Pass next_cursor from the answer as cursor to get the next page; it is null on the last page.
+
+**Use when:** Checking which betalfiler exist, whether one has been downloaded, or which invoices are already in an active batch.
+**Do not use for:** The lines of one batch (GET /supplier-payment-batches/{id}).
+
+**Pitfalls:**
+- next_cursor rides in data (not meta): pass it back as ?cursor= until it is null.
+- settled_count counts invoices with nothing left to pay, however they were settled; a created batch is not proof the bank executed it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"created" \| "cancelled" \| "all"` | no | created (active), cancelled, or all (default). |
+| `limit` | query | `number` | no | Page size, 1-100 (default 50). |
+| `cursor` | query | `string` | no | next_cursor from the previous page. Omit for the first page. |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_payment_batches: { supplier_payment_batch_id: string, format: "pain001", status: "created" | "cancelled", currency: string, total_amount: number, item_count: number, settled_count: number, msg_id: string, file_generated_at: string | null, download_count: number, created_at: string, cancelled_at: string | null, supplier_invoice_ids: string[] }[],
+    next_cursor: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_payment_batches": [
+      {
+        "supplier_payment_batch_id": "5b0c…",
+        "format": "pain001",
+        "status": "created",
+        "currency": "SEK",
+        "total_amount": 12500,
+        "item_count": 2,
+        "settled_count": 0,
+        "msg_id": "ACCOUNTED-5566778899-B5B0C1A2F",
+        "file_generated_at": null,
+        "download_count": 0,
+        "created_at": "2026-09-25T09:00:00Z",
+        "cancelled_at": null,
+        "supplier_invoice_ids": [
+          "9e2f…",
+          "0a7d…"
+        ]
+      }
+    ],
+    "next_cursor": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-payment-batches`
+
+**Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices.**
+`scope:suppliers:write · risk:high · idempotent · dry-run`
+
+Creates a payment batch: an immutable snapshot of one credit transfer per invoice (amount, payment date, the supplier's bankgiro / plusgiro / bank account, OCR or invoice-number reference) and the company's own bank details as debtor, with a pain.001 MsgId fixed at creation. Every invoice is re-read and re-checked inside one transaction, so an invoice settled or already batched meanwhile is refused. Books nothing and marks nothing paid. Download the XML with GET /supplier-payment-batches/{id}/file and upload it in the bank, where the payments are signed; afterwards settle each invoice with mark-paid or bank matching. Idempotent. Dry-runnable.
+
+**Use when:** The user wants to pay approved supplier invoices through their bank's file upload (typically the weekly or monthly payment run).
+**Do not use for:** Marking invoices paid (POST /supplier-invoices/{id}/mark-paid), paying salaries (salary-runs/{id}/payment-file) or sending anything to the bank: this only produces the file.
+
+**Pitfalls:**
+- Money leaves the company's account once the file is uploaded and signed in the bank: preview first (POST /supplier-payment-batches/preview) and check amounts and payees.
+- An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.
+- Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic or org_number (company settings).
+- An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.
+- A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.
+- Between two requests (dry run, then create) a supplier's bank details can change: pass expected_payees from the dry run's items (payee.fingerprint, amount) and create answers 409 SI_BATCH_PAYEE_CHANGED instead of paying a changed account. A staged MCP create is pinned this way automatically.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  format?: "pain001",
+  items: { supplier_invoice_id: string, amount?: number, payment_date?: string }[],
+  confirm_already_batched?: boolean,
+  expected_payees?: { supplier_invoice_id: string, payee_fingerprint: string, amount: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "items": [
+    {
+      "supplier_invoice_id": "9e2f…"
+    },
+    {
+      "supplier_invoice_id": "0a7d…",
+      "amount": 5000
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_payment_batch_id: string,
+    msg_id: string,
+    format: "pain001",
+    status: "created",
+    currency: string,
+    total_amount: number,
+    item_count: number,
+    created_at: string,
+    file: { filename: string, download: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_payment_batch_id": "5b0c…",
+    "msg_id": "ACCOUNTED-5566778899-B5B0C1A2F",
+    "format": "pain001",
+    "status": "created",
+    "currency": "SEK",
+    "total_amount": 12500,
+    "item_count": 2,
+    "created_at": "2026-09-25T09:00:00Z",
+    "file": {
+      "filename": "betalfil_20260925_5b0c1a2f.xml",
+      "download": "/api/v1/companies/{companyId}/supplier-payment-batches/{supplier_payment_batch_id}/file"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-payment-batches/{id}`
+
+**Read one supplier payment batch (betalfil) with its lines and live settlement.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the batch, the company bank details it debits (as snapshotted at creation), and one line per invoice: amount, payment date, payee, reference, and the invoice's live status and remaining amount. file names the download filename and the v1 path that serves the XML (available only while the batch is not cancelled).
+
+**Use when:** Checking what a betalfil pays, or which of its invoices are settled.
+**Do not use for:** Getting the XML itself: GET /supplier-payment-batches/{id}/file.
+
+**Pitfalls:**
+- The payee and amount per line are the snapshot the file pays, even if the supplier's details changed since.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_payment_batch_id: string,
+    format: "pain001",
+    status: "created" | "cancelled",
+    currency: string,
+    total_amount: number,
+    item_count: number,
+    settled_count: number,
+    msg_id: string,
+    file_generated_at: string | null,
+    download_count: number,
+    created_at: string,
+    cancelled_at: string | null,
+    supplier_invoice_ids: string[],
+    debtor: { name: string, iban: string, bic: string },
+    items: { supplier_payment_batch_item_id: string, supplier_invoice_id: string, supplier_invoice_number: string | null, arrival_number: number | null, amount: number, payment_date: string, payee_name: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, invoice_status: string | null, remaining_amount: number | null, settled: boolean }[],
+    file: { filename: string, content_type: "application/xml", available: boolean, download: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_payment_batch_id": "5b0c…",
+    "format": "pain001",
+    "status": "created",
+    "currency": "SEK",
+    "total_amount": 12500,
+    "item_count": 2,
+    "settled_count": 0,
+    "msg_id": "ACCOUNTED-5566778899-B5B0C1A2F",
+    "file_generated_at": null,
+    "download_count": 0,
+    "created_at": "2026-09-25T09:00:00Z",
+    "cancelled_at": null,
+    "supplier_invoice_ids": [
+      "9e2f…",
+      "0a7d…"
+    ],
+    "debtor": {
+      "name": "Testbolaget AB",
+      "iban": "SE35 **** 0003",
+      "bic": "ESSESESS"
+    },
+    "items": [
+      {
+        "supplier_payment_batch_item_id": "71c4…",
+        "supplier_invoice_id": "9e2f…",
+        "supplier_invoice_number": "CD3014794407",
+        "arrival_number": 12,
+        "amount": 7500,
+        "payment_date": "2026-10-01",
+        "payee_name": "Derome Bygg AB",
+        "payee": {
+          "type": "bankgiro",
+          "label": "BG 5050-1055"
+        },
+        "reference": {
+          "type": "invoice_number",
+          "value": "CD3014794407"
+        },
+        "invoice_status": "approved",
+        "remaining_amount": 7500,
+        "settled": false
+      }
+    ],
+    "file": {
+      "filename": "betalfil_20260925_5b0c1a2f.xml",
+      "content_type": "application/xml",
+      "available": true,
+      "download": "/api/v1/companies/{companyId}/supplier-payment-batches/{supplier_payment_batch_id}/file"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-payment-batches/{id}/cancel`
+
+**Cancel (makulera) a supplier payment batch.**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Marks an active batch cancelled: Accounted stops serving its file and its invoices can go into a new batch. The batch and its lines are kept (they are underlag for the payment instruction). A file already uploaded to the bank is NOT recalled: stop those payments in the bank. Cannot be undone; create a new batch instead. Idempotent. Dry-runnable.
+
+**Use when:** A betalfil was created by mistake or with wrong amounts, before (or instead of) uploading it.
+**Do not use for:** Stopping a payment the bank already has (do that in the bank) or un-paying an invoice.
+
+**Pitfalls:**
+- An already cancelled batch answers 409 SI_BATCH_ALREADY_CANCELLED.
+- download_count above 0 means the file may already be at the bank: check there too.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { supplier_payment_batch_id: string, status: "cancelled", cancelled_at: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_payment_batch_id": "5b0c…",
+    "status": "cancelled",
+    "cancelled_at": "2026-09-25T10:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-payment-batches/{id}/file`
+
+**Download the pain.001 payment file of a supplier payment batch.**
+`scope:suppliers:write · risk:low · idempotent`
+
+Returns the batch's XML payment file inline as `content` (a UTF-8 string), with filename, content_type and sha256, in the same shape as the salary payment file. The file regenerates from the stored batch, so every download is byte-identical (same MsgId) and the bank's duplicate detection works. Each call records the download on the batch (file_generated_at, download_count). Upload the file in the bank's file channel, where the payments are signed; nothing is sent to the bank by this call and nothing is booked.
+
+**Use when:** The batch is created and the user (or their payment operator) needs the file to upload in the bank.
+**Do not use for:** Creating the batch (POST /supplier-payment-batches) or marking invoices paid (mark-paid after the bank executed).
+
+**Pitfalls:**
+- Write `content` to `filename` as UTF-8, exactly as returned; do not re-indent or re-encode the XML.
+- A cancelled batch answers 409 SI_BATCH_CANCELLED: its file is never served again.
+- Uploading the same file twice is caught by most banks through the MsgId, but not all: check download_count and the bank before re-uploading.
+- Needs suppliers:write although it is a GET: the file is a payment instruction and the download is recorded.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_payment_batch_id: string,
+    format: "pain001",
+    filename: string,
+    content_type: "application/xml",
+    content: string,
+    sha256: string,
+    msg_id: string,
+    item_count: number,
+    total_amount: number,
+    currency: string,
+    download_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_payment_batch_id": "5b0c…",
+    "format": "pain001",
+    "filename": "betalfil_20260925_5b0c1a2f.xml",
+    "content_type": "application/xml",
+    "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\">…",
+    "sha256": "3f9a…",
+    "msg_id": "ACCOUNTED-5566778899-B5B0C1A2F",
+    "item_count": 2,
+    "total_amount": 12500,
+    "currency": "SEK",
+    "download_count": 1
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-payment-batches/preview`
+
+**Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; and whether the company's own bank details (IBAN, BIC, org number: the pain.001 debtor) are complete. Reads only; creates nothing.
+
+**Use when:** Before creating a payment batch, to see what would be paid and what blocks it.
+**Do not use for:** Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).
+
+**Pitfalls:**
+- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), not_found.
+- debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic or org_number).
+- already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.
+- Only SEK invoices; at most 100 per call.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{ format?: "pain001", supplier_invoice_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "supplier_invoice_ids": [
+    "9e2f…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "not_found" }[],
+    total_amount: number,
+    currency: "SEK",
+    debtor_ok: boolean,
+    debtor_missing: "iban" | "bic" | "org_number" | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "eligible": [
+      {
+        "supplier_invoice_id": "9e2f…",
+        "supplier_name": "Derome Bygg AB",
+        "supplier_invoice_number": "CD3014794407",
+        "amount": 737.5,
+        "payment_date": "2026-10-01",
+        "payee": {
+          "type": "bankgiro",
+          "label": "BG 5050-1055"
+        },
+        "reference": {
+          "type": "invoice_number",
+          "value": "CD3014794407"
+        },
+        "warnings": [
+          "payee_city_missing"
+        ],
+        "active_supplier_payment_batch_id": null
+      }
+    ],
+    "excluded": [],
+    "total_amount": 737.5,
+    "currency": "SEK",
+    "debtor_ok": true,
+    "debtor_missing": null
   },
   "meta": {
     "request_id": "req_…",

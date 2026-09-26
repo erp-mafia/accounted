@@ -27,7 +27,7 @@ import { AGENTS, COMMUNITY_OPEN, type AgentConnection } from '@/lib/agent-skills
 import { itemHue, seedOf, type ItemKind } from './hues'
 import { StrataField } from './StrataField'
 import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { agentSegment, agentStatus, communityMeta, communitySegment, kindOf, rulesSegment, type CommunityMeta, type SkillSummary } from './data'
+import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, rulesSegment, type CommunityMeta, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
 const KINDS: ItemKind[] = ['workflow', 'rules', 'analysis']
@@ -155,7 +155,12 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
       ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
-  const all = [...flows, ...packs, ...shared]
+  // Accounted's own analyses: examples of what an analysis is, next to the community's.
+  const analyses: Item[] = catalog.filter((s) => s.source === 'accounted' && s.itemKind === 'analysis').map((s) => ({
+    key: s.slug, kind: 'analysis', title: s.name, desc: s.summary, href: `${hrefBase}/${analysisSegment(s.slug)}`,
+    source: 'accounted', meta: null, categories: [], popularity: usage?.[s.slug]?.count ?? 0,
+  }))
+  const all = [...flows, ...packs, ...analyses, ...shared]
   const ofKind = all.filter((i) => i.kind === kind)
 
   // Egna: for flows, what the company made; for knowledge, what the company's flows carry.
@@ -365,12 +370,15 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
   const [ran, setRan] = useState(false)
   const hue = itemHue(item.kind, item.source === 'own' ? item.title : item.key, item.source === 'accounted' && item.kind === 'workflow' ? item.key as never : null)
   const ai = AI_CLIENTS.find((c) => c.id === client)!
-  const runnable = item.kind === 'workflow' && item.source === 'accounted' && aiReady
+  // Accounted's flows and analyses start from the banner; community items open their page first.
+  const runnable = (item.kind === 'workflow' || item.kind === 'analysis') && item.source === 'accounted' && aiReady
   const states = overview?.agents.find((a) => a.id === item.key)?.connections ?? []
   function run(target: ClaudeTarget = 'web') {
     const id = item.key as RegistrySkillId
-    trackInstructions('instructions_start_clicked', { item: id, kind: 'workflow', client, surface: 'banner', target: client === 'claude' ? target : 'web' })
-    const prompt = t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
+    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? target : 'web' })
+    const prompt = item.kind === 'analysis'
+      ? t('skill_prompt', { name: item.title, slug: item.key, client })
+      : t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
     void (client === 'claude' ? openInClaude(target, prompt, true) : copyPromptAndOpen(prompt, client, true)).then(() => setRan(true))
   }
   return (

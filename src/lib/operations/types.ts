@@ -137,6 +137,14 @@ export interface OperationMcpBinding {
      * staged before the switch still commits. Runs before validation.
      */
     upgradeParams?: (params: Record<string, unknown>) => Record<string, unknown>
+    /**
+     * The params to stage, from the validated input and the dry run's
+     * preview, when the commit must hold to what the approver saw (e.g. the
+     * payee each payment goes to): the result is staged instead of the bare
+     * input, must itself be a valid input, and the operation's rules refuse
+     * the commit when the pinned values no longer hold. Pure: no I/O.
+     */
+    pinParams?: (input: Record<string, unknown>, preview: Record<string, unknown>) => Record<string, unknown>
   }
 }
 

@@ -163,6 +163,29 @@ export async function createSupplierInvoiceRegistrationEntry(
   supplierType: string,
   supplierName?: string
 ): Promise<JournalEntry | null> {
+  const input = await buildSupplierInvoiceRegistrationEntryInput(
+    supabase, companyId, invoice, items, supplierType, supplierName
+  )
+  if (!input) return null
+  return createJournalEntry(supabase, companyId, userId, input)
+}
+
+/**
+ * The registration verifikat createSupplierInvoiceRegistrationEntry would
+ * post, without posting it: the fiscal period lookup is the only database
+ * read, and nothing is written. The deferred "Bokför" dry run previews these
+ * lines. Returns null when no open fiscal period covers invoice_date. Throws
+ * the same generator errors (SupplierInvoiceFxRateMissingError) the
+ * committing path throws.
+ */
+export async function buildSupplierInvoiceRegistrationEntryInput(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: SupplierInvoice,
+  items: SupplierInvoiceItem[],
+  supplierType: string,
+  supplierName?: string
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
@@ -291,7 +314,7 @@ export async function createSupplierInvoiceRegistrationEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**

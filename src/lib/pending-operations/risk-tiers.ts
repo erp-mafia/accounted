@@ -33,6 +33,20 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
   create_dimension: 'low',
+  // Operation registry, wave 2: booking, payment files, utlägg, payroll.
+  send_payslips: 'medium',
+  revert_salary_run: 'low',
+  unapprove_salary_run: 'medium',
+  attach_salary_expense_claims: 'medium',
+  create_supplier_payment_batch: 'high',
+  cancel_supplier_payment_batch: 'medium',
+  book_invoice: 'high',
+  bulk_book_invoices: 'high',
+  book_supplier_invoice: 'high',
+  create_expense_claim: 'medium',
+  delete_expense_claim: 'medium',
+  record_expense_payout: 'medium',
+  match_expense_payout: 'medium',
   // Operation registry, wave 1: setup capabilities.
   create_cash_account: 'low',
   update_cash_account: 'medium',

@@ -199,6 +199,23 @@ import '@/app/api/v1/companies/[companyId]/reconciliation/accounts/[accountKey]/
 // Dimensions PR2: registry list + value creation (kostnadsställe/projekt).
 import '@/app/api/v1/companies/[companyId]/dimensions/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/route'
+// Operation registry, wave 2: booking, payment files, utlägg, payroll.
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/send-payslips/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/revert/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/unapprove/route'
+import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/employees/[employeeId]/expense-claims/route'
+import '@/app/api/v1/companies/[companyId]/supplier-payment-batches/route'
+import '@/app/api/v1/companies/[companyId]/supplier-payment-batches/preview/route'
+import '@/app/api/v1/companies/[companyId]/supplier-payment-batches/[id]/route'
+import '@/app/api/v1/companies/[companyId]/supplier-payment-batches/[id]/cancel/route'
+import '@/app/api/v1/companies/[companyId]/supplier-payment-batches/[id]/file/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/book/route'
+import '@/app/api/v1/companies/[companyId]/invoices/bulk-book/route'
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/book/route'
+import '@/app/api/v1/companies/[companyId]/expense-claims/route'
+import '@/app/api/v1/companies/[companyId]/expense-claims/[id]/route'
+import '@/app/api/v1/companies/[companyId]/expense-claims/payouts/route'
+import '@/app/api/v1/companies/[companyId]/transactions/[id]/match-expense-payout/route'
 // Operation registry, wave 1: setup capabilities.
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/route'
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/set-primary/route'

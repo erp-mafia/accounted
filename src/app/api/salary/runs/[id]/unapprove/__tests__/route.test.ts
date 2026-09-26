@@ -69,10 +69,11 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
 
     expect(status).toBe(404)
-    expect(body.error).toContain('hittades inte')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_NOT_FOUND')
   })
 
   it('returns 400 when the run is not approved (e.g. already paid)', async () => {
@@ -85,10 +86,12 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(400)
-    expect(body.error).toContain('godkänd')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_NOT_APPROVED')
+    expect(body.error.message).toContain('godkänd')
   })
 
   it('returns 409 when the AGI declaration has been submitted to Skatteverket', async () => {
@@ -102,10 +105,12 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('Skatteverket')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_UNAPPROVE_AGI_FILED')
+    expect(body.error.message).toContain('Skatteverket')
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 
@@ -137,10 +142,12 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
 
     const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
     const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    expect(body.error).toContain('ändrats')
+    // Structured envelope since the rules moved to lib/salary/run-status-recall.ts (shared with v1/MCP).
+    expect(body.error.code).toBe('SALARY_RUN_STATUS_CHANGED')
+    expect(body.error.message).toContain('ändrats')
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 

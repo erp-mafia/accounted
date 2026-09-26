@@ -7,6 +7,7 @@
  * choices are kept in the page so add, remove and reset can be tried.
  */
 
+import { analysisSkills } from '@/lib/agent-skills/analyses'
 import { useState, type ReactNode } from 'react'
 import { CompanyProvider } from '@/contexts/CompanyContext'
 import DashboardNav from '@/components/dashboard/DashboardNav'
@@ -190,8 +191,11 @@ function installFixtures() {
       case '/api/skills/usage': return json({ bookkeep: { count: 12, last_at: '2026-09-22T09:14:00Z' }, 'quarterly-vat-review': { count: 2, last_at: '2026-08-12T08:00:00Z' } })
       case '/api/skills': {
         const slug = url.searchParams.get('slug')
-        if (!slug) return json(CATALOG)
+        // Accounted's own analyses ship in code, as they do in the app.
+        if (!slug) return json([...CATALOG, ...analysisSkills.map(({ body: _body, ...s }) => ({ ...s, active: true, installations: [] }))])
         if (slug === 'own/00000000-0000-4000-8000-000000000001') return json({ body: OWN_BODY })
+        const analysis = analysisSkills.find((s) => s.slug === slug)
+        if (analysis) return json({ body: analysis.body })
         if (OWN_BODIES.has(slug)) return json({ body: OWN_BODIES.get(slug) })
         const real = PACK_TEXTS.get(slug)
         if (real) return json({ body: real })
