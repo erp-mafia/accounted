@@ -19,8 +19,11 @@ import { CATEGORY_IDS, SHOWN_FLOWS } from './catalog-setup'
 import { AgentCard } from './AgentCard'
 import { CommunityFoot } from './KindViews'
 import { ConnectionMark, SourceMarks } from './ConnectionMark'
-import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
+import { useCompany } from '@/contexts/CompanyContext'
+import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
+import { useClaudeTarget } from './claude-target'
+import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import type { Presence } from './hues'
 import { AGENTS, COMMUNITY_OPEN, type AgentConnection } from '@/lib/agent-skills/agents'
@@ -85,7 +88,7 @@ interface Item {
  * categories (industries and company forms) with counts; a category or a
  * search shows the full list. Egna is what the company made or uses.
  */
-export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate }: {
+export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending }: {
   hrefBase: string
   catalog: SkillSummary[]
   options: KnowledgeOption[]
@@ -102,6 +105,12 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   onCreate: (kind: ItemKind) => void
   /** Shown in the featured slot while no AI is connected. */
   gate: ReactNode
+  /**
+   * A connection being made, with its address and steps. The overview shows
+   * it in the featured slot (as `gate`); every other view and list shows it
+   * on top, so a connect started from Egna or a search keeps the address.
+   */
+  pending?: ReactNode
 }) {
   const t = useTranslations('skills_registry')
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
@@ -246,6 +255,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
         </div>
       </div>
 
+      {(view === 'own' || listing) && pending}
       {view === 'own' && (
         <section className={styles.catSection}>
           <div className={styles.catHead}><h2>{t(`own_${kind}_title`)}</h2></div>
@@ -367,19 +377,27 @@ function CatalogCard({ item }: { item: Item }) {
 /** The featured slot at the top of Upptäck, as Claude's "From Anthropic" banner. A flow starts right here in the company's AI. */
 function Featured({ item, industry, client, aiReady, overview }: { item: Item; industry: boolean; client: AiClient; aiReady: boolean; overview: AgentsOverview | null | undefined }) {
   const t = useTranslations('skills_registry')
-  const [ran, setRan] = useState(false)
+  const { company } = useCompany()
+  const [claudeTarget] = useClaudeTarget()
+  const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
+  const [outcome, setOutcome] = useState<StartOutcome | null>(null)
   const hue = itemHue(item.kind, item.source === 'own' ? item.title : item.key, item.source === 'accounted' && item.kind === 'workflow' ? item.key as never : null)
   const ai = AI_CLIENTS.find((c) => c.id === client)!
   // Accounted's flows and analyses start from the banner; community items open their page first.
   const runnable = (item.kind === 'workflow' || item.kind === 'analysis') && item.source === 'accounted' && aiReady
   const states = overview?.agents.find((a) => a.id === item.key)?.connections ?? []
-  function run(target: ClaudeTarget = 'web') {
-    const id = item.key as RegistrySkillId
-    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? target : 'web' })
-    const prompt = item.kind === 'analysis'
-      ? t('skill_prompt', { name: item.title, slug: item.key, client })
-      : t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
-    void (client === 'claude' ? openInClaude(target, prompt, true) : copyPromptAndOpen(prompt, client, true)).then(() => setRan(true))
+  const id = item.key as RegistrySkillId
+  // Accounted's own text: filled in on the web, with the company pinned only where no URL carries it.
+  const prompt = pinCompany(
+    item.kind === 'analysis' ? t('skill_prompt', { name: item.title, slug: item.key, client }) : t('prompt', { say: t(`skills.${id}.say`), agent: id, client }),
+    t('prompt_company_pin', { company: company?.name ?? '', companyId: company?.id ?? '' }),
+  )
+  function run(start: ClaudeTarget = 'web'): Promise<StartOutcome> {
+    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? start : 'web' })
+    setOutcome(null)
+    const starting = startInAi(client, start, prompt, true)
+    void starting.then(setOutcome)
+    return starting
   }
   return (
     <section className={styles.featured} style={{ background: `hsl(${hue} 32% 90%)` }}>
@@ -393,7 +411,7 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
         <p>{item.lede ?? item.desc}</p>
         <div className={styles.featuredActions}>
           {runnable && (client === 'claude' ? <ClaudeStart size="sm" onStart={run} /> : (
-            <Button size="sm" className="gap-2 pl-3" onClick={() => run()}>
+            <Button size="sm" className="gap-2 pl-3" onClick={() => void run()}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={ai.logo} alt="" width={14} height={14} className={styles.btnLogo} />
               {t('run_agent', { client: ai.name })}
@@ -404,7 +422,7 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
               {item.connections.map((c) => <ConnectionBadge key={c} kind={c} state={states.find((s) => s.kind === c)} clientName={ai.name} />)}
             </span>
           )}
-          {ran && <span className={styles.featuredNote} role="status">{t('prefilled_open', { client: ai.name })}</span>}
+          {runnable && <StartNote banner route={handoffRoute(client, target, true)} outcome={outcome} client={client} target={target} prompt={prompt.pinned} onWeb={() => void run('web')} />}
         </div>
       </div>
       <span className={styles.featuredArt}><ItemSymbol kind={item.kind} hue={hue} seedKey={item.key} size={120} open /></span>

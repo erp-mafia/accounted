@@ -28,8 +28,10 @@ import { StrataField } from './StrataField'
 import { ConnectionMark } from './ConnectionMark'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
-import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
+import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
+import { useClaudeTarget } from './claude-target'
+import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { isPeriodFlow, parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
@@ -54,10 +56,10 @@ async function readBody(url: string): Promise<string> {
  */
 export function AgentDetail({ segment, backHref = '/skills' }: { segment: string; backHref?: string }) {
   const { company } = useCompany()
-  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} agentId={agentIdFromSegment(segment)} backHref={backHref} /> : null
+  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} companyName={company.name} agentId={agentIdFromSegment(segment)} backHref={backHref} /> : null
 }
 
-function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: string; backHref: string }) {
+function Detail({ companyId, companyName, agentId, backHref }: { companyId: string; companyName: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
   const companyName = useCompany().company?.name ?? ''
   const locale = useLocale()
@@ -78,6 +80,8 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
   }, [])
   const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
+  const [claudeTarget] = useClaudeTarget()
+  const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
 
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const agents = useSWR(['/api/agents', companyId, client], ([url, , c]) => readAgents(`${url}?client=${c}`))
@@ -93,7 +97,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
   const handedRoutine = parseRoutineQuery(handedParams)
   const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<View>(handedRoutine ? 'routine' : 'main')
-  const [runState, setRunState] = useState<'idle' | 'copied' | 'failed'>('idle')
+  const [outcome, setOutcome] = useState<StartOutcome | null>(null)
 
   // Gone only once a fresh catalog says so: a cached list can predate the item.
   if (!curated && catalog.data && !catalog.isValidating && !own) {
@@ -167,21 +171,24 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
     }
   }
 
-  function run(target: ClaudeTarget = 'web') {
-    if (connected !== null && connected.length === 0) {
-      trackInstructions('instructions_connect_clicked', { client: 'claude', surface: 'flow' })
-      openAiConnector(aiConnectAction('claude', { origin: window.location.origin, appName }).open)
-      return
-    }
-    trackInstructions('instructions_start_clicked', { item: curated ?? 'own', kind: 'workflow', client, surface: 'flow', target: client === 'claude' ? target : 'web' })
-    // Curated agents open with the prompt typed in; an own agent's prompt carries the name the user wrote, so it is copied.
-    const prompt = t('prompt', { say, agent: agentId, client })
-    void (client === 'claude' ? openInClaude(target, prompt, !!curated) : copyPromptAndOpen(prompt, client, !!curated)).then((ok) => setRunState(ok ? 'copied' : 'failed'))
-  }
   const say = curated ? t(`skills.${curated}.say`) : t('own_say', { name })
   // A month-end close or VAT flow scheduled weekly first checks whether its period is already done.
   const routineSay = curated && isPeriodFlow(curated) ? t(`routine_say.${curated}`) : say
   const disconnected = connected !== null && connected.length === 0
+  // Curated flows are fixed text, so on the web they open filled in; an own flow's prompt carries the name the user wrote, so it is copied.
+  const prompt = pinCompany(t('prompt', { say, agent: agentId, client }), t('prompt_company_pin', { company: companyName, companyId }))
+  function run(start: ClaudeTarget = 'web'): Promise<StartOutcome> | undefined {
+    if (disconnected) {
+      trackInstructions('instructions_connect_clicked', { client: 'claude', surface: 'flow' })
+      openAiConnector(aiConnectAction('claude', { origin: window.location.origin, appName }).open)
+      return undefined
+    }
+    trackInstructions('instructions_start_clicked', { item: curated ?? 'own', kind: 'workflow', client, surface: 'flow', target: client === 'claude' ? start : 'web' })
+    setOutcome(null)
+    const starting = startInAi(client, start, prompt, !!curated)
+    void starting.then(setOutcome)
+    return starting
+  }
 
   return (
     <div className={styles.apage}>
@@ -198,7 +205,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
           <div className={styles.stageFoot}>
             {/* A draft saved by an AI is not loadable until it is added, so it cannot be started yet. */}
             {own?.draft ? <span className={styles.stageStatus}>{t('draft_run_hint')}</span> : !disconnected && client === 'claude' ? <ClaudeStart onStart={run} /> : (
-              <Button size="lg" className="gap-2 pl-4" onClick={() => run()}>
+              <Button size="lg" className="gap-2 pl-4" onClick={() => void run()}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={AI_CLIENTS.find((c) => c.id === (disconnected ? 'claude' : client))!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {disconnected ? t('connect_client', { client: 'Claude' }) : t('run_agent', { client: clientName })}
@@ -207,9 +214,11 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
             )}
             {/* A routine is scheduled in Claude, and never for a draft. */}
             {!own?.draft && <RoutineOffer client={client} disconnected={disconnected} readOnly={false} canWrite={canWrite} onOpen={() => setView('routine')} />}
-            {runState !== 'idle' && <span className={styles.stageStatus} role="status">{runState === 'copied' ? t(curated ? 'prefilled_open' : 'copied_open', { client: clientName }) : t('copy_failed')}</span>}
             {/* only a status worth reading: work waiting, a missing connection, no AI yet */}
             {status && status.presence !== 'ready' && <span className={styles.stageStatus}><span className={styles.chipDot} data-presence={status.presence} aria-hidden />{status.text}</span>}
+            {!own?.draft && !disconnected && (
+              <StartNote route={handoffRoute(client, target, !!curated)} outcome={outcome} client={client} target={target} prompt={prompt.pinned} onWeb={() => void run('web')} />
+            )}
           </div>
         </section>
 

@@ -84,12 +84,12 @@ describe('aiConnectAction', () => {
     expect(a.copy).toBeNull()
   })
 
-  it('ChatGPT and Grok copy the server URL and open their connector page', () => {
+  it('ChatGPT and Grok copy the server URL and open their connector page (Grok: grok.com/connectors, where New Connector lives)', () => {
     const chatgpt = aiConnectAction('chatgpt', input)
     expect(chatgpt.open).toBe('https://chatgpt.com/#settings/Connectors')
     expect(chatgpt.copy).toContain('/api/extensions/ext/mcp-server/mcp?tool_namespace=accounted&client=chatgpt')
     const grok = aiConnectAction('grok', input)
-    expect(grok.open).toBe('https://grok.com/')
+    expect(grok.open).toBe('https://grok.com/connectors')
     expect(grok.copy).toContain('client=grok&auth=required')
   })
 })

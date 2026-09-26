@@ -15,7 +15,7 @@ export type AiClient = 'claude' | 'chatgpt' | 'grok'
 export const AI_CLIENTS: { id: AiClient; name: string; logo: string; home: string }[] = [
   { id: 'claude', name: 'Claude', logo: '/logos/claude.webp', home: 'https://claude.ai/customize/connectors' },
   { id: 'chatgpt', name: 'ChatGPT', logo: '/logos/chatgpt.webp', home: 'https://chatgpt.com/#settings/Connectors' },
-  { id: 'grok', name: 'Grok', logo: '/logos/grok.webp', home: 'https://grok.com/' },
+  { id: 'grok', name: 'Grok', logo: '/logos/grok.webp', home: 'https://grok.com/connectors' },
 ]
 
 const AI_CLIENT_IDS = new Set<string>(AI_CLIENTS.map((c) => c.id))
@@ -58,6 +58,12 @@ export function pickConnectedAiClient(clients: AiClient[], preferred?: AiClient)
  * Open an empty chat. Company identifiers and task details must never enter
  * third-party URLs, browser history or URL logs. The user reviews and copies
  * the prompt inside Accounted, then pastes it into their chosen client.
+ *
+ * The one exception is a claude:// link to Claude Desktop or Cowork
+ * (components/skills/run.ts): it is a local handoff to the app on the same
+ * device, with no HTTP request and no URL log, like a paste. It may carry
+ * text the user wrote and the company (name and company_id). An https ?q=
+ * link never does.
  */
 export function aiChatLink(client: AiClient): string {
   switch (client) {

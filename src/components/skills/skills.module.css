@@ -895,6 +895,19 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 
 /* Starta i Claude with a choice of where (ClaudeStart.tsx) */
 .splitStart { display: inline-flex; align-items: stretch; }
+/* The line under a start (StartNote.tsx): what will happen before the click, what did after it. */
+.startNote { flex-basis: 100%; display: flex; flex-direction: column; gap: 8px; padding: 8px 12px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background) / 0.94); font-size: 12.5px; line-height: 18px; color: hsl(var(--foreground) / 0.8); }
+.startNote p { margin: 0; }
+.startNoteActions { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+/* A copy that failed: the prompt itself, one click selects all of it. */
+.startPrompt { display: flex; align-items: flex-start; gap: 8px; max-height: 76px; overflow-y: auto; padding: 4px 4px 4px 8px; border: 1px solid hsl(var(--border)); border-radius: 4px; }
+.startPrompt > span { flex: 1; min-width: 0; padding-top: 4px; user-select: all; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* With a note under the buttons the stage stacks the tile and the foot, so the note never covers the tile. */
+.stage:has(.startNote) { display: flex; flex-direction: column; gap: 16px; padding: 16px; }
+.stage:has(.startNote) .stageTile { position: relative; left: auto; top: auto; transform: none; margin: auto; }
+.stage:has(.startNote) .stageFoot { position: relative; left: auto; right: auto; bottom: auto; }
+@media (max-width: 960px) { .stage:has(.startNote) { height: auto; min-height: 380px; } }
+@media (max-width: 560px) { .stage:has(.startNote) { gap: 24px; padding-top: 40px; } }
 .routineSwitch { align-self: center; }
 /* Accounted's review list (ReviewQueue.tsx) */
 .reviewList { display: flex; flex-direction: column; gap: 16px; margin: 0; padding: 0; list-style: none; }

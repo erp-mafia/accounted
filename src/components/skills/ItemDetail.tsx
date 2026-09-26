@@ -9,14 +9,17 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
 import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
 import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
-import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
-import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
+import { useClaudeTarget } from './claude-target'
+import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import { RoutineOffer, RoutinePanel } from './RoutinePanel'
 import { parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
@@ -72,6 +75,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   const t = useTranslations('skills_registry')
   const locale = useLocale()
   const { canWrite } = useCanWrite()
+  const { appName } = useBranding()
   const router = useRouter()
   const knowledgeName = useKnowledgeName()
   const knowledgeDesc = useKnowledgeDesc()
@@ -85,16 +89,22 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   const handedRoutine = parseRoutineQuery(handedParams)
   const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
+  // ── the AI connection, read once and whenever the user comes back (as on a flow's page) ──
   const [connected, setConnected] = useState<AiClient[] | null>(null)
-  const [ran, setRan] = useState(false)
+  const [outcome, setOutcome] = useState<StartOutcome | null>(null)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) })
-    return () => controller.abort()
+    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) }) }
+    check()
+    window.addEventListener('focus', check)
+    return () => { controller.abort(); window.removeEventListener('focus', check) }
   }, [])
   const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
   const ai = AI_CLIENTS.find((c) => c.id === client)!
+  const disconnected = connected !== null && connected.length === 0
+  const [claudeTarget] = useClaudeTarget()
+  const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
 
   const pack: KnowledgeOption | undefined = options.data?.find((o) => rulesSegment(o.id) === segment)
   const shared = catalog.data?.find((s) => s.tier === 'community' && communitySegment(s.slug) === segment)
@@ -174,11 +184,20 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   // An AI-saved draft is not loadable until it is added, so it cannot run yet.
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
   const steps = isFlow && body.data ? ownSkillSteps(body.data) : []
-  function runShared(target: ClaudeTarget = 'web') {
-    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
-    // A shared item's text carries what its author wrote, so the prompt is copied rather than typed into the chat.
-    const prompt = t('skill_prompt', { name: item!.name, slug: item!.key, client })
-    void (client === 'claude' ? openInClaude(target, prompt, false) : copyPromptAndOpen(prompt, client, false)).then(() => setRan(true))
+  // Accounted's own analyses are fixed text, so they open filled in, as from the banner. An own or
+  // shared item carries what a person wrote, so on the web it is copied rather than put in a link.
+  const fixedText = !!builtIn
+  const prompt = pinCompany(t('skill_prompt', { name: item.name, slug: item.key, client }), t('prompt_company_pin', { company: companyName, companyId }))
+  function runShared(start: ClaudeTarget = 'web'): Promise<StartOutcome> {
+    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? start : 'web' })
+    setOutcome(null)
+    const starting = startInAi(client, start, prompt, fixedText)
+    void starting.then(setOutcome)
+    return starting
+  }
+  function connectClaude() {
+    trackInstructions('instructions_connect_clicked', { client: 'claude', surface: 'item' })
+    openAiConnector(aiConnectAction('claude', { origin: window.location.origin, appName }).open)
   }
   // Every flow the company can give knowledge to: Accounted's, then its own.
   const ownFlows = (catalog.data ?? []).filter((s) => s.tier === 'own' && (s.itemKind ?? 'workflow') === 'workflow' && !s.draft && s.shareStatus !== 'withdrawn' && s.installations[0])
@@ -211,8 +230,16 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
             <small>{t(`kind_one_${item.kind}`)}{item.community ? ` · @${item.community.author}` : ''}</small>
           </div>
           <div className={styles.stageFoot}>
-            {runnable && client === 'claude' ? <ClaudeStart onStart={runShared} /> : runnable ? (
-              <Button size="lg" className="gap-2 pl-4" onClick={() => runShared()}>
+            {/* With no AI connected a start could never reach Accounted: connect first, as on a flow's page. */}
+            {runnable && disconnected ? (
+              <Button size="lg" className="gap-2 pl-4" onClick={connectClaude}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={AI_CLIENTS.find((c) => c.id === 'claude')!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
+                {t('connect_client', { client: 'Claude' })}
+                <ArrowUpRight className="h-4 w-4" aria-hidden />
+              </Button>
+            ) : runnable && client === 'claude' ? <ClaudeStart onStart={runShared} /> : runnable ? (
+              <Button size="lg" className="gap-2 pl-4" onClick={() => void runShared()}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={ai.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {t('run_agent', { client: ai.name })}
@@ -222,9 +249,12 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
               ? <Button size="lg" className="gap-2" disabled={!canWrite} onClick={() => setView('give')}><Plus className="h-4 w-4" aria-hidden />{t('give_to_flow')}</Button>
               : <span />}
             {/* A routine is scheduled in Claude; an analysis only reads, so a viewer may schedule one. */}
-            {runnable && <RoutineOffer client={client} disconnected={connected !== null && connected.length === 0} readOnly={item.kind === 'analysis'} canWrite={canWrite} onOpen={() => setView('routine')} />}
-            {ran && <span className={styles.stageStatus} role="status">{t('copied_open', { client: ai.name })}</span>}
+            {runnable && <RoutineOffer client={client} disconnected={disconnected} readOnly={item.kind === 'analysis'} canWrite={canWrite} onOpen={() => setView('routine')} />}
+            {runnable && disconnected && <span className={styles.stageStatus}><span className={styles.chipDot} data-presence="idle" aria-hidden />{t('status_ai_missing')}</span>}
             {item.community && <Vote meta={item.community} slug={item.key} />}
+            {runnable && !disconnected && (
+              <StartNote route={handoffRoute(client, target, fixedText)} outcome={outcome} client={client} target={target} prompt={prompt.pinned} onWeb={() => void runShared('web')} />
+            )}
           </div>
         </section>
 
