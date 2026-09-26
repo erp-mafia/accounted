@@ -614,7 +614,12 @@ async function writeSystemdokumentation(
   const base = `systemdokumentation/${periodLabel(period)}`
   try {
     const report = await generateSystemdokumentation(supabase, companyId, period.id, { appVersion: currentAppVersion() })
-    if (!report) return
+    if (!report) {
+      // The period vanished between enumeration and generation: say so
+      // rather than leave the referenced snapshot silently missing.
+      revision.file(`${base}.error.txt`, 'Räkenskapsåret hittades inte när arkivet skapades.')
+      return
+    }
     revision.file(`${base}.json`, JSON.stringify(report, null, 2))
     const [{ SystemdokumentationPDF }, { renderToBuffer }] = await Promise.all([
       import('./systemdokumentation-pdf-template'),

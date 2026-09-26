@@ -204,6 +204,17 @@ describe('generateFullArchive', () => {
       expect(documentation.fullstandig_dokumentation.arkiverad_kopia).toContain('revision/systemdokumentation/')
     })
 
+    it('marks a systemdokumentation snapshot that could not be generated instead of leaving it missing', async () => {
+      enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
+      const buffer = await generateFullArchive(supabase as any, 'company-1', {
+        scope: 'period', period_id: PERIOD_2024.id, include_documents: false,
+      })
+      const zip = await JSZip.loadAsync(buffer)
+      const label = `${PERIOD_2024.period_start}_${PERIOD_2024.period_end}`
+      expect(zip.file(`revision/systemdokumentation/${label}.json`)).toBeNull()
+      expect(await zip.file(`revision/systemdokumentation/${label}.error.txt`)!.async('text')).toContain('hittades inte')
+    })
+
     it('exports supplier settlement rules and their legacy limitation for audit interpretation', async () => {
       enqueueMany([{ data: COMPANY_ROW }, { data: PERIOD_2024 }])
       const buffer = await generateFullArchive(supabase as any, 'company-1', {
