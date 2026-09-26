@@ -22,7 +22,7 @@ import { RoutinePanel } from './RoutinePanel'
 import { parseRoutineQuery } from '@/lib/agent-skills/routine'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
-import { DeleteOwn, Field, Row, ShareBox, SubView } from './AgentDetail'
+import { DeleteOwn, EditOwnButton, Field, Row, ShareBox, SubView } from './AgentDetail'
 import { FlowSymbol } from './FlowSymbol'
 import { CopyIcon } from './CopyIcon'
 import { ItemSymbol } from './ItemSymbol'
@@ -34,6 +34,8 @@ import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
 const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
+// Skriv själv, loaded when own knowledge or an analysis is edited.
+const CreateItem = dynamic(() => import('./CreateItem').then((m) => m.CreateItem))
 
 async function readBody(url: string): Promise<string> {
   const response = await fetch(url)
@@ -85,6 +87,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
   const [connected, setConnected] = useState<AiClient[] | null>(null)
   const [ran, setRan] = useState(false)
+  const [editing, setEditing] = useState(false)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
@@ -161,6 +164,18 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
     )
   }
 
+  // Shared text is frozen for review: only a private own item can be edited (PATCH action 'edit').
+  const editable = !!mine?.installations[0] && (mine.shareStatus ?? 'private') === 'private'
+  if (editing && editable && body.data !== undefined) {
+    return (
+      <CreateItem backHref={backHref} edit={{
+        installationId: mine!.installations[0].installation_id, kind: item.kind, name: mine!.name, description: mine!.summary ?? '', body: body.data,
+        onCancel: () => setEditing(false),
+        onSaved: async () => { await Promise.all([catalog.mutate(), body.mutate()]); setEditing(false) },
+      }} />
+    )
+  }
+
   const hue = itemHue(item.kind, item.own ? item.name : item.key)
   // Back to where the item lives: its industry or company form, or the general list.
   const home = item.atomId && (item.atomId.startsWith('vertical/') || item.atomId.startsWith('modifier/')) ? item.atomId : null
@@ -200,6 +215,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
       <Link href={back} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={item.name}>
           <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
@@ -234,13 +250,13 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               <>
                 <div className={styles.apAvatar}><ItemSymbol kind={item.kind} hue={hue} seedKey={item.key} size={60} /></div>
                 <Field label={t('field_name')}>
-                  <div className={styles.fieldBox} data-ph-mask={item.community ? '' : undefined}>{item.name}</div>
+                  <p className={styles.fieldText} data-ph-mask={item.community || item.own ? '' : undefined}>{item.name}</p>
                 </Field>
                 {isFlow && (
                   <Field label={t('section_instructions')} note={t('source_community')} copy={<CopyIcon text={body.data} label={t('copy_instructions')} />}>
-                    <div className={styles.instrBox} data-ph-mask="">
-                      {steps.length > 0 ? <ol>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol> : body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{t('loading_short')}</span>}
-                    </div>
+                    {steps.length > 0 ? <ol className={styles.stepsText} data-ph-mask="">{steps.map((step, i) => <li key={i}>{step}</li>)}</ol> : (
+                      <div className={styles.mdBody} data-ph-mask="">{body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{t('loading_short')}</span>}</div>
+                    )}
                   </Field>
                 )}
                 <div className={styles.rows}>
@@ -257,7 +273,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                     </Row>
                   )}
                 </div>
-                {!isFlow && <Field label={t('field_contents')} note={t('contents_note')} copy={<CopyIcon text={body.data} label={t('copy_contents')} />}>
+                {!isFlow && <Field label={t('field_contents')} note={t(mine && !editable ? 'edit_frozen' : 'contents_note')}
+                  copy={<>{editable && <EditOwnButton disabled={!canWrite || body.data === undefined} onClick={() => setEditing(true)} />}<CopyIcon text={body.data} label={t('copy_contents')} /></>}>
                   <div className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
                     {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
                   </div>

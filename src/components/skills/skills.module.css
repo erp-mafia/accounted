@@ -473,7 +473,9 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .sheetIdent { display: flex; align-items: center; gap: 14px; }
 .sheetIdent .whoName { font-family: var(--font-display); font-weight: 400; font-size: 28px; line-height: 32px; }
 /* knowledge the company can change */
-.chipX { display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: -4px; border: 0; border-radius: 9999px; background: transparent; color: hsl(var(--muted-foreground)); cursor: pointer; transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out); }
+.chipX { position: relative; display: inline-grid; place-items: center; width: 18px; height: 18px; margin-right: -4px; border: 0; border-radius: 9999px; background: transparent; color: hsl(var(--muted-foreground)); cursor: pointer; transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out); }
+/* The drawn circle stays 18px; the part that takes a tap is 26px (WCAG 2.5.8 asks for 24). */
+.chipX::before { content: ""; position: absolute; inset: -4px; border-radius: 9999px; }
 .chipX:hover { background: hsl(var(--secondary) / 0.6); color: hsl(var(--foreground)); }
 .chipX:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 1px; }
 .chipAdded small { color: hsl(var(--success)); }
@@ -502,13 +504,16 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .acFoot .open { margin-left: auto; }
 
 /* ── the agent page ── */
-/* Stage and panel share one height: fits the dashboard panel under its top bar on a laptop, never taller than 680px. */
+/* The stage's height, and the least the panel beside it is: fits the dashboard panel under its top bar on a laptop, never taller than 680px. */
 .apage { --agent-page-h: clamp(460px, calc(100dvh - 170px), 680px); display: flex; flex-direction: column; gap: 16px; }
-.agrid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: stretch; }
-/* the stage and the panel are one pair: same top, same bottom */
+.agrid2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+/* the stage and the panel are one pair: same top, and the panel at least as tall as the stage */
 @media (max-width: 960px) { .agrid2 { grid-template-columns: 1fr; } }
 .stage { position: relative; height: var(--agent-page-h); border: 1px solid hsl(var(--border)); border-radius: 16px; overflow: hidden; color: hsl(var(--foreground)); }
 @media (max-width: 960px) { .stage { height: 380px; } }
+/* Side by side, the panel grows with what it holds instead of scrolling inside a capped box (rows were cut off with no
+   sign that they were there), and the stage stays in view beside it, under the 48px top bar. */
+@media (min-width: 961px) { .stage { position: sticky; top: calc(3rem + 16px); } }
 /* the ground eases between colours; the canvas fills the stage, so a resize stretches the grain until the redraw instead of leaving a blank strip */
 .strata { position: absolute; inset: 0; transition: background-color 350ms var(--ease-out); }
 .strata canvas { display: block; width: 100%; height: 100%; }
@@ -524,7 +529,7 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
   .stageFoot { position: relative; left: auto; right: auto; bottom: auto; align-self: stretch; }
 }
 .stageStatus { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 9999px; background: hsl(var(--background) / 0.94); font-size: 12.5px; }
-.apanel { display: flex; flex-direction: column; gap: 20px; height: var(--agent-page-h); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 28px 32px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
+.apanel { display: flex; flex-direction: column; gap: 20px; min-height: var(--agent-page-h); padding: 28px 32px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
 .apHead { display: flex; flex-direction: column; gap: 6px; }
 .apHead h1 { font-family: var(--font-display); font-weight: 400; font-size: 28px; line-height: 32px; }
 .apHead p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
@@ -602,7 +607,7 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .agrid > li { display: flex; }
 .agrid > li > .acard { flex: 1; }
 .acard .acPanel { flex: 1; }
-@media (max-width: 960px) { .apanel { height: auto; overflow: visible; } }
+@media (max-width: 960px) { .apanel { min-height: 0; } }
 /* the knowledge grid scrolls with the panel, not on its own */
 .apanel .kgrid2 { max-height: none; overflow: visible; }
 
@@ -859,6 +864,16 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .textEdit { width: 100%; min-height: 220px; padding: 14px 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; background: hsl(var(--background)); font: inherit; font-size: 13.5px; line-height: 21px; color: hsl(var(--foreground)); resize: vertical; outline: none; transition: border-color 150ms var(--ease-out); }
 .textEdit:focus { border-color: hsl(var(--ring)); }
 .placeholderName { color: hsl(var(--muted-foreground)); font-weight: 400; }
+/* The form as one fieldset, so a read-only member's controls are disabled together; it lays out like the panel. */
+.formSet { display: flex; flex-direction: column; gap: 20px; min-width: 0; margin: 0; padding: 0; border: 0; }
+/* Where the stage stacks above the form, Save sits in a bar pinned at the bottom, above the phone's bottom nav. */
+.saveBar { position: sticky; bottom: var(--bottom-nav-h); z-index: 20; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 -16px; padding: 12px 16px; border-top: 1px solid hsl(var(--border)); background: hsl(var(--background)); }
+@media (min-width: 768px) { .saveBar { margin: 0 -24px; padding: 12px 24px; } }
+/* Read access: one quiet line above the stage, saying why the controls are grey. */
+.viewerNote { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
+/* What an item is, read as text: not drawn as the input boxes Skriv själv types into. */
+.fieldText { margin: 0; font-size: 15px; line-height: 21px; color: hsl(var(--foreground)); overflow-wrap: anywhere; }
+.stepsText { margin: 0; padding-left: 20px; list-style: decimal; display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 19px; }
 
 /* ── an analysis's picture (AnalysisSymbol.tsx): raised bars, still until hovered ── */
 .anaSym { position: relative; display: inline-block; flex: none; }
