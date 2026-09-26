@@ -3,7 +3,7 @@ import { FOLDER_ORDER, folderFor, folderQuery, foldersFromCounts, openByDefault 
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 
 describe('folderFor', () => {
-  it('puts every type on one shelf and the untyped last', () => {
+  it('puts every type on one shelf, a booked document with no type on its own, and the untyped last', () => {
     expect(folderFor('agreement.loan')).toBe('agreements')
     expect(folderFor('registration.bolagsverket')).toBe('authority')
     expect(folderFor('filing.bolagsverket')).toBe('authority')
@@ -20,6 +20,9 @@ describe('folderFor', () => {
     expect(folderFor('other')).toBe('other')
     expect(folderFor(null)).toBe('untyped')
     expect(folderFor('')).toBe('untyped')
+    expect(folderFor(null, true)).toBe('booked')
+    expect(folderFor('receipt', true)).toBe('receipts')
+    expect(FOLDER_ORDER.slice(-2)).toEqual(['booked', 'untyped'])
   })
 })
 
@@ -37,6 +40,7 @@ describe('folderQuery', () => {
     expect(folderQuery('receipts')).toEqual({ mode: 'in', types: ['receipt'] })
     expect(folderQuery('supplier_invoices').types).toEqual(expect.arrayContaining(['supplier_invoice', 'credit_note']))
     expect(folderQuery('untyped')).toEqual({ mode: 'untyped', types: null })
+    expect(folderQuery('booked')).toEqual({ mode: 'booked', types: null })
     const other = folderQuery('other')
     expect(other.mode).toBe('not_in')
     // Every known type lands in exactly one folder: the other folder excludes all the rest and nothing of its own.
@@ -49,18 +53,22 @@ describe('foldersFromCounts', () => {
     const folders = foldersFromCounts([
       { doc_type: 'credit_note', n: 2 },
       { doc_type: 'supplier_invoice', n: 30 },
+      { doc_type: 'supplier_invoice', booked: true, n: 4 },
       { doc_type: null, n: 5 },
+      { doc_type: null, booked: true, n: 2170 },
       { doc_type: 'receipt', n: 0 },
     ])
     expect(folders.map((f) => [f.key, f.count])).toEqual([
-      ['supplier_invoices', 32],
+      ['supplier_invoices', 36],
+      ['booked', 2170],
       ['untyped', 5],
     ])
     expect(folders[0].types).toEqual([
-      { doc_type: 'supplier_invoice', count: 30 },
+      { doc_type: 'supplier_invoice', count: 34 },
       { doc_type: 'credit_note', count: 2 },
     ])
     expect(folders[1].types).toEqual([])
+    expect(folders[2].types).toEqual([])
   })
 })
 

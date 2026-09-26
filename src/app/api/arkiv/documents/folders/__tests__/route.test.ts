@@ -61,4 +61,22 @@ describe('GET /api/arkiv/documents/folders', () => {
     ])
     expect(vi.mocked(mockSupabase.rpc)).toHaveBeenCalledWith('arkiv_document_type_counts', { p_company_id: 'company-1', p_year: 2025 })
   })
+  it("tells a booked document with no type apart from a loose one: a verifikat's underlag is a folder, not a question", async () => {
+    enqueue({
+      data: [
+        { doc_type: null, booked: true, n: 2170 },
+        { doc_type: null, booked: false, n: 3 },
+        { doc_type: 'receipt', booked: true, n: 5 },
+      ],
+    })
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    const data = (body as { data: { total: number; folders: Array<{ key: string; count: number }> } }).data
+    expect(data.total).toBe(2178)
+    expect(data.folders.map((f) => [f.key, f.count])).toEqual([
+      ['receipts', 5],
+      ['booked', 2170],
+      ['untyped', 3],
+    ])
+  })
 })

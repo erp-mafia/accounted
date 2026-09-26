@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Banknote, ChevronRight, File, FileOutput, FileQuestion, FileSignature, FileText, ScrollText, ShoppingBag, Stamp, type LucideIcon } from 'lucide-react'
+import { Banknote, ChevronRight, File, FileOutput, FileQuestion, FileSignature, FileText, Paperclip, ScrollText, ShoppingBag, Stamp, type LucideIcon } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -40,6 +40,7 @@ const ICONS: Record<FolderKey, LucideIcon> = {
   customer_invoices: FileOutput,
   bank_statements: Banknote,
   other: File,
+  booked: Paperclip,
   untyped: FileQuestion,
 }
 
@@ -168,15 +169,15 @@ export function ArkivTree({ refreshKey = 0 }: { refreshKey?: number }) {
             const page = pages[folder.key]
             const shown = page?.rows ?? []
             const remaining = Math.max(0, folder.count - shown.length)
+            const hint = folder.key === 'untyped' ? t('folder_untyped_hint') : folder.key === 'booked' ? t('folder_booked_hint') : null
             const mix =
-              folder.key === 'untyped'
-                ? t('folder_untyped_hint')
-                : folder.types.length > 1
-                  ? folder.types
-                      .slice(0, 3)
-                      .map((x) => `${typeLabel(x.doc_type)} ${x.count}`)
-                      .join(', ')
-                  : null
+              hint ??
+              (folder.types.length > 1
+                ? folder.types
+                    .slice(0, 3)
+                    .map((x) => `${typeLabel(x.doc_type)} ${x.count}`)
+                    .join(', ')
+                : null)
             return (
               <details
                 key={folder.key}

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { FOLDER_ORDER, folderFor, type FolderKey } from './folders'
@@ -85,6 +86,8 @@ export async function listRecords(supabase: SupabaseClient, companyId: string, o
   }>
   const total = count ?? rows.length
   if (rows.length === 0) return { items: [], total, next_offset: null }
+  // A document tied to a closed or locked period keeps its type on the classification (lib/documents/locked-period.ts).
+  await fillTypeFromClassification(supabase, rows)
 
   const entryIds = [...new Set(rows.map((r) => r.journal_entry_id).filter((id): id is string => !!id))]
   const [entries, originals] = await Promise.all([

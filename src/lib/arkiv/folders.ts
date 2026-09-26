@@ -2,7 +2,9 @@
  * The archive as folders (the Dokument tree, 2026-09-24): every document
  * type has one shelf, in a fixed order that reads from the rare and
  * long-lived (agreements, authority letters, corporate records) to the many
- * and routine (receipts, invoices, statements), with the documents nobody
+ * and routine (receipts, invoices, statements), then the booked documents
+ * with no type (a verifikat's underlag: the verifikat says what they are,
+ * and nothing types them in the background), with the documents nobody
  * has typed yet last, where their question is visible.
  */
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
@@ -16,6 +18,7 @@ export type FolderKey =
   | 'customer_invoices'
   | 'bank_statements'
   | 'other'
+  | 'booked'
   | 'untyped'
 
 export const FOLDER_ORDER: readonly FolderKey[] = [
@@ -27,14 +30,16 @@ export const FOLDER_ORDER: readonly FolderKey[] = [
   'customer_invoices',
   'bank_statements',
   'other',
+  'booked',
   'untyped',
 ]
 
 /** A folder with at most this many documents opens on arrival; a bigger one is a heading until clicked. */
 export const OPEN_BY_DEFAULT_MAX = 12
 
-export function folderFor(docType: string | null | undefined): FolderKey {
-  if (!docType) return 'untyped'
+/** Which shelf a document sits on: a booked one with no type is a verifikat's underlag, not a question. */
+export function folderFor(docType: string | null | undefined, booked = false): FolderKey {
+  if (!docType) return booked ? 'booked' : 'untyped'
   if (docType.startsWith('agreement.')) return 'agreements'
   if (docType.startsWith('registration.') || docType.startsWith('filing.') || docType.startsWith('decision.')) return 'authority'
   if (docType.startsWith('minutes.') || docType === 'share_subscription_list' || docType === 'annual_report') return 'corporate'
@@ -55,11 +60,11 @@ export interface FolderCount {
 }
 
 /** Type counts from the database sorted into folders, in FOLDER_ORDER, empty folders left out. */
-export function foldersFromCounts(counts: ReadonlyArray<{ doc_type: string | null; n: number }>): FolderCount[] {
+export function foldersFromCounts(counts: ReadonlyArray<{ doc_type: string | null; booked?: boolean; n: number }>): FolderCount[] {
   const byKey = new Map<FolderKey, Map<string, number>>()
-  for (const { doc_type, n } of counts) {
+  for (const { doc_type, booked, n } of counts) {
     if (!(n > 0)) continue
-    const key = folderFor(doc_type)
+    const key = folderFor(doc_type, booked ?? false)
     const types = byKey.get(key) ?? new Map<string, number>()
     types.set(doc_type ?? '', (types.get(doc_type ?? '') ?? 0) + n)
     byKey.set(key, types)
@@ -78,12 +83,14 @@ export function foldersFromCounts(counts: ReadonlyArray<{ doc_type: string | nul
 }
 
 /**
- * Which rows a folder holds, as arkiv_document_page takes it: the untyped folder the rows with no type, the
+ * Which rows a folder holds, as arkiv_document_page takes it: the untyped folder the loose rows with no type,
+ * the booked folder the booked rows with no type, the
  * other folder every typed row no other folder names (so a type the taxonomy has since dropped is never lost),
  * every other folder its own types.
  */
-export function folderQuery(key: FolderKey): { mode: 'in' | 'not_in' | 'untyped'; types: string[] | null } {
+export function folderQuery(key: FolderKey): { mode: 'in' | 'not_in' | 'untyped' | 'booked'; types: string[] | null } {
   if (key === 'untyped') return { mode: 'untyped', types: null }
+  if (key === 'booked') return { mode: 'booked', types: null }
   if (key === 'other') return { mode: 'not_in', types: DOC_TYPES.filter((t) => folderFor(t) !== 'other') }
   return { mode: 'in', types: DOC_TYPES.filter((t) => folderFor(t) === key) }
 }

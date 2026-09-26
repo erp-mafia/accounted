@@ -11223,6 +11223,8 @@
     "folder_customer_invoices": "Kundfakturor",
     "folder_bank_statements": "Kontoutdrag",
     "folder_other": "Övrigt",
+    "folder_booked": "Bokförda underlag",
+    "folder_booked_hint": "hör till ett verifikat",
     "folder_untyped": "Utan typ",
     "folder_untyped_hint": "typas medan de läses in",
     "tree_show_more": "Visa {count} till",

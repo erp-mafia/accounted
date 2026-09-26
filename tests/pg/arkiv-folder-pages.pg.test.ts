@@ -1,21 +1,24 @@
 import { randomUUID } from 'crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
-import { insertAuthUser, seedCompany } from './fixtures'
+import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 /**
  * arkiv_document_type_counts and arkiv_document_page: the Dokument tree counts
  * and pages its folders over the whole archive, with the list's filters (no
  * structured archives, admitted or held) and its date (the date the inbox read
- * off a receipt or invoice, the upload day otherwise). A member sees their own
+ * off a receipt or invoice, the upload day otherwise). A booked document with
+ * no type is a verifikat's underlag, apart from a loose one that awaits its
+ * type, and a type set on a document in a closed period counts under that type
+ * although the period lock keeps it off the row. A member sees their own
  * company only.
  */
-async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string }): Promise<string> {
+async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.document_attachments
-       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at)
-     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10)`,
+       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at, journal_entry_id)
+     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10, $11)`,
     [
       id,
       p.userId,
@@ -27,6 +30,7 @@ async function insertDocument(p: { userId: string; companyId: string; docType: s
       p.admission ?? 'admitted',
       p.invoiceDate ? JSON.stringify({ invoice: { invoiceDate: p.invoiceDate } }) : null,
       p.createdAt,
+      p.journalEntryId ?? null,
     ],
   )
   return id
@@ -35,10 +39,11 @@ async function insertDocument(p: { userId: string; companyId: string; docType: s
 describe('arkiv_document_type_counts and arkiv_document_page', () => {
   let userId: string
   let companyId: string
+  let fiscalPeriodId: string
   const ids: Record<string, string> = {}
 
   beforeAll(async () => {
-    ;({ userId, companyId } = await seedCompany())
+    ;({ userId, companyId, fiscalPeriodId } = await seedCompany())
     const c = { userId, companyId }
     // A receipt uploaded in 2026 but dated 2025: it counts in 2025.
     ids.receipt2025 = await insertDocument({ ...c, docType: 'receipt', createdAt: '2026-02-01T10:00:00Z', invoiceDate: '2025-12-30' })
@@ -52,8 +57,14 @@ describe('arkiv_document_type_counts and arkiv_document_page', () => {
 
   const counts = (year: number | null) =>
     withUserContext(userId, async (client) => {
-      const { rows } = await client.query<{ doc_type: string | null; n: string }>(`SELECT doc_type, n FROM public.arkiv_document_type_counts($1, $2)`, [companyId, year])
-      return Object.fromEntries(rows.map((r) => [r.doc_type ?? 'untyped', Number(r.n)]))
+      const { rows } = await client.query<{ doc_type: string | null; booked: boolean; n: string }>(`SELECT doc_type, booked, n FROM public.arkiv_document_type_counts($1, $2)`, [companyId, year])
+      // Keyed as the tree folds it: a type whether booked or not, the untyped by whether a verifikat holds them.
+      const out: Record<string, number> = {}
+      for (const r of rows) {
+        const key = r.doc_type ?? (r.booked ? 'booked' : 'untyped')
+        out[key] = (out[key] ?? 0) + Number(r.n)
+      }
+      return out
     })
 
   const page = (mode: string, types: string[] | null, year: number | null, offset = 0, limit = 25) =>
@@ -80,6 +91,28 @@ describe('arkiv_document_type_counts and arkiv_document_page', () => {
     expect((await page('not_in', ['receipt', 'agreement.loan'], null)).map((r) => r.id)).toEqual([ids.oddType])
     expect((await page('untyped', null, null)).map((r) => r.id)).toEqual([ids.untyped])
     expect((await page('in', ['receipt'], 2025)).map((r) => r.id)).toEqual([ids.receipt2025])
+  })
+
+  it("tells a booked document with no type (a verifikat's underlag) apart from a loose one, and counts a type the period lock kept off the row", async () => {
+    const c = { userId, companyId }
+    const openEntry = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId, entryDate: '2026-06-01' })
+    ids.booked = await insertDocument({ ...c, docType: null, createdAt: '2026-06-02T10:00:00Z', journalEntryId: openEntry })
+    // A document linked while its period was open, then the period closed: the row refuses the type, the classification carries it.
+    const oldPeriod = await insertFiscalPeriod({ userId, companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    const oldEntry = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId: oldPeriod, entryDate: '2025-06-01' })
+    ids.locked = await insertDocument({ ...c, docType: null, createdAt: '2025-06-02T10:00:00Z', journalEntryId: oldEntry })
+    await getPool().query(`UPDATE public.fiscal_periods SET is_closed = true, closed_at = now() WHERE id = $1`, [oldPeriod])
+    await expect(getPool().query(`UPDATE public.document_attachments SET doc_type = 'receipt' WHERE id = $1`, [ids.locked])).rejects.toThrow(/locked\/closed fiscal period/)
+    await getPool().query(
+      `INSERT INTO public.document_classifications (company_id, document_id, doc_type, confidence, relevance, relevance_reason, decided_by, is_current)
+       VALUES ($1, $2, 'receipt', 1, 'relevant', '', 'human', true)`,
+      [companyId, ids.locked],
+    )
+
+    expect(await counts(null)).toEqual({ receipt: 4, 'agreement.loan': 1, untyped: 1, something_new: 1, booked: 1 })
+    expect((await page('booked', null, null)).map((r) => r.id)).toEqual([ids.booked])
+    expect((await page('untyped', null, null)).map((r) => r.id)).toEqual([ids.untyped])
+    expect((await page('in', ['receipt'], 2025)).map((r) => r.id)).toEqual([ids.receipt2025, ids.locked])
   })
 
   it('shows a stranger nothing of another company', async () => {
