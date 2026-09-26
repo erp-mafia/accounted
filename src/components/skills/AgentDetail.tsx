@@ -65,7 +65,6 @@ export function AgentDetail({ segment, backHref = '/skills' }: { segment: string
 
 function Detail({ companyId, companyName, agentId, backHref }: { companyId: string; companyName: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
-  const companyName = useCompany().company?.name ?? ''
   const locale = useLocale()
   const router = useRouter()
   const { canWrite } = useCanWrite()

@@ -10486,6 +10486,7 @@
     "routine_preview": "Så blir rutinen",
     "routine_go": "Schemalägg i Claude",
     "routine_note": "Kräver Claude Pro, Max, Team eller Enterprise. Rutinen körs i Claudes moln, även när datorn är avstängd. Tillåt Accounted-verktygen med Alltid tillåt, men låt Godkänn kräva ditt ok.",
+    "routine_back": "Tillbaka",
     "routine_prompt_analysis": "Skapa en schemalagd uppgift som körs {when} (Europe/Stockholm). {company} Varje gång den körs: {run} Ingen är med när den körs, så skicka \"unattended\": true när du anropar get_task och ställ inga frågor. Det här är en analys: ändra ingenting i Accounted och lägg inga förslag. Godkänn aldrig förslag själv. Bygg analysen och avsluta med de viktigaste förändringarna sedan förra körningen. Kör uppgiften en gång direkt nu medan jag är här, så att jag ser att den når Accounted och kan tillåta verktygen.",
     "routine_company": "Den gäller bolaget {name} (company_id {id}): skicka company_id \"{id}\" på varje anrop till Accounted.",
     "routine_say": {

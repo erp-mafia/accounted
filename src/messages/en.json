@@ -10486,6 +10486,7 @@
     "routine_preview": "What the routine does",
     "routine_go": "Schedule in Claude",
     "routine_note": "Needs Claude Pro, Max, Team or Enterprise. The routine runs in Claude's cloud, even when your computer is off. Allow the Accounted tools with Always allow, but let Approve require your OK.",
+    "routine_back": "Back",
     "routine_prompt_analysis": "Create a scheduled task that runs {when} (Europe/Stockholm). {company} Each time it runs: {run} Nobody is there while it runs, so pass \"unattended\": true when you call get_task and ask no questions. This is an analysis: change nothing in Accounted and stage no proposals. Never approve proposals yourself. Build the analysis and finish with the most important changes since the last run. Run the task once right now while I am here, so I can see that it reaches Accounted and allow its tools.",
     "routine_company": "It is for the company {name} (company_id {id}): pass company_id \"{id}\" on every call to Accounted.",
     "routine_say": {

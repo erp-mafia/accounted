@@ -98,7 +98,7 @@ export function RoutinePanel({ run, name, item, kind, company, onBack, initial, 
   }
 
   return (
-    <SubView title={t('routine_title')} onBack={onBack} backLabel={t('creator.back')}>
+    <SubView title={t('routine_title')} onBack={onBack} backLabel={t('routine_back')}>
       <RoutineFields value={choice} onChange={(next) => { setChoice(next); setStatus(null) }} />
       <Field label={t('routine_preview')} copy={<CopyIcon text={prompt} label={t('routine_copy')} />}>
         <div className={`${styles.instrBox} ${styles.routinePreview}`}>
