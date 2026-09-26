@@ -78,6 +78,58 @@ export async function stagePeppolDelivery(args: {
   return data as StagedPeppolDelivery
 }
 
+/**
+ * stage_peppol_delivery for a service-role caller (the v1 API and the MCP
+ * approval path, where auth.uid() is NULL). The RPC is granted to
+ * service_role only and checks that the named actor is a non-viewer member
+ * of the company, then stages exactly as stage_peppol_delivery does.
+ */
+export async function stagePeppolDeliveryAsActor(args: {
+  supabase: SupabaseClient
+  companyId: string
+  invoiceId: string
+  actorId: string
+  document: GeneratedPeppolInvoice
+}): Promise<StagedPeppolDelivery> {
+  const { data, error } = await args.supabase.rpc('stage_peppol_delivery_as_actor', {
+    p_actor_id: args.actorId,
+    p_company_id: args.companyId,
+    p_invoice_id: args.invoiceId,
+    p_recipient_scheme: args.document.recipient.scheme,
+    p_recipient_identifier: args.document.recipient.identifier,
+    p_customization_id: PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
+    p_profile_id: PEPPOL_BIS_BILLING_PROFILE_ID,
+    p_filename: args.document.filename,
+    p_xml_payload: args.document.xml,
+    p_xml_sha256: sha256Hex(args.document.xml),
+  })
+
+  if (error) throw error
+  if (!data) throw new Error('Failed to stage Peppol delivery: no data returned')
+  return data as StagedPeppolDelivery
+}
+
+/**
+ * The deliveries of one invoice, newest first, read with a service-role
+ * client (peppol_deliveries is not granted to authenticated). The caller has
+ * already established membership; the company filter is explicit. Same
+ * columns as list_peppol_delivery_summaries: never the XML payload.
+ */
+export async function listPeppolDeliveriesForInvoice(args: {
+  service: SupabaseClient
+  companyId: string
+  invoiceId: string
+}): Promise<PeppolDeliverySummary[]> {
+  const { data, error } = await args.service
+    .from('peppol_deliveries')
+    .select('id, idempotency_key, recipient_scheme, recipient_identifier, xml_sha256, provider, provider_submission_id, status, status_at, status_detail, submitted_at, terminal_at, evidence_retrieved_at, created_at')
+    .eq('company_id', args.companyId)
+    .eq('invoice_id', args.invoiceId)
+    .order('created_at', { ascending: false })
+  if (error) throw new Error(`Failed to list Peppol deliveries: ${error.message}`)
+  return (data ?? []) as PeppolDeliverySummary[]
+}
+
 export async function listPeppolDeliverySummaries(args: {
   supabase: SupabaseClient
   companyId: string

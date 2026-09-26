@@ -699,9 +699,9 @@ Example response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful dashboard Peppol send: that flow issues the invoice itself. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent (the send response carried issuance.ok=false and the invoice is still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending lives in the dashboard invoice page behind a per-company access grant (requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful Peppol send (POST /invoices/{id}/send-peppol, gnubok_send_invoice_peppol or the dashboard): that flow issues the invoice itself. If a Peppol send reports that the invoice was sent but could not be marked as sent (issuance.ok=false with warning PEPPOL_SENT_NOT_ISSUED, invoice still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending needs a per-company access grant (POST /peppol/access-request; check an invoice with GET /invoices/{id}/peppol): aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
-**Use when:** You delivered the invoice through a channel other than Accounted's email or a successful dashboard Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a dashboard Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
+**Use when:** You delivered the invoice through a channel other than Accounted's email or Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).
 
 **Pitfalls:**
@@ -779,6 +779,185 @@ Returns the invoice as application/pdf. The descriptive filename contains compan
 | `id` | path | `string` | yes |  |
 
 Response `200` (`application/pdf`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/invoices/{id}/peppol`
+
+**Check whether a customer invoice can be sent over Peppol, to which participant, and what is missing.**
+`scope:invoices:read · risk:low · idempotent`
+
+Runs every gate the Peppol send applies, as reads, and lists each failing one: the access point is configured, the company is not the demo company, the operators granted Peppol access and sends remain, the invoice is a plain invoice in draft/sent/overdue, a draft can be issued (payee account), and the BIS Billing 3 document builds (EN 16931 + Sweden CIUS preflight). Answers the sender and recipient participant ids (0007 + org number). The recipient's registration in the Peppol network is not looked up here: the send does that on commit.
+
+**Use when:** Before POST /invoices/{id}/send-peppol, to fix what is missing (a buyer reference, a Bankgiro, the org number) instead of learning it from a refused send.
+**Do not use for:** Downloading the UBL XML (the dashboard export) or reading past transmissions (GET /invoices/{id}/peppol/deliveries).
+
+**Pitfalls:**
+- ready=true means nothing on Accounted's side stops the send; the buyer can still be unregistered in Peppol, which the send answers as 422 PEPPOL_RECIPIENT_NOT_REACHABLE.
+- A draft without a number is validated with a placeholder number: the real F-series number is allocated only when the send commits.
+- PEPPOL_ACCESS_REQUIRED means the company has not been granted Peppol: request it with POST /peppol/access-request.
+- Peppol here is BIS Billing 3: aktiebolag senders, standard invoices only (no credit notes, quotes, proformas or self-billing), Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 %, no ROT/RUT deductions. Anything else is listed as a blocker.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    invoice_number: string | null,
+    invoice_status: string,
+    ready: boolean,
+    will_issue_invoice: boolean,
+    sender: { scheme: string, identifier: string } | null,
+    recipient: { scheme: string, identifier: string } | null,
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    blockers: { code: string, field: string | null, message_sv: string, message_en: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "invoice_number": "F-1042",
+    "invoice_status": "sent",
+    "ready": false,
+    "will_issue_invoice": false,
+    "sender": {
+      "scheme": "0007",
+      "identifier": "5560160680"
+    },
+    "recipient": {
+      "scheme": "0007",
+      "identifier": "5566778899"
+    },
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    },
+    "blockers": [
+      {
+        "code": "BUYER_REFERENCE_REQUIRED",
+        "field": "invoice.your_reference",
+        "message_sv": "Märkning eller Er referens krävs för Peppol när inköpsordernummer saknas.",
+        "message_en": "A marking or buyer reference is required for Peppol when no purchase order reference is available."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/invoices/{id}/peppol/deliveries`
+
+**List an invoice's Peppol deliveries and their network status.**
+`scope:invoices:read · risk:low · idempotent`
+
+Every document staged for the Peppol network for this invoice, newest first, with its lifecycle status (staged through submission_accepted, transport_succeeded and the buyer's business response), the access point's submission id and the SHA-256 of the exact XML. Also answers whether sending is available in this environment and the company's access grant. Status updates arrive asynchronously from the access point.
+
+**Use when:** After a send, to follow the delivery, or before resending, to see whether the invoice already went out.
+**Do not use for:** Checking whether an invoice can be sent (GET /invoices/{id}/peppol) or email deliveries.
+
+**Pitfalls:**
+- submission_accepted means the access point took the document, not that the buyer received it; transport_succeeded and business_accepted come later.
+- A delivery in retryable_failure can be resent with POST /invoices/{id}/send-peppol; a terminal failed or business_rejected one cannot be resent unchanged.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    deliveries: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null }[],
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "deliveries": [
+      {
+        "delivery_id": "2b9c…",
+        "idempotency_key": "5e3f…",
+        "recipient_scheme": "0007",
+        "recipient_identifier": "5566778899",
+        "xml_sha256": "a3f1…",
+        "provider": "qvalia",
+        "provider_submission_id": "int-1",
+        "status": "transport_succeeded",
+        "status_at": "2026-09-26T10:01:00Z",
+        "status_detail": null,
+        "submitted_at": "2026-09-26T10:00:02Z",
+        "terminal_at": null
+      }
+    ],
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "receive_enabled": false,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
 
 ---
 
@@ -871,7 +1050,7 @@ Example response `200`:
 
 The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
 
-**Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices are sent from the invoice page in the dashboard (per-company access grant requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. A successful dashboard Peppol send issues the invoice itself, so do not call :mark-sent after it; only if the dashboard reports that the invoice was sent via Peppol but could not be marked as sent does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
+**Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices go through POST /invoices/{id}/send-peppol (check readiness first with GET /invoices/{id}/peppol; per-company access grant requested with POST /peppol/access-request; aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions). A successful Peppol send issues the invoice itself, so do not call :mark-sent after it; only if it reports that the invoice was sent via Peppol but could not be marked as sent (issuance.ok=false) does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
 **Do not use for:** Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).
 
 **Pitfalls:**
@@ -950,6 +1129,99 @@ Example response `200`:
       "billing@gnubok-user.test"
     ],
     "journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/{id}/send-peppol`
+
+**Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+Builds the BIS Billing 3 UBL document, stages it as a delivery (retained with the invoice's fiscal year), looks the buyer up in the Peppol network and submits it. A draft is numbered first (the number is in the document) and, once the network accepted it, issued with the :mark-sent semantics: status sent, verifikat under faktureringsmetoden, PDF archived as underlag. Resending the exact same document replays the first submission instead of transmitting twice. The dry run validates everything as reads and contacts no network.
+
+**Use when:** The buyer receives e-invoices over Peppol (typically public sector, where Lag 2018:1277 requires it, or a company that asks for it) and GET /invoices/{id}/peppol shows no blockers.
+**Do not use for:** Emailing the invoice (POST /invoices/{id}/send), recording one delivered another way (:mark-sent), credit notes, quotes or proformas.
+
+**Pitfalls:**
+- Needs the company's Peppol access grant: 403 PEPPOL_ACCESS_REQUIRED until the operators enable it (POST /peppol/access-request), 409 PEPPOL_SEND_LIMIT_REACHED once the sending cap is used.
+- A buyer not registered in Peppol answers 422 PEPPOL_RECIPIENT_NOT_REACHABLE and nothing is transmitted; a failed lookup answers 502 PEPPOL_LOOKUP_FAILED and is safe to retry.
+- 422 PEPPOL_SUBMISSION_REJECTED is the access point's verdict on the document: fix the invoice (a correction is a credit note plus a new invoice once issued), do not resend unchanged.
+- 502 PEPPOL_SUBMISSION_FAILED and 409 PEPPOL_SEND_PRECONDITION_FAILED leave the delivery resendable: retry later or fix the Peppol settings.
+- If a draft was transmitted but could not be marked as sent, the response carries issuance.ok=false and a PEPPOL_SENT_NOT_ISSUED warning: complete it with POST /invoices/{id}/mark-sent, which reuses the number.
+- An invoice date outside every fiscal year answers 422 PEPPOL_FISCAL_PERIOD_MISSING (the delivery needs its retention basis).
+- Peppol here is BIS Billing 3: aktiebolag senders, standard invoices only (no credit notes, quotes, proformas or self-billing), Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 %, no ROT/RUT deductions. Anything else is listed as a blocker.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice_id: string,
+    invoice_number: string | null,
+    invoice_status: string,
+    network_submitted: true,
+    already_submitted: boolean,
+    delivery: { delivery_id: string, idempotency_key: string, recipient_scheme: string, recipient_identifier: string, xml_sha256: string, provider: string | null, provider_submission_id: string | null, status: string, status_at: string, status_detail: string | null, submitted_at: string | null, terminal_at: string | null },
+    recipient: { scheme: string, identifier: string } | null,
+    journal_entry_id: string | null,
+    issuance: { ok: true, partial_failures: unknown[] } | { ok: false, error_code: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice_id": "7d1e…",
+    "invoice_number": "F-1042",
+    "invoice_status": "sent",
+    "network_submitted": true,
+    "already_submitted": false,
+    "delivery": {
+      "delivery_id": "2b9c…",
+      "idempotency_key": "5e3f…",
+      "recipient_scheme": "0007",
+      "recipient_identifier": "5566778899",
+      "xml_sha256": "a3f1…",
+      "provider": "qvalia",
+      "provider_submission_id": "int-1",
+      "status": "submission_accepted",
+      "status_at": "2026-09-26T10:00:02Z",
+      "status_detail": null,
+      "submitted_at": "2026-09-26T10:00:02Z",
+      "terminal_at": null
+    },
+    "recipient": {
+      "scheme": "0007",
+      "identifier": "5566778899"
+    },
+    "journal_entry_id": "9a0b…",
+    "issuance": {
+      "ok": true,
+      "partial_failures": []
+    }
   },
   "meta": {
     "request_id": "req_…",

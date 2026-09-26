@@ -11,7 +11,7 @@ import {
   AGI_KONTROLLERA_MAX_BYTES,
 } from '@/lib/salary/agi/kontrollera-schemas'
 import { TimeoutError } from '@/lib/http/fetch-with-timeout'
-import { requireCapability } from '@/lib/entitlements/has-capability'
+import { capabilityBlockedResponse, requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { buildAuthorizeUrl, exchangeCodeForTokens, generatePkcePair } from './lib/oauth'
 import { skatteverketConnectorMode, startConnectorAuthorization } from './lib/connector-mode'
@@ -72,10 +72,16 @@ import {
   agiGetKvittenser,
   agiLasPeriod,
   agiLasUppPeriod,
-  agiKontrolleraHU,
-  agiKontrolleraIU,
 } from './lib/agi-client'
-import { syncSkattekonto, SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import {
+  previewSkattekontoSync,
+  runSkattekontoSync,
+  runValidateAgiUppgift,
+  syncSkattekontoNow,
+  validateAgiUppgift,
+} from './lib/core-actions'
+import type { SkvActionFailure } from '@/lib/skatteverket/extension-actions'
+import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
 import { fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
@@ -2203,42 +2209,16 @@ export const skatteverketExtension: Extension = {
           )
         }
 
+        // The SKV call and its audit row live in lib/core-actions.ts, shared
+        // with the v1 operation (skatteverket.agi-validate-*).
         try {
-          const result = await agiKontrolleraHU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
-          if (!result.ok) {
-            await writeSkatteverketAudit(ctx, {
-              endpoint: 'agi.kontrollera.hu',
-              agRegistreradId: parsed.data.agRegistreradId,
-              redovisningsperiod: parsed.data.redovisningsPeriod,
-              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
-              responseStatus: result.status,
-              requestSizeBytes: rawBytes,
-              errorMessage: result.error,
-            })
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'ok',
-            responseStatus: result.status,
-            skvStatus: result.data?.status ?? null,
-            requestSizeBytes: rawBytes,
+          const result = await runValidateAgiUppgift(ctx, {
+            uppgift: 'huvuduppgift',
+            payload: parsed.data,
           })
+          if (!result.ok) return skvActionFailureResponse(result)
           return NextResponse.json({ data: result.data })
         } catch (err) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.hu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'internal_error',
-            requestSizeBytes: rawBytes,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          })
           return handleSkvError(err)
         }
       },
@@ -2311,42 +2291,16 @@ export const skatteverketExtension: Extension = {
           )
         }
 
+        // The SKV call and its audit row live in lib/core-actions.ts, shared
+        // with the v1 operation (skatteverket.agi-validate-*).
         try {
-          const result = await agiKontrolleraIU(ctx.supabase, ctx.userId, ctx.companyId, parsed.data)
-          if (!result.ok) {
-            await writeSkatteverketAudit(ctx, {
-              endpoint: 'agi.kontrollera.iu',
-              agRegistreradId: parsed.data.agRegistreradId,
-              redovisningsperiod: parsed.data.redovisningsPeriod,
-              outcome: result.status === 401 || result.status === 403 ? 'auth_error' : 'skv_error',
-              responseStatus: result.status,
-              requestSizeBytes: rawBytes,
-              errorMessage: result.error,
-            })
-            return NextResponse.json(
-              { error: result.error, code: result.body?.kod },
-              { status: result.status },
-            )
-          }
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'ok',
-            responseStatus: result.status,
-            skvStatus: result.data?.status ?? null,
-            requestSizeBytes: rawBytes,
+          const result = await runValidateAgiUppgift(ctx, {
+            uppgift: 'individuppgift',
+            payload: parsed.data,
           })
+          if (!result.ok) return skvActionFailureResponse(result)
           return NextResponse.json({ data: result.data })
         } catch (err) {
-          await writeSkatteverketAudit(ctx, {
-            endpoint: 'agi.kontrollera.iu',
-            agRegistreradId: parsed.data.agRegistreradId,
-            redovisningsperiod: parsed.data.redovisningsPeriod,
-            outcome: 'internal_error',
-            requestSizeBytes: rawBytes,
-            errorMessage: err instanceof Error ? err.message : String(err),
-          })
           return handleSkvError(err)
         }
       },
@@ -2579,10 +2533,10 @@ export const skatteverketExtension: Extension = {
           // writes back to their row, never to the caller's (#1673). A row
           // flagged needs_reconsent cannot heal on its own, so answer the
           // reconnect prompt directly instead of burning a refresh call.
-          const resolved = await resolveCompanyReadAuth(ctx)
-          if (!resolved.ok) return readAuthFailureResponse(resolved.reason)
-          const result = await syncSkattekonto(ctx, resolved.auth)
-          return NextResponse.json({ data: result })
+          // Shared with the v1 operation skattekonto.sync (lib/core-actions.ts).
+          const result = await runSkattekontoSync(ctx)
+          if (!result.ok) return skvActionFailureResponse(result)
+          return NextResponse.json({ data: result.data })
         } catch (err) {
           return handleSkvError(err)
         }
@@ -2870,6 +2824,13 @@ export const skatteverketExtension: Extension = {
     // momsdeklarationer (inlamnat) and beslut (beslutat). Contract in
     // lib/skatteverket/declaration-status.ts.
     fetchVatDeclarationStatus,
+    // AGI pre-validation and the manual skattekonto sync for the v1
+    // operations (lib/operations/skatteverket.ts). Contract in
+    // lib/skatteverket/extension-actions.ts; the routes above call the same
+    // functions.
+    validateAgiUppgift,
+    syncSkattekontoNow,
+    previewSkattekontoSync,
   },
 }
 
@@ -3002,6 +2963,24 @@ async function loadAGIXml(
 /**
  * Convert Skatteverket errors to appropriate HTTP responses.
  */
+/**
+ * A shared-service failure (lib/core-actions.ts) in the envelope these
+ * dashboard routes always answered: the paywall 403, the SKV auth codes the
+ * reconnect UI reads (via handleSkvError), and Skatteverket's own status and
+ * felkod for a refused kontrollera call.
+ */
+function skvActionFailureResponse(failure: SkvActionFailure): NextResponse {
+  if (failure.code === 'SKATTEVERKET_CAPABILITY_BLOCKED') return capabilityBlockedResponse(CAPABILITY.skatteverket)
+  const details = failure.details ?? {}
+  const skvCode = details.skv_code as SkatteverketAuthError['code'] | undefined
+  if (skvCode) return handleSkvError(new SkatteverketAuthError(failure.error, skvCode))
+  const status = typeof details.skv_status === 'number' ? details.skv_status : failure.http_status
+  return NextResponse.json(
+    { error: failure.error, code: details.skv_kod ?? failure.code },
+    { status },
+  )
+}
+
 function handleSkvError(err: unknown): NextResponse {
   if (err instanceof SkatteverketAuthError) {
     // MISSING_SCOPE returns 401: the existing token works, but it doesn't

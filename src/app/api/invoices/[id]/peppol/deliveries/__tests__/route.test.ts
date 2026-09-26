@@ -35,6 +35,7 @@ describe('GET /api/invoices/[id]/peppol/deliveries', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     reset()
+    serviceTables.reset()
     delete process.env.PEPPOL_TRANSPORT_PROVIDER
     requireAuthMock.mockResolvedValue({ user, supabase: mockSupabase, error: null })
   })
@@ -78,7 +79,10 @@ describe('GET /api/invoices/[id]/peppol/deliveries', () => {
 
   it('returns minimized delivery status and a truthful transport gate', async () => {
     enqueue({ data: { id: INVOICE_ID }, error: null })
-    enqueue({
+    // Deliveries are read from peppol_deliveries with the service client (the
+    // service is shared with the v1 door, where no auth.uid() exists for the
+    // list_peppol_delivery_summaries RPC), no longer through the user's RPC.
+    serviceTables.enqueue({
       data: [{
         id: '22222222-2222-4222-8222-222222222222',
         status: 'transport_succeeded',

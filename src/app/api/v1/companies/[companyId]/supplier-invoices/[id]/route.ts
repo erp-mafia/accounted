@@ -7,9 +7,11 @@
  *         caller's perspective; for those, use the action verbs or :credit).
  *         Idempotent (mandatory Idempotency-Key). Dry-runnable.
  *
- * No DELETE: supplier-invoice withdrawal is via :credit (mirrors v1 invoices).
- * The credit verb keeps both originals AND credit notes in the audit trail per
- * BFL 5 kap 5 § (corrections via reversing entries).
+ * DELETE: only an unbooked, unpaid invoice (operation supplier-invoices.delete,
+ *         rules in lib/supplier-invoices/manage.ts, shared with the dashboard).
+ *         A booked invoice is withdrawn via :credit, which keeps both the
+ *         original AND the credit note in the audit trail per BFL 5 kap 5 §
+ *         (corrections via reversing entries).
  */
 
 import { z } from 'zod'
@@ -21,6 +23,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { UpdateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { supplierInvoicesDelete } from '@/lib/operations/supplier-invoice-actions'
 import {
   findChangedVerifikatFields,
   findLockedVerifikatFields,
@@ -364,3 +368,5 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
   },
   { requireIdempotencyKey: true },
 )
+
+export const DELETE = v1OperationHandler(supplierInvoicesDelete)

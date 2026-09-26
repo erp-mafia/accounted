@@ -50,7 +50,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'core.md',
     title: 'Core',
-    members: ['health', 'companies', 'operations', 'settings'],
+    members: ['health', 'companies', 'operations', 'settings', 'peppol'],
     blurb:
       'Connectivity, company discovery, async-operation polling, and company settings. ' +
       'Every session starts with GET /companies to resolve the companyId that all other URLs need.',
@@ -67,7 +67,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'periods.md',
     title: 'Periods and registers',
-    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket'],
+    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket', 'skattekonto'],
     blurb:
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS ' +
       'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +

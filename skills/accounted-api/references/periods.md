@@ -1334,6 +1334,758 @@ Example response `200`:
 
 ---
 
+### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance`
+
+**Answer the årsredovisning compliance questions and record the confirmations.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
+
+**Use when:** The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
+**Do not use for:** The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).
+
+**Pitfalls:**
+- An unanswered question is null, never false: false is a legal assertion that the condition does not apply.
+- signer_roster_confirmed asserts the roster matches the board and VD registered at Bolagsverket; any later roster change clears it.
+- is_parent_company false also clears parent_group_size and prepares_consolidated_accounts.
+- Send at least one field (400 VALIDATION_ERROR otherwise).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  is_public_limited_company?: boolean | null,
+  is_in_liquidation?: boolean | null,
+  securities_traded_on_regulated_market?: boolean | null,
+  is_parent_company?: boolean | null,
+  parent_group_size?: "none" | "small" | "large" | null,
+  prepares_consolidated_accounts?: boolean | null,
+  has_foreign_branch?: boolean | null,
+  has_crypto_assets?: boolean | null,
+  has_share_based_payments?: boolean | null,
+  has_convertible_debt?: boolean | null,
+  building_revenue_share_pct?: number | null,
+  has_material_deferred_tax?: boolean | null,
+  reporting_currency?: "SEK" | "EUR",
+  auditor_report_required?: boolean | null,
+  auditor_report_included?: boolean,
+  dividend_prudence_confirmed?: boolean | null,
+  narrative_confirmed?: boolean,
+  k2_assessment_confirmed?: boolean,
+  signer_roster_confirmed?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "is_public_limited_company": false,
+  "k2_assessment_confirmed": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    profile: Record<string, unknown>,
+    disclosures: Record<string, unknown>,
+    eligibility: Record<string, unknown>,
+    validation: Record<string, unknown>,
+    capabilities: Record<string, unknown>,
+    report_summary: { proposed_dividend: number | null, distributable_equity: number | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "profile": {
+      "annual_report_profile_id": "9d3a…",
+      "is_public_limited_company": false
+    },
+    "validation": {
+      "stage": "draft",
+      "ok": true,
+      "error_count": 0,
+      "warning_count": 1,
+      "issues": []
+    },
+    "report_summary": {
+      "proposed_dividend": 0,
+      "distributable_equity": 412000
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl`
+
+**The K2 årsredovisning as an inline XBRL (XHTML) document.**
+`scope:reports:read · risk:low · idempotent`
+
+Generates the iXBRL document Bolagsverket's digital filing takes (K2, Bolagsverket taxonomy), for the live draft or a frozen version (version_id). The XHTML is also the human-readable document. It is not a filing: digital filing goes through connected software with the fastställelseintyg signed by BankID, which this API does not do.
+
+**Use when:** Archiving the digital document, or validating it with external tools.
+**Do not use for:** The pre-flight result as JSON (GET .../arsredovisning/ixbrl/validate) or a printable copy (GET .../arsredovisning/pdf).
+
+**Pitfalls:**
+- K2 aktiebolag only.
+- The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
+- proposed_dividend (whole SEK) applies to the live draft only.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+| `proposed_dividend` | query | `number` | no | Live draft only: proposed dividend in whole SEK for the resultatdisposition. |
+
+Response `200` (`application/xhtml+xml`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl/validate`
+
+**Pre-flight the generated iXBRL årsredovisning against Bolagsverket's kontrollera rules.**
+`scope:reports:read · risk:low · idempotent`
+
+Generates the K2 inline XBRL document (the live draft, or a frozen version with version_id) and runs the local mirror of Bolagsverket's kontrollera checks on it, plus a generation dry run and the 5 MB size limit. Issues carry the Bolagsverket code where one exists (e.g. 1107 missing signers) or ACC-*. Nothing is sent to Bolagsverket. Read-only.
+
+**Use when:** Before a digital filing, or to see why the iXBRL document is not ready.
+**Do not use for:** The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
+
+**Pitfalls:**
+- K2 aktiebolag only: the iXBRL generator does not produce K3 documents.
+- A validation with issues still answers 200; read ok and error_count.
+- An unknown version_id answers 404 NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+| `proposed_dividend` | query | `number` | no | Live draft only: proposed dividend in whole SEK for the resultatdisposition. |
+
+Response `200`:
+```ts
+{
+  data: {
+    ok: boolean,
+    issues: { code: string, severity: "error" | "warn", message: string }[],
+    error_count: number,
+    warning_count: number,
+    generated_bytes: number,
+    entry_point: string,
+    period: { start: string, end: string },
+    annual_report_version_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "ok": false,
+    "issues": [
+      {
+        "code": "1107",
+        "severity": "error",
+        "message": "Underskrifter saknas."
+      }
+    ],
+    "error_count": 1,
+    "warning_count": 0,
+    "generated_bytes": 84211,
+    "entry_point": "k2-ab-risbs-2024-09-12",
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    },
+    "annual_report_version_id": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/narrative`
+
+**Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
+
+**Use when:** Writing or correcting the texts of the årsredovisning before a version is frozen for signing.
+**Do not use for:** The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).
+
+**Pitfalls:**
+- A version already frozen keeps its text: freeze a new version after editing.
+- agm_disposition_outcome alternative_decision needs agm_disposition_decision text (400 VALIDATION_ERROR).
+- parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.
+- Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.
+- Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  description?: string | null,
+  important_events?: string | null,
+  resultatdisposition?: string | null,
+  proposed_dividend?: number | null,
+  agm_date?: string | null,
+  long_term_debt_over_five_years?: number | null,
+  securities_pledged?: string | null,
+  contingent_liabilities?: string | null,
+  parent_company_name?: string | null,
+  parent_company_org_number?: "" | string | null,
+  parent_company_city?: string | null,
+  medelantal_anstallda_override?: number | null,
+  long_term_debt_over_five_years_confirmed?: boolean,
+  securities_pledged_confirmed?: boolean,
+  contingent_liabilities_confirmed?: boolean,
+  parent_company_confirmed?: boolean,
+  agm_disposition_outcome?: "proposal_approved" | "alternative_decision" | null,
+  agm_disposition_decision?: string | null,
+  note_overrides?: Record<string, string | null>,
+  omit_kassaflodesanalys?: boolean,
+  kassaflodesanalys_omission_confirmed?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "description": "Bolaget bedriver konsultverksamhet inom IT.",
+  "agm_date": "2027-05-20"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    narrative_id: string,
+    fiscal_period_id: string,
+    description: string | null,
+    important_events: string | null,
+    resultatdisposition: string | null,
+    proposed_dividend: number | null,
+    agm_date: string | null,
+    long_term_debt_over_five_years: number | null,
+    securities_pledged: string | null,
+    contingent_liabilities: string | null,
+    parent_company_name: string | null,
+    parent_company_org_number: string | null,
+    parent_company_city: string | null,
+    medelantal_anstallda_override: number | null,
+    agm_disposition_outcome: "proposal_approved" | "alternative_decision" | null,
+    agm_disposition_decision: string | null,
+    note_overrides: Record<string, string>,
+    omit_kassaflodesanalys: boolean,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "narrative_id": "1f0e…",
+    "fiscal_period_id": "7c2b…",
+    "description": "Bolaget bedriver konsultverksamhet inom IT.",
+    "agm_date": "2027-05-20",
+    "updated_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/pdf`
+
+**The årsredovisning as PDF: the live draft or a frozen version.**
+`scope:reports:read · risk:low · idempotent`
+
+Renders the årsredovisning for the räkenskapsår (K2 or K3 template by the framework) as the dashboard does. Without version_id it is the live draft from the books, named ...-utkast.pdf; with version_id it is that immutable version with the signatures recorded on it, named ...-papperskopia.pdf once signed. Nothing is sent to Bolagsverket.
+
+**Use when:** A printable copy for the board to sign on paper, the archive, or a review.
+**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (gnubok_preview_arsredovisning).
+
+**Pitfalls:**
+- The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
+- An unknown version_id answers 404 NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+
+Response `200` (`application/pdf`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures`
+
+**The årsredovisning signer roster and its signatures.**
+`scope:reports:read · risk:low · idempotent`
+
+The current signer slots for the räkenskapsår: the unbound pending roster while one exists, otherwise the slots bound to the latest version with their status, signing date, method and evidence reference. The signature_id values are what PATCH and DELETE .../signatures/{signatureId} take; finalizing a version may create new slots bound to it. Read-only.
+
+**Use when:** Before adding a signer (avoid duplicates) or to find the slot to record a signature on after a version is finalized.
+**Do not use for:** The report content (gnubok_preview_arsredovisning) or the version list (gnubok_list_arsredovisning_versions).
+
+**Pitfalls:**
+- Declined slots are listed too; they do not appear in the document.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    signatures: { signature_id: string, fiscal_period_id: string, annual_report_version_id: string | null, role: string, signer_name: string, status: "pending" | "signed" | "declined", signed_at: string | null, signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null, evidence_reference: string | null, evidence_recorded_at: string | null, created_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signatures": [
+      {
+        "signature_id": "5b1c…",
+        "fiscal_period_id": "7c2b…",
+        "annual_report_version_id": null,
+        "role": "Styrelseledamot",
+        "signer_name": "Anna Andersson",
+        "status": "pending",
+        "signed_at": null,
+        "signing_method": null,
+        "evidence_reference": null,
+        "evidence_recorded_at": null,
+        "created_at": "2027-03-02T09:00:00Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures`
+
+**Add a board member or the VD to the årsredovisning signer roster.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Adds a pending signer slot (role and name) to the roster for the räkenskapsår. ÅRL 2 kap. 7 § requires every ordinarie styrelseledamot and the VD, if any, to sign. This records who is to sign; it signs nothing and involves no BankID. Any roster change clears the signer roster confirmation. Answers 201 with the slot. Idempotent. Dry-runnable.
+
+**Use when:** Setting up who signs, before finalizing a version (POST .../arsredovisning/versions action finalize).
+**Do not use for:** Recording that someone signed (PATCH .../signatures/{signatureId}) or filing with Bolagsverket.
+
+**Pitfalls:**
+- The same role and name twice on the unbound roster answers 409 ARSREDOVISNING_SIGNER_ALREADY_EXISTS.
+- signer_name is the name as registered at Bolagsverket; a personnummer is refused (400).
+- Confirm the roster afterwards: PATCH .../compliance {"signer_roster_confirmed": true}.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör",
+  signer_name: string
+}
+```
+
+Example request:
+```json
+{
+  "role": "Styrelseledamot",
+  "signer_name": "Anna Andersson"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signature_id: string,
+    fiscal_period_id: string,
+    annual_report_version_id: string | null,
+    role: string,
+    signer_name: string,
+    status: "pending" | "signed" | "declined",
+    signed_at: string | null,
+    signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null,
+    evidence_reference: string | null,
+    evidence_recorded_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "fiscal_period_id": "7c2b…",
+    "annual_report_version_id": null,
+    "role": "Styrelseledamot",
+    "signer_name": "Anna Andersson",
+    "status": "pending",
+    "signed_at": null,
+    "signing_method": null,
+    "evidence_reference": null,
+    "evidence_recorded_at": null,
+    "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId}`
+
+**Record that a signer signed the frozen årsredovisning version, or declined.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version's finalization and today. Idempotent. Dry-runnable.
+
+**Use when:** The board has signed the printed or e-signed document and the signatures are to be registered.
+**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).
+
+**Pitfalls:**
+- A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.
+- A slot already signed or declined, bound to another version, or of another period answers 409 SIGNATURE_INVALID_TRANSITION.
+- A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.
+- evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.
+- Recorded signatures cannot be undone: finalize a new version instead.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `signatureId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  status: "signed" | "declined",
+  annual_report_version_id?: string,
+  signing_method?: "paper_original" | "advanced_e_signature" | "bankid",
+  evidence_reference?: string,
+  signed_at?: string
+}
+```
+
+Example request:
+```json
+{
+  "status": "signed",
+  "annual_report_version_id": "4e7d…",
+  "signing_method": "paper_original",
+  "evidence_reference": "archive:AR-2026-1",
+  "signed_at": "2027-03-05T10:00:00Z"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signature_id: string,
+    fiscal_period_id: string,
+    annual_report_version_id: string | null,
+    role: string,
+    signer_name: string,
+    status: "pending" | "signed" | "declined",
+    signed_at: string | null,
+    signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null,
+    evidence_reference: string | null,
+    evidence_recorded_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "fiscal_period_id": "7c2b…",
+    "annual_report_version_id": "4e7d…",
+    "role": "Styrelseledamot",
+    "signer_name": "Anna Andersson",
+    "status": "signed",
+    "signed_at": "2027-03-05T10:00:00Z",
+    "signing_method": "paper_original",
+    "evidence_reference": "archive:AR-2026-1",
+    "evidence_recorded_at": null,
+    "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId}`
+
+**Remove a signer from the årsredovisning roster before a version binds it.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Deletes a pending signer slot that no version has bound yet. Slots bound to a finalized version stay (they are part of what gets signed): finalize a new version with the corrected roster instead. Any roster change clears the signer roster confirmation. Idempotent. Dry-runnable.
+
+**Use when:** A signer was added by mistake or has left the board before the version is finalized.
+**Do not use for:** Declining a bound slot (PATCH .../signatures/{signatureId} {"status": "declined"}).
+
+**Pitfalls:**
+- A bound, signed or declined slot answers 409 ARSREDOVISNING_SIGNER_ROSTER_LOCKED.
+- Takes no body.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `signatureId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { signature_id: string, deleted: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions`
+
+**Freeze an immutable årsredovisning version: a draft snapshot, or the version that gets signed.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Builds the årsredovisning from a complete read of the books (refused while an SIE import is unfinished) and stores it as an immutable version with its content hash. action snapshot stores a draft; action finalize requires every signing-stage check to pass, marks the version ready_for_signature, supersedes an earlier ready or signed version and binds the signer roster to it. certificate_signer names who signs the fastställelseintyg. expected_content_hash (from a dry run) makes the call refuse when the content has changed since. Answers 201 with the version. Idempotent. Dry-runnable: the dry run answers the content hash and the validation counts.
+
+**Use when:** The texts, compliance answers and signer roster are done and the document is to be signed (finalize), or a checkpoint of the draft is wanted (snapshot).
+**Do not use for:** Filing with Bolagsverket (dashboard only, BankID), recording signatures (PATCH .../signatures/{signatureId}) or reading the document (GET .../arsredovisning/pdf).
+
+**Pitfalls:**
+- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run gnubok_validate_arsredovisning with stage signing first.
+- finalize needs a confirmed signer roster (PATCH .../compliance {"signer_roster_confirmed": true}) and at least one signer.
+- Content changed since the hash you pass: 409 ARSREDOVISNING_CONTENT_CHANGED; dry-run again and review.
+- A new finalize supersedes the previous ready_for_signature version; signatures recorded on it do not carry over.
+- Refused while an SIE import is unfinished: complete or undo it first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  action: "snapshot" | "finalize",
+  certificate_signer?: {
+    first_name: string,
+    last_name: string,
+    role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör"
+  },
+  expected_content_hash?: string
+}
+```
+
+Example request:
+```json
+{
+  "action": "finalize",
+  "certificate_signer": {
+    "first_name": "Anna",
+    "last_name": "Andersson",
+    "role": "Styrelseledamot"
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    annual_report_version_id: string,
+    version_number: number,
+    status: "draft" | "ready_for_signature" | "signed" | "filed" | "registered" | "superseded",
+    framework: string,
+    content_hash: string,
+    taxonomy_version: string | null,
+    entry_point: string | null,
+    finalized_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "annual_report_version_id": "4e7d…",
+    "version_number": 2,
+    "status": "ready_for_signature",
+    "framework": "k2",
+    "content_hash": "9f86d081…",
+    "taxonomy_version": "2024-09-12",
+    "entry_point": "k2-ab-risbs-2024-09-12",
+    "finalized_at": "2027-03-02T09:00:00Z",
+    "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/close`
 
 **Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §).**
@@ -1651,6 +2403,225 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/correct`
+
+**Correct a year's ingående balanser by storno: the full corrected IB replaces the old one.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Books the corrected IB verifikat from the lines given (the complete IB, not a difference), stornoes the old IB verifikat and relinks the year to the new one (BFL 5 kap 5 §: nothing posted is edited). The new verifikat's text references the one it corrects. With cascade=true the per-account change is also carried into every later year's IB; years that are closed, locked, behind the lock date or have a bokslut are skipped and reported. Only for an open, unlocked year with an IB and no bokslut. Idempotent. Dry-runnable: the dry run previews the new verifikat and the per-account change and writes nothing.
+
+**Use when:** The IB booked for a year was wrong (a typo, a balance the previous system corrected later).
+**Do not use for:** A year without an IB (POST /fiscal-periods/{id}/opening-balances/manual), a single wrong line in an open year (POST /journal-entries/{id}/strike-lines on the IB verifikat corrects inside the same verifikat), or a year that is locked, closed or has a bokslut (unwind those first).
+
+**Pitfalls:**
+- Send the COMPLETE corrected IB: accounts left out end at zero.
+- A year without an IB answers 409 OB_CORRECT_NO_EXISTING; one with a posted bokslut 409 OB_CORRECT_YEAR_END_EXISTS.
+- A company lock date on or after the year's start answers 409 OB_COMPANY_LOCK_DATE.
+- If the storno or relink fails the new IB is stornoed again and 500 OB_CORRECT_FAILED names both entry ids: the year keeps its old IB.
+- cascade is best effort per later year: read cascade.skipped in the response and correct those years by hand.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, amount?: number }[],
+  cascade?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "1930",
+      "amount": 84250.5
+    },
+    {
+      "account_number": "1510",
+      "debit_amount": 12500,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "2440",
+      "amount": -9800
+    },
+    {
+      "account_number": "2081",
+      "amount": -25000
+    },
+    {
+      "account_number": "2099",
+      "amount": -61950.5
+    }
+  ],
+  "cascade": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    reversed_entry_id: string,
+    fiscal_period_id: string,
+    lines_created: number,
+    total_debit: number,
+    total_credit: number,
+    cascade?: { corrected: { fiscal_period_id: string, period_name: string | null, journal_entry_id: string, reversed_entry_id: string | null }[], skipped: { fiscal_period_id: string, period_name: string | null, reason: string }[], failed?: boolean }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "8c1e…",
+    "voucher_series": "A",
+    "voucher_number": 42,
+    "reversed_entry_id": "4d2a…",
+    "fiscal_period_id": "7b3a…",
+    "lines_created": 5,
+    "total_debit": 96750.5,
+    "total_credit": 96750.5,
+    "cascade": {
+      "corrected": [],
+      "skipped": []
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/manual`
+
+**Book a fiscal year's ingående balanser (IB) from explicit lines, for a company new to Accounted.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts the IB verifikat (source_type opening_balance, series A, dated the year's first day) through the bookkeeping engine and links it to the year, as the dashboard's opening balance import does. Lines are balance sheet accounts only (class 1-2), zero rows dropped, at least two left, debit equal to credit. BAS accounts missing from the chart are activated. Refused when the year already has an IB, is closed or locked, or starts on or before the company lock date. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.
+
+**Use when:** The company moved from another system without an SIE file and its first year in Accounted needs the balances from the previous system's balansräkning.
+**Do not use for:** Carrying the IB forward from a year closed in Accounted (POST /fiscal-periods/{id}/opening-balances, or the year-end which does it), an SIE migration (POST /imports/sie brings its own IB), or changing an IB already booked (POST /fiscal-periods/{id}/opening-balances/correct).
+
+**Pitfalls:**
+- A year that already has an IB answers 409 OB_PERIOD_ALREADY_HAS_BALANCES with details.existingEntryId: correct it instead.
+- Class 3-8 accounts answer 400 OB_PNL_ACCOUNT, class 0 and 9 400 OB_NON_BALANCE_SHEET_ACCOUNT: an IB holds balance sheet accounts only, earlier years' results sit in equity (20xx).
+- Debit and credit must match to the öre: 400 OB_UNBALANCED with details.diff.
+- A company lock date on or after the year's start answers 409 OB_SET_COMPANY_LOCK_DATE; a closed or locked year 400 OB_PERIOD_CLOSED or OB_PERIOD_LOCKED.
+- The IB is a posted verifikat: it is never edited or deleted, only corrected by storno through /opening-balances/correct.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, amount?: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "1930",
+      "amount": 84250.5
+    },
+    {
+      "account_number": "1510",
+      "debit_amount": 12500,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "2440",
+      "amount": -9800
+    },
+    {
+      "account_number": "2081",
+      "amount": -25000
+    },
+    {
+      "account_number": "2099",
+      "amount": -61950.5
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    fiscal_period_id: string,
+    entry_date: string,
+    lines_created: number,
+    total_debit: number,
+    total_credit: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "4d2a…",
+    "voucher_series": "A",
+    "voucher_number": 1,
+    "fiscal_period_id": "7b3a…",
+    "entry_date": "2026-01-01",
+    "lines_created": 5,
+    "total_debit": 96750.5,
+    "total_credit": 96750.5
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/reopen-external`
 
 **Undo klarmarkera: reopen a year marked closed in the previous system.**
@@ -1845,6 +2816,249 @@ Example response `200`:
     "status": "succeeded",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skattekonto/sync`
+
+**Fetch the skattekonto from Skatteverket now instead of waiting for the hourly sync.**
+`scope:transactions:write · risk:low · idempotent · dry-run`
+
+Reads the company's skattekonto saldo and transactions (booked and upcoming) from Skatteverket and stores them, then refreshes the booking proposals and the reconciliation snapshot. Books nothing: booking skattekonto rows is a separate step. Read-only on Skatteverket's side. Runs on the company's connection (any member's BankID connection, or a verified läsombud grant). Idempotent. Dry-runnable: the dry run checks the connection locally and never calls Skatteverket.
+
+**Use when:** A payment to or from the skattekonto was just made and the reconciliation or the booking proposals should see it now.
+**Do not use for:** Booking skattekonto rows, or importing a skattekonto file (POST /imports/skattekonto-file).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- The paid Skatteverket capability is required: 403 SKATTEVERKET_CAPABILITY_BLOCKED otherwise.
+- Skatteverket only returns roughly the last 555 days; older history comes from a skattekonto file import.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    booked: number,
+    upcoming: number,
+    skipped: number,
+    saldo_skatteverket: number,
+    saldo_kronofogden: number,
+    synced_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "booked": 3,
+    "upcoming": 1,
+    "skipped": 0,
+    "saldo_skatteverket": -1240,
+    "saldo_kronofogden": 0,
+    "synced_at": "2026-09-26T08:00:00.000Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skatteverket/agi/validate-huvuduppgift`
+
+**Pre-validate an AGI huvuduppgift at Skatteverket without filing anything.**
+`scope:compliance:read · risk:low · idempotent`
+
+Sends one arbetsgivardeklaration huvuduppgift (AGI API v1.7 section 7: agRegistreradId, redovisningsPeriod, the totals) to Skatteverket's /kontrollera and answers its kontrollsvar: an overall status and each finding. Skatteverket saves nothing; the only local write is the regulator audit row. Uses the calling user's own Skatteverket connection. Live call, not cached.
+
+**Use when:** Checking a hand-built or externally generated huvuduppgift before filing it, e.g. from a payroll system outside Accounted.
+**Do not use for:** Filing (POST /salary-runs/{id}/generate-agi, then the BankID-signed submission) or checking a salary run booked in Accounted (the submission flow validates it).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- redovisningsPeriod is YYYYMM and no earlier than 201807; amounts are whole kronor.
+- A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
+- status OK or INFO means Skatteverket would accept the figures; it never checks them against the books.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  agRegistreradId: string,
+  redovisningsPeriod: string,
+  summaSkatteavdr?: number,
+  summaArbAvgSlf?: number,
+  totalSjuklonekostnad?: number
+}
+```
+
+Example request:
+```json
+{
+  "agRegistreradId": "165560000167",
+  "redovisningsPeriod": "202609",
+  "summaSkatteavdr": 0
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    uppgift: "huvuduppgift" | "individuppgift",
+    status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE",
+    fel: { status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE", felmeddelande: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "uppgift": "huvuduppgift",
+    "status": "INFO",
+    "fel": [
+      {
+        "status": "INFO",
+        "felmeddelande": "Summa skatteavdrag är 0."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skatteverket/agi/validate-individuppgift`
+
+**Pre-validate one AGI individuppgift at Skatteverket without filing anything.**
+`scope:compliance:read · risk:low · idempotent`
+
+Sends one individuppgift (AGI API v1.7 section 8: the payee, specifikationsnummer, cash pay, benefits, preliminary tax and flags) to Skatteverket's /kontrollera and answers its kontrollsvar. Skatteverket saves nothing; the only local write is the regulator audit row. Uses the calling user's own Skatteverket connection. Live call, not cached.
+
+**Use when:** Checking a hand-built or externally generated individuppgift before filing it.
+**Do not use for:** Filing, or salary runs booked in Accounted (the AGI submission flow builds and validates their individuppgifter).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- betalningsmottagarId is the payee's personnummer (12 digits): it is sent to Skatteverket and not stored by Accounted beyond the audit row's metadata.
+- forstaAnstalld and vaxaStod are mutually exclusive (400 VALIDATION_ERROR).
+- A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  agRegistreradId: string,
+  redovisningsPeriod: string,
+  betalningsmottagarId: string,
+  specifikationsnummer: number,
+  kontantErsattningUlagAG?: number,
+  avdrPrelSkatt?: number,
+  skatteplBilformanUlagAG?: number,
+  drivmVidBilformanUlagAG?: number,
+  kostformanUlagAG?: number,
+  skatteplOvrigaFormanerUlagAG?: number,
+  bostadsformanSmahusUlagAG?: boolean,
+  bostadsformanEjSmahusUlagAG?: boolean,
+  kontantErsattningEjUlagSA?: number,
+  skatteplBilformanEjUlagSA?: number,
+  drivmVidBilformanEjUlagSA?: number,
+  kostformanEjUlagSA?: number,
+  skatteplOvrigaFormanerEjUlagSA?: number,
+  bostadsformanSmahusEjUlagSA?: boolean,
+  bostadsformanEjSmahusEjUlagSA?: boolean,
+  formanHarJusterats?: boolean,
+  forstaAnstalld?: boolean,
+  vaxaStod?: boolean,
+  borttag?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "agRegistreradId": "165560000167",
+  "redovisningsPeriod": "202609",
+  "betalningsmottagarId": "19800101XXXX",
+  "specifikationsnummer": 1,
+  "kontantErsattningUlagAG": 35000,
+  "avdrPrelSkatt": 8200
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    uppgift: "huvuduppgift" | "individuppgift",
+    status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE",
+    fel: { status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE", felmeddelande: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "uppgift": "individuppgift",
+    "status": "OK",
+    "fel": []
   },
   "meta": {
     "request_id": "req_…",

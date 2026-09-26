@@ -958,6 +958,99 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/imports/skattekonto-file`
+
+**Import a skattekontoutdrag file (Skatteverket tax account statement) into the skattekonto rows.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Parses the statement (the CSV export or legacy .skv from Skatteverket's Skattekonto e-tjänst, sent as base64), deduplicates it server-side against the skattekonto rows already stored, inserts the new events (source file_import), promotes upcoming rows the statement proves settled and skips duplicates. Books nothing: the rows are booked afterwards through the skattekonto rules, like synced rows. A file already imported is refused; a file naming another organisation number or not summing is refused unless confirmed. Idempotent. Dry-runnable: the dry run parses and counts and writes nothing.
+
+**Use when:** The company has no Skatteverket connection (self-hosted, or not yet connected) and the skattekonto should be reconciled and booked from the statement file.
+**Do not use for:** Companies with a Skatteverket connection (the hourly sync fetches the same events), bank statements (POST /imports/bank), or booking the rows (the skattekonto booking tools).
+
+**Pitfalls:**
+- Send the file bytes base64-encoded in content_base64, up to about 3 MB of file; the filename matters for legacy .skv detection.
+- A file already imported answers 409 SKATTEKONTO_FILE_DUPLICATE with details.import_id.
+- A header organisation number that is not the company's answers 409 SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH: check the file, then resend with confirm_org_number_mismatch=true.
+- A statement whose saldo markers do not sum (filtered, truncated or edited) answers 409 SKATTEKONTO_FILE_SUM_MISMATCH: resend with confirm_sum_mismatch=true only if the gap is understood.
+- A file that is not a skattekontoutdrag answers 400 SKATTEKONTO_FILE_NOT_RECOGNIZED: a bank CSV is never accepted here.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  filename: string,
+  content_base64: string,
+  confirm_org_number_mismatch?: boolean,
+  confirm_sum_mismatch?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "filename": "Kontoutdrag 556677-8899 2026-05-03--2026-08-01.csv",
+  "content_base64": "U2thdHRla29udG8…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    import_id: string,
+    imported: number,
+    duplicates: number,
+    promoted: number,
+    errors: number,
+    date_from: string,
+    date_to: string,
+    closing_saldo: number | null,
+    file_hash: string,
+    variant: "csv" | "skv",
+    row_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "import_id": "1f0c…",
+    "imported": 14,
+    "duplicates": 2,
+    "promoted": 1,
+    "errors": 0,
+    "date_from": "2026-05-03",
+    "date_to": "2026-08-01",
+    "closing_saldo": 23490,
+    "file_hash": "9a1b…",
+    "variant": "csv",
+    "row_count": 17
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/reconciliation/accounts`
 
 **List the accounts that can be reconciled, with status per account.**

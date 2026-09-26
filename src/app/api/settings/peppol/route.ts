@@ -3,26 +3,21 @@ import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
-import { getPeppolAccess, getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
 import {
   canRetryPeppolRegistration,
   deregisterCompanyFromPeppolReceiving,
-  describePeppolParticipantEligibility,
-  getPeppolRegistration,
   isStalePeppolPending,
-  registerCompanyForPeppolReceiving,
-  type PeppolParticipantEligibility,
   type PeppolRegistrationRow,
   type PeppolTransportVerdict,
 } from '@/lib/invoices/peppol-registration'
+import { getPeppolRegistrationStatus, registerPeppolParticipant } from '@/lib/invoices/peppol-settings-service'
 import {
   getPeppolTransport,
   getPeppolTransportAvailability,
   type PeppolTransport,
 } from '@/lib/invoices/peppol-transport'
-import { isSandboxCompany } from '@/lib/sandbox/guard'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { createServiceClient } from '@/lib/supabase/server'
-import type { CompanySettings } from '@/types'
 
 ensureInitialized()
 
@@ -30,8 +25,6 @@ ensureInitialized()
 // platform default would cut the registration off mid-call and leave a
 // pending row behind.
 export const maxDuration = 90
-
-type ParticipantSettings = Pick<CompanySettings, 'org_number' | 'company_name' | 'vat_number' | 'city' | 'country'>
 
 /**
  * Minimized row for the settings page. `last_error` stays server-side: it is
@@ -57,16 +50,20 @@ function registrationPayload(row: PeppolRegistrationRow | null) {
 }
 
 /** Response context for a transport verdict: the hosted detail and code travel in `details`, the pair also goes to the log. */
-function verdictContext(result: PeppolTransportVerdict, requestId: string | undefined) {
+function verdictContext(details: { reason: string | null; code: string | null }, requestId: string | undefined) {
   return {
     requestId,
-    reason: [result.reason, result.detail].filter(Boolean).join(': ') || undefined,
-    details: { reason: result.detail, code: result.reason },
+    reason: [details.code, details.reason].filter(Boolean).join(': ') || undefined,
+    details: { reason: details.reason, code: details.code },
   }
 }
 
+function isTransportVerdictCode(code: string): boolean {
+  return code === 'PEPPOL_REGISTRATION_REJECTED' || code === 'PEPPOL_REGISTRATION_FAILED'
+}
+
 function isTransportVerdict(result: { ok: false; code: string }): result is PeppolTransportVerdict {
-  return result.code === 'PEPPOL_REGISTRATION_REJECTED' || result.code === 'PEPPOL_REGISTRATION_FAILED'
+  return isTransportVerdictCode(result.code)
 }
 
 function resolveTransport(): { transport: PeppolTransport; provider: string } | null {
@@ -76,96 +73,46 @@ function resolveTransport(): { transport: PeppolTransport; provider: string } | 
   return transport ? { transport, provider: availability.provider } : null
 }
 
-/** GET /api/settings/peppol: receiving status for the active company. */
+/** GET /api/settings/peppol: receiving status for the active company (lib/invoices/peppol-settings-service.ts). */
 export const GET = withRouteContext(
   'settings.peppol.get',
-  async (_request, { supabase, companyId, log, requestId }) => {
-    const availability = getPeppolTransportAvailability()
-    const resolved = resolveTransport()
-    try {
-      const registration = resolved
-        ? await getPeppolRegistration({ supabase, companyId, provider: resolved.provider })
-        : null
-      // Eligibility is answered up front so a company that cannot be
-      // registered (personnummer, missing org number) sees why before it
-      // asks the operators for a receiving slot.
-      const { data: settings, error: settingsError } = await supabase
-        .from('company_settings')
-        .select('org_number, company_name, vat_number, city, country')
-        .eq('company_id', companyId)
-        .maybeSingle()
-      // A failed read is a server error, never "no organisation number":
-      // that verdict would hide the receiving offer from an eligible company.
-      if (settingsError) throw new Error(`Failed to read company settings: ${settingsError.message}`)
-      const participant: PeppolParticipantEligibility = settings
-        ? describePeppolParticipantEligibility(settings as unknown as ParticipantSettings)
-        : { ok: false, code: 'PEPPOL_REGISTRATION_ORG_NUMBER_REQUIRED' }
-      const access = await getPeppolAccessSummary({ supabase, service: createServiceClient(), companyId })
-      return privateNoStore(NextResponse.json({
-        data: {
-          transport: availability,
-          receiving_supported: !!resolved?.transport.registerRecipient,
-          access,
-          participant,
-          registration: registrationPayload(registration),
-        },
-      }))
-    } catch (err) {
-      return privateNoStore(errorResponse(err, log, { requestId }))
-    }
+  async (_request, { supabase, companyId, user, log, requestId }) => {
+    const outcome = await getPeppolRegistrationStatus(
+      { supabase, companyId, userId: user.id, log },
+      { service: createServiceClient() },
+    )
+    if (!outcome.ok) return privateNoStore(sessionFailureResponse(outcome, log, requestId))
+    if (outcome.dryRun) return privateNoStore(NextResponse.json({ data: outcome.preview }))
+    return privateNoStore(NextResponse.json({
+      data: { ...outcome.data, registration: registrationPayload(outcome.data.registration) },
+    }))
   },
 )
 
-/** POST /api/settings/peppol: publish the company's Peppol identifier for receiving. */
+/**
+ * POST /api/settings/peppol: publish the company's Peppol identifier for
+ * receiving. The gates live in lib/invoices/peppol-settings-service.ts,
+ * shared with the v1 operation peppol.register.
+ */
 export const POST = withRouteContext(
   'settings.peppol.register',
   async (_request, { supabase, companyId, user, log, requestId }) => {
-    const resolved = resolveTransport()
-    if (!resolved) {
-      return privateNoStore(errorResponseFromCode('PEPPOL_TRANSPORT_UNAVAILABLE', log, { requestId }))
-    }
-    if (await isSandboxCompany(supabase, companyId)) {
-      return privateNoStore(errorResponseFromCode('PEPPOL_SANDBOX_NOT_ALLOWED', log, { requestId }))
-    }
-    // Receiving consumes a contracted tenant slot: operators grant it per company.
-    const access = await getPeppolAccess(createServiceClient(), companyId)
-    if (!access || access.status !== 'enabled') {
-      return privateNoStore(errorResponseFromCode('PEPPOL_ACCESS_REQUIRED', log, { requestId }))
-    }
-    if (!access.receive_enabled) {
-      return privateNoStore(errorResponseFromCode('PEPPOL_RECEIVING_NOT_ENABLED', log, { requestId }))
-    }
-
-    const { data: settings, error: settingsError } = await supabase
-      .from('company_settings')
-      .select('org_number, company_name, vat_number, city, country')
-      .eq('company_id', companyId)
-      .single()
-    if (settingsError || !settings) {
-      return privateNoStore(errorResponseFromCode('INVOICE_SEND_COMPANY_SETTINGS_MISSING', log, { requestId }))
-    }
-
-    try {
-      const result = await registerCompanyForPeppolReceiving({
-        service: createServiceClient(),
-        companyId,
-        userId: user.id,
-        transport: resolved.transport,
-        settings: settings as unknown as ParticipantSettings,
-      })
-      if (!result.ok) {
-        return privateNoStore(errorResponseFromCode(
-          result.code,
-          log,
-          isTransportVerdict(result) ? verdictContext(result, requestId) : { requestId },
-        ))
+    const outcome = await registerPeppolParticipant(
+      { supabase, companyId, userId: user.id, log },
+      { service: createServiceClient() },
+    )
+    if (!outcome.ok) {
+      if (outcome.error) return privateNoStore(errorResponse(outcome.error, log, { requestId }))
+      if (isTransportVerdictCode(outcome.code)) {
+        const details = outcome.details as { reason: string | null; code: string | null }
+        return privateNoStore(errorResponseFromCode(outcome.code, log, verdictContext(details, requestId)))
       }
-      return privateNoStore(NextResponse.json({
-        data: { registration: registrationPayload(result.registration) },
-      }, { status: 201 }))
-    } catch (err) {
-      return privateNoStore(errorResponse(err, log, { requestId }))
+      return privateNoStore(errorResponseFromCode(outcome.code, log, { requestId }))
     }
+    if (outcome.dryRun) return privateNoStore(NextResponse.json({ data: outcome.preview }))
+    return privateNoStore(NextResponse.json({
+      data: { registration: registrationPayload(outcome.data.registration) },
+    }, { status: 201 }))
   },
   { requireWrite: true },
 )
@@ -188,7 +135,7 @@ export const DELETE = withRouteContext(
         return privateNoStore(errorResponseFromCode(
           result.code,
           log,
-          isTransportVerdict(result) ? verdictContext(result, requestId) : { requestId },
+          isTransportVerdict(result) ? verdictContext({ reason: result.detail, code: result.reason }, requestId) : { requestId },
         ))
       }
       return privateNoStore(NextResponse.json({

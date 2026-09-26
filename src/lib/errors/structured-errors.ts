@@ -3299,6 +3299,37 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Korrigeringen av ingående balanser misslyckades.',
     message_en: 'Opening balance correction failed.',
   },
+  // API parity wave 4: manual ingående balanser and the skattekonto file import over v1/MCP.
+  OB_SET_COMPANY_LOCK_DATE: {
+    httpStatus: 409,
+    message_sv:
+      'Bokföringen är låst t.o.m. ett låsdatum som täcker räkenskapsårets första dag, så ingående balanser kan inte bokföras. Flytta låsdatumet under Inställningar → Bokföring och försök igen.',
+    message_en:
+      'The company-wide bookkeeping lock date covers the first day of the fiscal year, so opening balances cannot be booked. Move the lock date under Settings → Bookkeeping and try again.',
+    remediation: {
+      description:
+        'Move the bookkeeping lock date (company_settings.bookkeeping_locked_through) to a date before the period start, then retry.',
+    },
+  },
+  OB_NON_BALANCE_SHEET_ACCOUNT: {
+    httpStatus: 400,
+    message_sv: 'Ingående balanser får bara bokas på balanskonton (klass 1 och 2).',
+    message_en: 'Opening balances may only use balance sheet accounts (class 1 and 2).',
+  },
+  SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Kontoutdraget gäller ett annat organisationsnummer än företagets. Kontrollera att det är rätt fil och bekräfta för att importera ändå.',
+    message_en:
+      'The statement names a different organisation number than the company. Check the file, then send confirm_org_number_mismatch=true to import it anyway.',
+  },
+  SKATTEKONTO_FILE_SUM_MISMATCH: {
+    httpStatus: 409,
+    message_sv:
+      'Kontoutdraget summerar inte: ingående saldo plus händelserna blir inte utgående saldo. Filen kan vara filtrerad eller ofullständig. Bekräfta för att importera ändå.',
+    message_en:
+      'The statement does not sum: opening saldo plus the events differs from the closing saldo. Send confirm_sum_mismatch=true to import it anyway.',
+  },
 }
 
 const REGISTER_IMPORT: Record<string, StructuredErrorEntry> = {
@@ -4104,6 +4135,54 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       'Leverantörsfakturan ingår i en betalfil och kan inte tas bort: betalfilens rader är underlag för betalningsinstruktionen, även om filen makulerats.',
     message_en:
       'The supplier invoice is part of a payment batch and cannot be deleted: the batch rows document the payment instruction, even if the batch was cancelled.',
+  },
+  // ── API parity wave 4: supplier-invoice actions, inbox matches, Skatteverket helpers ──
+  SI_DELETE_CREDIT_NOTE: {
+    httpStatus: 400,
+    message_sv:
+      'Kreditfakturor kan inte tas bort direkt. Gå till originalfakturan och välj "Ångra kreditering" för att frigöra numret och återställa bokföringen.',
+    message_en:
+      'A credit note cannot be deleted directly. Undo the credit on the original invoice (uncredit), which cancels its verifikat with a storno and restores the original.',
+  },
+  SI_DELETE_INVALID_STATUS: {
+    httpStatus: 400,
+    message_sv: 'Endast obetalda fakturor utan bokföring kan tas bort.',
+    message_en: 'Only unpaid supplier invoices without bookkeeping can be deleted (status registered, approved or overdue).',
+  },
+  SI_UNCREDIT_FAILED: {
+    httpStatus: 400,
+    message_sv: 'Krediteringen kunde inte ångras.',
+    message_en:
+      'The credit could not be undone. A locked or closed period refuses the storno of the credit note; details.reason names the cause.',
+  },
+  SI_ITEM_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Fakturaraden kunde inte hittas.',
+    message_en: 'Supplier invoice line not found on this invoice.',
+  },
+  SI_ITEM_ACCOUNT_SETTLED: {
+    httpStatus: 409,
+    message_sv: 'Fakturan är avslutad och dess rader kan inte flyttas.',
+    message_en: 'The supplier invoice is settled; its lines can no longer be moved to another account.',
+  },
+  SI_ITEM_ACCOUNT_NO_MATCHING_LINE: {
+    httpStatus: 409,
+    message_sv:
+      'Registreringsverifikatet har ingen rad på det gamla kontot som matchar raden. Rätta verifikatet för hand.',
+    message_en:
+      'The registration verifikat has no line on the old account that matches this invoice line (it was corrected by hand). Correct the verifikat directly.',
+  },
+  SI_ITEM_ACCOUNT_UPDATE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Fakturaraden kunde inte flyttas till det nya kontot. Försök igen.',
+    message_en: 'The supplier invoice line could not be moved to the new account. Try again.',
+    retryable: true,
+  },
+  SKATTEVERKET_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv:
+      'Den här funktionen kräver en betald prenumeration. Uppgradera för att fortsätta använda externa tjänster.',
+    message_en: 'Talking to Skatteverket directly requires a paid subscription for this company.',
   },
 }
 
@@ -5363,6 +5442,23 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
       'Årsredovisningen för räkenskapsåret är registrerad hos Bolagsverket och texterna kan inte längre ändras.',
     message_en:
       'The årsredovisning for this fiscal period has been registered with Bolagsverket; its narrative texts can no longer be edited.',
+  },
+  // Årsredovisning workflow operations (lib/operations/arsredovisning.ts).
+  SIGNATURE_INVALID_TRANSITION: {
+    httpStatus: 409,
+    message_sv:
+      'Underskriften kan inte ändras: den är redan signerad eller avböjd, hör till en annan version eller finns inte för räkenskapsåret.',
+    message_en:
+      'The signature cannot transition: it is already signed or declined, bound to another version, or not found for this fiscal period.',
+    retryable: false,
+  },
+  ARSREDOVISNING_CONTENT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Årsredovisningens innehåll har ändrats sedan förhandsgranskningen. Granska den nya förhandsgranskningen och försök igen.',
+    message_en:
+      'The annual report content has changed since it was previewed (content hash mismatch). Review a new dry run and retry.',
+    retryable: false,
   },
 }
 

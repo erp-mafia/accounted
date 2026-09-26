@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 256 endpoints.
+  pagination, scopes), and all 284 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,16 +142,19 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 256 operations. Paths are shown without
+API version `2026-05-12`, 284 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (8)
+### Core (11)
 
 Full detail: [references/core.md](references/core.md)
 
 ```text
 GET /companies : List companies the API key can access [scope:companies:read risk:low idempotent]
 POST /companies : Create a company and set it up for bookkeeping [scope:companies:write risk:medium dry-run]
+POST /companies/{companyId}/peppol/access-request : Ask the operators to switch on Peppol for the company (sending, optionally receiving) [scope:companies:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/peppol/registration : Read the company's Peppol receiving status: access grant, eligibility and registration [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/peppol/registration : Register the company as a Peppol participant so it can receive e-invoices [scope:companies:write risk:high idempotent dry-run]
 GET /companies/{companyId}/settings : Read the company settings [scope:companies:read risk:low idempotent]
 PATCH /companies/{companyId}/settings : Partially update company settings (contact, invoicing, reminders, voucher series, toggles) [scope:companies:write risk:medium idempotent dry-run reversible]
 PATCH /companies/{companyId}/settings/bookkeeping-lock : Set, move or remove the company-wide bookkeeping lock date [scope:companies:write risk:high idempotent dry-run reversible]
@@ -185,7 +188,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (26)
+### Periods and registers (41)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -207,18 +210,33 @@ DELETE /companies/{companyId}/dimensions/{id}/values/{valueId} : Delete an unref
 GET /companies/{companyId}/fiscal-periods : List fiscal periods (räkenskapsår) [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/fiscal-periods : Create a fiscal year (räkenskapsår) [scope:bookkeeping:write risk:medium idempotent dry-run]
 PATCH /companies/{companyId}/fiscal-periods/{id} : Rename or re-date an open fiscal year [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+PATCH /companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance : Answer the årsredovisning compliance questions and record the confirmations [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl : The K2 årsredovisning as an inline XBRL (XHTML) document [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl/validate : Pre-flight the generated iXBRL årsredovisning against Bolagsverket's kontrollera rules [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/narrative : Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/pdf : The årsredovisning as PDF: the live draft or a frozen version [scope:reports:read risk:low idempotent]
+GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures : The årsredovisning signer roster and its signatures [scope:reports:read risk:low idempotent]
+POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures : Add a board member or the VD to the årsredovisning signer roster [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+PATCH /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId} : Record that a signer signed the frozen årsredovisning version, or declined [scope:bookkeeping:write risk:medium idempotent dry-run]
+DELETE /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId} : Remove a signer from the årsredovisning roster before a version binds it [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions : Freeze an immutable årsredovisning version: a draft snapshot, or the version that gets signed [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/fiscal-periods/{id}/close : Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §) [scope:bookkeeping:write risk:high idempotent]
 POST /companies/{companyId}/fiscal-periods/{id}/close-external : Mark a migrated fiscal year as closed in the previous system (klarmarkera) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/currency-revaluation : Run FX revaluation for the fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/lock : Lock a fiscal period (no new entries can be posted into it) [scope:bookkeeping:write risk:high idempotent reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/opening-balances : Generate opening-balance verifikation for the next fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
+POST /companies/{companyId}/fiscal-periods/{id}/opening-balances/correct : Correct a year's ingående balanser by storno: the full corrected IB replaces the old one [scope:bookkeeping:write risk:high idempotent dry-run]
+POST /companies/{companyId}/fiscal-periods/{id}/opening-balances/manual : Book a fiscal year's ingående balanser (IB) from explicit lines, for a company new to Accounted [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/fiscal-periods/{id}/reopen-external : Undo klarmarkera: reopen a year marked closed in the previous system [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/unlock : Unlock a locked (not closed) fiscal year [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end closing (currency revaluation + closing entry) [scope:bookkeeping:write risk:high idempotent]
+POST /companies/{companyId}/skattekonto/sync : Fetch the skattekonto from Skatteverket now instead of waiting for the hourly sync [scope:transactions:write risk:low idempotent dry-run]
+POST /companies/{companyId}/skatteverket/agi/validate-huvuduppgift : Pre-validate an AGI huvuduppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]
+POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-validate one AGI individuppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (14)
+### Invoices (AR) (17)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -233,8 +251,11 @@ POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfa
 POST /companies/{companyId}/invoices/{id}/mark-paid : Record a payment against an invoice [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-sent : Transition a draft invoice to sent (without emailing) [scope:invoices:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/invoices/{id}/pdf : Download the rendered invoice PDF [scope:invoices:read risk:low idempotent]
+GET /companies/{companyId}/invoices/{id}/peppol : Check whether a customer invoice can be sent over Peppol, to which participant, and what is missing [scope:invoices:read risk:low idempotent]
+GET /companies/{companyId}/invoices/{id}/peppol/deliveries : List an invoice's Peppol deliveries and their network status [scope:invoices:read risk:low idempotent]
 POST /companies/{companyId}/invoices/{id}/quote-status : Record the customer decision on a quote (offert) [scope:invoices:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/invoices/{id}/send : Send a draft invoice to the customer by email [scope:invoices:write risk:high idempotent dry-run]
+POST /companies/{companyId}/invoices/{id}/send-peppol : Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:write risk:medium idempotent dry-run reversible]
 ```
@@ -253,7 +274,7 @@ DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) 
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (25)
+### Suppliers (AP) (29)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -267,10 +288,14 @@ GET /companies/{companyId}/supplier-invoices : List supplier invoices for a comp
 POST /companies/{companyId}/supplier-invoices : Register a new supplier invoice [scope:suppliers:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/supplier-invoices/{id} : Retrieve a single supplier invoice by id [scope:suppliers:read risk:low idempotent]
 PATCH /companies/{companyId}/supplier-invoices/{id} : Update a registered supplier invoice [scope:suppliers:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/supplier-invoices/{id} : Delete an unbooked, unpaid supplier invoice (no verifikat, no payment) [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/approve : Approve a registered or overdue supplier invoice [scope:suppliers:write risk:low idempotent dry-run]
+POST /companies/{companyId}/supplier-invoices/{id}/bank-entered : Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark [scope:suppliers:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/book : Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step) [scope:suppliers:write risk:high idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/credit : Issue a credit note for a supplier invoice [scope:suppliers:write risk:high idempotent dry-run]
+PATCH /companies/{companyId}/supplier-invoices/{id}/items/{itemId} : Move one supplier-invoice line to another account, correcting the registration verifikat inline [scope:suppliers:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/mark-paid : Record a payment against a supplier invoice [scope:suppliers:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/supplier-invoices/{id}/uncredit : Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-payment-batches : List supplier payment batches (betalfiler), newest first, with settlement progress [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-payment-batches : Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-payment-batches/{id} : Read one supplier payment batch (betalfil) with its lines and live settlement [scope:suppliers:read risk:low idempotent]
@@ -285,7 +310,7 @@ DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) 
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```
 
-### Documents (13)
+### Documents (15)
 
 Full detail: [references/documents.md](references/documents.md)
 
@@ -301,11 +326,13 @@ GET /companies/{companyId}/inbox-items/{id} : Read one inbox item with its full 
 PATCH /companies/{companyId}/inbox-items/{id} : Correct fields of an inbox item's reading (supplier, invoice, totals) [scope:documents:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/inbox-items/{id} : Discard an inbox item that was never converted or booked [scope:documents:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/inbox-items/{id}/convert : Register a supplier invoice from an inbox item, with its document as underlag [scope:suppliers:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/inbox-items/{id}/match-supplier : Set which supplier an inbox item comes from [scope:documents:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/inbox-items/{id}/match-transaction : Pair an inbox item with the bank transaction it documents [scope:documents:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (44)
+### Banking (45)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -323,6 +350,7 @@ POST /companies/{companyId}/imports/sie : Import a SIE4 file [scope:bookkeeping:
 POST /companies/{companyId}/imports/sie/{id}/resume : Resume an interrupted SIE import from where it stopped [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/imports/sie/{id}/undo : Undo an SIE import by batch storno: every entry it posted is reversed, nothing is deleted [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/imports/sie/upload : Reserve a direct SIE upload [scope:bookkeeping:write risk:low reversible]
+POST /companies/{companyId}/imports/skattekonto-file : Import a skattekontoutdrag file (Skatteverket tax account statement) into the skattekonto rows [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/reconciliation/accounts : List the accounts that can be reconciled, with status per account [scope:reconciliation:read risk:low idempotent]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey} : The reconciliation bridge for one account [scope:reconciliation:read risk:low idempotent]
 GET /companies/{companyId}/reconciliation/accounts/{accountKey}/items : List the rows behind one account's bridge, bucketed [scope:reconciliation:read risk:low idempotent]

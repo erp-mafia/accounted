@@ -31,7 +31,16 @@ export interface ReportFileRouteSpec<Q extends z.ZodTypeAny> {
   contentType: string
   errorCodes?: string[]
   query: Q
-  build: (ctx: OperationContext, query: z.infer<Q>) => Promise<OperationOutcome<ReportFile>>
+  /**
+   * The route's path segments (e.g. { companyId, id } under
+   * /fiscal-periods/:id/...), for a file that belongs to one resource. The
+   * query schema stays the query alone: it is what the endpoint registers.
+   */
+  build: (
+    ctx: OperationContext,
+    query: z.infer<Q>,
+    path: Record<string, string>,
+  ) => Promise<OperationOutcome<ReportFile>>
 }
 
 export function v1ReportFileHandler<Q extends z.ZodTypeAny>(spec: ReportFileRouteSpec<Q>) {
@@ -58,9 +67,9 @@ export function v1ReportFileHandler<Q extends z.ZodTypeAny>(spec: ReportFileRout
     },
   })
 
-  return withApiV1<{ params: Promise<{ companyId: string }> }>(
+  return withApiV1<{ params: Promise<Record<string, string>> }>(
     spec.operation,
-    async (request, ctx) => {
+    async (request, ctx, routeParams) => {
       const raw = Object.fromEntries(new URL(request.url).searchParams.entries())
       const parsed = spec.query.safeParse(raw)
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
@@ -68,6 +77,7 @@ export function v1ReportFileHandler<Q extends z.ZodTypeAny>(spec: ReportFileRout
       const outcome = await spec.build(
         { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
         parsed.data,
+        (await routeParams?.params) ?? {},
       )
       if (!outcome.ok) {
         if (outcome.error) return v1ErrorResponse(outcome.error, ctx.log, { requestId: ctx.requestId })
