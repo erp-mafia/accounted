@@ -1,4 +1,5 @@
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
+import { markUnattended, isUnattended } from './unattended'
 import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
@@ -23321,7 +23322,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | null
   errorMessage: string | null
   /**
    * The specific English diagnostic, passed as `structured.error.message_en`.
@@ -24316,6 +24317,41 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }))
           )
         }
+      }
+
+      // A scheduled routine's session reads and stages, never commits
+      // (unattended.ts). get_task with unattended: true marks the session; any
+      // later write that does not merely stage (an approval, a direct commit)
+      // is refused here, whatever the AI was told by what it read.
+      if (sessionId && toolName === 'gnubok_get_task' && (toolArgs as Record<string, unknown>).unattended === true) {
+        await markUnattended(sessionId).catch((err) => log.warn('Could not mark an unattended MCP session', { error: err instanceof Error ? err.message : String(err) }))
+      }
+      if (sessionId && tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isUnattended(sessionId).catch(() => false)) {
+        const blocked = toToolError(
+          codedError('FORBIDDEN', 'Den här körningen är schemalagd och ingen är med, så den får bara läsa och lägga förslag. Förslagen väntar på godkännande i Accounted. (Unattended run: approvals and direct writes are refused; staged proposals wait for a person in Accounted.)'),
+          { toolName }
+        )
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope: requiredScope ?? null,
+          actor,
+          latencyMs: 0,
+          success: false,
+          isError: true,
+          errorCode: blocked.error.code,
+          errorKind: 'unattended_write_blocked',
+          errorMessage: blocked.error.message_sv,
+          errorDetail: blocked.error.message_en,
+          requestId: id ?? null,
+          userId,
+          companyId: effectiveCompanyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, decorate({
+            content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(blocked, toolNamespace), null, 2) }],
+            isError: true,
+          }))
+        )
       }
 
       // Detect if THIS call follows the previous call's `next` hint: must
