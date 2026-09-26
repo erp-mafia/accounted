@@ -171,6 +171,31 @@ describe('loadAgentBundle: the company chooses the knowledge', () => {
     expect(bundle.connections).toEqual([])
   })
 
+  it('inlines the company\'s own knowledge given to a flow, as it does a pack', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    const ownId = '00000000-0000-4000-8000-000000000001'
+    const rulesId = '00000000-0000-4000-8000-0000000000aa'
+    const skills = [
+      { id: ownId, company_id: 'company-a', team_id: null, atom_id: null, name: 'Påminnelse', description: 'Mejlar listan', body: '# Steg', share_status: 'private', draft: false, kind: 'workflow' },
+      { id: rulesId, company_id: 'company-a', team_id: null, atom_id: null, name: 'Våra SaaS-leverantörer', description: 'Hur vi konterar', body: '# Våra regler\n\n6540.', share_status: 'private', draft: false, kind: 'rules' },
+    ]
+    enqueue({ data: { team_id: null } }) // companies
+    enqueue({ data: skills })
+    enqueue({ data: null }) // profile atoms
+    enqueue({ data: [{ agent_id: `own/${ownId}`, atom_id: null, own_skill_id: rulesId, included: true }] })
+    enqueue({ data: [atom('horizontal/swedish-accounting-compliance', { body: '# BFL' })] })
+    enqueue({ data: { team_id: null } }) // companies, for the own knowledge
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null }) // connections
+    enqueue({ data: null }); enqueue({ data: [] }) // summary, memory
+    enqueue({ data: skills }) // the own knowledge
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', `own/${ownId}`))!
+    expect(bundle.knowledge.map((k) => [k.id, k.tier, k.source, k.title])).toEqual([
+      ['horizontal/swedish-accounting-compliance', 'horizontal', 'default', 'swedish-accounting-compliance'],
+      [`own/${rulesId}`, 'own', 'added', 'Våra SaaS-leverantörer'],
+    ])
+    expect(bundle.knowledge[1].body).toContain('6540')
+  })
+
   it('returns null for an unknown agent', async () => {
     expect(await loadAgentBundle(supabase as never, 'company-a', 'nope')).toBeNull()
   })

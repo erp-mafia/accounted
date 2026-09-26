@@ -18,7 +18,7 @@ import { Field, KnowledgeChip, KnowledgePanel, Row } from './AgentDetail'
 import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
-import { fetchConnections, readOptions, rulesSegment, simulatedClient } from './data'
+import { fetchConnections, knowledgeHref, readOptions, simulatedClient } from './data'
 import { RoutineRow, useRoutinePrompt } from './RoutinePanel'
 import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { trackInstructions } from './track'
@@ -245,7 +245,7 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
                   <div className={styles.rows}>
                     <Row label={t('section_knowledge')} onAdd={() => setView('knowledge')} addLabel={t('knowledge_add')}>
                       {held.length === 0 ? <span className={styles.muted}>{t('create_knowledge_none')}</span> : held.map((k) => (
-                        <KnowledgeChip key={k.id} knowledge={k} href={`${backHref}/${rulesSegment(k.id)}`} canEdit onRemove={() => changeKnowledge('remove', k.id)} />
+                        <KnowledgeChip key={k.id} knowledge={k} href={knowledgeHref(backHref, k.id)} canEdit onRemove={() => changeKnowledge('remove', k.id)} />
                       ))}
                     </Row>
                   </div>
