@@ -589,7 +589,7 @@ Sets bookkeeping_locked_through (nothing dated on or before it can be booked, co
 **Pitfalls:**
 - Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
 - Refused while an SIE import is still holding a fiscal period (finish the import first).
-- A backwards move is allowed but high risk: it reopens dates that may already be declared to Skatteverket.
+- A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -598,7 +598,11 @@ Sets bookkeeping_locked_through (nothing dated on or before it can be booked, co
 
 Request body:
 ```ts
-{ bookkeeping_locked_through?: string | null, auto_lock_period_days?: number | null }
+{
+  bookkeeping_locked_through?: string | null,
+  auto_lock_period_days?: number | null,
+  acknowledge_filed_vat_periods?: boolean
+}
 ```
 
 Example request:
@@ -760,6 +764,7 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 - An enskild firma must keep fiscal_year_start_month=1 (BFL 3 kap.).
 - aktiekapital and antal_aktier are set or cleared together.
 - accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).
+- accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

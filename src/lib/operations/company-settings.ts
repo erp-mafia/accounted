@@ -37,7 +37,9 @@ import {
   refineInvoiceSettings,
   upgradeLegacyCompanySettingsParams,
 } from '@/lib/pending-operations/schemas/company-settings'
-import { defineOperation, type OperationContext, type OperationOutcome } from './types'
+import { defineOperation, type OperationContext, type OperationOutcome, type OperationWarning } from './types'
+import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 
 const S = UpdateSettingsSchema.shape
@@ -433,6 +435,53 @@ const TaxProfileInput = z
     if (!atLeastOneField(value)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
   })
 
+/**
+ * The accounting method (kontantmetoden or faktureringsmetoden) governs a
+ * whole fiscal year: BFL 5 kap 2 § lets a small business book at payment,
+ * but every receivable and payable unpaid at year-end is booked anyway, and
+ * on the VAT side a move to bokslutsmetoden needs Skatteverket (ML 7 kap
+ * 17 §). A switch in the middle of a year with bookings leaves the year kept
+ * under two methods. Over the API an agent may therefore switch only while
+ * the current fiscal year has no posted verifikat (the onboarding fix of a
+ * wrong choice); later the change belongs to a person, at a year boundary.
+ */
+async function refuseMidYearMethodChange(
+  ctx: OperationContext,
+  requested: string | null | undefined,
+): Promise<Extract<OperationOutcome<never>, { ok: false }> | null> {
+  if (requested === undefined || requested === null) return null
+  const { data: current } = await ctx.supabase
+    .from('company_settings')
+    .select('accounting_method')
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  if (((current?.accounting_method as string | null | undefined) ?? 'accrual') === requested) return null
+
+  const today = todayIsoStockholm()
+  const { data: period } = await ctx.supabase
+    .from('fiscal_periods')
+    .select('id, name, period_start, period_end')
+    .eq('company_id', ctx.companyId)
+    .lte('period_start', today)
+    .gte('period_end', today)
+    .maybeSingle()
+  if (!period) return null
+
+  const { count } = await ctx.supabase
+    .from('journal_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', ctx.companyId)
+    .eq('fiscal_period_id', period.id as string)
+    .eq('status', 'posted')
+  if (!count) return null
+  return {
+    ok: false,
+    code: 'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
+    details: { fiscal_period_id: period.id, fiscal_year: period.name, posted_entries: count },
+    messageSv: `Bokföringsmetoden kan inte bytas mitt i räkenskapsåret ${String(period.name)}: det finns ${count} bokförda verifikationer. Byt inför nästa räkenskapsår i inställningarna.`,
+  }
+}
+
 export const settingsUpdateTaxProfile = defineOperation({
   id: 'settings.update-tax-profile',
   kind: 'write',
@@ -456,6 +505,7 @@ export const settingsUpdateTaxProfile = defineOperation({
       'An enskild firma must keep fiscal_year_start_month=1 (BFL 3 kap.).',
       'aktiekapital and antal_aktier are set or cleared together.',
       'accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).',
+      'accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).',
     ],
     example: {
       request: { vat_registered: true, vat_number: 'SE556677889901', moms_period: 'quarterly' },
@@ -484,6 +534,7 @@ export const settingsUpdateTaxProfile = defineOperation({
     'SETTINGS_MOMS_PERIOD_REQUIRED',
     'SETTINGS_VAT_40M_REQUIRES_MONTHLY',
     'SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE',
+    'ACCOUNTING_METHOD_CHANGE_MID_YEAR',
   ],
   http: { method: 'PATCH', path: `${SETTINGS_PATH}/tax-profile` },
   mcp: {
@@ -495,6 +546,8 @@ export const settingsUpdateTaxProfile = defineOperation({
     stage: { pendingType: 'update_company_tax_profile', title: () => 'Ändra skatte- och momsuppgifter' },
   },
   run: async (ctx, input, { dryRun }) => {
+    const refused = await refuseMidYearMethodChange(ctx, input.accounting_method)
+    if (refused) return refused
     const outcome = await runSettingsWrite(ctx, input, dryRun)
     if (!outcome.ok || outcome.dryRun) return outcome
     return {
@@ -513,10 +566,17 @@ const BookkeepingLockInput = z
     auto_lock_period_days: S.auto_lock_period_days.describe(
       'Lock each month automatically this many days after it ends (the settings page offers 30, 60, 90). Null turns it off.',
     ),
+    acknowledge_filed_vat_periods: z
+      .boolean()
+      .optional()
+      .describe(
+        'Required as true when the move reopens a momsdeklaration period already filed: the refusal names those periods.',
+      ),
   })
   .strict()
   .superRefine((value, ctx) => {
-    if (!atLeastOneField(value)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
+    const { acknowledge_filed_vat_periods: _acknowledged, ...fields } = value
+    if (!atLeastOneField(fields)) ctx.addIssue({ code: 'custom', message: AT_LEAST_ONE })
   })
 
 export const settingsUpdateBookkeepingLock = defineOperation({
@@ -535,7 +595,7 @@ export const settingsUpdateBookkeepingLock = defineOperation({
     pitfalls: [
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
       'Refused while an SIE import is still holding a fiscal period (finish the import first).',
-      'A backwards move is allowed but high risk: it reopens dates that may already be declared to Skatteverket.',
+      'A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.',
     ],
     example: {
       request: { bookkeeping_locked_through: '2026-06-30' },
@@ -551,13 +611,13 @@ export const settingsUpdateBookkeepingLock = defineOperation({
   },
   input: BookkeepingLockInput,
   output: SettingsResource,
-  errorCodes: ['FORBIDDEN', 'NOT_FOUND'],
+  errorCodes: ['FORBIDDEN', 'NOT_FOUND', 'BOOKKEEPING_LOCK_REOPENS_FILED_VAT'],
   http: { method: 'PATCH', path: `${SETTINGS_PATH}/bookkeeping-lock` },
   mcp: {
     name: 'gnubok_update_bookkeeping_lock',
     title: 'Update Bookkeeping Lock',
     description:
-      'Stage setting, moving or removing the company-wide lock date (bookkeeping_locked_through) and auto-lock days. Moving it back reopens locked dates. For one fiscal period use gnubok_lock_period. Owner/admin only.',
+      'Stage setting, moving or removing the company-wide lock date (bookkeeping_locked_through) and auto-lock days. Reopening a filed VAT period needs acknowledge_filed_vat_periods. For one fiscal period use gnubok_lock_period. Owner/admin only.',
     keywords: ['låsdatum', 'lås bokföringen', 'bokföringslås', 'låst till och med', 'automatisk låsning'],
     stage: {
       pendingType: 'update_bookkeeping_lock',
@@ -569,9 +629,46 @@ export const settingsUpdateBookkeepingLock = defineOperation({
             : 'Ändra automatisk låsning',
     },
   },
-  run: async (ctx, input, { dryRun }) => {
+  run: async (ctx, { acknowledge_filed_vat_periods: acknowledged, ...input }, { dryRun }) => {
+    let reopenedWarning: OperationWarning | null = null
+    if (input.bookkeeping_locked_through !== undefined) {
+      const { data: current } = await ctx.supabase
+        .from('company_settings')
+        .select('bookkeeping_locked_through')
+        .eq('company_id', ctx.companyId)
+        .maybeSingle()
+      const before = (current?.bookkeeping_locked_through as string | null | undefined) ?? null
+      const reopened = await filedVatPeriodsReopenedBy(
+        ctx.supabase,
+        ctx.companyId,
+        before,
+        input.bookkeeping_locked_through ?? null,
+      )
+      if (reopened.length > 0) {
+        const names = reopened.map((p) => p.tax_period).join(', ')
+        if (acknowledged !== true) {
+          return {
+            ok: false,
+            code: 'BOOKKEEPING_LOCK_REOPENS_FILED_VAT',
+            details: { filed_periods: reopened, acknowledge_with: 'acknowledge_filed_vat_periods' },
+            messageSv: `Låsdatumet skulle öppna momsperioder som redan är deklarerade (${names}). Bekräfta med acknowledge_filed_vat_periods om en rättelse ska bokföras där.`,
+          }
+        }
+        reopenedWarning = {
+          code: 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
+          message_sv: `Deklarerade momsperioder öppnades igen (${names}). Bokför rättelsen och lämna en rättad momsdeklaration för perioden.`,
+          message_en: `Filed VAT periods were reopened (${names}). Book the correction and file a corrected VAT return for the period.`,
+        }
+      }
+    }
     const outcome = await runSettingsWrite(ctx, input, dryRun)
-    if (!outcome.ok || outcome.dryRun) return outcome
-    return { ok: true, data: outcome.data.resource, ...(outcome.warnings ? { warnings: outcome.warnings } : {}) }
+    if (!outcome.ok) return outcome
+    if (outcome.dryRun) {
+      return reopenedWarning
+        ? { ...outcome, preview: { ...outcome.preview, reopened_filed_vat_periods: reopenedWarning.message_en } }
+        : outcome
+    }
+    const warnings = [...(outcome.warnings ?? []), ...(reopenedWarning ? [reopenedWarning] : [])]
+    return { ok: true, data: outcome.data.resource, ...(warnings.length > 0 ? { warnings } : {}) }
   },
 })
