@@ -764,11 +764,8 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 - An enskild firma must keep fiscal_year_start_month=1 (BFL 3 kap.).
 - aktiekapital and antal_aktier are set or cleared together.
 - accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).
-<<<<<<< HEAD
 - defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.
-=======
 - accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).
->>>>>>> feat/api-parity-wave1-setup
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
