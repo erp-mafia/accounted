@@ -881,6 +881,135 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/inbox-items/{id}/match-supplier`
+
+**Set which supplier an inbox item comes from.**
+`scope:documents:write · risk:low · idempotent · dry-run · reversible`
+
+Sets the item's matched supplier, the supplier the conversion to a supplier invoice (POST /inbox-items/{id}/convert) uses when the request names none. A hint only: nothing is registered or booked. Picking another supplier later replaces it. Idempotent. Dry-runnable.
+
+**Use when:** The reading named the supplier ambiguously or not at all, and the right supplier exists in the register (GET /suppliers).
+**Do not use for:** Creating a supplier (POST /suppliers) or registering the invoice (POST /inbox-items/{id}/convert, which also accepts supplier_id directly).
+
+**Pitfalls:**
+- The supplier must belong to the same company: otherwise 404 SUPPLIER_NOT_FOUND.
+- An item already converted keeps the supplier its supplier invoice has; this only changes the item's hint.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ supplier_id: string }
+```
+
+Example request:
+```json
+{
+  "supplier_id": "8a9b…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { inbox_item_id: string, matched_supplier_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "inbox_item_id": "1b2c…",
+    "matched_supplier_id": "8a9b…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/inbox-items/{id}/match-transaction`
+
+**Pair an inbox item with the bank transaction it documents.**
+`scope:documents:write · risk:low · idempotent · dry-run · reversible`
+
+Sets the item's matched transaction and, when the transaction has no document yet, pins the item's document on it (an existing pin is never replaced). When the transaction is already booked, the item is completed against that verifikat: the document becomes its underlag. Release with POST /inbox-items/{id}/unmatch-transaction. Idempotent. Dry-runnable.
+
+**Use when:** A receipt or invoice in the inbox belongs to a bank transaction (typically a card purchase) and should travel with it to booking.
+**Do not use for:** Registering a supplier invoice from the item (POST /inbox-items/{id}/convert) or attaching an arbitrary document to a transaction (POST /transactions/{id}/attach-document).
+
+**Pitfalls:**
+- The transaction must belong to the same company: otherwise 404 TX_CATEGORIZE_TX_NOT_FOUND.
+- A transaction that already carries another document keeps it (details in the dry run: transaction_has_other_document).
+- Matching a booked transaction in a locked period links the document best-effort; check the verifikat afterwards.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ transaction_id: string }
+```
+
+Example request:
+```json
+{
+  "transaction_id": "1f2e…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { inbox_item_id: string, matched_transaction_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "inbox_item_id": "1b2c…",
+    "matched_transaction_id": "1f2e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/inbox-items/{id}/stamp`
 
 **Mark an inbox item as consumed by a journal entry.**

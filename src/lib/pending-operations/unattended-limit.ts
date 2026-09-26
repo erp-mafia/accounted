@@ -78,6 +78,10 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   redate_entry: ['total_debit'],
   correct_entry_lines_inline: ['changed_amount_sek'],
   book_vat_settlement: ['journal_entry.total_debit'],
+  // Operation registry, wave 4.
+  send_invoice_peppol: ['invoice.total'],
+  set_opening_balances_manual: ['journal_entry.total_debit'],
+  correct_opening_balances: ['journal_entry.total_debit'],
 }
 
 /**

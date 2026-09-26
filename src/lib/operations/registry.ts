@@ -39,6 +39,10 @@ import {
   fiscalPeriodsUpdate,
 } from './fiscal-periods'
 import {
+  openingBalancesCorrect,
+  openingBalancesSetManual,
+} from './opening-balances'
+import {
   salaryRunsAttachExpenseClaims,
   salaryRunsRevert,
   salaryRunsSendPayslips,
@@ -49,6 +53,20 @@ import {
   invoicesBulkBook,
   supplierInvoicesBook,
 } from './invoice-booking'
+import {
+  invoicesPeppolDeliveries,
+  invoicesPeppolReadiness,
+  invoicesSendPeppol,
+  peppolGetRegistration,
+  peppolRegister,
+  peppolRequestAccess,
+} from './peppol'
+import {
+  supplierInvoicesDelete,
+  supplierInvoicesMarkBankEntered,
+  supplierInvoicesUncredit,
+  supplierInvoicesUpdateItemAccount,
+} from './supplier-invoice-actions'
 import {
   expenseClaimsCreate,
   expenseClaimsDelete,
@@ -81,6 +99,10 @@ import {
   inboxItemsUpdateExtractedData,
 } from './inbox-items'
 import {
+  inboxItemsMatchSupplier,
+  inboxItemsMatchTransaction,
+} from './inbox-matches'
+import {
   transactionsBulkBook,
   transactionsDelete,
   transactionsLinkJournalEntry,
@@ -93,6 +115,9 @@ import {
   importsSieResume,
   importsSieUndo,
 } from './imports'
+import {
+  importsSkattekontoFile,
+} from './skattekonto-file'
 import {
   journalEntriesBatchNoDocumentRequired,
   journalEntriesClearNoDocumentRequired,
@@ -119,6 +144,21 @@ import {
   reportsVatSettlementProposal,
   vatBookSettlement,
 } from './vat-settlement'
+import {
+  arsredovisningAddSignatory,
+  arsredovisningCreateVersion,
+  arsredovisningListSignatories,
+  arsredovisningRecordSignature,
+  arsredovisningRemoveSignatory,
+  arsredovisningUpdateCompliance,
+  arsredovisningUpdateNarrative,
+  arsredovisningValidateIxbrl,
+} from './arsredovisning'
+import {
+  skattekontoSync,
+  skatteverketAgiValidateHuvuduppgift,
+  skatteverketAgiValidateIndividuppgift,
+} from './skatteverket-helpers'
 import type { AnyOperation } from './types'
 
 export const OPERATIONS: readonly AnyOperation[] = [
@@ -149,6 +189,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   fiscalPeriodsUnlock,
   fiscalPeriodsCloseExternal,
   fiscalPeriodsReopenExternal,
+  // opening-balances
+  openingBalancesSetManual,
+  openingBalancesCorrect,
   // salary-run-lifecycle
   salaryRunsSendPayslips,
   salaryRunsRevert,
@@ -158,6 +201,18 @@ export const OPERATIONS: readonly AnyOperation[] = [
   invoicesBook,
   invoicesBulkBook,
   supplierInvoicesBook,
+  // peppol
+  invoicesPeppolReadiness,
+  invoicesSendPeppol,
+  invoicesPeppolDeliveries,
+  peppolGetRegistration,
+  peppolRegister,
+  peppolRequestAccess,
+  // supplier-invoice-actions
+  supplierInvoicesDelete,
+  supplierInvoicesUncredit,
+  supplierInvoicesUpdateItemAccount,
+  supplierInvoicesMarkBankEntered,
   // expense-claims
   expenseClaimsList,
   expenseClaimsGet,
@@ -185,6 +240,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   inboxItemsDelete,
   inboxItemsUnmatchTransaction,
   inboxItemsConvertToSupplierInvoice,
+  // inbox-matches
+  inboxItemsMatchSupplier,
+  inboxItemsMatchTransaction,
   // transactions
   transactionsDelete,
   transactionsUpdate,
@@ -196,6 +254,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   importsBankUndo,
   importsSieUndo,
   importsSieResume,
+  // skattekonto-file
+  importsSkattekontoFile,
   // journal-entries
   journalEntriesUpdateDraft,
   journalEntriesSetNote,
@@ -219,6 +279,19 @@ export const OPERATIONS: readonly AnyOperation[] = [
   // vat-settlement
   reportsVatSettlementProposal,
   vatBookSettlement,
+  // arsredovisning
+  arsredovisningUpdateNarrative,
+  arsredovisningUpdateCompliance,
+  arsredovisningCreateVersion,
+  arsredovisningListSignatories,
+  arsredovisningAddSignatory,
+  arsredovisningRecordSignature,
+  arsredovisningRemoveSignatory,
+  arsredovisningValidateIxbrl,
+  // skatteverket-helpers
+  skatteverketAgiValidateHuvuduppgift,
+  skatteverketAgiValidateIndividuppgift,
+  skattekontoSync,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

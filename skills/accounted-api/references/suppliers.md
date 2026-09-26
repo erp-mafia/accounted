@@ -810,6 +810,60 @@ Example response `200`:
 
 ---
 
+### `DELETE /api/v1/companies/{companyId}/supplier-invoices/{id}`
+
+**Delete an unbooked, unpaid supplier invoice (no verifikat, no payment).**
+`scope:suppliers:write · risk:medium · idempotent · dry-run`
+
+Removes a supplier invoice that never reached the books: status registered, approved or overdue, no registration verifikat, no payment, no accrual schedule and no payment-batch row. Its lines go with it. A booked invoice is never deleted: withdraw it with a credit note (POST /supplier-invoices/{id}/credit), which keeps both verifikat in the audit trail (BFL 5 kap 5 §). Idempotent. Dry-runnable.
+
+**Use when:** A supplier invoice was registered by mistake (a duplicate, the wrong company, a quote) under defer_invoice_booking or kontantmetoden, so no verifikat exists yet.
+**Do not use for:** Booked invoices (credit them), credit notes (undo the credit on the original: POST /supplier-invoices/{id}/uncredit) or discarding an inbox item (DELETE /inbox-items/{id}).
+
+**Pitfalls:**
+- An invoice with a registration verifikat, a payment or an accrual schedule answers 400 SI_DELETE_HAS_BOOKING with details.reason (registration_journal_entry, payments, accrual_schedule).
+- A credit note answers 400 SI_DELETE_CREDIT_NOTE; paid, partially paid or credited invoices answer 400 SI_DELETE_INVALID_STATUS.
+- An invoice in a payment batch (even a cancelled one) answers 409 SI_DELETE_IN_PAYMENT_BATCH: the batch rows document the payment instruction.
+- The ankomstnummer the invoice held is not reused.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { supplier_invoice_id: string, deleted: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice_id": "3b4c…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/approve`
 
 **Approve a registered or overdue supplier invoice.**
@@ -860,6 +914,70 @@ Example response `200`:
     "status": "approved",
     "arrival_number": 42,
     "supplier_invoice_number": "2026-1234"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/bank-entered`
+
+**Mark a supplier invoice as entered in the internet bank ("inlagd i banken"), or clear the mark.**
+`scope:suppliers:write · risk:low · idempotent · dry-run · reversible`
+
+Records that the payment was entered in the bank by hand, so the invoice stops showing as waiting to be paid. A mark, not a payment: it books nothing and changes no amount or status; the payment is still recorded by :mark-paid or the bank match, and the mark clears itself when one of those lands. entered=true needs an unpaid, payable invoice (approved, overdue, partially_paid; never a credit note); entered=false clears it in any status. Marking an already marked invoice keeps the first timestamp. Idempotent. Dry-runnable.
+
+**Use when:** The user paid the invoice by typing it into the internet bank (not through a betalfil) and wants the list to say so until the bank transaction arrives.
+**Do not use for:** Recording the payment itself (POST /supplier-invoices/{id}/mark-paid) or payment batches (betalfil).
+
+**Pitfalls:**
+- A registered (unattested), paid or credited invoice, or a credit note, answers 400 SI_BANK_ENTERED_NOT_PAYABLE with details.currentStatus.
+- details.reason race means a payment landed between the read and the write: reload.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ entered: boolean }
+```
+
+Example request:
+```json
+{
+  "entered": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { supplier_invoice_id: string, bank_entered_at: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice_id": "3b4c…",
+    "bank_entered_at": "2026-09-06T10:00:00.000Z"
   },
   "meta": {
     "request_id": "req_…",
@@ -1002,6 +1120,73 @@ Example response `200`:
 
 ---
 
+### `PATCH /api/v1/companies/{companyId}/supplier-invoices/{id}/items/{itemId}`
+
+**Move one supplier-invoice line to another account, correcting the registration verifikat inline.**
+`scope:suppliers:write · risk:high · idempotent · dry-run · reversible`
+
+Changes the account of one line on an unsettled supplier invoice (registered, approved, overdue). When the invoice has a posted registration verifikat, the same verifikat is corrected inside itself through the inline rättelse (the old line is struck and replaced, split when the verifikat carries one line per account), logged with who and when (BFL 5 kap 5 §); that is only allowed in an open, unlocked period. Without a verifikat only the line changes. A standard BAS account missing from the chart is added. Idempotent. Dry-runnable: the preview carries the planned rättelse lines.
+
+**Use when:** A supplier invoice line was booked on the wrong cost account (e.g. 6580 instead of 6550) and the period is still open.
+**Do not use for:** Settled invoices (paid, credited), locked or closed periods (storno through POST /journal-entries/{id}/reverse and a new verifikat), or changing amounts or VAT.
+
+**Pitfalls:**
+- A settled invoice answers 409 SI_ITEM_ACCOUNT_SETTLED.
+- A locked or closed period answers 409 JOURNAL_RATTELSE_PERIOD_LOCKED: past a lock, storno is the only lawful correction.
+- When the verifikat was already corrected by hand and holds no matching line on the old account, the answer is 409 SI_ITEM_ACCOUNT_NO_MATCHING_LINE and nothing changes.
+- account_number is a STRING ("6550"), never a number.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `itemId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ account_number: string }
+```
+
+Example request:
+```json
+{
+  "account_number": "6550"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { changed: boolean, corrected?: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "changed": true,
+    "corrected": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/mark-paid`
 
 **Record a payment against a supplier invoice.**
@@ -1083,6 +1268,77 @@ Example response `200`:
     "remaining_amount": 0,
     "paid_at": "2026-05-13",
     "payment_journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/supplier-invoices/{id}/uncredit`
+
+**Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice.**
+`scope:suppliers:write · risk:high · idempotent · dry-run`
+
+For an original supplier invoice with status credited: posts a storno cancelling the live credit note's verifikat (dated on that verifikat's date, never an edit or delete), marks the credit note reversed (the row is kept for the archive and the ankomstnummer series), and restores the original's status and remaining amount from its payments (paid, partially_paid, overdue, approved, or registered when it has no verifikat). The invoice can be credited again afterwards. An invoice that is not credited is an idempotent no-op (changed=false). Dry-runnable: the preview names the storno and the restored status.
+
+**Use when:** A supplier invoice was credited by mistake and the credit should be taken back.
+**Do not use for:** Crediting an invoice (POST /supplier-invoices/{id}/credit), deleting an unbooked invoice (DELETE /supplier-invoices/{id}) or reversing an arbitrary verifikat.
+
+**Pitfalls:**
+- Pass the ORIGINAL invoice id, not the credit note's.
+- The credit note's verifikat must lie in an open, unlocked period: otherwise the dry run answers 400 PERIOD_LOCKED and the commit 400 SI_UNCREDIT_FAILED.
+- A credit verifikat already reversed by hand is fine: the row cleanup still runs and reversal_entry_id is null.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    supplier_invoice: { supplier_invoice_id: string, arrival_number: number | null, supplier_invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, remaining_amount: number | null, registration_journal_entry_id: string | null },
+    reversal_entry_id: string | null,
+    reversed_credit_note_id: string | null,
+    changed: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "supplier_invoice": {
+      "supplier_invoice_id": "3b4c…",
+      "arrival_number": 118,
+      "supplier_invoice_number": "55012",
+      "status": "approved",
+      "invoice_date": "2026-09-03",
+      "due_date": "2026-10-03",
+      "currency": "SEK",
+      "total": 6250,
+      "remaining_amount": 6250,
+      "registration_journal_entry_id": "6d7e…"
+    },
+    "reversal_entry_id": "9a8b…",
+    "reversed_credit_note_id": "5c6d…",
+    "changed": true
   },
   "meta": {
     "request_id": "req_…",

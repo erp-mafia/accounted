@@ -33,6 +33,19 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
   create_dimension: 'low',
+  // Operation registry, wave 4: Peppol, årsredovisning, IB, AP actions.
+  send_invoice_peppol: 'high',
+  register_peppol_participant: 'high',
+  request_peppol_access: 'medium',
+  update_arsredovisning_narrative: 'medium',
+  update_arsredovisning_compliance: 'medium',
+  create_arsredovisning_version: 'high',
+  add_arsredovisning_signature: 'medium',
+  set_opening_balances_manual: 'high',
+  correct_opening_balances: 'high',
+  delete_supplier_invoice: 'medium',
+  uncredit_supplier_invoice: 'high',
+  update_supplier_invoice_item_account: 'high',
   // Operation registry, wave 3: documents, transactions, rättelse, filing.
   delete_document: 'medium',
   delete_inbox_item: 'medium',

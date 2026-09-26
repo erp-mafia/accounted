@@ -72,7 +72,6 @@ import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import {
-  completeInboxItemsForBookedTransaction,
   resolveBookedJournalEntryIds,
   resolveUnderlagAnchoring,
   type UnderlagAnchoring,
@@ -95,6 +94,7 @@ import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
 import type { OperationContext } from '@/lib/operations/types'
 import {
   deleteInboxItem,
@@ -1139,6 +1139,7 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Match a supplier to an inbox item ───────────────────
+    // Rules in lib/documents/inbox-match.ts (v1: inbox-items.match-supplier).
     {
       method: 'POST',
       path: '/items/:id/match-supplier',
@@ -1159,36 +1160,18 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'supplier_id required' }, { status: 400 })
         }
 
-        // Confirm supplier exists in this company before linking.
-        const { data: supplier } = await ctx.supabase
-          .from('suppliers')
-          .select('id')
-          .eq('id', body.supplier_id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-        if (!supplier) {
-          return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
-        }
-
-        const { error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ matched_supplier_id: body.supplier_id })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-        return NextResponse.json({ data: { id, matched_supplier_id: body.supplier_id } })
+        const outcome = await matchInboxItemSupplier(operationContext(ctx), id, body.supplier_id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: outcome.data })
       },
     },
 
     // ── Match a bank transaction to an inbox item ──────────
     // Sets invoice_inbox_items.matched_transaction_id. Used by the
     // TransactionMatchPicker dialog after the user picks a candidate from
-    // the confidence-scored list. The transaction.categorization agent
-    // intent already reads this column in its capture() so the agent will
-    // see the inbox metadata as underlag on its next invocation.
+    // the confidence-scored list. Rules in lib/documents/inbox-match.ts
+    // (v1: inbox-items.match-transaction).
     {
       method: 'POST',
       path: '/items/:id/match-transaction',
@@ -1209,73 +1192,10 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'transaction_id required' }, { status: 400 })
         }
 
-        // Confirm transaction belongs to this company before linking. RLS
-        // would also catch it on the update, but failing fast keeps the
-        // error specific. Also fetch the existing document_id so we can
-        // decide whether to backfill it from the inbox doc below.
-        const { data: tx } = await ctx.supabase
-          .from('transactions')
-          .select('id, document_id')
-          .eq('id', body.transaction_id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-        if (!tx) {
-          return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
-        }
-
-        // Fetch the inbox item's document_id so we can mirror it to
-        // transactions.document_id below: the TransactionInboxCard reads
-        // that column to decide whether to show the paperclip/file-check
-        // indicators on the /transactions list. Without this, a row that
-        // has a matched inbox item still appears doc-less in the UI.
-        const { data: inboxItem } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ matched_transaction_id: body.transaction_id })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .select('id, matched_transaction_id')
-          .single()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // Mirror the inbox document onto the transaction so the list view
-        // reflects "underlag bifogat" immediately. Only when the tx has
-        // no other doc already (we never overwrite an existing link).
-        if (inboxItem?.document_id && !tx.document_id) {
-          const { error: txUpdateError } = await ctx.supabase
-            .from('transactions')
-            .update({ document_id: inboxItem.document_id })
-            .eq('id', body.transaction_id)
-            .eq('company_id', ctx.companyId)
-            .is('document_id', null)
-          if (txUpdateError) {
-            // Non-fatal: the match itself succeeded; the UI indicator just
-            // won't flip until next page refresh. Log but don't roll back.
-            console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
-          }
-        }
-
-        // The matched transaction may already be booked (directly or via a
-        // bulk-book samlingsverifikat): complete the item against the
-        // anchoring verifikat (underlag link + consumed stamp) so matching
-        // to a settled purchase resolves the item instead of stranding it
-        // as "linked". Best-effort, logged inside.
-        await completeInboxItemsForBookedTransaction(
-          ctx.supabase,
-          ctx.companyId,
-          body.transaction_id,
-        )
-
-        return NextResponse.json({ data: updated })
+        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: outcome.data })
       },
     },
 

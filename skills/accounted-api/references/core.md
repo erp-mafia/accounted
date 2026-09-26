@@ -173,6 +173,232 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/peppol/access-request`
+
+**Ask the operators to switch on Peppol for the company (sending, optionally receiving).**
+`scope:companies:write · risk:medium · idempotent · dry-run`
+
+Peppol is locked per company until the operators grant it (every transmission is billed per document and every receiving id uses a contracted slot). This records the request and notifies the operators by e-mail; they enable it with a sending cap and, when wants_receiving is true, a receiving slot. Idempotent: a second request keeps the first. Dry-runnable.
+
+**Use when:** GET /invoices/{id}/peppol or GET /peppol/registration reports PEPPOL_ACCESS_REQUIRED and the user wants Peppol.
+**Do not use for:** Registering the participant id once access is granted (POST /peppol/registration).
+
+**Pitfalls:**
+- A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.
+- Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ note?: string, wants_receiving?: boolean }
+```
+
+Example request:
+```json
+{
+  "wants_receiving": true,
+  "note": "Vi fakturerar kommuner."
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    created: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "access": {
+      "status": "requested",
+      "send_enabled": false,
+      "receive_enabled": false,
+      "max_sends": null,
+      "sent_count": 0,
+      "remaining_sends": null
+    },
+    "created": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/peppol/registration`
+
+**Read the company's Peppol receiving status: access grant, eligibility and registration.**
+`scope:companies:read · risk:low · idempotent`
+
+Whether this environment has an access point and whether it supports receiving, the company's Peppol access grant (sending cap, receiving slot), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.
+
+**Use when:** Before POST /peppol/registration, or to explain why the company does not receive e-invoices.
+**Do not use for:** Sending (GET /invoices/{id}/peppol checks an invoice) or reading received e-invoices (they arrive in the invoice inbox).
+
+**Pitfalls:**
+- participant.ok=false with PEPPOL_REGISTRATION_PERSONAL_NUMBER means a sole trader identified by personnummer: it cannot be published in the Peppol directory.
+- registration.can_retry says whether registering again can help; a permanent verdict (e.g. CONNECTOR_PEPPOL_PARTICIPANT_TAKEN) needs support.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    receiving_supported: boolean,
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    participant: { ok: boolean, code: string | null },
+    registration: { registration_id: string, provider: string, participant_scheme: string, participant_identifier: string, status: "pending" | "registered" | "failed" | "deregistered", registered_at: string | null, deregistered_at: string | null, last_error_code: string | null, stale_pending: boolean, can_retry: boolean, updated_at: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "receiving_supported": true,
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "receive_enabled": true,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    },
+    "participant": {
+      "ok": true,
+      "code": null
+    },
+    "registration": {
+      "registration_id": "4c2d…",
+      "provider": "qvalia",
+      "participant_scheme": "0007",
+      "participant_identifier": "5595386219",
+      "status": "registered",
+      "registered_at": "2026-09-26T10:00:00Z",
+      "deregistered_at": null,
+      "last_error_code": null,
+      "stale_pending": false,
+      "can_retry": false,
+      "updated_at": "2026-09-26T10:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/peppol/registration`
+
+**Register the company as a Peppol participant so it can receive e-invoices.**
+`scope:companies:write · risk:high · idempotent · dry-run`
+
+Publishes the company's participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs the operators' receiving grant. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.
+
+**Use when:** The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows receive_enabled.
+**Do not use for:** Sending e-invoices (that needs no registration of the buyer side here) or asking for access (POST /peppol/access-request).
+
+**Pitfalls:**
+- Without the grant: 403 PEPPOL_ACCESS_REQUIRED; with sending but no receiving slot: 403 PEPPOL_RECEIVING_NOT_ENABLED.
+- A personnummer-based sole trader answers 422 PEPPOL_REGISTRATION_PERSONAL_NUMBER: it would publish personal data in the directory.
+- 502 PEPPOL_REGISTRATION_FAILED is operational and retryable; 422 PEPPOL_REGISTRATION_REJECTED is a verdict on the identifier (details.code says which), do not retry it.
+- 409 PEPPOL_REGISTRATION_CAP_REACHED: every contracted receiving slot is taken; sending still works.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    registration: { registration_id: string, provider: string, participant_scheme: string, participant_identifier: string, status: "pending" | "registered" | "failed" | "deregistered", registered_at: string | null, deregistered_at: string | null, last_error_code: string | null, stale_pending: boolean, can_retry: boolean, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "registration": {
+      "registration_id": "4c2d…",
+      "provider": "qvalia",
+      "participant_scheme": "0007",
+      "participant_identifier": "5595386219",
+      "status": "registered",
+      "registered_at": "2026-09-26T10:00:00Z",
+      "deregistered_at": null,
+      "last_error_code": null,
+      "stale_pending": false,
+      "can_retry": false,
+      "updated_at": "2026-09-26T10:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/settings`
 
 **Read the company settings.**

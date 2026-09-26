@@ -197,9 +197,9 @@ describe('Skills registry', () => {
       // Legal: the v1 :send/:mark-sent descriptions say the agent verb is missing, not the capability.
       expect('a v1 or MCP Peppol send action is not yet available').not.toMatch(pattern)
     }
-    // No MCP tool or v1 action sends via Peppol yet: no text may hand an agent a Peppol send verb.
-    expect(allBodies).not.toMatch(/gnubok_send_invoice[^.\n]*Peppol/i)
-    expect(allBodies).not.toMatch(/gnubok_send_peppol|gnubok_peppol_send/i)
+    // The agent verb exists since the operation registry's wave 4: the texts name the right tool
+    // (gnubok_send_invoice_peppol), never an invented one.
+    expect(allBodies).not.toMatch(/gnubok_send_peppol\b|gnubok_peppol_send/i)
 
     const truthfulSkills = ['invoicing-rules', 'customer-onboarding'].map((slug) => {
       const skill = skills.find((candidate) => candidate.slug === slug)
@@ -228,8 +228,8 @@ describe('Skills registry', () => {
       expect(text).toMatch(/no reverse charge/i)
       expect(text).toMatch(/no ROT\/RUT deductions/i)
       expect(text).toMatch(/Er referens/)
-      // No agent-callable send verb yet.
-      expect(text).toMatch(/no MCP tool[^.\n]*Peppol|MCP tool[^.\n]*not (?:yet )?available/i)
+      // The agent-callable send verb, staged for a person to approve.
+      expect(text).toContain('gnubok_send_invoice_peppol')
       // A successful dashboard send issues the invoice; mark-sent is only the issuance-failure recovery.
       expect(text).toMatch(/successful dashboard Peppol send issues the invoice itself/i)
       expect(text).toMatch(/could not be marked as sent/i)
@@ -264,7 +264,7 @@ describe('Skills registry', () => {
       }
       // The pre-#546 framing listed Peppol as an external channel next to postal mail.
       expect(text).not.toMatch(/\(Peppol, postal/)
-      expect(text).toMatch(/a v1 or MCP Peppol send action is not yet available/)
+      expect(text).toMatch(/send-peppol/)
       expect(text).toMatch(/per-company access grant/)
       expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
       expect(text).toMatch(/aktiebolag senders, standard invoices only/)
