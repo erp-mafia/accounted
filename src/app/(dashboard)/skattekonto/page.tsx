@@ -21,12 +21,10 @@ import {
   CHECKBOX_REVEAL_CLASS,
 } from '@/components/ui/dry-table'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -67,6 +65,14 @@ import type {
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
+const SkattekontoMatchDialog = dynamic(
+  () =>
+    import('@/components/skattekonto/SkattekontoMatchDialog').then(
+      (module) => module.SkattekontoMatchDialog,
+    ),
+  { loading: DialogLoadingSkeleton },
+)
+
 const SkattekontoBookDialog = dynamic(
   () => import('@/components/skattekonto/SkattekontoBookDialog'),
   { loading: DialogLoadingSkeleton },
@@ -86,17 +92,6 @@ interface TransaktionerEnvelope {
     ignored_count: number
     ignored?: StoredSkattekontoTransaction[]
   }
-}
-
-interface MatchCandidate {
-  journal_entry_id: string
-  voucher_number: number | null
-  voucher_series: string | null
-  entry_date: string
-  description: string
-  status: 'draft' | 'posted' | 'reversed'
-  matched_amount: number
-  matched_side: 'debit' | 'credit'
 }
 
 export default function SkattekontoPage() {
@@ -123,9 +118,6 @@ export default function SkattekontoPage() {
   const [matchOpenFor, setMatchOpenFor] = useState<StoredSkattekontoTransaction | null>(
     null,
   )
-  const [matchCandidates, setMatchCandidates] = useState<MatchCandidate[] | null>(null)
-  const [matchLoading, setMatchLoading] = useState(false)
-  const [matchSubmitting, setMatchSubmitting] = useState<string | null>(null)
   // Ignored rows are always fetched (include_ignored=1) but rendered only on
   // demand: the count line below the table toggles the "Ignorerade" band.
   const [showIgnored, setShowIgnored] = useState(false)
@@ -341,72 +333,12 @@ export default function SkattekontoPage() {
     void reload()
   }
 
-  async function openMatch(row: StoredSkattekontoTransaction) {
+  // The shared dialog fetches candidates (single, combined and joined, see
+  // findMatchCandidates) and links on its own; the page only reloads.
+  function openMatch(row: StoredSkattekontoTransaction) {
     setMatchOpenFor(row)
-    setMatchCandidates(null)
-    setMatchLoading(true)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match-candidates`,
-      )
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte hämta kandidater',
-          description: getUserErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        setMatchOpenFor(null)
-        return
-      }
-      setMatchCandidates(json.data.candidates as MatchCandidate[])
-    } catch (err) {
-      toast({
-        title: 'Kunde inte hämta kandidater',
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
-      setMatchOpenFor(null)
-    } finally {
-      setMatchLoading(false)
-    }
   }
-
-  async function confirmMatch(journalEntryId: string) {
-    if (!matchOpenFor) return
-    setMatchSubmitting(journalEntryId)
-    try {
-      const res = await fetch(
-        `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${matchOpenFor.id}/match`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ journal_entry_id: journalEntryId }),
-        },
-      )
-      const json = await res.json()
-      if (!res.ok) {
-        toast({
-          title: 'Kunde inte koppla transaktionen',
-          description: getUserErrorMessage(json, { statusCode: res.status }),
-          variant: 'destructive',
-        })
-        return
-      }
-      toast({ title: 'Transaktion kopplad till verifikat' })
-      setMatchOpenFor(null)
-      setMatchCandidates(null)
-      await reload()
-    } catch (err) {
-      toast({
-        title: 'Kunde inte koppla transaktionen',
-        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
-        variant: 'destructive',
-      })
-    } finally {
-      setMatchSubmitting(null)
-    }
-  }
+  const closeMatch = useCallback(() => setMatchOpenFor(null), [])
 
   function copyOcr(ocr: string) {
     navigator.clipboard
@@ -938,21 +870,16 @@ export default function SkattekontoPage() {
           onMatch={() => {
             const target = bookTarget
             setBookTarget(null)
-            void openMatch(target)
+            openMatch(target)
           }}
         />
       )}
 
-      <MatchDialog
+      <SkattekontoMatchDialog
         row={matchOpenFor}
-        candidates={matchCandidates}
-        loading={matchLoading}
-        submittingId={matchSubmitting}
-        onClose={() => {
-          setMatchOpenFor(null)
-          setMatchCandidates(null)
-        }}
-        onConfirm={confirmMatch}
+        open={!!matchOpenFor}
+        onClose={closeMatch}
+        onMatched={() => void reload()}
       />
 
       <Dialog open={showPayment} onOpenChange={setShowPayment}>
@@ -1288,115 +1215,5 @@ function SkattekontoRow({
         )}
       </td>
     </tr>
-  )
-}
-
-function MatchDialog({
-  row,
-  candidates,
-  loading,
-  submittingId,
-  onClose,
-  onConfirm,
-}: {
-  row: StoredSkattekontoTransaction | null
-  candidates: MatchCandidate[] | null
-  loading: boolean
-  submittingId: string | null
-  onClose: () => void
-  onConfirm: (journalEntryId: string) => void
-}) {
-  const open = !!row
-  return (
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>Matcha mot befintligt verifikat</DialogTitle>
-          {/* data-ph-mask: transaction text and amount are user data */}
-          <DialogDescription data-ph-mask="">
-            {row && (
-              <>
-                {formatDate(row.transaktionsdatum)} • {row.transaktionstext} •{' '}
-                <span className="tabular-nums">
-                  {formatCurrency(Number(row.belopp_skatteverket))}
-                </span>
-              </>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-
-        {loading && (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Söker kandidater…
-          </p>
-        )}
-
-        {!loading && candidates && candidates.length === 0 && (
-          <div className="space-y-2 py-4 text-sm">
-            <p>Hittade inga verifikat med en matchande rad på konto 1630.</p>
-            <p className="text-muted-foreground">
-              Kandidaten måste ha samma belopp och sida på 1630 inom ±14 dagar
-              från transaktionsdatumet, och får inte redan vara kopplad till en
-              annan skattekonto-transaktion. Använd <strong>Bokför</strong> för
-              att skapa ett nytt verifikat istället.
-            </p>
-          </div>
-        )}
-
-        {!loading && candidates && candidates.length > 0 && (
-          <div className="max-h-[420px] overflow-y-auto rounded-lg border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Datum</TableHead>
-                  <TableHead>Verifikat</TableHead>
-                  <TableHead>Beskrivning</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {candidates.map(c => (
-                  <TableRow key={c.journal_entry_id}>
-                    <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {formatVoucher(c)}
-                    </TableCell>
-                    <TableCell className="max-w-[260px] truncate">
-                      {c.description}
-                    </TableCell>
-                    <TableCell>
-                      {/* Chips mark exceptions: posted is the normal case. */}
-                      {c.status === 'posted' ? (
-                        <span className="text-muted-foreground">Bokförd</span>
-                      ) : c.status === 'draft' ? (
-                        <Badge variant="outline">Utkast</Badge>
-                      ) : (
-                        <Badge variant="destructive">Makulerad</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        size="sm"
-                        onClick={() => onConfirm(c.journal_entry_id)}
-                        disabled={submittingId === c.journal_entry_id}
-                      >
-                        {submittingId === c.journal_entry_id ? 'Kopplar…' : 'Koppla'}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>
-            Avbryt
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }

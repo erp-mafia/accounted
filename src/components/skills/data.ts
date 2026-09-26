@@ -125,6 +125,10 @@ export function kindOf(skill: SkillSummary): ItemKind {
 export function rulesSegment(atomId: string): string {
   return `kunskap.${atomId.replace('/', '.')}`
 }
+/** Where a knowledge chip leads: an own knowledge item's page (egen.<id>), else the pack's. */
+export function knowledgeHref(base: string, id: string): string {
+  return id.startsWith('own/') ? `${base}/egen.${id.slice(4)}` : `${base}/${rulesSegment(id)}`
+}
 export function communitySegment(slug: string): string {
   // community/<name> -> community.<name>: the address accounted.se links to for "Lägg till i Accounted".
   return `community.${slug.replace(/^community\//, '').replaceAll('/', '.')}`
