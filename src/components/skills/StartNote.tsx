@@ -8,11 +8,11 @@ import { CopyIcon } from './CopyIcon'
 import styles from './skills.module.css'
 
 /**
- * The line under a start button. Before the click it says what will happen,
- * so a copy-and-paste start is known before the new tab takes over (and
- * Claude's warning for filled-in links is expected). After the click it says
- * what did: filled in, copied, a copy that failed (with the prompt to copy by
- * hand) or a Desktop link that opened nothing (with the way out). The
+ * The line under a start button. Before the click it says what will happen
+ * only when that needs doing by hand: a copy-and-paste start, a Desktop link
+ * or ChatGPT's app pick. A filled-in start needs no line. After the click it
+ * says what did: filled in, copied, a copy that failed (with the prompt to
+ * copy by hand) or a Desktop link that opened nothing (with the way out). The
  * banner's variant shows only the outcome.
  */
 export function StartNote({ route, outcome, client, target, prompt, onWeb, banner = false }: {
@@ -29,8 +29,6 @@ export function StartNote({ route, outcome, client, target, prompt, onWeb, banne
   const t = useTranslations('skills_registry')
   const { appName } = useBranding()
   const name = client === 'claude' && target !== 'web' ? t(`open_in_${target}`) : AI_CLIENTS.find((c) => c.id === client)!.name
-  // Claude on the web warns about every prompt that arrives through a link.
-  const caution = client === 'claude' && route === 'web_prefill' ? t('prefill_caution', { appName }) : null
   // A ChatGPT chat has no custom app until it is picked for that chat.
   const pickApp = client === 'chatgpt' ? t('chatgpt_pick_app', { appName }) : null
 
@@ -39,9 +37,9 @@ export function StartNote({ route, outcome, client, target, prompt, onWeb, banne
     if (banner) return null
     lines = route === 'desktop_link'
       ? [t('run_hint_desktop', { client: name })]
-      : [t(route === 'copy' ? 'run_hint' : 'run_hint_prefilled', { client: name }), caution, pickApp]
+      : [route === 'copy' ? t('run_hint', { client: name }) : null, pickApp]
   } else if (outcome === 'prefilled' || outcome === 'prefilled_copied') {
-    lines = [t('prefilled_open', { client: name }), caution, outcome === 'prefilled_copied' ? t('prefilled_backup') : null, pickApp]
+    lines = [t('prefilled_open', { client: name }), outcome === 'prefilled_copied' ? t('prefilled_backup') : null, pickApp]
   } else if (outcome === 'copied') {
     lines = [t('copied_open', { client: name }), pickApp]
   } else if (outcome === 'copy_failed') {
@@ -50,6 +48,7 @@ export function StartNote({ route, outcome, client, target, prompt, onWeb, banne
     lines = [t('no_app')]
   }
   const text = lines.filter(Boolean).join(' ')
+  if (!text) return null
 
   const extra = outcome === 'copy_failed' ? (
     <span className={styles.startPrompt}>
