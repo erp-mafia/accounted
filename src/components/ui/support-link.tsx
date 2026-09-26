@@ -36,7 +36,7 @@ import {
   listTickets,
   loadThread,
   markThreadRead,
-  pickActiveTicket,
+  pickTicketToOpen,
   replyInThread,
   sortByActivity,
   totalUnread,
@@ -59,10 +59,12 @@ type AttachmentError = 'unsupported' | 'too_many' | 'too_large'
 
 /**
  * loading  fetching tickets or a thread
- * thread   the conversation with support (reply box when it is the active ticket)
- * compose  write a new ticket, attachments allowed: when nothing is open, or
- *          on "Nytt ärende" beside an open one (the thread stays loaded, so
- *          the customer can go back to it)
+ * thread   the conversation with support (reply box when it is the active ticket;
+ *          read-only for a resolved ticket, e.g. one opened for an unread answer)
+ * compose  write a new ticket, attachments allowed: when there is nothing to
+ *          reply to or read, or on "Nytt ärende" beside a ticket (the thread
+ *          stays loaded, so the customer can go back to it). Earlier tickets
+ *          are listed here too, so history is never out of reach.
  * email    conversations unavailable (self-hosted, analytics off): same form, mail delivery
  * sent     delivered by mail (attachments, or the fallback)
  */
@@ -141,13 +143,16 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     const list = sortByActivity(await listTickets())
     setTickets(list)
     setUnread(totalUnread(list))
-    const next = pickActiveTicket(list, currentTicketId())
-    setActive(next)
+    const next = pickTicketToOpen(list, currentTicketId())
+    // Only an open ticket is the active one. A resolved ticket opened for its
+    // unread answer stays read-only: canReply is false and "Nytt ärende" is
+    // the way to write again.
+    setActive(next?.mode === 'reply' ? next.ticket : null)
     if (!next) {
       setView('compose')
       return
     }
-    await showTicket(next.id)
+    await showTicket(next.ticket.id)
   }, [showTicket])
 
   // Unread dot on the trigger: one cheap call when the trigger mounts.
@@ -293,7 +298,9 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
       message: message.trim(),
       files: attachments,
       // With a ticket still open, the SDK would otherwise append this to it.
-      newTicket: active !== null,
+      // The same goes for any ticket opened here, a resolved one read for its
+      // answer included: loading a thread makes it the SDK's current ticket.
+      newTicket: active !== null || thread !== null,
     })
     setIsSending(false)
 
@@ -347,6 +354,35 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
 
   const canReply = Boolean(thread && active && thread.ticketId === active.id && !isResolved(thread.status))
   const earlier = tickets.filter((x) => x.id !== viewingId)
+
+  // Shared by the thread and the compose view: with nothing to reply to or
+  // read, the dialog opens on the composer, and history must not vanish then.
+  const earlierToggle = earlier.length > 0 && (
+    <button
+      type="button"
+      onClick={() => setShowEarlier((v) => !v)}
+      className="ml-auto text-xs text-muted-foreground hover:text-foreground transition-colors"
+    >
+      {showEarlier ? t('hide_earlier') : t('earlier_tickets', { count: earlier.length })}
+    </button>
+  )
+
+  const earlierList = showEarlier && (
+    <ul className="mt-2 flex flex-col gap-1">
+      {earlier.map((x) => (
+        <li key={x.id}>
+          <button
+            type="button"
+            onClick={() => void showTicket(x.id)}
+            className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-secondary/35 transition-colors"
+          >
+            <span className="truncate text-foreground">{x.lastMessage || t('no_messages')}</span>
+            <span className="shrink-0 text-[11px] text-muted-foreground">{statusLabel(x.status)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  )
 
   const triggerLabel = (
     <>
@@ -529,14 +565,22 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           </div>
         )}
 
-        {view === 'compose' && thread && (
-          <button
-            type="button"
-            onClick={() => setView('thread')}
-            className="self-start text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            {t('back_to_ticket')}
-          </button>
+        {view === 'compose' && (thread || earlier.length > 0) && (
+          <div>
+            <div className="flex items-center gap-3">
+              {thread && (
+                <button
+                  type="button"
+                  onClick={() => setView('thread')}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {t('back_to_ticket')}
+                </button>
+              )}
+              {earlierToggle}
+            </div>
+            {earlierList}
+          </div>
         )}
 
         {(view === 'compose' || view === 'email') && composeForm}
@@ -548,15 +592,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                 {thread ? statusLabel(displayStatus(thread.status, thread.messages)) : ''}
               </span>
               <div className="flex items-center gap-3">
-                {earlier.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setShowEarlier((v) => !v)}
-                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {showEarlier ? t('hide_earlier') : t('earlier_tickets', { count: earlier.length })}
-                  </button>
-                )}
+                {earlierToggle}
                 {canReply && (
                   <button
                     type="button"
@@ -569,22 +605,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               </div>
             </div>
 
-            {showEarlier && (
-              <ul className="mt-2 flex flex-col gap-1">
-                {earlier.map((x) => (
-                  <li key={x.id}>
-                    <button
-                      type="button"
-                      onClick={() => void showTicket(x.id)}
-                      className="flex w-full items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-left text-sm hover:bg-secondary/35 transition-colors"
-                    >
-                      <span className="truncate text-foreground">{x.lastMessage || t('no_messages')}</span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">{statusLabel(x.status)}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+            {earlierList}
 
             {loadFailed ? (
               <p className="mt-4 text-sm text-muted-foreground">{t('load_failed')}</p>

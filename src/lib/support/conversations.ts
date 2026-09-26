@@ -109,9 +109,9 @@ function lastActivity(t: TicketSummary): number {
 }
 
 /**
- * The thread the dialog opens on: the SDK's current ticket when it is still
- * open, otherwise the most recently active unresolved one. Null means the
- * dialog starts with a composer.
+ * The ticket the customer can reply in: the SDK's current ticket when it is
+ * still open, otherwise the most recently active unresolved one. Null means
+ * there is nothing to reply to.
  */
 export function pickActiveTicket(tickets: TicketSummary[], currentId?: string | null): TicketSummary | null {
   const open = tickets.filter((t) => !isResolved(t.status))
@@ -122,6 +122,31 @@ export function pickActiveTicket(tickets: TicketSummary[], currentId?: string | 
 
 export function sortByActivity(tickets: TicketSummary[]): TicketSummary[] {
   return [...tickets].sort((a, b) => lastActivity(b) - lastActivity(a))
+}
+
+/**
+ * reply  the ticket can be continued (it is the active ticket)
+ * read   shown read-only, for an answer the customer has not seen yet
+ */
+export type OpenMode = 'reply' | 'read'
+
+/**
+ * The ticket the dialog opens on. An open ticket wins and opens for replying.
+ * With nothing open, the most recently active ticket with unread support
+ * messages opens read-only (every ticket is resolved by then): support often
+ * answers and resolves in one go, the trigger shows the unread dot and the
+ * nudge mail says there is an answer, so an empty composer reads as the
+ * answer being gone. Null means there is nothing to reply to and nothing new
+ * to read: the dialog starts with a composer.
+ */
+export function pickTicketToOpen(
+  tickets: TicketSummary[],
+  currentId?: string | null
+): { ticket: TicketSummary; mode: OpenMode } | null {
+  const active = pickActiveTicket(tickets, currentId)
+  if (active) return { ticket: active, mode: 'reply' }
+  const unread = sortByActivity(tickets).find((t) => t.unreadCount > 0)
+  return unread ? { ticket: unread, mode: 'read' } : null
 }
 
 export function conversationsAvailable(): boolean {
@@ -150,6 +175,10 @@ export async function listTickets(): Promise<TicketSummary[]> {
   }
 }
 
+/**
+ * Loading a thread also makes it the SDK's current ticket (getMessages
+ * switches to it), so a later send without newTicket lands in this ticket.
+ */
 export async function loadThread(ticketId: string): Promise<Thread | null> {
   try {
     const res = await posthog.conversations.getMessages(ticketId)
