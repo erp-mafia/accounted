@@ -30,6 +30,10 @@ BEGIN
     UPDATE public.company_skills SET review_note = 'Looks fine' WHERE id = own_id;
     RAISE EXCEPTION 'Author wrote a review note';
   EXCEPTION WHEN insufficient_privilege THEN NULL; END;
+  BEGIN
+    UPDATE public.company_skills SET approved_body_sha = repeat('a', 64) WHERE id = own_id;
+    RAISE EXCEPTION 'Author approved their own text';
+  EXCEPTION WHEN insufficient_privilege THEN NULL; END;
   RESET ROLE;
 
   -- Accounted sends it back: private again, with the reason.

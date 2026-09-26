@@ -460,12 +460,6 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .empty p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
 
 /* ── sharing an own agent ── */
-.share { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--background)); }
-.share p { font-size: 13px; line-height: 19px; color: hsl(var(--muted-foreground)); }
-.share label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; }
-.share input[type='text'] { height: 34px; padding: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font: inherit; font-weight: 400; }
-.share .check { flex-direction: row; align-items: flex-start; gap: 8px; font-weight: 400; color: hsl(var(--muted-foreground)); }
-.share .check input { margin-top: 3px; }
 .shareStatus { display: inline-flex; align-items: center; gap: 8px; width: fit-content; font-size: 13px; }
 
 .who { display: flex; flex-direction: column; min-width: 0; }
@@ -523,6 +517,12 @@ a.chip:focus-visible { outline: 2px solid hsl(var(--foreground)); outline-offset
 .stageTile b { font-size: 15px; font-weight: 500; line-height: 21px; }
 .stageTile small { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
 .stageFoot { position: absolute; left: 16px; right: 16px; bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+/* On a phone the start buttons wrap onto two rows: the stage grows to hold the tile and them, one under the other, instead of covering the tile. */
+@media (max-width: 560px) {
+  .stage { height: auto; display: flex; flex-direction: column; align-items: center; gap: 24px; padding: 40px 16px 16px; }
+  .stageTile { position: relative; left: auto; top: auto; transform: none; }
+  .stageFoot { position: relative; left: auto; right: auto; bottom: auto; align-self: stretch; }
+}
 .stageStatus { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border: 1px solid hsl(var(--border)); border-radius: 9999px; background: hsl(var(--background) / 0.94); font-size: 12.5px; }
 .apanel { display: flex; flex-direction: column; gap: 20px; height: var(--agent-page-h); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 28px 32px; border: 1px solid hsl(var(--border)); border-radius: 16px; background: hsl(var(--background)); }
 .apHead { display: flex; flex-direction: column; gap: 6px; }
@@ -894,8 +894,7 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .routinePreview { max-height: none; padding: 12px 14px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground) / 0.8); white-space: pre-wrap; }
 
 /* Starta i Claude with a choice of where (ClaudeStart.tsx) */
-.splitStart { display: inline-flex; align-items: center; gap: 4px; }
-.routineCreate { display: flex; flex-direction: column; gap: 12px; padding-top: 16px; border-top: 1px solid hsl(var(--border)); }
+.splitStart { display: inline-flex; align-items: stretch; }
 .routineSwitch { align-self: center; }
 /* Accounted's review list (ReviewQueue.tsx) */
 .reviewList { display: flex; flex-direction: column; gap: 16px; margin: 0; padding: 0; list-style: none; }
@@ -903,3 +902,25 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .reviewHead b { display: block; font-size: 15px; font-weight: 500; }
 .reviewAlert { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: hsl(var(--destructive) / 0.08); color: hsl(var(--destructive)); font-size: 13px; line-height: 19px; }
 .reviewFile { max-height: 360px; overflow: auto; padding: 14px 16px; border: 1px solid hsl(var(--border)); border-radius: 12px; font-size: 12.5px; line-height: 18px; white-space: pre-wrap; }
+/* "Dela": the card as others will see it, the name it will carry, one confirmation (ShareBox in AgentDetail.tsx) */
+.shareForm { display: flex; flex-direction: column; gap: 14px; }
+.shareForm > small { margin-top: -6px; font-size: 12px; }
+.sharePreview { display: flex; pointer-events: none; }
+.sharePreview > * { flex: 1; }
+.shareBy { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
+.shareField { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 500; }
+.shareInput { display: flex; align-items: center; gap: 2px; height: 36px; padding: 0 12px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font-weight: 400; color: hsl(var(--muted-foreground)); transition: border-color 150ms var(--ease-out); }
+.shareInput:focus-within { border-color: hsl(var(--ring)); }
+.shareInput[data-invalid] { border-color: hsl(var(--destructive)); }
+.shareInput input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 14px; color: hsl(var(--foreground)); outline: none; }
+.shareInput input::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
+.shareHint { font-size: 12px; font-weight: 400; color: hsl(var(--destructive)); }
+.shareCheck { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground)); }
+.shareCheck input { margin-top: 3px; accent-color: hsl(var(--foreground)); }
+/* Skriv själv's routine (RoutineRow): one row like the others, the choice inline on the right */
+.routineInline { display: grid; grid-template-columns: 120px minmax(0, 1fr); align-items: center; column-gap: 12px; row-gap: 6px; min-height: 60px; border-top: 1px solid hsl(var(--border)); padding-top: 8px; }
+.routineControls { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.routineSelect { height: 34px; padding: 0 10px; border: 1px solid hsl(var(--border)); border-radius: 8px; background: hsl(var(--background)); font: inherit; font-size: 13.5px; color: hsl(var(--foreground)); outline: none; }
+.routineSelect:focus { border-color: hsl(var(--ring)); }
+.routineInlineNote { grid-column: 1 / -1; justify-self: end; text-align: right; font-size: 12px; color: hsl(var(--muted-foreground)); }
+@media (max-width: 560px) { .routineInline { grid-template-columns: 1fr; } .routineControls { justify-content: flex-start; } .routineInlineNote { justify-self: start; text-align: left; } }

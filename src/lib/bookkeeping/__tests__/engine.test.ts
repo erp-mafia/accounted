@@ -1595,3 +1595,125 @@ describe('reverseEntry: opening balance unlink', () => {
     expect(fpUpdates).toEqual([])
   })
 })
+
+describe('reverseEntry: depreciation schedule release', () => {
+  // A register-posted avskrivning links its depreciation_schedules row to the
+  // voucher. Reversing the voucher must release that row, or the register
+  // keeps counting a cancelled avskrivning and commit_asset_depreciation
+  // refuses to book the period again. The trigger side (release allowed only
+  // with a posted storno) is pinned in
+  // tests/pg/depreciation-schedule-storno-release.pg.test.ts.
+  function buildSupabase(sourceType: string, releaseError: unknown = null) {
+    const original = {
+      id: 'entry-1',
+      company_id: 'company-1',
+      status: 'posted',
+      fiscal_period_id: 'period-1',
+      voucher_series: 'I',
+      voucher_number: 1,
+      entry_date: '2026-08-31',
+      description: 'Planenlig avskrivning 2025/26: Dator',
+      source_type: sourceType,
+      source_id: null,
+      lines: [
+        { account_number: '7832', debit_amount: 2059, credit_amount: 0 },
+        { account_number: '1229', debit_amount: 0, credit_amount: 2059 },
+      ],
+    }
+    const reversal = { id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }
+
+    let jeCall = 0
+    const jeResults = [
+      { data: original, error: null },
+      { data: reversal, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'entry-1' }], error: null },
+      { data: { ...reversal, lines: [] }, error: null },
+    ]
+    function jeBuilder() {
+      const b: Record<string, unknown> = {}
+      for (const m of ['select', 'eq', 'in', 'update', 'insert']) {
+        b[m] = vi.fn().mockReturnValue(b)
+      }
+      b.single = vi.fn().mockImplementation(async () => jeResults[jeCall++])
+      b.then = (resolve: (v: unknown) => void) => resolve(jeResults[jeCall++])
+      return b
+    }
+
+    const dsUpdates: unknown[] = []
+    const dsFilters: Record<string, unknown>[] = []
+
+    const supabase = {
+      rpc: vi.fn().mockResolvedValue({ data: 2, error: null }),
+      from: vi.fn().mockImplementation((table: string) => {
+        if (table === 'journal_entries') return jeBuilder()
+        if (table === 'chart_of_accounts') {
+          const b: Record<string, unknown> = {}
+          for (const m of ['select', 'eq', 'in']) b[m] = vi.fn().mockReturnValue(b)
+          b.then = (resolve: (v: unknown) => void) =>
+            resolve({
+              data: [
+                { id: 'acc-7832', account_number: '7832' },
+                { id: 'acc-1229', account_number: '1229' },
+              ],
+              error: null,
+            })
+          return b
+        }
+        if (table === 'journal_entry_lines') {
+          return { insert: vi.fn().mockResolvedValue({ error: null }) }
+        }
+        if (table === 'depreciation_schedules') {
+          const b: Record<string, unknown> = {}
+          const filters: Record<string, unknown> = {}
+          b.update = vi.fn().mockImplementation((payload: unknown) => {
+            dsUpdates.push(payload)
+            dsFilters.push(filters)
+            return b
+          })
+          b.eq = vi.fn().mockImplementation((col: string, val: unknown) => {
+            filters[col] = val
+            return b
+          })
+          b.then = (resolve: (v: unknown) => void) => resolve({ error: releaseError })
+          return b
+        }
+        return createMockChain()
+      }),
+    }
+
+    return { supabase, dsUpdates, dsFilters }
+  }
+
+  it('releases the schedule row linked to a reversed year_end voucher', async () => {
+    const { supabase, dsUpdates, dsFilters } = buildSupabase('year_end')
+
+    const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(result.id).toBe('reversal-1')
+    // Link and posted flag fall together: the trigger accepts exactly this.
+    expect(dsUpdates).toEqual([{ journal_entry_id: null, posted_at: null }])
+    // Scoped to this company and this voucher only.
+    expect(dsFilters).toEqual([{ company_id: 'company-1', journal_entry_id: 'entry-1' }])
+  })
+
+  it('does not touch depreciation_schedules for other source types', async () => {
+    const { supabase, dsUpdates } = buildSupabase('manual')
+
+    await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(dsUpdates).toEqual([])
+  })
+
+  it('still returns the posted storno when the release write fails', async () => {
+    const { supabase, dsUpdates } = buildSupabase('year_end', {
+      message: 'Cannot modify a posted depreciation schedule',
+      code: '23514',
+    })
+
+    const result = await reverseEntry(supabase as never, 'company-1', 'user-1', 'entry-1')
+
+    expect(result.id).toBe('reversal-1')
+    expect(dsUpdates).toHaveLength(1)
+  })
+})

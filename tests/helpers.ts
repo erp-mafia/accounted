@@ -774,6 +774,105 @@ export function createQueuedMockSupabase() {
   return { supabase, enqueue, enqueueMany, reset, calls, findCall, findCalls }
 }
 
+// ============================================================
+// Per-table Supabase mock
+// ============================================================
+
+export type TableMockResult = { data?: unknown; error?: unknown; count?: number | null }
+
+/**
+ * A Supabase mock that answers per table instead of from one global FIFO
+ * queue, so a test pins WHAT each table returns rather than the order the
+ * code under test happens to query in (createQueuedMockSupabase breaks on
+ * every reordering of unrelated reads).
+ *
+ * Each key holds either:
+ *   - an array: one entry is consumed per awaited chain, and the last entry
+ *     sticks once the others are used up;
+ *   - a plain object: returned for every await (a constant).
+ * A key with nothing set resolves `{ data: null, error: null }`.
+ *
+ * Tables are keyed by name ('suppliers'); RPCs by 'rpc:<name>'
+ * ('rpc:get_next_arrival_number'). A value is consumed when the chain is
+ * awaited, not when `from()` is called.
+ *
+ * `auth.getUser` is a vi.fn (unauthenticated by default). There is
+ * deliberately no `auth.getClaims`: requireAuth's typeof guard then takes
+ * the getUser path, so a test controls the user with
+ * `supabase.auth.getUser.mockResolvedValue({ data: { user } })`, exactly as
+ * with createQueuedMockSupabase.
+ *
+ * Usage:
+ *   const { supabase, setTable, findCall, reset } = createTableMockSupabase()
+ *   setTable('suppliers', { data: supplier })
+ *   setTable('supplier_invoices', [{ data: null }, { data: created }])
+ *   setTable('rpc:get_next_arrival_number', { data: 5 })
+ */
+export function createTableMockSupabase(
+  initial: Record<string, TableMockResult | TableMockResult[]> = {},
+) {
+  const queues = new Map<string, TableMockResult[]>()
+
+  /** Every chained builder call, in order: { table, method, args }. */
+  const calls: { table: string; method: string; args: unknown[] }[] = []
+
+  const setTable = (key: string, value: TableMockResult | TableMockResult[]) => {
+    queues.set(key, Array.isArray(value) ? [...value] : [value])
+  }
+
+  const next = (key: string) => {
+    const q = queues.get(key)
+    const entry = q && q.length > 1 ? q.shift()! : q?.[0]
+    return { data: entry?.data ?? null, error: entry?.error ?? null, count: entry?.count ?? null }
+  }
+
+  const buildChain = (key: string): unknown =>
+    new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'then') {
+            return (resolve: (v: unknown) => void) => resolve(next(key))
+          }
+          return (...args: unknown[]) => {
+            calls.push({ table: key, method: String(prop), args })
+            return buildChain(key)
+          }
+        },
+      },
+    )
+
+  /** Args of the first `method` call made against `table`, or undefined. */
+  const findCall = (table: string, method: string): unknown[] | undefined =>
+    calls.find((c) => c.table === table && c.method === method)?.args
+
+  /** Args of every `method` call made against `table`. */
+  const findCalls = (table: string, method: string): unknown[][] =>
+    calls.filter((c) => c.table === table && c.method === method).map((c) => c.args)
+
+  /** Drop every table answer and recorded call, then re-apply `initial`. */
+  const reset = () => {
+    queues.clear()
+    calls.length = 0
+    for (const [key, value] of Object.entries(initial)) setTable(key, value)
+  }
+  reset()
+
+  const supabase = {
+    from: vi.fn((table: string) => buildChain(table)),
+    // Recorded as method 'rpc' on key 'rpc:<name>', so findCall can read the args.
+    rpc: vi.fn((name: string, args?: unknown) => {
+      calls.push({ table: `rpc:${name}`, method: 'rpc', args: [args] })
+      return buildChain(`rpc:${name}`)
+    }),
+    auth: {
+      getUser: vi.fn().mockResolvedValue({ data: { user: null }, error: null }),
+    },
+  }
+
+  return { supabase, setTable, reset, calls, findCall, findCalls }
+}
+
 export function makeCategorizationTemplate(
   overrides: Partial<CategorizationTemplate> = {}
 ): CategorizationTemplate {

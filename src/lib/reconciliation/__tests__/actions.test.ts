@@ -148,6 +148,26 @@ describe('matchPairs', () => {
     expect(emitMock).not.toHaveBeenCalled()
   })
 
+  it('turns a combined skattekonto proposal into ONE group pair (crm#128)', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    skvStatusMock.mockResolvedValue({
+      items: {
+        proposed: [
+          { item_id: R1, proposal: { journal_entry_id: E1, confidence: 0.9, external_ids: [R1, R2] } },
+          { item_id: R2, proposal: { journal_entry_id: E1, confidence: 0.9, external_ids: [R1, R2] } },
+        ],
+      },
+    })
+    linkGroupMock.mockResolvedValue({ journal_entry_id: E1, via: 'line', skattekonto_transaction_ids: [R1, R2] })
+
+    const result = await matchPairs(supabase as never, COMPANY, USER, 'skattekonto', { use_proposals: true })
+
+    expect(result?.considered).toBe(1)
+    expect(linkGroupMock).toHaveBeenCalledWith(supabase, COMPANY, [R1, R2], E1)
+    expect(linkMock).not.toHaveBeenCalled()
+    expect(result?.applied.map((a) => a.external_id)).toEqual([R1, R2])
+  })
+
   it('links bank pairs through manualLink with the account ledger number', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ledger_account: '1931' } }) // cash_accounts lookup
