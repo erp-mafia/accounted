@@ -131,7 +131,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (pageOrder) query = query.in('id', pageOrder)
   const { data, error } = await query
   if (error) return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 })
-  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
+  const docs = (data ?? []) as Array<{ id: string; created_at: string; file_name: string; doc_type: string | null; admission_state: string; journal_entry_id: string | null; journal_entry_line_id?: string | null; extracted_data: Record<string, unknown> | null; page_count: number | null }>
   if (docs.length === 0) return NextResponse.json(pageOrder ? { data: [], next_offset: nextOffset } : { data: [] })
   const ids = docs.map((d) => d.id)
 
