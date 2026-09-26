@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { userFacing } from '@/lib/errors/user-facing'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { AccountMapping, ImportResult, ParsedSIEFile, SIEVoucher } from './types'
 import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
@@ -30,8 +31,22 @@ export interface SIEJobInput {
   fiscalYear?: {start:string;end:string}
 }
 
+/**
+ * Every message this class carries is a finished Swedish sentence naming the
+ * file, the setting or the choice the reader has to change, so it is marked
+ * user-facing: without that the registry answers its code with "Förfrågan
+ * innehåller ogiltiga uppgifter" and the specific half is lost. Observed on a
+ * paused import, where the truth was that SIE_IMPORT_JOBS was unset.
+ */
 export class SIEJobValidationError extends Error {
-  constructor(message: string, readonly code: string = 'VALIDATION_ERROR', readonly details?: Record<string, unknown>) { super(message) }
+  constructor(
+    message: string,
+    readonly code: string = 'VALIDATION_ERROR',
+    readonly details?: Record<string, unknown>,
+  ) {
+    super(message)
+    userFacing(this, code)
+  }
 }
 
 /** Accounted's financial reports classify targets by BAS classes 1-8. */
