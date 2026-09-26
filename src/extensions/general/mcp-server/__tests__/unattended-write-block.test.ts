@@ -158,6 +158,18 @@ describe('MCP unattended-session guard', () => {
     }
   })
 
+  it('holds a commit back when the marks cannot be read', async () => {
+    vi.mocked(getRedis).mockReturnValue({ mget: () => Promise.reject(new Error('upstash down')) } as never)
+    try {
+      const approve = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }, 'desk-chat'))
+      expect(approve.kind).toBe('unattended_write_blocked')
+      const read = await kindOf(mcpToolCall('gnubok_list_skills', {}, 'desk-chat'))
+      expect(read.kind).not.toBe('unattended_write_blocked')
+    } finally {
+      vi.mocked(getRedis).mockReturnValue(null)
+    }
+  })
+
   it('scopes the mark to the session when there is one, else the key', () => {
     expect(unattendedScope('s1', 'k1')).toMatchObject({ scope: 'session:s1' })
     expect(unattendedScope(null, 'k1')).toMatchObject({ scope: 'key:k1' })
