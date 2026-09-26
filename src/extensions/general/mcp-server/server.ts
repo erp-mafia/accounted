@@ -4862,7 +4862,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_task',
     title: 'Get Accounting Task',
-    description: 'Start a handoff task: its instructions and the skills to load.',
+    description: 'Start a handoff task: goal, instructions and skills.',
     inputSchema: ACCOUNTING_TASK_INPUT_SCHEMA,
     outputSchema: {
       type: 'object',
@@ -4878,14 +4878,20 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase, actor) {
-      const task = await getAccountingTask(args, companyId, supabase)
-      // An agent run delivers its workflow and knowledge bodies here instead of
-      // load_skill: record them the same way so provenance and run counts hold.
+      // The key tells get_task which client it was minted for (a missing
+      // `client`) and lets an own item run in the company that owns it.
+      const task = await getAccountingTask(args, companyId, supabase, { userId, apiKeyId: actor?.type === 'api_key' ? actor.id : undefined })
+      // An agent run or an analysis delivers its bodies here instead of
+      // load_skill: record them the same way so provenance and run counts
+      // hold, in the company the task actually runs in.
       if (actor && 'workflow' in task) {
-        await emitSkillLoaded({ slug: task.workflow.slug, tier: 'workflow', bodyHash: skillBodyHash(task.workflow.body), version: task.workflow.version ?? undefined, actor, userId, companyId })
+        await emitSkillLoaded({ slug: task.workflow.slug, tier: 'workflow', bodyHash: skillBodyHash(task.workflow.body), version: task.workflow.version ?? undefined, actor, userId, companyId: task.company_id })
         for (const k of task.knowledge) {
-          await emitSkillLoaded({ slug: k.id, tier: 'horizontal', bodyHash: skillBodyHash(k.body), version: k.version ?? undefined, actor, userId, companyId })
+          await emitSkillLoaded({ slug: k.id, tier: 'horizontal', bodyHash: skillBodyHash(k.body), version: k.version ?? undefined, actor, userId, companyId: task.company_id })
         }
+      }
+      if (actor && 'analysis' in task) {
+        await emitSkillLoaded({ slug: task.analysis.slug, tier: task.analysis.tier, bodyHash: skillBodyHash(task.analysis.body), version: task.analysis.version ?? undefined, actor, userId, companyId: task.company_id })
       }
       return task
     },
@@ -4894,7 +4900,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_skills',
     title: 'List Domain Skills',
-    description: 'List applicable workflows and company skills. include_all reveals unselected/inapplicable skills. Load bodies with gnubok_load_skill.',
+    description: 'List applicable workflows and company skills. Load bodies with gnubok_load_skill.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4924,16 +4930,16 @@ export const tools: McpTool[] = [
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
               tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
+              item_kind: { type: 'string', enum: ['workflow', 'rules', 'analysis'] },
             },
             required: ['slug', 'name', 'summary', 'tier'],
           },
         },
         count: { type: 'number' },
-        hidden_count: { type: 'number', description: 'Inapplicable skills hidden.' },
+        hidden_count: { type: 'number' },
         company_context: {
           type: 'object',
           additionalProperties: false,
-          description: 'Applicability filter inputs.',
           properties: {
             entity_type: { type: ['string', 'null'] },
             has_employees: { type: 'boolean' },
@@ -5003,6 +5009,9 @@ export const tools: McpTool[] = [
           summary: s.summary,
           tags: s.tags,
           tier: s.tier,
+          // Whether an own item (or an Accounted analysis) is a job to run, rules
+          // to follow or an analysis to build: the tier alone says only "own".
+          ...(s.itemKind ? { item_kind: s.itemKind } : {}),
         })),
         count: applicable.length,
         hidden_count: tagFiltered.length - applicable.length,

@@ -21,7 +21,6 @@ import {
 import {
   AI_CLIENTS,
   aiPrefilledChatLink,
-  kvittojaktenSkillSlug,
   openAiConnector,
   pickConnectedAiClient,
   type AiClient,
@@ -55,13 +54,17 @@ function markPrereqSeen(): void {
 
 /**
  * "Kvittojakten": one click opens the connected AI client with the prompt
- * already typed in. The agent then loads the skill written for that client
- * (kvittojakten-claude, -chatgpt, -grok), searches the user's own mailbox for
- * the underlag that are missing and stages the links for approval.
+ * already typed in. The AI then starts it with get_task kind
+ * "agent:kvittojakten", as the Instruktioner page does, so the knowledge the
+ * company chose there and its company facts come along with the workflow
+ * written for that client (kvittojakten-claude, -chatgpt, -grok). It searches
+ * the user's own mailbox for the underlag that are missing and stages the
+ * links for approval.
  *
  * Unlike AiTaskAction there is no review dialog and no clipboard step: the
- * prompt names a skill and nothing else, so it may travel in the chat URL
- * (see aiPrefilledChatLink). Renders nothing while no client is connected.
+ * prompt names the flow and the client and nothing else, so it may travel in
+ * the chat URL (see aiPrefilledChatLink). Renders nothing while no client is
+ * connected.
  *
  * The same outline button as HandoffButton, on an Att göra row and in a
  * page header alike, so the two AI actions never look like different things.
@@ -100,7 +103,7 @@ export function KvittojaktenButton({
   function run(client: AiClient) {
     markPrereqSeen()
     setPending(null)
-    const prompt = t('ai_kvittojakten_prompt', { skill: kvittojaktenSkillSlug(client) })
+    const prompt = t('ai_kvittojakten_prompt', { client })
     openAiConnector(aiPrefilledChatLink(client, prompt))
     onOpen?.()
   }

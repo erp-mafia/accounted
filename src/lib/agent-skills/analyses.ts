@@ -8,7 +8,11 @@ import type { Skill } from './types'
  * charting library drew empty or wrong, the SVG ones did not.
  */
 
-const DASHBOARD_RULES = `## Så byggs dashboarden
+/**
+ * How every analysis is built and that it changes nothing. get_task appends it
+ * to an own analysis that does not carry it, so an author never has to write it.
+ */
+export const DASHBOARD_RULES = `## Så byggs dashboarden
 - Bygg den som en artifact om din klient kan visa artifacts (till exempel Claude på webben eller i appen). Går det inte: visa samma innehåll som tabeller i svaret.
 - Rita diagram som enkel SVG direkt i sidan, utan externa bibliotek, så att de fungerar överallt.
 - Kontrollera innan du visar den att diagrammet och tabellerna visar samma siffror.
@@ -69,7 +73,7 @@ Hur mycket pengar som finns på företagskontot dag för dag de kommande 30 daga
 - Underskrids gränsen: föreslå vad som kan göras (flytta pengar från ett annat konto, skjuta en betalning, påminna en kund), men gör ingenting själv.
 
 ## Tools
-- \`gnubok_list_cash_accounts\` och \`gnubok_connect_bank\` för bankkonton, saldo och senaste synk.
+- \`gnubok_list_cash_accounts\` (finns inte i tools/list: anropa den via \`gnubok_call_tool\`) och \`gnubok_connect_bank\` för bankkonton, saldo och senaste synk.
 - \`gnubok_list_invoices\` och \`gnubok_list_supplier_invoices\` för obetalda fakturor och förfallodagar.
 - \`gnubok_query_journal\` och \`gnubok_list_uncategorized_transactions\` för återkommande dragningar de senaste tre månaderna.
 
@@ -102,7 +106,7 @@ Vad bolaget betalar varje månad för prenumerationer och återkommande leverant
 ## Tools
 - \`gnubok_list_uncategorized_transactions\` och \`gnubok_query_journal\` för bankens dragningar, bokförda och obokförda.
 - \`gnubok_list_supplier_invoices\` för leverantörer som fakturerar.
-- \`gnubok_list_cash_accounts\` för vilka konton som är bankkonton.
+- \`gnubok_list_cash_accounts\` (via \`gnubok_call_tool\`, den finns inte i tools/list) för vilka konton som är bankkonton.
 
 ${DASHBOARD_RULES}
 `
