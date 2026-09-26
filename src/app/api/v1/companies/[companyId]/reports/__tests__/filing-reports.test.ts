@@ -616,6 +616,32 @@ describe('GET /audit-trail', () => {
     expect((await get(getAuditTrail, '/audit-trail?from_date=yesterday')).status).toBe(400)
   })
 
+  const settingsRow = (id: string) => ({
+    ...row(id, '2026-03-03T09:14:00Z'),
+    action: 'UPDATE',
+    table_name: 'company_settings',
+    old_state: { org_number: '198501011234', bankgiro: '123-4567', phone: '08-1' },
+    new_state: { org_number: '198501011234', bankgiro: '765-4321', phone: '08-1' },
+  })
+
+  it('gives an owner the whole row snapshots', async () => {
+    useClient({ audit_log: { data: [settingsRow(ID1)], error: null } })
+    const body = await (await get(getAuditTrail, '/audit-trail')).json()
+    expect(body.data.snapshots_included).toBe(true)
+    expect(body.data.entries[0].new_state).toMatchObject({ bankgiro: '765-4321' })
+  })
+
+  it('gives a plain member the changed column names, never the snapshots', async () => {
+    useClient({
+      company_members: { data: { company_id: COMPANY_ID, role: 'member' }, error: null },
+      audit_log: { data: [settingsRow(ID1)], error: null },
+    })
+    const body = await (await get(getAuditTrail, '/audit-trail')).json()
+    expect(body.data.snapshots_included).toBe(false)
+    expect(body.data.entries[0]).toMatchObject({ old_state: null, new_state: null, changed_fields: ['bankgiro'] })
+    expect(JSON.stringify(body)).not.toContain('198501011234')
+  })
+
   it('returns a page with a next_cursor and applies the filters, company-scoped', async () => {
     const client = useClient({
       audit_log: { data: [row(ID1, '2026-03-02T09:14:00Z'), row(ID2, '2026-03-01T09:14:00Z')], error: null },

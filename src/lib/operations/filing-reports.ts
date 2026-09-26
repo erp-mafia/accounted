@@ -30,6 +30,8 @@ import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistori
 import { maskOwnerPersonnummer, redactPersonnummer } from '@/lib/reports/owner-identity-mask'
 import { listAuditLogPage } from '@/lib/core/audit/audit-service'
 import { defineOperation, type OperationContext, type OperationOutcome } from './types'
+import { getCompanyRole } from '@/lib/auth/require-write'
+import { COMPANY_ADMIN_ROLES } from './access'
 
 /**
  * The generators return interfaces; the output schemas below document them
@@ -719,7 +721,7 @@ export const auditTrailList = defineOperation({
     useWhen: 'Tracing exactly how one record changed (record_id), or exporting the raw log for an auditor.',
     doNotUseFor: 'The readable processing history for a räkenskapsår (GET /reports/behandlingshistorik).',
     pitfalls: [
-      'old_state / new_state are whole row snapshots and can hold personal data (a sole trader\'s org number is the owner\'s personnummer, supplier bank details): treat the response as confidential.',
+      'old_state / new_state are whole row snapshots and can hold personal data (a sole trader\'s org number is the owner\'s personnummer, supplier bank details): only an owner or admin of the company receives them (snapshots_included true). Other callers get old_state/new_state null and changed_fields, the column names that changed.',
       'from_date / to_date compare against the created_at timestamp: to_date=2026-01-31 stops at 2026-01-31T00:00:00Z. Pass the next day to include all of the 31st.',
       'The page is in data.entries with data.next_cursor; a cursor that no longer decodes starts from the first page.',
     ],
@@ -770,13 +772,39 @@ export const auditTrailList = defineOperation({
           description: z.string().nullable(),
           old_state: z.record(z.string(), z.unknown()).nullable(),
           new_state: z.record(z.string(), z.unknown()).nullable(),
+          changed_fields: z
+            .array(z.string())
+            .optional()
+            .describe('For callers who are not owner or admin: the column names that changed, in place of the snapshots.'),
           created_at: z.string(),
         })
         .loose(),
     ),
     next_cursor: z.string().nullable(),
+    snapshots_included: z
+      .boolean()
+      .describe('false unless the caller is an owner or admin of the company: old_state/new_state are then null.'),
   }),
   errorCodes: ['REPORT_GENERATION_FAILED'],
   http: { method: 'GET', path: '/api/v1/companies/:companyId/audit-trail' },
-  run: async (ctx, input) => asDocumented(await listAuditLogPage(ctx, input)),
+  run: async (ctx, input) => {
+    const outcome = asDocumented(await listAuditLogPage(ctx, input))
+    if (!outcome.ok || outcome.dryRun) return outcome
+    // Whole row snapshots can hold personal data and bank details, and
+    // reports:read is a default scope: only an owner or admin reads them over
+    // the API. Everyone else sees what happened and which columns changed.
+    const role = await getCompanyRole(ctx.supabase, ctx.userId, { companyId: ctx.companyId })
+    const privileged = role.ok && (COMPANY_ADMIN_ROLES as readonly string[]).includes(role.role)
+    const data = outcome.data as { entries: Array<Record<string, unknown>>; next_cursor: string | null }
+    if (privileged) return { ok: true, data: { ...data, snapshots_included: true } }
+    const entries = data.entries.map((entry) => {
+      const before = (entry.old_state as Record<string, unknown> | null) ?? {}
+      const after = (entry.new_state as Record<string, unknown> | null) ?? {}
+      const changed = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+        .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+        .sort()
+      return { ...entry, old_state: null, new_state: null, changed_fields: changed }
+    })
+    return { ok: true, data: { entries, next_cursor: data.next_cursor, snapshots_included: false } }
+  },
 })
