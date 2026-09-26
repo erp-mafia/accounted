@@ -449,7 +449,7 @@
     "keywords_templates": "Booking templates, Learned patterns, Counterparties",
     "keywords_invoicing": "Invoice number, Prefix, Payment terms, Our reference, Invoice types, Quote, Pro forma, Recurring, Self-billing, Bank accounts, Bankgiro, Swish, IBAN, Payment link, PDF, Print",
     "keywords_sending": "Sender, Own domain, Reply-to, Copy, Email texts, Reminders, Reminder texts",
-    "keywords_connections": "Bank, PSD2, Skatteverket, Agent, Peppol, E-invoice, WhatsApp, Stripe, Shopify, WooCommerce",
+    "keywords_connections": "Bank, PSD2, Skatteverket, Agent, Peppol, E-invoice, WhatsApp, Stripe, Shopify, WooCommerce, Zettle",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API keys, OAuth"
   },
   "settings_payments": {
@@ -11647,6 +11647,8 @@
     "stripe_help": "Payment links on invoices and the Stripe balance as a bank feed.",
     "shopify": "Shopify",
     "woocommerce": "WooCommerce",
-    "shop_help": "Orders are fetched from the web shop and booked."
+    "shop_help": "Orders are fetched from the web shop and booked.",
+    "zettle": "Zettle",
+    "zettle_help": "Paid purchases and refunds are fetched to the Orders page, where you book them."
   }
 }

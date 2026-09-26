@@ -449,7 +449,7 @@
     "keywords_templates": "Bokföringsmallar, Inlärda mönster, Motparter",
     "keywords_invoicing": "Fakturanummer, Prefix, Betalningsvillkor, Vår referens, Fakturatyper, Offert, Proforma, Återkommande, Självfaktura, Bankkonton, Bankgiro, Swish, IBAN, Betallänk, PDF, Utskrift",
     "keywords_sending": "Avsändare, Egen domän, Svarsadress, Kopia, E-posttexter, Påminnelser, Påminnelsetexter",
-    "keywords_connections": "Bank, PSD2, Skatteverket, Ombud, Peppol, E-faktura, WhatsApp, Stripe, Shopify, WooCommerce",
+    "keywords_connections": "Bank, PSD2, Skatteverket, Ombud, Peppol, E-faktura, WhatsApp, Stripe, Shopify, WooCommerce, Zettle",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API-nycklar, OAuth"
   },
   "settings_payments": {
@@ -11647,6 +11647,8 @@
     "stripe_help": "Betallänkar på fakturorna och Stripe-saldot som ett bankflöde.",
     "shopify": "Shopify",
     "woocommerce": "WooCommerce",
-    "shop_help": "Ordrar hämtas från webshoppen och bokförs."
+    "shop_help": "Ordrar hämtas från webshoppen och bokförs.",
+    "zettle": "Zettle",
+    "zettle_help": "Betalda köp och återbetalningar hämtas till Ordersidan, där du bokför dem."
   }
 }
