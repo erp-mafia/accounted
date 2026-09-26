@@ -10,6 +10,7 @@ import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
+import { isPaymentSourceType } from '@/lib/bookkeeping/payment-source-types'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -23,7 +24,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal } from 'lucide-react'
+import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, Pencil, Plus, CalendarClock, MoreHorizontal, Unlink } from 'lucide-react'
 import LinkVoucherPicker from '@/components/invoices/LinkVoucherPicker'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate, cn } from '@/lib/utils'
@@ -174,6 +175,54 @@ function InlineAccountCell({
   )
 }
 
+/** A payment row with the linked verifikat's source_type embedded by the GET route. */
+type PaymentRow = SupplierInvoicePayment & {
+  payment_exchange_rate?: number | null
+  journal_entry?: { id: string; source_type: string | null } | null
+}
+
+/**
+ * True when the payment only LINKS an existing verifikat, so the unlink route
+ * can undo it. A payment whose settlement Accounted booked itself belongs to
+ * storno, and the RPC refuses it.
+ *
+ * Both of the RPC's signals, so the control appears exactly where it works:
+ * the entry's source_type, and whether the invoice names that entry as its own
+ * payment_journal_entry_id. The second is what keeps an utlägg off this path,
+ * whose entry is source_type 'expense_claim' (outside PAYMENT_SOURCE_TYPES)
+ * but whose payable is genuinely settled.
+ *
+ * Fails CLOSED on the EMBED being absent, which is the case we genuinely
+ * cannot read: a payload from before the embed existed, or an entry the caller
+ * cannot see. Tested on the embed itself rather than on source_type, because
+ * those are different questions and only this one means "we do not know".
+ *
+ * A present embed always carries a source_type: journal_entries.source_type is
+ * `text not null` with a CHECK over a closed set (migration 20240101000002),
+ * and every writer stamps one, SIE import included ('import' /
+ * 'opening_balance'). It is typed nullable here only because this is an
+ * untrusted JSON payload; should one ever arrive empty, isPaymentSourceType
+ * reads it as "not a booked payment" and the row stays unlinkable, which is
+ * what the RPC concludes too (NULL = ANY(booked_payment_types) is NULL, not
+ * TRUE). One branch, both sides agreeing, no unreachable special case.
+ */
+function isUnlinkablePayment(payment: PaymentRow, paymentJournalEntryId: string | null): boolean {
+  if (!payment.journal_entry_id) return false
+  if (payment.journal_entry_id === paymentJournalEntryId) return false
+  // The link books its own residual verifikat when it settles across currencies
+  // and stamps the effective rate here; the RPC refuses those with
+  // UNLINK_SI_PAYMENT_FX_SETTLED. Offering the action would promise an undo
+  // that cannot happen.
+  if (payment.payment_exchange_rate != null) return false
+  // Settlement evidence recorded by attach_supplier_invoice_settlement_voucher:
+  // an ordinary voucher already covers this payable, and the row says so rather
+  // than linking anything. Removing it would reopen a settled payable, so the
+  // RPC refuses it and the control must not offer it.
+  if (payment.notes?.startsWith('settlement-evidence')) return false
+  if (!payment.journal_entry) return false
+  return !isPaymentSourceType(payment.journal_entry.source_type)
+}
+
 export default function SupplierInvoiceDetailPage() {
   const { canWrite } = useCanWrite()
   const { settings: companySettings } = useCompanySettings()
@@ -198,6 +247,12 @@ export default function SupplierInvoiceDetailPage() {
   // The list page's "Betald {date}" label, so the header reads like the row.
   const tList = useTranslations('supplier_invoices')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
+  // A payment that only LINKS an existing verifikat can be undone here; one
+  // with its own booked payment voucher is the storno path's, and the RPC
+  // refuses it. The detail payload carries the entry's source_type so the
+  // control is offered only where it works.
+  const [unlinkTarget, setUnlinkTarget] = useState<PaymentRow | null>(null)
+  const [isUnlinking, setIsUnlinking] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
   const [payTab, setPayTab] = useState<'new' | 'existing'>('new')
@@ -251,6 +306,40 @@ export default function SupplierInvoiceDetailPage() {
     credited: t('status_credited'),
     reversed: t('status_reversed'),
   }), [t])
+
+  async function confirmUnlink() {
+    if (!unlinkTarget) return
+    setIsUnlinking(true)
+    try {
+      const res = await fetch(
+        `/api/supplier-invoices/${params.id}/payments/${unlinkTarget.id}`,
+        { method: 'DELETE' },
+      )
+      const body = await res.json().catch(() => null)
+      if (!res.ok) {
+        toast({
+          title: t('unlink_payment_failed_title'),
+          description: getErrorMessage(body, {
+            statusCode: res.status,
+            context: 'supplier_invoice',
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setUnlinkTarget(null)
+      toast({ title: t('unlink_payment_done_title') })
+      await fetchInvoice()
+    } catch (err) {
+      toast({
+        title: t('unlink_payment_failed_title'),
+        description: getErrorMessage(err, { context: 'supplier_invoice' }),
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUnlinking(false)
+    }
+  }
 
   async function fetchInvoice() {
     const seq = ++fetchSeqRef.current
@@ -673,7 +762,7 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
   const items = (invoice.items || []) as SupplierInvoiceItem[]
-  const payments = (invoice.payments || []) as SupplierInvoicePayment[]
+  const payments = (invoice.payments || []) as PaymentRow[]
   const creditedOriginal =
     (invoice as SupplierInvoice & {
       credited_original?: { id: string; supplier_invoice_number: string; arrival_number: number } | null
@@ -1115,18 +1204,52 @@ export default function SupplierInvoiceDetailPage() {
           <DefRow label={t('payment_history_title')} className="items-baseline">
             <ul className="divide-y divide-border">
               {payments.map((p) => (
-                <li key={p.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
+                <li key={p.id} className="group flex flex-wrap items-center gap-x-4 gap-y-1 py-2 first:pt-0 last:pb-0">
                   <span className="tabular-nums text-muted-foreground">{formatDate(p.payment_date)}</span>
                   <span className="tabular-nums">{formatCurrency(p.amount, p.currency)}</span>
                   {p.notes && <span className="min-w-0 truncate text-muted-foreground">{p.notes}</span>}
-                  {p.journal_entry_id && (
-                    <Link
-                      href={`/bookkeeping/${p.journal_entry_id}`}
-                      className="ml-auto text-xs text-muted-foreground hover:text-foreground hover:underline"
-                    >
-                      {t('view_voucher')}
-                    </Link>
-                  )}
+                  <div className="ml-auto flex items-center gap-2">
+                    {p.journal_entry_id && (
+                      <Link
+                        href={`/bookkeeping/${p.journal_entry_id}`}
+                        className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      >
+                        {t('view_voucher')}
+                      </Link>
+                    )}
+                    {/* Removing the link is destructive and sits next to a link
+                        people click to LOOK at something, so it goes behind the
+                        same kebab the page's other destructive actions use
+                        rather than one slip away from "Visa verifikation". */}
+                    {isUnlinkablePayment(p, invoice.payment_journal_entry_id ?? null) && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-sm"
+                            className="shrink-0"
+                            aria-label={tCommon('more_options')}
+                          >
+                            <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[240px]">
+                          {/* Reads as what it is, in the page's own vocabulary:
+                              the delete item above carries the same destructive
+                              class and every item in both menus has an icon. */}
+                          <DropdownMenuItem
+                            onSelect={() => setUnlinkTarget(p)}
+                            disabled={!canWrite}
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Unlink className="h-4 w-4" />
+                            {t('unlink_payment_action')}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -1431,6 +1554,41 @@ export default function SupplierInvoiceDetailPage() {
               />
             </TabsContent>
           </Tabs>
+        </DialogContent>
+      </Dialog>
+
+      {/* Undo a link to an existing verifikat */}
+      <Dialog
+        open={unlinkTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !isUnlinking) setUnlinkTarget(null)
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t('unlink_payment_title')}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              {t('unlink_payment_description', {
+                amount: unlinkTarget
+                  ? formatCurrency(unlinkTarget.amount, unlinkTarget.currency)
+                  : '',
+              })}
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="secondary"
+                onClick={() => setUnlinkTarget(null)}
+                disabled={isUnlinking}
+              >
+                {t('cancel')}
+              </Button>
+              <Button onClick={confirmUnlink} disabled={isUnlinking}>
+                {t('unlink_payment_confirm')}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
