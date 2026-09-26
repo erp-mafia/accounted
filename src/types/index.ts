@@ -2607,6 +2607,20 @@ export type PendingOperationType =
   | 'create_dimension'
   | 'update_dimension'
   | 'delete_dimension'
+  // Operation registry, wave 1: setup capabilities.
+  | 'create_cash_account'
+  | 'update_cash_account'
+  | 'set_primary_cash_account'
+  | 'set_invoice_payee_default'
+  | 'create_fiscal_period'
+  | 'update_fiscal_period'
+  | 'close_fiscal_period_external'
+  | 'reopen_fiscal_period_external'
+  | 'delete_account'
+  | 'activate_accounts'
+  | 'deactivate_accounts'
+  | 'update_company_tax_profile'
+  | 'update_bookkeeping_lock'
   // Dimensions PR6: bulk retag of posted-line dimensions via the audited
   // retag_line_dimensions RPC (gnubok_tag_journal_lines).
   | 'retag_line_dimensions'

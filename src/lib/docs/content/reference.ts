@@ -40,7 +40,7 @@ interface ResourceGroup {
 }
 
 const RESOURCES: ResourceGroup[] = [
-  { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and update their payment and contact settings.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings)?$/.test(p) },
+  { slug: 'companies', label: 'Companies', description: 'List, create and read the companies the API key can access, and read and update their settings: payment, contact and invoicing, the tax and VAT profile, and the bookkeeping lock.', matcher: (p) => /\/companies(?:\/:companyId)?(?:\/settings(?:\/(?:tax-profile|bookkeeping-lock))?)?$/.test(p) },
   { slug: 'customers', label: 'Customers', description: 'CRM-side: who you invoice. Business and individual (sole-trader) customers with VIES validation.', matcher: (p) => /\/customers(\/|$)/.test(p) },
   { slug: 'invoices', label: 'Invoices', description: 'Outbound invoicing: draft, send, mark paid, credit, PDF download. Mixed-rate VAT supported.', matcher: (p) => /\/invoices(\/|$)/.test(p) },
   { slug: 'articles', label: 'Articles', description: 'Read the article/product catalogue used to build invoice line items.', matcher: (p) => /\/articles(\/|$)/.test(p) },
@@ -51,8 +51,8 @@ const RESOURCES: ResourceGroup[] = [
   { slug: 'bank-accounts', label: 'Bank accounts', description: 'The company\'s bank accounts (cash accounts, whose ids filter transactions) and the bank connections that sync them.', matcher: (p) => /\/(?:cash-accounts|bank-connections)(\/|$)/.test(p) },
   { slug: 'journal-entries', label: 'Journal entries', description: 'The bookkeeping engine surface: verifikation lifecycle (draft, commit, reverse, correct).', matcher: (p) => /\/journal-entries(\/|$)/.test(p) },
   { slug: 'voucher-gap-explanations', label: 'Voucher gap explanations', description: 'Documented explanations for gaps in the voucher series, per BFNAR 2013:2.', matcher: (p) => /\/voucher-gap/.test(p) },
-  { slug: 'fiscal-periods', label: 'Fiscal periods', description: 'Period lifecycle: lock, close, year-end, opening balances, FX revaluation. Async via the operations substrate.', matcher: (p) => /\/fiscal-periods(\/|$)/.test(p) },
-  { slug: 'accounts', label: 'Accounts', description: 'Read the chart of accounts (BAS).', matcher: (p) => /\/accounts(\/|$)/.test(p) },
+  { slug: 'fiscal-periods', label: 'Fiscal periods', description: 'Fiscal years and their lifecycle: create, edit, lock, unlock, close, year-end, opening balances, FX revaluation, and klarmarkering of years closed in a previous system.', matcher: (p) => /\/fiscal-periods(\/|$)/.test(p) },
+  { slug: 'accounts', label: 'Accounts', description: 'The chart of accounts (BAS): read, add, edit, activate, deactivate and delete unused accounts.', matcher: (p) => /\/accounts(\/|$)/.test(p) },
   { slug: 'fixed-assets', label: 'Fixed assets', description: 'The anläggningsregister: register an asset (no voucher, the purchase is already booked), correct it while no depreciation is posted, and dispose it, which posts the avyttring voucher with gain or loss, VAT and jämkning.', matcher: (p) => /\/assets(\/|$)/.test(p) },
   { slug: 'documents', label: 'Documents', description: 'Multipart upload, signed-URL download (15-min TTL), link to journal entries.', matcher: (p) => /\/documents(\/|$)/.test(p) },
   { slug: 'inbox-items', label: 'Inbox items', description: 'Stamp incoming documents in the inbox to turn them into supplier invoices or transactions.', matcher: (p) => /\/inbox-items(\/|$)/.test(p) },

@@ -221,35 +221,74 @@ export interface CreateManualBankAccountInput {
   invoice_payee?: boolean
 }
 
+/** Why a typed-in bank account cannot be created as asked. */
+export type ManualBankAccountRefusal =
+  | { reason: 'ledger_taken'; ledger_account: string }
+  | { reason: 'no_free_ledger' }
+  | { reason: 'iban_duplicate'; iban: string; cash_account_id: string }
+
+export interface ManualBankAccountPlan {
+  ledger_account: string
+  currency: string
+  /** The IBAN as it will be stored (identity and printed), or null. */
+  iban: string | null
+}
+
 /**
- * A bank account the user types in (no PSD2 connection). Allocates the next
- * free 19xx slot for the currency unless one is given, and makes sure that
- * number exists in the chart so bookings and pickers can see it.
+ * The read-only half of createManualBankAccount: which 19xx slot the new
+ * account gets, and whether anything refuses it. Writes nothing, so it is
+ * also the dry run of the API door.
+ *
+ * Refuses an IBAN another of the company's rows already carries, as its
+ * bank identity (iban) or as its printed payee IBAN: two rows for one
+ * physical account is how a company ends up with a second 19xx ledger for
+ * the same money (the Grönsinka 1938 case).
  */
-export async function createManualBankAccount(
+export async function planManualBankAccount(
   supabase: SupabaseClient,
   companyId: string,
-  userId: string,
-  input: CreateManualBankAccountInput,
-): Promise<CashAccount> {
+  input: Pick<CreateManualBankAccountInput, 'currency' | 'ledger_account' | 'payee'>,
+): Promise<{ ok: true; plan: ManualBankAccountPlan } | ({ ok: false } & ManualBankAccountRefusal)> {
   const currency = input.currency.toUpperCase()
   // findFreeLedgerAccount treats a slot held by a manual row as free (the
   // PSD2 path promotes that row in place); this path INSERTS, so every slot
   // any row holds is taken.
   const { data: existing, error: existingError } = await supabase
     .from('cash_accounts')
-    .select('ledger_account')
+    .select('id, ledger_account, iban, payee_iban')
     .eq('company_id', companyId)
   if (existingError) throw new Error(`cash_accounts lookup failed: ${existingError.message}`)
-  const taken = new Set(((existing ?? []) as { ledger_account: string }[]).map((r) => r.ledger_account))
+  const rows = (existing ?? []) as { id: string; ledger_account: string; iban?: string | null; payee_iban?: string | null }[]
+
+  const iban = compact(clean(input.payee?.iban), true)
+  if (iban) {
+    // Same normalization as the stored value (no spaces, upper case), so
+    // "SE45 5000 ..." and "se4550000..." are one account.
+    const twin = rows.find((r) => compact(clean(r.iban), true) === iban || compact(clean(r.payee_iban), true) === iban)
+    if (twin) return { ok: false, reason: 'iban_duplicate', iban, cash_account_id: twin.id }
+  }
+
+  const taken = new Set(rows.map((r) => r.ledger_account))
   const requested = input.ledger_account?.trim()
-  if (requested && taken.has(requested)) {
-    throw new Error(`Ledger account ${requested} is already a cash account of this company`)
-  }
+  if (requested && taken.has(requested)) return { ok: false, reason: 'ledger_taken', ledger_account: requested }
   const ledger = requested || (await findFreeLedgerAccount(supabase, companyId, currency, taken))
-  if (!ledger) {
-    throw new Error('No free 19xx ledger account for a new bank account')
-  }
+  if (!ledger) return { ok: false, reason: 'no_free_ledger' }
+  return { ok: true, plan: { ledger_account: ledger, currency, iban } }
+}
+
+/**
+ * The writing half: make sure the planned number exists in the chart so
+ * bookings and pickers can see it, then insert the manual row.
+ */
+export async function insertManualBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateManualBankAccountInput,
+  plan: ManualBankAccountPlan,
+): Promise<CashAccount> {
+  const ledger = plan.ledger_account
+  const currency = plan.currency
   const chartName = getBASReference(ledger)?.account_name ?? `Bankkonto ${currency}`
   const sync = await syncMappedAccounts(
     supabase,
@@ -290,8 +329,8 @@ export async function createManualBankAccount(
       swish: clean(payee.swish),
       // A typed account: the printed IBAN is also the account's identity, so
       // a later bank connection with the same IBAN promotes this row in place.
-      iban: compact(clean(payee.iban), true),
-      payee_iban: compact(clean(payee.iban), true),
+      iban: plan.iban,
+      payee_iban: plan.iban,
       bic: compact(clean(payee.bic), true),
       bank_code: clean(payee.bank_code),
       foreign_account_number: clean(payee.foreign_account_number),
@@ -300,6 +339,31 @@ export async function createManualBankAccount(
     .single()
   if (error) throw new Error(`cash_accounts insert failed: ${error.message}`)
   return data as CashAccount
+}
+
+/**
+ * A bank account the user types in (no PSD2 connection). Allocates the next
+ * free 19xx slot for the currency unless one is given, and makes sure that
+ * number exists in the chart so bookings and pickers can see it. Throws on
+ * a refusal; lib/cash-accounts/manage.ts answers the same refusals as codes.
+ */
+export async function createManualBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateManualBankAccountInput,
+): Promise<CashAccount> {
+  const planned = await planManualBankAccount(supabase, companyId, input)
+  if (!planned.ok) {
+    if (planned.reason === 'ledger_taken') {
+      throw new Error(`Ledger account ${planned.ledger_account} is already a cash account of this company`)
+    }
+    if (planned.reason === 'iban_duplicate') {
+      throw new Error(`IBAN ${planned.iban} is already on cash account ${planned.cash_account_id}`)
+    }
+    throw new Error('No free 19xx ledger account for a new bank account')
+  }
+  return insertManualBankAccount(supabase, companyId, userId, input, planned.plan)
 }
 
 /**

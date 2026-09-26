@@ -7,6 +7,26 @@
  * know about it.
  */
 import { dimensionsCreate, dimensionsDelete, dimensionsList, dimensionsUpdate } from './dimensions'
+import { accountsActivate, accountsCreate, accountsDeactivate, accountsDelete, accountsUpdate } from './accounts'
+import {
+  settingsGet,
+  settingsUpdate,
+  settingsUpdateBookkeepingLock,
+  settingsUpdateTaxProfile,
+} from './company-settings'
+import {
+  cashAccountsCreate,
+  cashAccountsSetPayeeDefault,
+  cashAccountsSetPrimary,
+  cashAccountsUpdate,
+} from './cash-accounts'
+import {
+  fiscalPeriodsCloseExternal,
+  fiscalPeriodsCreate,
+  fiscalPeriodsReopenExternal,
+  fiscalPeriodsUnlock,
+  fiscalPeriodsUpdate,
+} from './fiscal-periods'
 import type { AnyOperation } from './types'
 
 export const OPERATIONS: readonly AnyOperation[] = [
@@ -14,6 +34,24 @@ export const OPERATIONS: readonly AnyOperation[] = [
   dimensionsCreate,
   dimensionsUpdate,
   dimensionsDelete,
+  accountsCreate,
+  accountsUpdate,
+  accountsDelete,
+  accountsActivate,
+  accountsDeactivate,
+  settingsGet,
+  settingsUpdate,
+  settingsUpdateTaxProfile,
+  settingsUpdateBookkeepingLock,
+  cashAccountsCreate,
+  cashAccountsUpdate,
+  cashAccountsSetPrimary,
+  cashAccountsSetPayeeDefault,
+  fiscalPeriodsCreate,
+  fiscalPeriodsUpdate,
+  fiscalPeriodsUnlock,
+  fiscalPeriodsCloseExternal,
+  fiscalPeriodsReopenExternal,
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

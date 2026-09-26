@@ -205,6 +205,401 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/cash-accounts`
+
+**Create a bank account by hand (no bank connection), with the payee details invoices print.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company has a bank account that is not connected through the bank integration (a savings account, a currency account, a bank without PSD2) and it should appear in Konton, the booking flows or on invoices.
+**Do not use for:** Connecting a bank (the bank connection flow creates its own accounts), changing an existing account (PATCH /cash-accounts/{id}) or choosing which account invoices print by default (PUT /cash-accounts/payee-defaults).
+
+**Pitfalls:**
+- An IBAN another account of the company already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE: one physical account must exist once.
+- A ledger_account another cash account holds returns 409 CASH_ACCOUNT_LEDGER_TAKEN; omit it to get the next free one.
+- ledger_account is a STRING in 1920-1999 ("1931"), never a number, and never a till (1910-1919) or a PSP clearing account.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+- Creating an account does not make it the default payee: set that with PUT /cash-accounts/payee-defaults.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  name: string,
+  currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  ledger_account?: string,
+  invoice_payee?: boolean,
+  payee?: {
+    bank_name?: string | null,
+    clearing_number?: string | null | "",
+    account_number?: string | null | "",
+    bankgiro?: string | null | "",
+    plusgiro?: string | null | "",
+    swish?: string | null,
+    iban?: string | null | "",
+    bic?: string | null | "",
+    bank_code?: string | null | "",
+    foreign_account_number?: string | null | ""
+  }
+}
+```
+
+Example request:
+```json
+{
+  "name": "Sparkonto",
+  "currency": "SEK",
+  "payee": {
+    "bank_name": "SEB",
+    "bankgiro": "5050-1234"
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": false,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/cash-accounts/{id}`
+
+**Edit a bank account: verifikationsserie, payee details, name, or turn it on/off.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account and the primary flag are not editable here. Idempotent. Dry-runnable.
+
+**Use when:** The company changes bank details customers pay to, wants its own voucher series per bank account, or stops using a manually added account.
+**Do not use for:** Making an account the primary (POST /cash-accounts/{id}/set-primary), choosing the default payee per currency (PUT /cash-accounts/payee-defaults) or moving a transaction to another account.
+
+**Pitfalls:**
+- Payee fields, name, invoice_payee and enabled are owner/admin only (403 FORBIDDEN); voucher_series alone is open to any writer.
+- Payee fields on a PSP clearing account or a till return 400 INVOICE_PAYEE_ACCOUNT_INVALID: only 1920-1999 bank accounts print on invoices.
+- enabled on an account a bank connection holds returns 409 CASH_ACCOUNT_ENABLED_BANK_MANAGED; disabling the primary returns 400 CASH_ACCOUNT_DISABLE_PRIMARY, and one with unbooked transactions 400 CASH_ACCOUNT_DISABLE_UNRESOLVED.
+- An iban another account already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE.
+- Changing voucher_series only affects entries booked afterwards; nothing posted is renumbered.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  bank_name?: string | null,
+  clearing_number?: string | null | "",
+  account_number?: string | null | "",
+  bankgiro?: string | null | "",
+  plusgiro?: string | null | "",
+  swish?: string | null,
+  iban?: string | null | "",
+  bic?: string | null | "",
+  bank_code?: string | null | "",
+  foreign_account_number?: string | null | "",
+  voucher_series?: string | null,
+  name?: string | null,
+  invoice_payee?: boolean,
+  enabled?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "bankgiro": "5050-1234",
+  "invoice_payee": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": false,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/cash-accounts/{id}/set-primary`
+
+**Make a bank account the company's primary.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+The primary is where bookings land when nothing else says which bank account they belong to: the skattekonto counter leg and transactions with no cash account. It must be an enabled SEK giro or bank account (BAS 1920-1999). The flag moves in one transaction and the change is logged with the acting user. Only bookings made afterwards follow the new primary; nothing posted changes. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company's main business account is not the one marked primary (typically the seeded 1930).
+**Do not use for:** Choosing which account invoices print (PUT /cash-accounts/payee-defaults) or moving transactions between accounts.
+
+**Pitfalls:**
+- A disabled, non-SEK or non-bank account (till, PSP clearing) returns 400 CASH_ACCOUNT_PRIMARY_INELIGIBLE with details.reason.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+- Takes no body; the account id is in the path.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": true,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/cash-accounts/payee-defaults`
+
+**Choose which bank account invoices in a currency tell the customer to pay to.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Sets (or clears with cash_account_id null) the default payee account for one currency: every new invoice in that currency prints this account's payment details unless the invoice picks another. The account must be a bank account (1920-1999), enabled, flagged invoice_payee, and carry what the currency needs (an IBAN for anything but SEK). Answers every per-currency default after the change. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company wants EUR invoices paid to its EUR account, or changes which SEK account customers pay to.
+**Do not use for:** Editing the bank details themselves (PATCH /cash-accounts/{id}) or the primary account (set-primary).
+
+**Pitfalls:**
+- An account that cannot print for the currency returns 400 INVOICE_PAYEE_ACCOUNT_INVALID with details.reason (not_bank_account, disabled, not_payee, unusable_for_currency).
+- Invoices already sent keep the payment details they were sent with.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF", cash_account_id: string | null }
+```
+
+Example request:
+```json
+{
+  "currency": "EUR",
+  "cash_account_id": "7f3a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { defaults: { currency: string, cash_account_id: string }[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "defaults": [
+      {
+        "currency": "EUR",
+        "cash_account_id": "7f3a…"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/imports/bank`
 
 **Import a bank-file (CSV / XML / CAMT053).**

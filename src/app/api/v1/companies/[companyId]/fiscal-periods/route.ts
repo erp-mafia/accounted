@@ -1,14 +1,18 @@
 /**
- * GET /api/v1/companies/{companyId}/fiscal-periods
+ * GET  /api/v1/companies/{companyId}/fiscal-periods
+ * POST /api/v1/companies/{companyId}/fiscal-periods
  *
- * List fiscal periods (räkenskapsår) for the company. Ordered newest first.
- * Read-only in v1: period creation, locking and closing land in Phase 4.
+ * GET lists fiscal periods (räkenskapsår) for the company, newest first.
+ * POST creates one (operation fiscal-periods.create; contract, docs and rules
+ * in src/lib/operations/fiscal-periods.ts).
  */
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse } from '@/lib/api/v1/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { fiscalPeriodsCreate } from '@/lib/operations/fiscal-periods'
 
 const FiscalPeriod = z.object({
   id: z.string().uuid(),
@@ -41,7 +45,7 @@ registerEndpoint({
   useWhen:
     'You need to find the active period before booking, build a year-selector UI, or audit the period-lock history.',
   doNotUseFor:
-    'Creating, locking, or closing periods: those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.',
+    'Creating, editing, locking or closing periods: use POST /fiscal-periods, PATCH /fiscal-periods/{id}, POST /fiscal-periods/{id}/lock, /unlock, /close and /year-end.',
   pitfalls: [
     'previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.',
     'A period can be locked but not closed (löpande bokföring of the new year while bokslut work continues on the prior year: see BFL 5 kap 2 § for the löpande bokföring deadline).',
@@ -132,3 +136,5 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     return ok({ fiscal_periods: enriched }, { requestId: ctx.requestId })
   },
 )
+
+export const POST = v1OperationHandler(fiscalPeriodsCreate)

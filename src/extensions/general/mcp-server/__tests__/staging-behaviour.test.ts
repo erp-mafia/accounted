@@ -51,7 +51,11 @@ const ALLOWED_MUTATION_TABLES = new Set(['pending_operations', 'idempotency_keys
  * supabase/migrations and requires STABLE or IMMUTABLE, which Postgres itself
  * refuses to let modify data. A VOLATILE function cannot be listed here.
  */
-const READ_ONLY_RPCS = new Set(['sales_order_invoiced_quantities'])
+const READ_ONLY_RPCS = new Set([
+  'sales_order_invoiced_quantities',
+  // The kontoplan usage count: the account delete/deactivate previews read it.
+  'get_account_usage_counts',
+])
 
 /**
  * RPCs that DO write, tolerated at staging time, each with its reason. This
@@ -79,6 +83,8 @@ interface Recording {
  */
 function createRecordingClient(
   rows: Record<string, Record<string, unknown>> = {},
+  counts: Record<string, number> = {},
+  empty: readonly string[] = [],
 ): { client: never; recording: Recording } {
   const recording: Recording = { mutations: [], rpcs: [] }
   const builder = (table: string): unknown => {
@@ -92,7 +98,11 @@ function createRecordingClient(
         get(_target, prop) {
           if (prop === 'then') {
             return (resolve: (value: unknown) => void) =>
-              resolve({ data: single ? row : [row], error: null, count: 1 })
+              resolve(
+                empty.includes(table)
+                  ? { data: single ? null : [], error: null, count: 0 }
+                  : { data: single ? row : [row], error: null, count: counts[table] ?? 1 },
+              )
           }
           if (prop === 'single' || prop === 'maybeSingle') {
             return () => {
@@ -168,10 +178,14 @@ interface Fixture {
   args?: Record<string, unknown>
   /** Fields merged into the row every query on that table answers with. */
   rows?: Record<string, Record<string, unknown>>
+  /** The `count` a table's queries answer with (default 1). */
+  counts?: Record<string, number>
+  /** Tables whose queries find nothing (an empty list, a null row, count 0). */
+  empty?: string[]
 }
 
 async function observe(tool: Tool, fixture: Fixture = {}): Promise<BehaviourVerdict> {
-  const { client, recording } = createRecordingClient(fixture.rows)
+  const { client, recording } = createRecordingClient(fixture.rows, fixture.counts, fixture.empty)
   const args = {
     ...(synthesize(tool.inputSchema as Record<string, unknown>) as Record<string, unknown>),
     ...(fixture.args ?? {}),
@@ -276,6 +290,29 @@ const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Operation registry, wave 1: bank accounts and settings are owner/admin
+  // only on every door, so the preview reads the caller's role.
+  gnubok_update_company_tax_profile: { args: { f_skatt: true }, rows: { company_members: { role: 'owner' } } },
+  gnubok_update_bookkeeping_lock: { args: { auto_lock_period_days: 30 }, rows: { company_members: { role: 'owner' } } },
+  gnubok_create_cash_account: { rows: { company_members: { role: 'owner' } } },
+  gnubok_update_cash_account: { args: { voucher_series: 'B' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  gnubok_set_primary_cash_account: { rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  gnubok_set_invoice_payee_default: { args: { currency: 'SEK' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  // The company's first year: no neighbours, nothing to overlap.
+  gnubok_create_fiscal_period: {
+    args: { name: 'Räkenskapsår 2027', period_start: '2027-01-01', period_end: '2027-12-31' },
+    empty: ['fiscal_periods'],
+  },
+  gnubok_update_fiscal_period: { args: { name: 'Räkenskapsår 2026' }, rows: { fiscal_periods: { is_closed: false, locked_at: null } } },
+  // Klarmarkera: an ended, imported year with every bank row booked.
+  gnubok_close_fiscal_period_external: {
+    rows: { fiscal_periods: { ...ENDED_FISCAL_YEAR, closing_entry_id: null, locked_at: null } },
+    counts: { transactions: 0 },
+    empty: ['transactions'],
+  },
+  gnubok_reopen_fiscal_period_external: {
+    rows: { fiscal_periods: { is_closed: true, closed_externally: true, closing_entry_id: null } },
+  },
   // A custom (non-system) dimension: system dimensions are never deleted.
   gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.
@@ -283,7 +320,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
-  gnubok_update_company_settings: { args: { phone: '08-123 45 67' } },
+  // Settings are owner/admin only on every door: the preview reads the caller's role.
+  gnubok_update_company_settings: { args: { phone: '08-123 45 67' }, rows: { company_members: { role: 'owner' } } },
   gnubok_update_recurring_schedule: { args: { name: 'Hyra' } },
   gnubok_update_salary_run: { args: { notes: 'Rättad utbetalningsdag' } },
   // Bounded integers the generic 100 overshoots.

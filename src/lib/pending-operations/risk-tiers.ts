@@ -33,6 +33,20 @@ export const OPERATION_RISK_TIERS: Record<string, RiskLevel> = {
   // values) but at the lowest tier next to create_customer/create_article.
   create_dimension_value: 'low',
   create_dimension: 'low',
+  // Operation registry, wave 1: setup capabilities.
+  create_cash_account: 'low',
+  update_cash_account: 'medium',
+  set_primary_cash_account: 'medium',
+  set_invoice_payee_default: 'medium',
+  create_fiscal_period: 'medium',
+  update_fiscal_period: 'medium',
+  close_fiscal_period_external: 'high',
+  reopen_fiscal_period_external: 'high',
+  delete_account: 'medium',
+  activate_accounts: 'low',
+  deactivate_accounts: 'low',
+  update_company_tax_profile: 'high',
+  update_bookkeeping_lock: 'high',
   update_dimension: 'low',
   // Deleting is refused by the DB guard when anything is booked on the
   // dimension, but it removes the dimension and its values for good.

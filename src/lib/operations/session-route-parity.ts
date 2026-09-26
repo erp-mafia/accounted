@@ -131,8 +131,15 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Settings ───────────────────────────────────────────────────────
   'PUT /api/settings': covered(
-    [`PATCH ${V}/settings`, 'gnubok_update_company_settings'],
-    'the API covers the common fields; not every settings column is writable over the API',
+    [
+      `PATCH ${V}/settings`,
+      `PATCH ${V}/settings/tax-profile`,
+      `PATCH ${V}/settings/bookkeeping-lock`,
+      'gnubok_update_company_settings',
+      'gnubok_update_company_tax_profile',
+      'gnubok_update_bookkeeping_lock',
+    ],
+    'entity_type and org_number are fixed; payroll fields via PATCH /salary/settings',
   ),
   'POST /api/settings/logo': gap('P3', 'invoice logo upload'),
   'DELETE /api/settings/logo': gap('P3'),
@@ -156,12 +163,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/rules/:id': gap('P3', 'edit a counterparty booking rule'),
 
   // ── Chart of accounts ──────────────────────────────────────────────
-  'POST /api/bookkeeping/accounts': covered(['gnubok_create_account']),
-  'PUT /api/bookkeeping/accounts/:number': covered(['gnubok_update_account']),
-  'DELETE /api/bookkeeping/accounts/:number': gap('P3', 'delete an unused account'),
-  'POST /api/bookkeeping/accounts/activate': covered(['gnubok_create_account', 'gnubok_update_account'], 'one account per call, no batch'),
-  'POST /api/bookkeeping/accounts/deactivate': covered(['gnubok_update_account'], 'is_active=false one account per call, no batch'),
-  'POST /api/bookkeeping/accounts/prune': gap('P3', 'bulk-delete unused accounts'),
+  'POST /api/bookkeeping/accounts': covered([`POST ${V}/accounts`, 'gnubok_create_account']),
+  'PUT /api/bookkeeping/accounts/:number': covered([`PATCH ${V}/accounts/:number`, 'gnubok_update_account']),
+  'DELETE /api/bookkeeping/accounts/:number': covered([`DELETE ${V}/accounts/:number`, 'gnubok_delete_account']),
+  'POST /api/bookkeeping/accounts/activate': covered([`POST ${V}/accounts/activate`, 'gnubok_activate_accounts']),
+  'POST /api/bookkeeping/accounts/deactivate': covered([`POST ${V}/accounts/deactivate`, 'gnubok_deactivate_accounts']),
+  'POST /api/bookkeeping/accounts/prune': gap('P3', 'bulk-delete unused accounts; DELETE /accounts/:number does it one at a time'),
 
   // ── Journal entries (verifikat) ────────────────────────────────────
   'POST /api/bookkeeping/journal-entries': covered([`POST ${V}/journal-entries`, 'gnubok_create_voucher']),
@@ -192,13 +199,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/accruals/post-due/cron': machine(CRON),
 
   // ── Fiscal periods, year-end, årsredovisning ───────────────────────
-  'POST /api/bookkeeping/fiscal-periods': gap('P2', 'create a räkenskapsår'),
-  'PATCH /api/bookkeeping/fiscal-periods/:id': gap('P3', 'edit räkenskapsår dates before any entries'),
+  'POST /api/bookkeeping/fiscal-periods': covered([`POST ${V}/fiscal-periods`, 'gnubok_create_fiscal_period']),
+  'PATCH /api/bookkeeping/fiscal-periods/:id': covered([`PATCH ${V}/fiscal-periods/:id`, 'gnubok_update_fiscal_period']),
   'POST /api/bookkeeping/fiscal-periods/:id/lock': covered([`POST ${V}/fiscal-periods/:id/lock`, 'gnubok_lock_period']),
-  'POST /api/bookkeeping/fiscal-periods/:id/unlock': covered(['gnubok_unlock_period']),
+  'POST /api/bookkeeping/fiscal-periods/:id/unlock': covered([`POST ${V}/fiscal-periods/:id/unlock`, 'gnubok_unlock_period']),
   'POST /api/bookkeeping/fiscal-periods/:id/year-end': covered([`POST ${V}/fiscal-periods/:id/year-end`, 'gnubok_run_year_end']),
-  'POST /api/bookkeeping/fiscal-periods/:id/close-external': gap('P3', 'mark an imported year as closed in a previous system'),
-  'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': gap('P3', 'undo close-external'),
+  'POST /api/bookkeeping/fiscal-periods/:id/close-external': covered([`POST ${V}/fiscal-periods/:id/close-external`, 'gnubok_close_fiscal_period_external']),
+  'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': covered([`POST ${V}/fiscal-periods/:id/reopen-external`, 'gnubok_reopen_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
   'POST /api/bookkeeping/fiscal-periods/:id/depreciation': covered(['gnubok_post_annual_depreciation']),
@@ -253,10 +260,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/transactions/suggest-categories': covered(['gnubok_suggest_categories']),
 
   // ── Cash accounts ──────────────────────────────────────────────────
-  'POST /api/cash-accounts': gap('P2', 'create a bank/cash account (list via gnubok_list_cash_accounts)'),
-  'PATCH /api/cash-accounts/:id': gap('P2', 'edit a cash account (name, IBAN, ledger account)'),
-  'POST /api/cash-accounts/:id/primary': gap('P3'),
-  'PUT /api/cash-accounts/payee-defaults': gap('P3', 'per-currency payee account on invoices'),
+  'POST /api/cash-accounts': covered([`POST ${V}/cash-accounts`, 'gnubok_create_cash_account']),
+  'PATCH /api/cash-accounts/:id': covered([`PATCH ${V}/cash-accounts/:id`, 'gnubok_update_cash_account'], 'the ledger account is not editable on any door'),
+  'POST /api/cash-accounts/:id/primary': covered([`POST ${V}/cash-accounts/:id/set-primary`, 'gnubok_set_primary_cash_account']),
+  'PUT /api/cash-accounts/payee-defaults': covered([`PUT ${V}/cash-accounts/payee-defaults`, 'gnubok_set_invoice_payee_default']),
 
   // ── Reconciliation ─────────────────────────────────────────────────
   'POST /api/reconciliation/bank/run': covered([`POST ${V}/reconciliation/bank/run`]),
@@ -664,4 +671,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 198
+export const GAP_CEILING = 189

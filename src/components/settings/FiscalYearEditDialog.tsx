@@ -27,9 +27,9 @@ interface FiscalYearEditDialogProps {
   onSaved: () => void
 }
 
-/** Read a user-facing message from either a legacy `{ error: string }` body
- *  (what the fiscal-periods PATCH route returns) or the canonical
- *  `{ error: { message } }` envelope. */
+/** Read a user-facing message from the canonical `{ error: { message } }`
+ *  envelope (what the fiscal-periods PATCH route returns) or a legacy
+ *  `{ error: string }` body. */
 function readApiError(body: unknown, fallback: string): string {
   if (!body || typeof body !== 'object') return fallback
   const error = (body as { error?: unknown }).error

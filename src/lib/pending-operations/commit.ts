@@ -65,7 +65,6 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -200,8 +199,6 @@ import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/cre
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
-import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
-import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
@@ -217,7 +214,6 @@ import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery
 import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
 import { convertToSalesOrder } from '@/lib/sales-orders/convert-to-sales-order'
 import type { ServiceFailure } from '@/lib/sales-orders/result'
-import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
   CreateRecurringScheduleParamsSchema,
@@ -427,7 +423,8 @@ async function commitRegisteredOperation(
   companyId: string,
   params: Record<string, unknown>,
 ): Promise<ExecutorResult> {
-  const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(params)
+  const upgrade = operation.mcp?.stage?.upgradeParams
+  const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(upgrade ? upgrade(params) : params)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
     return {
@@ -902,70 +899,6 @@ async function commitUpdateCustomer(
   }
 }
 
-async function commitUpdateCompanySettings(
-  supabase: SupabaseClient,
-  companyId: string,
-  params: Record<string, unknown>,
-): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateCompanySettingsParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return {
-        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
-        status: 400,
-      }
-    }
-    throw err
-  }
-
-  // The bank columns mirror the default SEK payee account (migration
-  // 20260904010000): write the change through FIRST so a failure leaves
-  // nothing half-written, and the invoice PDF prints what the agent set.
-  try {
-    await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
-  } catch (err) {
-    log.error('update_company_settings: payee write-through failed', err as Error)
-    return { error: err instanceof Error ? err.message : 'Payee write-through failed', status: 500 }
-  }
-
-  const { data: row, error } = await supabase
-    .from('company_settings')
-    .update(validated.changes)
-    .eq('company_id', companyId)
-    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') {
-      return { error: 'Company settings not found', status: 404 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-
-  return {
-    data: {
-      company_id: companyId,
-      bank_name: row.bank_name ?? null,
-      clearing_number: row.clearing_number ?? null,
-      account_number: row.account_number ?? null,
-      bankgiro: row.bankgiro ?? null,
-      plusgiro: row.plusgiro ?? null,
-      swish: row.swish ?? null,
-      iban: row.iban ?? null,
-      bic: row.bic ?? null,
-      contact_person: row.default_our_reference ?? null,
-      email: row.email ?? null,
-      phone: row.phone ?? null,
-      website: row.website ?? null,
-      invoice_email_texts: row.invoice_email_texts ?? null,
-    },
-  }
-}
-
 async function commitCreateRecurringSchedule(
   supabase: SupabaseClient,
   userId: string,
@@ -1397,137 +1330,6 @@ async function commitUpdateArticle(
   await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
 
   return { data: { article_id: data.id } }
-}
-
-async function commitCreateAccount(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  // Defense in depth: re-validate the staged params at the commit boundary so
-  // a tampered pending_operations row cannot inject unexpected fields into
-  // chart_of_accounts (ASVS V4.5): mirrors commitCreateArticle.
-  let validated
-  try {
-    validated = CreateAccountParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
-
-  // Same row shape as the dashboard create route
-  // (app/api/bookkeeping/accounts/route.ts): class/group/sort_order derive
-  // from the number so the two write paths cannot drift.
-  const defaultVatRate = validated.default_vat_treatment && validated.default_vat_rate == null
-    ? defaultRateForVatTreatment(
-        validated.default_vat_treatment,
-        Number(validated.account_number[0]),
-      )
-    : validated.default_vat_rate ?? null
-
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      account_number: validated.account_number,
-      account_name: validated.account_name,
-      account_class: parseInt(validated.account_number[0]),
-      account_group: validated.account_number.substring(0, 2),
-      account_type: validated.account_type,
-      normal_balance: validated.normal_balance,
-      plan_type: validated.plan_type,
-      is_active: true,
-      is_system_account: false,
-      description: validated.description ?? null,
-      default_vat_code: validated.default_vat_code ?? null,
-      default_vat_rate: defaultVatRate,
-      default_vat_treatment: validated.default_vat_treatment ?? null,
-      sru_code: validated.sru_code ?? null,
-      sort_order: parseInt(validated.account_number),
-    })
-    .select('account_number, account_name')
-    .single()
-
-  if (error) {
-    if (error.code === '23505') {
-      return { error: `Kontonummer ${validated.account_number} finns redan i kontoplanen.`, status: 409 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-  return { data: { account_number: data.account_number, account_name: data.account_name } }
-}
-
-async function commitUpdateAccount(
-  supabase: SupabaseClient,
-  _userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateAccountParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
-
-  const { account_number, ...rest } = validated
-  const updateData: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(rest)) {
-    if (value !== undefined) updateData[key] = value
-  }
-
-  if (validated.default_vat_treatment && validated.default_vat_rate == null) {
-    const { data: current, error: currentError } = await supabase
-      .from('chart_of_accounts')
-      .select('default_vat_rate')
-      .eq('company_id', companyId)
-      .eq('account_number', account_number)
-      .single()
-
-    if (currentError) {
-      if (currentError.code === 'PGRST116') {
-        return { error: 'Kontot hittades inte', status: 404 }
-      }
-      return { error: currentError.message, status: 500 }
-    }
-
-    if (current.default_vat_rate == null) {
-      updateData.default_vat_rate = defaultRateForVatTreatment(
-        validated.default_vat_treatment,
-        Number(account_number.charAt(0)),
-      )
-    } else {
-      delete updateData.default_vat_rate
-    }
-  }
-  if (Object.keys(updateData).length === 0) {
-    return { error: 'Inget att uppdatera', status: 400 }
-  }
-
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .update(updateData)
-    .eq('company_id', companyId)
-    .eq('account_number', account_number)
-    .select('account_number, account_name, is_active')
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') return { error: 'Kontot hittades inte', status: 404 }
-    return { error: error.message, status: 500 }
-  }
-
-  return { data: { account_number: data.account_number, account_name: data.account_name, is_active: data.is_active } }
 }
 
 async function commitSetVoucherNote(
@@ -7775,9 +7577,6 @@ async function commitPendingOperationInner(
       case 'update_recurring_schedule':
         result = await commitUpdateRecurringSchedule(supabase, companyId, pendingOp.params)
         break
-      case 'update_company_settings':
-        result = await commitUpdateCompanySettings(supabase, companyId, pendingOp.params)
-        break
       case 'create_article':
         result = await commitCreateArticle(supabase, userId, companyId, pendingOp.params)
         break
@@ -7786,12 +7585,6 @@ async function commitPendingOperationInner(
         break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'create_account':
-        result = await commitCreateAccount(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'update_account':
-        result = await commitUpdateAccount(supabase, userId, companyId, pendingOp.params)
         break
       case 'set_voucher_note':
         result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)

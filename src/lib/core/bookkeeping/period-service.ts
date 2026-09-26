@@ -455,42 +455,17 @@ async function inspectPeriodLedger(
 }
 
 /**
- * Mark a fiscal period as closed in a previous bookkeeping system
- * ("klarmarkera"). Imported historical years (SIE) arrive with
- * is_closed = false and no closing entry, so the year-end page lists them as
- * pending bokslut even though the bokslut was already done in the old
- * software.
- *
- * Deliberately bypasses closePeriod's locked_at/closing_entry_id
- * preconditions: the closing entry lives in the previous system. Everything
- * else stays strict:
- * - the period must have ended (a running year cannot be done elsewhere)
- * - a period with its own closing entry goes through the normal close
- * - already-closed periods are refused
- * - the same unbooked-bank-transactions guard as lockPeriod applies, because
- *   closing strands them exactly the way locking would (BFL 5 kap 2 §)
- *
- * Sets locked_at too (when missing) so the period carries the full
- * closed+locked state the enforcement triggers and readers expect, and writes
- * the immutable audit_log entry (BFNAR 2013:2 p. 9.16: this is a control
- * decision made by a person, not a year-end run).
+ * Every refusal markPeriodClosedExternally applies before it writes, run
+ * against an already fetched period. Read-only, so the klarmarkera operation's
+ * dry run (the MCP staging preview) answers exactly what the commit will.
+ * Throws the same messages markPeriodClosedExternally always has.
  */
-export async function markPeriodClosedExternally(
+export async function assertPeriodExternallyClosable(
   supabase: SupabaseClient,
   companyId: string,
-  userId: string,
-  fiscalPeriodId: string
-): Promise<FiscalPeriod> {
-  const { data: period, error: fetchError } = await supabase
-    .from('fiscal_periods')
-    .select('*')
-    .eq('id', fiscalPeriodId)
-    .eq('company_id', companyId)
-    .single()
-
-  if (fetchError || !period) {
-    throw new Error('Fiscal period not found')
-  }
+  period: FiscalPeriod
+): Promise<void> {
+  const fiscalPeriodId = period.id
 
   if (period.is_closed) {
     throw new Error('Period is already closed')
@@ -598,6 +573,47 @@ export async function markPeriodClosedExternally(
         `Gå till Transaktioner, bokför dem eller markera dem som privata eller ignorerade, och klarmarkera därefter.`
     )
   }
+}
+
+/**
+ * Mark a fiscal period as closed in a previous bookkeeping system
+ * ("klarmarkera"). Imported historical years (SIE) arrive with
+ * is_closed = false and no closing entry, so the year-end page lists them as
+ * pending bokslut even though the bokslut was already done in the old
+ * software.
+ *
+ * Deliberately bypasses closePeriod's locked_at/closing_entry_id
+ * preconditions: the closing entry lives in the previous system. Everything
+ * else stays strict:
+ * - the period must have ended (a running year cannot be done elsewhere)
+ * - a period with its own closing entry goes through the normal close
+ * - already-closed periods are refused
+ * - the same unbooked-bank-transactions guard as lockPeriod applies, because
+ *   closing strands them exactly the way locking would (BFL 5 kap 2 §)
+ *
+ * Sets locked_at too (when missing) so the period carries the full
+ * closed+locked state the enforcement triggers and readers expect, and writes
+ * the immutable audit_log entry (BFNAR 2013:2 p. 9.16: this is a control
+ * decision made by a person, not a year-end run).
+ */
+export async function markPeriodClosedExternally(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  fiscalPeriodId: string
+): Promise<FiscalPeriod> {
+  const { data: period, error: fetchError } = await supabase
+    .from('fiscal_periods')
+    .select('*')
+    .eq('id', fiscalPeriodId)
+    .eq('company_id', companyId)
+    .single()
+
+  if (fetchError || !period) {
+    throw new Error('Fiscal period not found')
+  }
+
+  await assertPeriodExternallyClosable(supabase, companyId, period as FiscalPeriod)
 
   const now = new Date().toISOString()
   const { data: updated, error: updateError } = await supabase
