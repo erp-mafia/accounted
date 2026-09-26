@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
+import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 
 /** Provider results only. Routing and user configuration belong to other writers. */
 export interface BankSyncAccountResult {
@@ -98,4 +99,26 @@ export async function persistBankSyncFailure(
   if (error) throw dbError(error, 'Bank sync failure persistence')
   if (typeof data !== 'boolean') throw new Error('Bank sync failure persistence: missing acknowledgement')
   return data
+}
+
+/**
+ * Surface a sync that stopped on BANK_INGEST_ROUTE_UNRESOLVED without touching
+ * status, cursor or lease: the consent is fine and the row must stay 'active'
+ * (the cron selects only active rows and the account picker saves only on
+ * them). Only error_message changes, which is neither configuration nor
+ * session state, so the bank writer guards let it through without locks.
+ * persist_bank_sync_result clears it on the next successful sync.
+ */
+export async function persistBankRouteNeedsConfiguration(
+  supabase: SupabaseClient,
+  input: { companyId: string; connectionId: string },
+): Promise<void> {
+  const { error } = await supabase
+    .from('bank_connections')
+    .update({ error_message: BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE })
+    .eq('id', input.connectionId)
+    .eq('company_id', input.companyId)
+    .in('status', ['active', 'error'])
+    .is('superseded_by', null)
+  if (error) throw dbError(error, 'Bank route failure persistence')
 }

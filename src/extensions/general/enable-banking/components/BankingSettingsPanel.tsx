@@ -552,7 +552,10 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        throw new Error(data.error)
+        // Routes answer with either a plain string or the canonical envelope
+        // ({ error: { code, message } }); the envelope's message is Swedish.
+        const message = typeof data.error === 'string' ? data.error : data.error?.message
+        throw new Error(message || 'Synkronisering misslyckades')
       }
 
       console.log('[enable-banking] Sync completed', {
@@ -816,7 +819,16 @@ export default function BankingSettingsPanel() {
           bankName={pickerConnection.bank_name}
           accounts={pickerAccounts}
           isInitialSelection={pickerConnection.status === 'pending_selection'}
-          onSaved={() => fetchConnections()}
+          onSaved={() => {
+            // Sync stopped on a stale account selection: the save is the fix,
+            // so sync right away instead of leaving the row saying it stopped
+            // until the next cron run. Success clears the stored message.
+            if (pickerConnection.status === 'active' && pickerConnection.error_message) {
+              void handleSyncTransactions(pickerConnection.id)
+            } else {
+              fetchConnections()
+            }
+          }}
         />
       )}
 
