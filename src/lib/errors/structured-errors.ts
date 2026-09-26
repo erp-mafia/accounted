@@ -2627,6 +2627,37 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
  * Agent-triggered PSD2 sync (v1 bank-connections sync + MCP gnubok_sync_bank).
  * Emitted by extensions/general/enable-banking/lib/trigger-sync.ts.
  */
+// Refusals save_bank_account_selection raises by name. Nothing is saved when
+// one of them fires; the picker shows message_sv as is. The PT409 name stays
+// out of DB_CONFLICTS: other bank routes raise it too and keep CONFLICT.
+const BANK_SELECTION: Record<string, StructuredErrorEntry> = {
+  BANK_CONFIGURATION_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Bankkopplingen eller bankkontona ändrades medan du valde konton. Inget sparades. Öppna kontovalet igen och spara på nytt.',
+    message_en: 'The bank connection or its accounts changed while you were choosing. Nothing was saved. Open the account picker again and save once more.',
+  },
+  BANK_SELECTION_LEDGER_CONFLICT: {
+    httpStatus: 400,
+    message_sv: 'Två bankkonton kan inte bokföras på samma bokföringskonto. Välj olika bokföringskonton. Inget sparades.',
+    message_en: 'Two bank accounts cannot book to the same ledger account. Choose different ledger accounts. Nothing was saved.',
+  },
+  CASH_ACCOUNT_KEEPER_IDENTITY_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett annat bankkonto (annat IBAN eller annan valuta). Välj ett annat bokföringskonto. Inget sparades.',
+    message_en: 'The ledger account is already used by another bank account (a different IBAN or currency). Choose another ledger account. Nothing was saved.',
+  },
+  CASH_ACCOUNT_LEDGER_CLAIMED: {
+    httpStatus: 409,
+    message_sv: 'Bokföringskontot används redan av ett bankkonto från en annan bankanslutning. Välj ett annat bokföringskonto. Inget sparades.',
+    message_en: 'The ledger account is already used by a bank account from another bank connection. Choose another ledger account. Nothing was saved.',
+  },
+  CASH_ACCOUNT_LEDGER_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Bankkontot har redan historik på sitt bokföringskonto och kan inte flyttas till ett annat automatiskt. Inget sparades.',
+    message_en: 'The bank account already has history on its ledger account and cannot be moved to another one automatically. Nothing was saved.',
+  },
+}
+
 const BANK_SYNC: Record<string, StructuredErrorEntry> = {
   BANK_SYNC_NOT_ACTIVE: {
     httpStatus: 409,
@@ -5277,6 +5308,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...TAX_DECL,
   ...SIE_IMPORT,
   ...BANK_FILE,
+  ...BANK_SELECTION,
   ...BANK_SYNC,
   ...SKATTEKONTO_FILE,
   ...OPENING_BALANCE_IMPORT,

@@ -55,7 +55,7 @@ export type PairSkipCode =
 export interface AppliedLink {
   external_id: string
   journal_entry_id: string
-  via?: 'line' | 'entry_total'
+  via?: 'line' | 'entry_total' | 'lines'
   /** Present on the links of a 1:N split: the slice of the row this verifikat settles. */
   allocated_amount?: number
 }
@@ -109,9 +109,17 @@ async function proposalsAsPairs(
   if (parsed.kind === 'skattekonto') {
     const status = await getSkattekontoReconciliationStatus(supabase, companyId)
     if (!status) return []
-    return status.items.proposed
-      .filter((i) => i.proposal && i.proposal.confidence >= threshold)
-      .map((i) => ({ external_ids: [i.item_id], journal_entry_ids: [i.proposal!.journal_entry_id] }))
+    // Rows of one combined proposal become ONE pair so the group is linked
+    // together (a single row alone does not settle the verifikat).
+    const pairsByEntry = new Map<string, ReconciliationPair>()
+    for (const i of status.items.proposed) {
+      if (!i.proposal || i.proposal.confidence < threshold) continue
+      const entryId = i.proposal.journal_entry_id
+      const ids = i.proposal.external_ids ?? [i.item_id]
+      const key = i.proposal.external_ids ? `group:${entryId}` : `row:${i.item_id}`
+      if (!pairsByEntry.has(key)) pairsByEntry.set(key, { external_ids: ids, journal_entry_ids: [entryId] })
+    }
+    return Array.from(pairsByEntry.values())
   }
   if (parsed.kind === 'bank') {
     const { data } = await supabase

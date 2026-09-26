@@ -35,6 +35,20 @@ interface MatchCandidate {
   status: 'draft' | 'posted' | 'reversed'
   matched_amount: number
   matched_side: 'debit' | 'credit'
+  /** Other open rows that settle this verifikat together with this one (crm#128). */
+  combined_with?: Array<{
+    id: string
+    transaktionsdatum: string
+    transaktionstext: string
+    belopp_skatteverket: number
+  }>
+  combined_total?: number
+  /** Rows already linked to the verifikat that this row joins (crm#104). */
+  joins_linked_count?: number
+}
+
+function candidateKey(c: MatchCandidate): string {
+  return [c.journal_entry_id, ...(c.combined_with ?? []).map((o) => o.id)].join(':')
 }
 
 /**
@@ -107,16 +121,21 @@ export function SkattekontoMatchDialog({
     }
   }, [open, row, toast, onClose, t])
 
-  async function confirmMatch(journalEntryId: string) {
+  async function confirmMatch(candidate: MatchCandidate) {
     if (!row) return
-    setSubmittingId(journalEntryId)
+    setSubmittingId(candidateKey(candidate))
     try {
       const res = await fetch(
         `/api/extensions/ext/skatteverket/skattekonto/transaktioner/${row.id}/match`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ journal_entry_id: journalEntryId }),
+          body: JSON.stringify({
+            journal_entry_id: candidate.journal_entry_id,
+            ...(candidate.combined_with?.length
+              ? { also_transaction_ids: candidate.combined_with.map((o) => o.id) }
+              : {}),
+          }),
         },
       )
       const json = await res.json()
@@ -191,17 +210,38 @@ export function SkattekontoMatchDialog({
               </TableHeader>
               <TableBody>
                 {candidates.map(c => (
-                  <TableRow key={c.journal_entry_id}>
+                  <TableRow key={candidateKey(c)}>
                     <TableCell className="tabular-nums">{formatDate(c.entry_date)}</TableCell>
                     <TableCell className="tabular-nums">
                       {formatVoucher(c)}
                     </TableCell>
-                    <TableCell className="max-w-[260px] truncate">
-                      {c.description}
+                    <TableCell className="max-w-[260px]">
+                      <span className="block truncate">{c.description}</span>
+                      {c.combined_with && c.combined_with.length > 0 && (
+                        /* data-ph-mask: event texts and amounts are user data */
+                        <span className="mt-1 block text-xs text-muted-foreground" data-ph-mask="">
+                          {t('combined_note', {
+                            count: c.combined_with.length,
+                            total: formatCurrency(c.combined_total ?? 0),
+                          })}
+                          {c.combined_with.map((o) => (
+                            <span key={o.id} className="block truncate tabular-nums">
+                              {formatDate(o.transaktionsdatum)} {o.transaktionstext}{' '}
+                              {formatCurrency(o.belopp_skatteverket)}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                      {!!c.joins_linked_count && (
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {t('joins_linked_note', { count: c.joins_linked_count })}
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell>
+                      {/* Chips mark exceptions: posted is the normal case. */}
                       {c.status === 'posted' ? (
-                        <Badge variant="secondary">{t('status_posted')}</Badge>
+                        <span className="text-muted-foreground">{t('status_posted')}</span>
                       ) : c.status === 'draft' ? (
                         <Badge variant="outline">{t('status_draft')}</Badge>
                       ) : (
@@ -211,10 +251,14 @@ export function SkattekontoMatchDialog({
                     <TableCell className="text-right">
                       <Button
                         size="sm"
-                        onClick={() => confirmMatch(c.journal_entry_id)}
-                        disabled={submittingId === c.journal_entry_id}
+                        onClick={() => confirmMatch(c)}
+                        disabled={submittingId === candidateKey(c)}
                       >
-                        {submittingId === c.journal_entry_id ? t('linking') : t('link')}
+                        {submittingId === candidateKey(c)
+                          ? t('linking')
+                          : c.combined_with?.length
+                            ? t('link_group', { count: c.combined_with.length + 1 })
+                            : t('link')}
                       </Button>
                     </TableCell>
                   </TableRow>

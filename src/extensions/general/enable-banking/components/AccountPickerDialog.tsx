@@ -456,11 +456,10 @@ export function AccountPickerDialog({
         // validation): nothing was persisted and no sync started. Surface the
         // server's message inside the still-open picker; the progress modal's
         // failed state would wrongly claim "we retry in the background".
-        setSaveError(
-          typeof data?.error === 'string' && data.error
-            ? data.error
-            : 'Kunde inte spara kontoval'
-        )
+        // Route validation answers { error: string }; database refusals
+        // answer the structured envelope { error: { code, message } }.
+        const message = typeof data?.error === 'string' ? data.error : data?.error?.message
+        setSaveError(typeof message === 'string' && message ? message : 'Kunde inte spara kontoval')
         if (isInitialSelection) setProgressOpen(false)
         return
       }

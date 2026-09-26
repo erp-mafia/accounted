@@ -2810,6 +2810,134 @@ describe('getReconciliationStatus', () => {
     expect(status.unconvertible_gl_line_count).toBe(0)
     expect(status.not_reconcilable_reason).toBeNull()
   })
+
+  describe('a linked pair that straddles the window edge', () => {
+    // Anonymised from a support case: the first fiscal year starts 2026-07-30,
+    // the company received a 25 000 kr deposit on 2026-07-17, and the deposit
+    // is linked to A6, dated inside the year. Filtered on the year, the
+    // verifikat counted and the deposit did not: 25 000 kr "oförklarat" on a
+    // fully linked account.
+    const tx = (id: string, date: string, amount: number, journalEntryId: string | null) => ({
+      id,
+      date,
+      amount,
+      journal_entry_id: journalEntryId,
+      reconciliation_method: journalEntryId ? 'manual' : null,
+      is_ignored: false,
+      cash_account_id: null,
+    })
+    const entry = (id: string, entryDate: string, sourceType = 'bank_import') => ({
+      id,
+      entry_date: entryDate,
+      status: 'posted',
+      source_type: sourceType,
+    })
+    const line = (journalEntryId: string, amount: number) => ({
+      debit_amount: amount > 0 ? amount : 0,
+      credit_amount: amount < 0 ? -amount : 0,
+      journal_entry_id: journalEntryId,
+    })
+
+    it('counts a bank row dated before the window in the window of the verifikat it is linked to', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // 1) transactions read on their own date: only the in-window row.
+      enqueue({ data: [tx('t-in', '2026-08-05', -5000, 'e-a')] })
+      // 2) junction anchors of those rows: none.
+      enqueue({ data: [] })
+      // 3) 1930 lines in the window: A6 (+25 000) and the in-window payment.
+      enqueue({ data: [entry('e-6', '2026-08-01'), entry('e-a', '2026-08-05')] })
+      enqueue({ data: [line('e-6', 25000), line('e-a', -5000)] })
+      // 4) unmatched GL lines RPC: nothing (both vouchers are linked).
+      enqueue({ data: [] })
+      // 5) pull-in: rows before the window pointing at a window verifikat.
+      enqueue({ data: [tx('t-pre', '2026-07-17', 25000, 'e-6')] })
+      // 6) rows after the window pointing at one: none.
+      enqueue({ data: [] })
+      // 7) junction links to window verifikat: none.
+      enqueue({ data: [] })
+      // 8) junction anchors of the pulled-in row: none.
+      enqueue({ data: [] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-07-30', '2027-06-30')
+
+      expect(status.bank_transaction_total).toBe(20000)
+      expect(status.gl_1930_period_movement).toBe(20000)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(2)
+      expect(status.unmatched_transaction_count).toBe(0)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('pulls in a row linked only through transaction_voucher_links', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      enqueue({ data: [] }) // transactions in the window: none
+      enqueue({ data: [entry('e-6', '2026-08-01')] })
+      enqueue({ data: [line('e-6', 25000)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+      enqueue({ data: [] }) // pointer rows before the window
+      enqueue({ data: [] }) // pointer rows after the window
+      enqueue({ data: [{ transaction_id: 't-j' }] }) // junction links to e-6
+      enqueue({ data: [tx('t-j', '2026-07-17', 25000, null)] }) // that row, scoped
+      enqueue({ data: [{ transaction_id: 't-j', journal_entry_id: 'e-6', role: 'bank_line' }] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2026-07-30', '2027-06-30')
+
+      expect(status.bank_transaction_total).toBe(25000)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(1)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('leaves a bank row inside the window out when its verifikat is dated before the window', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // The mirror case: booked on the last day of the prior year, cleared
+      // the bank on the second day of this one. It belongs to the prior year.
+      enqueue({ data: [tx('t-late', '2027-07-31', -800, 'e-last'), tx('t-in', '2027-08-10', -300, 'e-b')] })
+      enqueue({ data: [] }) // junction anchors
+      enqueue({ data: [entry('e-b', '2027-08-10')] })
+      enqueue({ data: [line('e-b', -300)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+      enqueue({ data: [] }) // pointer rows before the window
+      enqueue({ data: [] }) // junction links to window verifikat
+      // The date of e-last, read because it is outside the window.
+      enqueue({ data: [{ id: 'e-last', entry_date: '2027-07-29' }] })
+      enqueue({ data: [{ journal_entry_id: 'e-last' }] })
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1', '2027-07-30')
+
+      expect(status.bank_transaction_total).toBe(-300)
+      expect(status.bank_transaction_count).toBe(1)
+      expect(status.difference).toBe(0)
+      expect(status.matched_count).toBe(1)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+
+    it('still drops an unlinked row dated before the opening balance floor', async () => {
+      const { supabase, enqueue } = createQueueMockSupabase()
+      // No caller window: the IB (2026-07-30) is the floor. The linked deposit
+      // follows its verifikat in; the unlinked one before the IB stays out.
+      enqueue({
+        data: [tx('t-pre', '2026-07-17', 25000, 'e-6'), tx('t-open', '2026-07-10', 999, null)],
+      })
+      enqueue({ data: [] }) // junction anchors
+      enqueue({ data: [entry('e-ib', '2026-07-30', 'opening_balance'), entry('e-6', '2026-08-01')] })
+      enqueue({ data: [line('e-ib', 1000), line('e-6', 25000)] })
+      enqueue({ data: [] }) // unmatched GL RPC
+
+      const status = await getReconciliationStatus(supabase as never, 'company-1')
+
+      expect(status.gl_1930_opening_balance).toBe(1000)
+      expect(status.bank_transaction_total).toBe(25000)
+      expect(status.bank_transaction_count).toBe(1)
+      expect(status.unmatched_transaction_count).toBe(0)
+      expect(status.difference).toBe(0)
+      expect(status.unexplained_difference).toBe(0)
+      expect(status.is_reconciled).toBe(true)
+    })
+  })
 })
 
 // ============================================================

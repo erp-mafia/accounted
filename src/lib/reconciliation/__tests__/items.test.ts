@@ -4,6 +4,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 const skvStatusMock = vi.fn()
 const fetchUnlinkedMock = vi.fn()
 const junctionMock = vi.fn()
+const alignMock = vi.fn()
 
 vi.mock('../skattekonto-reconciliation', () => ({
   getSkattekontoReconciliationStatus: (...args: unknown[]) => skvStatusMock(...args),
@@ -12,6 +13,7 @@ vi.mock('../bank-reconciliation', () => ({
   fetchUnlinkedGLLines: (...args: unknown[]) => fetchUnlinkedMock(...args),
   fetchJunctionLinkMap: (...args: unknown[]) => junctionMock(...args),
   scopeTransactionsToAccount: (q: unknown) => q,
+  alignLinkedTransactionsToWindow: (...args: unknown[]) => alignMock(...args),
 }))
 const coveringSetsMock = vi.fn()
 vi.mock('../covering-set-candidate', () => ({
@@ -34,6 +36,11 @@ describe('listAccountItems', () => {
     fetchUnlinkedMock.mockReset()
     junctionMock.mockReset()
     junctionMock.mockResolvedValue(new Map())
+    alignMock.mockReset()
+    alignMock.mockImplementation(async (o: { rows: unknown[]; junctionLinks: Map<string, string[]> }) => ({
+      rows: o.rows,
+      junctionLinks: o.junctionLinks,
+    }))
     coveringSetsMock.mockReset()
     coveringSetsMock.mockResolvedValue(new Map())
   })
@@ -163,6 +170,42 @@ describe('listAccountItems', () => {
     const matched = await listAccountItems(other.supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'matched' })
     expect(matched?.items).toEqual([])
     expect(coveringSetsMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('lists a linked row in the window of its verifikat, like the status counts it', async () => {
+    const base = {
+      description: 'Insättning', merchant_name: null, currency: 'SEK', potential_journal_entry_id: null,
+      potential_match_method: null, potential_match_confidence: null, is_ignored: false, reconciliation_method: 'manual',
+    }
+    const inWindow = { ...base, id: 't-in', date: '2026-08-05', amount: -5000, journal_entry_id: 'e-a' }
+    const before = { ...base, id: 't-pre', date: '2026-07-17', amount: 25000, journal_entry_id: 'e-6' }
+    alignMock.mockImplementation(async (o: { rows: unknown[]; junctionLinks: Map<string, string[]> }) => ({
+      rows: [...o.rows, before],
+      junctionLinks: o.junctionLinks,
+    }))
+
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: CASH, ledger_account: '1930', currency: 'SEK', is_primary: true } })
+    enqueue({ data: [inWindow] })
+    const res = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, {
+      bucket: 'matched',
+      windowFrom: '2026-07-30',
+      windowTo: '2027-06-30',
+    })
+
+    expect(alignMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bankAccount: '1930',
+        from: '2026-07-30',
+        to: '2027-06-30',
+        readFrom: '2026-07-30',
+        readTo: '2027-06-30',
+        cashAccountId: CASH,
+        includeUnassigned: true,
+      }),
+    )
+    expect(res?.items.map((i) => i.item_id)).toEqual(['t-in', 't-pre'])
+    expect(res?.items[1]).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-6' })
   })
 
   it('returns null for an unknown cash account', async () => {
