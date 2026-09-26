@@ -105,21 +105,22 @@ interface VerifikatShape {
 /**
  * What the verifikat says about an invoice's direction. A booked document is
  * the evidence for a booking, and the booking's shape is the company's own
- * record of which way the money went: a supplier debt (2440) or an expense
- * is a purchase, a customer claim (15xx) or revenue (3xxx) a sale. Beats the
- * model's guess between the two invoice types (prod 2026-09-26: 217
- * purchase documents typed customer_invoice in 41 companies, 85 sales
- * documents typed supplier_invoice; Arcim's Kundfakturor held six supplier
- * invoices). Says nothing when the shape is mixed or the entry is not a
- * purchase or a sale at all.
+ * record of which way the money went: a supplier debt raised (2440 credit)
+ * or an expense is a purchase, a customer claim raised (15xx debit) or
+ * revenue (3xxx credit) a sale. Beats the model's guess between the two
+ * invoice types (prod 2026-09-26: 217 purchase documents typed
+ * customer_invoice in 41 companies; Arcim's Kundfakturor held six supplier
+ * invoices). Says nothing for a payment (the claim or debt settled: the
+ * document on it is as often a payment notice as the invoice, and the text
+ * is the better judge), for a mixed shape, or for an entry that is neither.
  */
 export function kindFromVerifikat(entry: VerifikatShape | null | undefined): 'supplier_invoice' | 'customer_invoice' | null {
   if (!entry) return null
   const source = entry.source_type ?? ''
   if (source.startsWith('supplier_invoice_')) return 'supplier_invoice'
-  if (source === 'invoice_created' || source === 'invoice_paid' || source === 'invoice_cash_payment') return 'customer_invoice'
-  const sale = entry.lines.some((l) => l.account_number.startsWith('15') || (l.account_number.startsWith('3') && l.credit_amount > 0))
-  const purchase = entry.lines.some((l) => l.account_number === '2440' || (/^[4-7]/.test(l.account_number) && l.debit_amount > 0))
+  if (source === 'invoice_created' || source === 'invoice_cash_payment') return 'customer_invoice'
+  const sale = entry.lines.some((l) => (l.account_number.startsWith('15') && l.debit_amount > 0) || (l.account_number.startsWith('3') && l.credit_amount > 0))
+  const purchase = entry.lines.some((l) => (l.account_number === '2440' && l.credit_amount > 0) || (/^[4-7]/.test(l.account_number) && l.debit_amount > 0))
   if (purchase && !sale) return 'supplier_invoice'
   if (sale && !purchase) return 'customer_invoice'
   return null

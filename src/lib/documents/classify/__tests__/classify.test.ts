@@ -235,11 +235,15 @@ describe('kindFromVerifikat', () => {
     expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '2440', debit_amount: 0, credit_amount: 5775 }, { account_number: '2641', debit_amount: 1155, credit_amount: 0 }, { account_number: '5420', debit_amount: 4620, credit_amount: 0 }] })).toBe('supplier_invoice')
     expect(kindFromVerifikat({ source_type: 'bank_transaction', lines: [{ account_number: '1930', debit_amount: 0, credit_amount: 12500 }, { account_number: '6530', debit_amount: 10000, credit_amount: 0 }, { account_number: '2641', debit_amount: 2500, credit_amount: 0 }] })).toBe('supplier_invoice')
     expect(kindFromVerifikat({ source_type: 'import', lines: [{ account_number: '1510', debit_amount: 12500, credit_amount: 0 }, { account_number: '3001', debit_amount: 0, credit_amount: 10000 }, { account_number: '2611', debit_amount: 0, credit_amount: 2500 }] })).toBe('customer_invoice')
-    // The payment of a customer invoice still concerns a sale.
-    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1930', debit_amount: 12500, credit_amount: 0 }, { account_number: '1510', debit_amount: 0, credit_amount: 12500 }] })).toBe('customer_invoice')
-    // The engine's own source types say it outright.
+    // A payment says nothing: the document on it is as often a payment notice as the invoice (prod 2026-09-26: 1 324
+    // Fortnox Finans inbetalningsavier on 1510 C / 1938 D in one company), and the text is the better judge there.
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1930', debit_amount: 12500, credit_amount: 0 }, { account_number: '1510', debit_amount: 0, credit_amount: 12500 }] })).toBeNull()
+    expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '2440', debit_amount: 5775, credit_amount: 0 }, { account_number: '1930', debit_amount: 0, credit_amount: 5775 }] })).toBeNull()
+    expect(kindFromVerifikat({ source_type: 'invoice_paid', lines: [{ account_number: '1930', debit_amount: 12500, credit_amount: 0 }, { account_number: '1510', debit_amount: 0, credit_amount: 12500 }] })).toBeNull()
+    // The engine's own source types say it outright, the cash-method payment included (the invoice is booked as it is paid).
     expect(kindFromVerifikat({ source_type: 'supplier_invoice_paid', lines: [] })).toBe('supplier_invoice')
     expect(kindFromVerifikat({ source_type: 'invoice_created', lines: [] })).toBe('customer_invoice')
+    expect(kindFromVerifikat({ source_type: 'invoice_cash_payment', lines: [] })).toBe('customer_invoice')
     // A mixed or unrelated booking says nothing, and so does a loose document.
     expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1510', debit_amount: 100, credit_amount: 0 }, { account_number: '2440', debit_amount: 0, credit_amount: 100 }] })).toBeNull()
     expect(kindFromVerifikat({ source_type: 'manual', lines: [{ account_number: '1930', debit_amount: 100, credit_amount: 0 }, { account_number: '2893', debit_amount: 0, credit_amount: 100 }] })).toBeNull()
