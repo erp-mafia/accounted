@@ -21,13 +21,26 @@ const ITEM_KIND: Record<string, CommunityKind> = { workflow: 'workflow', knowled
 /** Industries a community item may name; the catalogue shows it under vertical/<id>. */
 export const COMMUNITY_INDUSTRIES = ['konsult-it', 'bygg-hantverk', 'e-handel', 'restaurang-cafe', 'vard-halsa', 'software-saas-ai', 'reklambyra-marknadsforing'] as const
 
-/** A folder name from a title: lowercase ascii, digits and hyphens. */
+/**
+ * Accounted's own knowledge packs are named swedish-* (.claude/skills in the
+ * same repository), and accounted.se serves both at /instruktioner/<name>.
+ * A community folder may not take such a name, or it would take over the
+ * pack's page there.
+ */
+const RESERVED_PREFIX = 'swedish-'
+
+export function isReservedCommunitySlug(slug: string): boolean {
+  return slug.startsWith(RESERVED_PREFIX)
+}
+
+/** A folder name from a title: lowercase ascii, digits and hyphens, never one of Accounted's own pack names. */
 export function communitySlug(title: string): string {
-  return title.toLowerCase()
+  const slug = title.toLowerCase()
     .replace(/[åä]/g, 'a').replace(/ö/g, 'o').replace(/é/g, 'e')
     .normalize('NFKD').replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
     .slice(0, 60).replace(/-+$/, '') || 'instruktion'
+  return isReservedCommunitySlug(slug) ? `community-${slug}`.slice(0, 60).replace(/-+$/, '') : slug
 }
 
 /**
@@ -90,6 +103,7 @@ export interface ParsedCommunitySkill {
 /** Reads one community/<slug>/SKILL.md; an error names what to fix. */
 export function parseCommunitySkillMd(slug: string, text: string): ParsedCommunitySkill | { error: string } {
   if (!/^[a-z0-9][a-z0-9-]{0,99}$/.test(slug)) return { error: 'folder name: lowercase letters, digits and hyphens' }
+  if (isReservedCommunitySlug(slug)) return { error: 'folder name: swedish-* is reserved for Accounted\'s own knowledge' }
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text)
   if (!match) return { error: 'missing frontmatter' }
   let raw: unknown
