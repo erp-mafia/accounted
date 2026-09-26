@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+vi.mock('@/lib/documents/preview', () => ({ keptPreview: vi.fn(async () => null) }))
 vi.mock('../router', () => ({ readDocumentBytes: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => ({ downloadDocumentObject: vi.fn() }))
 vi.mock('@/lib/ai', () => ({ getAiStatus: vi.fn(() => ({ configured: true })) }))
@@ -8,6 +9,7 @@ import { readAndStoreDocument, readUnreadDocuments, storableText } from '../stor
 import { readDocumentBytes } from '../router'
 import { ReaderUnavailableError } from '../types'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
+import { keptPreview } from '@/lib/documents/preview'
 
 type Call = { table: string; op: string; payload?: unknown; filters: Record<string, unknown> }
 
@@ -154,6 +156,19 @@ describe('storableText', () => {
     const inserted = calls.find((c) => c.op === 'insert')!.payload as Array<{ text: string; words: Array<{ t: string }> }>
     expect(inserted[0].text).toBe('Summa')
     expect(inserted[0].words[0].t).toBe('Summa')
+  })
+})
+
+describe('readAndStoreDocument reads a photo from its kept preview', () => {
+  it('sends the viewer\'s JPEG to the model and never downloads the original', async () => {
+    asMock(downloadDocumentObject).mockClear()
+    asMock(keptPreview).mockResolvedValueOnce(Buffer.from('jpeg-preview'))
+    asMock(readDocumentBytes).mockResolvedValue({ ok: true, reader: 'claude_vision', pageCount: 1, pages: [{ pageNo: 1, text: 'Kvitto', reader: 'claude_vision', hasTextLayer: false }] })
+    const { supabase } = makeSupabase()
+    const out = await readAndStoreDocument(supabase, { ...doc, mime_type: 'image/heic' })
+    expect(out).toMatchObject({ status: 'read', pages: 1 })
+    expect(downloadDocumentObject).not.toHaveBeenCalled()
+    expect(readDocumentBytes).toHaveBeenCalledWith(Buffer.from('jpeg-preview'), 'image/jpeg', expect.anything())
   })
 })
 

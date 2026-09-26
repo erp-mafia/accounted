@@ -5,6 +5,22 @@ import { readImageWithModel, transcribeWithModel } from './vision'
 import { fitImageForModel } from './image'
 import { readerForMime, type ModelSkipReason, type ReadOptions, type ReadOutcome, type ReadPage } from './types'
 
+/** How many pages the model reads at once for one document. */
+const MODEL_PAGE_CONCURRENCY = 3
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i])
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+  return out
+}
+
 /**
  * Decide how a document is read and read it. Text layers first (local, free,
  * with word boxes), the model only for scanned pages and photos.
@@ -18,27 +34,35 @@ export async function readDocumentBytes(bytes: Buffer, mimeType: string | null |
   if (reader === 'pdf_text') {
     const local = await readPdfTextLayer(bytes)
     const pages: ReadPage[] = [...local.pages]
+    // Scanned pages first, then pictures inside text pages (a table pasted as an image); a budget takes them in that order.
+    const candidates = [...local.pagesNeedingVision.map((pageNo) => ({ pageNo, picture: false })), ...(local.pagesWithImages ?? []).map((pageNo) => ({ pageNo, picture: true }))]
     let partial: ModelSkipReason | undefined
-    let modelPages = 0
-    for (const pageNo of local.pagesNeedingVision) {
-      if (!opts.allowModel) { partial = 'ai_gated'; break }
-      if (opts.maxModelPages != null && modelPages >= opts.maxModelPages) { partial = 'budget'; break }
-      const single = await extractSinglePagePdf(bytes, pageNo)
-      const out = await transcribeWithModel({ kind: 'pdf', data: single, fileName: `page-${pageNo}.pdf` }, { tier: opts.tier })
-      if (!out.ok) { partial = 'ai_unconfigured'; break }
-      modelPages++
-      if (out.text) pages.push({ pageNo, text: out.text, reader: 'claude_vision', hasTextLayer: false })
+    let wanted = candidates
+    if (candidates.length > 0 && !opts.allowModel) {
+      partial = 'ai_gated'
+      wanted = []
+    } else if (opts.maxModelPages != null && candidates.length > opts.maxModelPages) {
+      partial = 'budget'
+      wanted = candidates.slice(0, opts.maxModelPages)
     }
-    // A picture inside a text page (a table pasted as an image): the model reads the whole page when it may; the text layer stays until then.
-    for (const pageNo of partial ? [] : (local.pagesWithImages ?? [])) {
-      if (!opts.allowModel) { partial = 'ai_gated'; break }
-      if (opts.maxModelPages != null && modelPages >= opts.maxModelPages) { partial = 'budget'; break }
-      const single = await extractSinglePagePdf(bytes, pageNo)
-      const out = await transcribeWithModel({ kind: 'pdf', data: single, fileName: `page-${pageNo}.pdf` }, { tier: opts.tier })
-      if (!out.ok) { partial = 'ai_unconfigured'; break }
-      modelPages++
-      const at = pages.findIndex((p) => p.pageNo === pageNo)
-      if (out.text && at >= 0) pages[at] = { ...pages[at], text: out.text, reader: 'claude_vision', hasTextLayer: true }
+    // The model reads pages a few at a time: one after the other, a 20-page scan was a minute-long wait.
+    const read = await mapLimit(wanted, MODEL_PAGE_CONCURRENCY, async (c) => {
+      const single = await extractSinglePagePdf(bytes, c.pageNo)
+      return { ...c, out: await transcribeWithModel({ kind: 'pdf', data: single, fileName: `page-${c.pageNo}.pdf` }, { tier: opts.tier }) }
+    })
+    for (const { pageNo, picture, out } of read) {
+      if (!out.ok) {
+        partial = 'ai_unconfigured'
+        continue
+      }
+      if (!out.text) continue
+      if (picture) {
+        // The text layer stays until the model has read the whole page.
+        const at = pages.findIndex((p) => p.pageNo === pageNo)
+        if (at >= 0) pages[at] = { ...pages[at], text: out.text, reader: 'claude_vision', hasTextLayer: true }
+      } else {
+        pages.push({ pageNo, text: out.text, reader: 'claude_vision', hasTextLayer: false })
+      }
     }
     pages.sort((a, b) => a.pageNo - b.pageNo)
     // Text pages are worth keeping on their own; the scanned ones wait for the model.

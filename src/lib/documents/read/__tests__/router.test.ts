@@ -17,6 +17,25 @@ const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.doc
 describe('readDocumentBytes', () => {
   beforeEach(() => vi.clearAllMocks())
 
+  it('reads a scanned bundle a few pages at a time and returns them in page order', async () => {
+    mock(readPdfTextLayer).mockResolvedValue({ pages: [], pagesNeedingVision: [1, 2, 3, 4], pageCount: 4, pdfType: 'Scanned' })
+    mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('p'))
+    let inFlight = 0
+    let peak = 0
+    mock(transcribeWithModel).mockImplementation(async (doc: { fileName?: string }) => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return { ok: true, text: `sida ${doc.fileName}` }
+    })
+    const out = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf', { allowModel: true })
+    expect(transcribeWithModel).toHaveBeenCalledTimes(4)
+    expect(peak).toBeGreaterThan(1)
+    expect(out).toMatchObject({ ok: true, pageCount: 4 })
+    expect((out as { pages: Array<{ pageNo: number }> }).pages.map((p) => p.pageNo)).toEqual([1, 2, 3, 4])
+  })
+
   it('skips structured archives and unknown types without reading', async () => {
     expect(await readDocumentBytes(Buffer.from('<x/>'), 'application/xml')).toEqual({ ok: false, skipped: 'structured' })
     expect(await readDocumentBytes(Buffer.from('zzz'), 'application/zip')).toEqual({ ok: false, skipped: 'unsupported_mime' })
