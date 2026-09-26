@@ -136,21 +136,24 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const usedByFlows = (atomId: string) => overview?.agents.filter((a) => a.knowledge.some((k) => k.id === atomId)).length ?? 0
   const shared: Item[] = catalog.filter((s) => COMMUNITY_OPEN && s.tier === 'community').map((s) => {
     const meta = communityMeta(s)
-    return { key: s.slug, kind: kindOf(s), title: s.name, desc: s.summary, href: `${hrefBase}/${communitySegment(s.slug)}`, source: 'community', meta, categories: [], popularity: meta?.used_by ?? meta?.votes ?? 0 }
+    return { key: s.slug, kind: kindOf(s), title: s.name, desc: s.summary, href: `${hrefBase}/${communitySegment(s.slug)}`, source: 'community', meta, categories: (meta?.industries ?? []).map((i) => `vertical/${i}`), popularity: meta?.used_by ?? meta?.votes ?? 0 }
   })
   const flows: Item[] = SHOWN_FLOWS.map((id) => ({ id })).map((s) => ({
     key: s.id, kind: 'workflow', title: t(`skills.${s.id}.name`), desc: t(`skills.${s.id}.short`), href: `${hrefBase}/${agentSegment(s.id)}`,
     source: 'accounted', meta: null, categories: [], popularity: usage?.[s.id]?.count ?? 0, connections: AGENTS[s.id].connections, lede: t(`skills.${s.id}.desc`),
     status: agentStatus({ id: s.id, aiKnown: true, overview, waiting: undefined, lastAt: undefined, t: (key, values) => t(key, values), formatDate: (iso) => iso }),
   }))
-  const packs: Item[] = options.filter((o) => o.tier !== 'community').map((o) => ({
+  // Accounted's packs only: the company's own knowledge is listed under Egna from the catalog.
+  const packs: Item[] = options.filter((o) => o.tier !== 'community' && o.tier !== 'own').map((o) => ({
     key: o.id, kind: 'rules', title: knowledgeName(o.id, o.title), desc: knowledgeDesc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
     source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
   }))
   // Own items: a flow opens the flow page; own knowledge and analyses open the item page (egen.<id>).
   const ownItems: Item[] = own.map((s) => {
     const k = s.itemKind ?? 'workflow'
-    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: 0 }
+    // A draft your AI saved waits for you: say so on the card, not only on its page.
+    return { key: s.slug, kind: k, title: s.name, desc: s.summary, href: k === 'workflow' ? `${hrefBase}/${agentSegment(s.slug)}` : `${hrefBase}/egen.${s.slug.slice(4)}`, source: 'own', meta: null, categories: [], popularity: s.draft ? 1 : 0,
+      ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   const all = [...flows, ...packs, ...shared]
   const ofKind = all.filter((i) => i.kind === kind)

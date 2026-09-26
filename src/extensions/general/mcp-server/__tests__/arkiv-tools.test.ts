@@ -153,6 +153,17 @@ describe('Arkiv tools', () => {
     await expect(tool('gnubok_read_document').execute({ record_ref: `agreement:${AGR}` }, CO, 'user-1', supabase)).rejects.toThrow(/document:<uuid>/)
   })
 
+  it('read_document completes a partly read document before answering, so an agent never answers from half of it', async () => {
+    const { ensureDocumentRead } = await import('@/lib/documents/read/on-demand')
+    vi.mocked(ensureDocumentRead).mockResolvedValueOnce({ status: 'read', pages: 3, reader: 'claude_vision' } as never)
+    enqueue({ data: { id: DOC, file_name: 'skuldebrev.pdf', doc_type: 'agreement.loan', page_count: 3 } })
+    enqueue({ data: [{ page_no: 1, text: 'sida 1' }, { page_no: 2, text: 'sida 2' }, { page_no: 3, text: 'sida 3' }] })
+    enqueue({ data: { page_count: 3 } })
+    const out = (await tool('gnubok_read_document').execute({ record_ref: `document:${DOC}` }, CO, 'user-1', supabase)) as { pages: unknown[] }
+    expect(ensureDocumentRead).toHaveBeenCalledWith(supabase, CO, DOC)
+    expect(out.pages).toHaveLength(3)
+  })
+
   it('read_document says why a document has no text instead of answering with nothing', async () => {
     enqueue({ data: { id: DOC, file_name: 'data.csv', doc_type: null, page_count: null } })
     enqueue({ data: [] })

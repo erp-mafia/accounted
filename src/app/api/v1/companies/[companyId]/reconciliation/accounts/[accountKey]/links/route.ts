@@ -30,7 +30,7 @@ const LinksResponse = z.object({
     z.object({
       external_id: z.string(),
       journal_entry_id: z.string(),
-      via: z.enum(['line', 'entry_total']).optional(),
+      via: z.enum(['line', 'entry_total', 'lines']).optional(),
       allocated_amount: z.number().optional(),
     }),
   ),

@@ -46,11 +46,12 @@ const INVOICE = 'horizontal/swedish-invoice-compliance'
 const YEAR_END = 'horizontal/swedish-year-end-closing'
 
 /**
- * Community sharing (share, upvote, community items and authors) is built but
- * held back from this release: the page, the knowledge picker and the share
- * route all read this one switch. Flip it when community launches.
+ * Community sharing (share, upvote, community items and authors): the page,
+ * the knowledge picker and the share route all read this one switch. Shared
+ * items are reviewed by Accounted and published through the public MIT repo
+ * erp-mafia/accounted-skills (community-repo.ts, community-sync.ts).
  */
-export const COMMUNITY_OPEN = false
+export const COMMUNITY_OPEN = true
 
 /** What a company's own agent carries until the company changes it: the accounting law every flow stands on. */
 export const OWN_AGENT_KNOWLEDGE: readonly string[] = [COMPLIANCE]

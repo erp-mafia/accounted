@@ -19,15 +19,23 @@ const CLAUDE_DOWNLOAD = 'https://claude.com/download'
  * so a scheduled run is the same job a click starts, told that nobody is
  * there to answer questions while it runs.
  */
+/** The request Claude Desktop gets: schedule `run` at the chosen time. Shared by the panel and Skriv själv. */
+export function useRoutinePrompt() {
+  const t = useTranslations('skills_registry')
+  return ({ cadence, day, time }: RoutineChoice, run: string) => {
+    const at = routineTime(time)
+    const when = cadence === 'weekly'
+      ? t('routine_when_weekly', { day: t(`routine_days.${day}`), time: at })
+      : t(`routine_when_${cadence}`, { time: at })
+    return routinePrompt({ when, run, wrap: (w, r) => t('routine_prompt', { when: w, run: r }) })
+  }
+}
+
 export function RoutinePanel({ run, item, kind, onBack, initial }: { run: string; item: string; kind: ItemKind; onBack: () => void; initial?: RoutineChoice | null }) {
   const t = useTranslations('skills_registry')
   const [choice, setChoice] = useState<RoutineChoice>(initial ?? { cadence: 'weekly', day: 'mon', time: '07:00' })
-  const { cadence, day, time } = choice
-  const at = routineTime(time)
-  const when = cadence === 'weekly'
-    ? t('routine_when_weekly', { day: t(`routine_days.${day}`), time: at })
-    : t(`routine_when_${cadence}`, { time: at })
-  const prompt = routinePrompt({ when, run, wrap: (w, r) => t('routine_prompt', { when: w, run: r }) })
+  const { cadence } = choice
+  const prompt = useRoutinePrompt()(choice, run)
   const claude = AI_CLIENTS.find((c) => c.id === 'claude')!
 
   function open() {
@@ -89,3 +97,37 @@ export function RoutineFields({ value, onChange, none = false }: { value: Routin
     </>
   )
 }
+
+/**
+ * Skriv själv's routine: one row like the page's other rows, how often on the
+ * right and, once chosen, the day and time beside it. Nothing unfolds below;
+ * saving schedules it (CreateItem.tsx).
+ */
+export function RoutineRow({ value, onChange }: { value: RoutineChoice | null; onChange: (next: RoutineChoice | null) => void }) {
+  const t = useTranslations('skills_registry')
+  const current = value ?? { cadence: 'weekly' as const, day: 'mon' as const, time: '07:00' }
+  return (
+    <div className={styles.routineInline}>
+      <span className={styles.rowLabel}>{t('routine_create_label')}</span>
+      <span className={styles.routineControls}>
+        <select className={styles.routineSelect} value={value?.cadence ?? 'none'} aria-label={t('routine_how_often')}
+          onChange={(e) => onChange(e.target.value === 'none' ? null : { ...current, cadence: e.target.value as RoutineCadence })}>
+          <option value="none">{t('routine_none')}</option>
+          {(['daily', 'weekdays', 'weekly'] as const).map((c) => <option key={c} value={c}>{t(`routine_${c}`)}</option>)}
+        </select>
+        {value?.cadence === 'weekly' && (
+          <select className={styles.routineSelect} value={value.day} aria-label={t('routine_day')} onChange={(e) => onChange({ ...value, day: e.target.value as RoutineDay })}>
+            {ROUTINE_DAYS.map((d) => <option key={d} value={d}>{t(`routine_days.${d}`)}</option>)}
+          </select>
+        )}
+        {value && <input type="time" className={styles.routineSelect} value={value.time} aria-label={t('routine_time')} onChange={(e) => onChange({ ...value, time: e.target.value })} />}
+      </span>
+      {value && (
+        <small className={styles.routineInlineNote}>
+          {t('routine_create_hint')} · <a className="underline underline-offset-4" href={CLAUDE_DOWNLOAD} target="_blank" rel="noreferrer">{t('routine_download')}</a>
+        </small>
+      )}
+    </div>
+  )
+}
+

@@ -58,11 +58,16 @@ const choices = new Map<string, { added: string[]; removed: Set<string> }>([['bo
 
 function knowledgeFor(defaults: readonly string[], agentId: string) {
   const choice = choices.get(agentId)
-  const option = (id: string) => OPTIONS.find((o) => o.id === id)!
+  const option = (id: string) => allOptions().find((o) => o.id === id)!
   return [
     ...defaults.filter((k) => !choice?.removed.has(k)).map((k) => ({ ...option(k), source: 'default' as const })),
     ...(choice?.added ?? []).filter((k) => !defaults.includes(k)).map((k) => ({ ...option(k), source: 'added' as const })),
   ]
+}
+
+/** Accounted's packs, then the demo company's own knowledge, as /api/agents/knowledge lists them. */
+function allOptions(): KnowledgeOption[] {
+  return [...OPTIONS, ...CATALOG.filter((c) => c.tier === 'own' && c.itemKind === 'rules').map((c) => ({ id: c.slug, tier: 'own' as const, title: c.name, summary: String(c.summary ?? ''), version: null, reviewed_at: null }))]
 }
 
 function applyChoice(body: { action: 'add' | 'remove' | 'reset'; agent_id: string; atom_id?: string }) {
@@ -136,6 +141,7 @@ const OWN_BODIES = new Map<string, string>()
 
 const CATALOG: Array<Record<string, unknown> & { slug: string; name: string }> = [
   { slug: 'own/00000000-0000-4000-8000-000000000001', name: 'Påminnelse om leverantörsfakturor', summary: 'Listar obetalda leverantörsfakturor som förfaller inom en vecka.', tags: ['own'], tier: 'own', source: 'own', active: true, shareStatus: 'private', installations: [{ installation_id: '00000000-0000-4000-8000-000000000001', scope: 'company' }] },
+  { slug: 'own/00000000-0000-4000-8000-0000000000aa', name: 'Våra SaaS-leverantörer', summary: 'Hur vi konterar molntjänster och AI-verktyg.', tags: ['own'], tier: 'own', source: 'own', active: true, shareStatus: 'private', itemKind: 'rules', installations: [{ installation_id: '00000000-0000-4000-8000-0000000000aa', scope: 'company' }] },
 ]
 
 /**
@@ -179,7 +185,7 @@ function installFixtures() {
     switch (url.pathname) {
       case '/api/ai/connections': return json(demoState().noAi ? [] : ['claude'])
       case '/api/agents': return json(stateOverview())
-      case '/api/agents/knowledge': return json(OPTIONS)
+      case '/api/agents/knowledge': return json(allOptions())
       case '/api/worklist/counts': return json({ counts: { book_transaction: 42, verifikat_missing_document: 9, inbox_document: 3 } })
       case '/api/skills/usage': return json({ bookkeep: { count: 12, last_at: '2026-09-22T09:14:00Z' }, 'quarterly-vat-review': { count: 2, last_at: '2026-08-12T08:00:00Z' } })
       case '/api/skills': {
