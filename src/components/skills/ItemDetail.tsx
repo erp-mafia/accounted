@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
@@ -18,8 +18,8 @@ import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboardi
 import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
 import { ClaudeStart } from './ClaudeStart'
 import { trackInstructions } from './track'
-import { RoutinePanel } from './RoutinePanel'
-import { parseRoutineQuery } from '@/lib/agent-skills/routine'
+import { RoutineOffer, RoutinePanel } from './RoutinePanel'
+import { parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { DeleteOwn, Field, Row, ShareBox, SubView } from './AgentDetail'
@@ -65,10 +65,10 @@ type Item = {
  */
 export function ItemDetail({ segment, backHref }: { segment: string; backHref: string }) {
   const { company } = useCompany()
-  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} segment={segment} backHref={backHref} /> : null
+  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} companyName={company.name} segment={segment} backHref={backHref} /> : null
 }
 
-function Detail({ companyId, segment, backHref }: { companyId: string; segment: string; backHref: string }) {
+function Detail({ companyId, companyName, segment, backHref }: { companyId: string; companyName: string; segment: string; backHref: string }) {
   const t = useTranslations('skills_registry')
   const locale = useLocale()
   const { canWrite } = useCanWrite()
@@ -81,7 +81,9 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const agents = useSWR(['/api/agents', companyId, 'claude'], ([url, , c]) => readAgents(`${url}?client=${c}`))
   // A routine chosen in Skriv själv arrives as ?rutin=… and opens its panel filled in.
-  const handedRoutine = parseRoutineQuery(new URLSearchParams(useSearchParams().toString()))
+  const handedParams = new URLSearchParams(useSearchParams().toString())
+  const handedRoutine = parseRoutineQuery(handedParams)
+  const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
   const [connected, setConnected] = useState<AiClient[] | null>(null)
   const [ran, setRan] = useState(false)
@@ -219,10 +221,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
             ) : item.atomId
               ? <Button size="lg" className="gap-2" disabled={!canWrite} onClick={() => setView('give')}><Plus className="h-4 w-4" aria-hidden />{t('give_to_flow')}</Button>
               : <span />}
-            {/* A routine is scheduled in Claude Desktop, so only for Claude. */}
-            {runnable && client === 'claude' && (
-              <Button size="lg" variant="outline" className="gap-2" onClick={() => setView('routine')}><Repeat className="h-4 w-4" aria-hidden />{t('routine_open')}</Button>
-            )}
+            {/* A routine is scheduled in Claude; an analysis only reads, so a viewer may schedule one. */}
+            {runnable && <RoutineOffer client={client} disconnected={connected !== null && connected.length === 0} readOnly={item.kind === 'analysis'} canWrite={canWrite} onOpen={() => setView('routine')} />}
             {ran && <span className={styles.stageStatus} role="status">{t('copied_open', { client: ai.name })}</span>}
             {item.community && <Vote meta={item.community} slug={item.key} />}
           </div>
@@ -274,7 +274,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               </>
             )}
             {view === 'routine' && (
-              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
+              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} name={item.name} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} company={{ id: companyId, name: companyName }} initial={handedRoutine} sent={handedSent} onBack={() => setView('main')} />
             )}
             {view === 'give' && item.atomId && (
               <SubView title={t('give_to_flow')} onBack={() => setView('main')}>

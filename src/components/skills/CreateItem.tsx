@@ -19,10 +19,11 @@ import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
 import { fetchConnections, knowledgeHref, readOptions, simulatedClient } from './data'
-import { RoutineRow, useRoutinePrompt } from './RoutinePanel'
+import { RoutineRow, RoutineRowElsewhere, sendRoutine, useRoutineTranslate } from './RoutinePanel'
+import { useClaudeTarget } from './claude-target'
 import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { trackInstructions } from './track'
-import { coworkLink, routineQuery, type RoutineChoice } from '@/lib/agent-skills/routine'
+import { routinePrompt, routineQuery, type RoutineChoice, type RoutineSent, type RoutineTarget } from '@/lib/agent-skills/routine'
 import styles from './skills.module.css'
 
 const KIND_PARAM: Record<string, ItemKind> = { arbetsfloden: 'workflow', kunskap: 'rules', analyser: 'analysis' }
@@ -35,10 +36,10 @@ const KIND_PARAM: Record<string, ItemKind> = { arbetsfloden: 'workflow', kunskap
  */
 export function CreateItem({ backHref }: { backHref: string }) {
   const { company } = useCompany()
-  return company ? <Create companyId={company.id} backHref={backHref} /> : null
+  return company ? <Create companyId={company.id} companyName={company.name} backHref={backHref} /> : null
 }
 
-function Create({ companyId, backHref }: { companyId: string; backHref: string }) {
+function Create({ companyId, companyName, backHref }: { companyId: string; companyName: string; backHref: string }) {
   const t = useTranslations('skills_registry')
   const router = useRouter()
   const { mutate } = useSWRConfig()
@@ -62,8 +63,12 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
   const [view, setView] = useState<'main' | 'knowledge'>('main')
   const [state, setState] = useState<'idle' | 'saving'>('idle')
   const [problem, setProblem] = useState<string | null>(null)
-  // A routine is scheduled in Claude Desktop, so it is offered to Claude users only, for flows and analyses.
+  // A routine is scheduled in Claude, so it is offered to Claude users only, for flows and analyses.
   const [routine, setRoutine] = useState<RoutineChoice | null>(null)
+  // Where in Claude: the web unless this browser starts Claude in Desktop or Cowork.
+  const [claudeTarget] = useClaudeTarget()
+  const [chosenTarget, setChosenTarget] = useState<RoutineTarget | null>(null)
+  const routineTarget: RoutineTarget = chosenTarget ?? (claudeTarget === 'web' ? 'web' : 'desktop')
   const [connected, setConnected] = useState<AiClient[] | null>(null)
   useEffect(() => {
     const simulated = simulatedClient()
@@ -71,7 +76,10 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
     void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) })
     return () => controller.abort()
   }, [])
-  const routineOffered = kind !== 'rules' && pickConnectedAiClient(connected ?? []) === 'claude'
+  const aiClient = pickConnectedAiClient(connected ?? [])
+  const routineOffered = kind !== 'rules' && aiClient === 'claude'
+  // ChatGPT and Grok users see where routines are instead of a row that is not there.
+  const routineElsewhere = kind !== 'rules' && !!aiClient && aiClient !== 'claude'
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
 
   // Coloured by its name, as the saved item will be.
@@ -114,12 +122,13 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
       : `${head}${text.trim()}\n`
   }
 
-  const routinePrompt = useRoutinePrompt()
+  const translate = useRoutineTranslate()
   const scheduling = !!routine && routineOffered
 
   async function save() {
-    // Opening Claude Desktop needs a click, and the browser honours one for a few seconds:
-    // the routine is sent from this same click when saving is quick, else handed to the new page.
+    // Opening Claude needs a click, and the browser honours one for a few seconds: the routine
+    // is sent from this same click when saving is quick. Either way the new page opens its
+    // routine panel, which says what to do in Claude and can send it again.
     const clickedAt = performance.now()
     setState('saving')
     setProblem(null)
@@ -149,18 +158,18 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
       const page = kind === 'workflow' ? `${backHref}/own-${data.id}` : `${backHref}/egen.${data.id}`
       if (routine && routineOffered) {
         const stillClicked = (navigator.userActivation?.isActive ?? true) && performance.now() - clickedAt < 4000
+        let sent: RoutineSent | null = null
         if (stillClicked) {
           const agent = `own/${data.id}`
           const run = kind === 'workflow'
             ? t('prompt', { say: t('own_say', { name: name.trim() }), agent, client: 'claude' })
             : t('skill_prompt', { name: name.trim(), slug: agent, client: 'claude' })
-          trackInstructions('instructions_routine_opened', { item: 'own', kind, cadence: routine.cadence })
-          window.location.href = coworkLink(routinePrompt(routine, run))
-          router.push(page)
-          return
+          trackInstructions('instructions_routine_opened', { item: 'own', kind, cadence: routine.cadence, target: routineTarget })
+          const request = routinePrompt({ choice: routine, run, readOnly: kind === 'analysis', company: { id: companyId, name: companyName } }, translate)
+          sent = await sendRoutine(routineTarget, request)
         }
-        // Too slow for the browser to allow it: the new page opens with the routine filled in, one click away.
-        router.push(`${page}?${routineQuery(routine)}`)
+        // Sent or not, the new page opens with the routine filled in: a Desktop that never opened loses nothing.
+        router.push(`${page}?${routineQuery(routine, sent)}`)
         return
       }
       router.push(page)
@@ -250,7 +259,8 @@ function Create({ companyId, backHref }: { companyId: string; backHref: string }
                     </Row>
                   </div>
                 )}
-                {routineOffered && <RoutineRow value={routine} onChange={setRoutine} />}
+                {routineOffered && <RoutineRow value={routine} onChange={setRoutine} target={routineTarget} onTarget={setChosenTarget} />}
+                {routineElsewhere && <RoutineRowElsewhere />}
                 </div>
               </>
             )}
