@@ -298,6 +298,11 @@ describe('GET /api/reports/kpi', () => {
       financial_sections: [],
       total_financial: 0,
       net_result: 0,
+      nettoomsattning: 0,
+      aktiverat_arbete: 0,
+      ovriga_rorelseintakter: 0,
+      rorelseresultat: 0,
+      definitions: {},
       period: { start: '', end: '' },
     })
     mockTrialBalance.mockResolvedValue({

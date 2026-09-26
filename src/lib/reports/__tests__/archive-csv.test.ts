@@ -76,6 +76,11 @@ describe('incomeStatementToCsv', () => {
       financial_sections: [],
       total_financial: 0,
       net_result: 60,
+      nettoomsattning: 0,
+      aktiverat_arbete: 0,
+      ovriga_rorelseintakter: 0,
+      rorelseresultat: 0,
+      definitions: {},
       period: { start: '2024-01-01', end: '2024-12-31' },
     }
     const csv = incomeStatementToCsv(report)
