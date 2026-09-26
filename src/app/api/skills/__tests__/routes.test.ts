@@ -99,6 +99,10 @@ describe('skills HTTP routes', () => {
   it('rejects missing sharing consent', async () => {
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author' }), params)).status).toBe(400)
   })
+  it('refuses to publish under a reserved handle such as @accounted', async () => {
+    expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'accounted', confirmed_no_customer_data: true }), params)).status).toBe(400)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
   it('submits only the scoped private row with consent evidence', async () => {
     enqueue({ data: { id } })
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author', confirmed_no_customer_data: true }), params)).status).toBe(200)

@@ -1,4 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { EntityType } from '@/types'
+import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { AGENTS, OWN_AGENT_KNOWLEDGE } from './agents'
 import { isAgentId } from './agent-bundle'
 import { toSummary } from './atoms'
@@ -15,12 +17,33 @@ export interface KnowledgeOption {
 }
 
 /**
- * Every pack a company can give an agent: live, exposed and top level
- * (references travel with their pack), then the company's own knowledge
- * items (added by a person, not withdrawn) as `own/<id>`.
+ * Company-form packs whose law is about one legal form (docs/LEGAL-FORMS.md:
+ * an array of form codes only when the law is about that form). Fåmansbolag
+ * (3:12, lön eller utdelning) and holding structures are aktiebolag law, so an
+ * enskild firma is never offered them: given to a flow, they would feed its AI
+ * the wrong rules. Every pack not listed fits every company.
+ */
+export const PACK_LEGAL_FORMS: Readonly<Record<string, readonly EntityType[]>> = {
+  'modifier/holding-ab': ['aktiebolag'],
+  'modifier/single-shareholder-ab-fmb': ['aktiebolag'],
+}
+
+/** Whether a pack applies to a company of this legal form. */
+export function packFitsForm(atomId: string, entityType: EntityType): boolean {
+  const forms = PACK_LEGAL_FORMS[atomId]
+  return !forms || forms.includes(entityType)
+}
+
+/**
+ * Every pack a company can give an agent: live, exposed, top level
+ * (references travel with their pack) and written for its legal form, then
+ * the company's own knowledge items (added by a person, not withdrawn) as
+ * `own/<id>`. Adding a pack checks against this list, so a pack for another
+ * legal form cannot be added either.
  */
 export async function loadKnowledgeOptions(supabase: SupabaseClient, companyId: string): Promise<KnowledgeOption[]> {
-  const [{ data, error }, rows] = await Promise.all([
+  const [entityType, { data, error }, rows] = await Promise.all([
+    resolveCompanyEntityType(supabase, companyId),
     supabase.from('agent_atom_registry')
       .select('id, tier, title, description, version, reviewed_at')
       .eq('is_active', true).eq('mcp_exposed', true).is('parent_atom_id', null)
@@ -29,6 +52,7 @@ export async function loadKnowledgeOptions(supabase: SupabaseClient, companyId: 
   ])
   if (error) throw new Error(`Failed to load knowledge options: ${error.message}`)
   const packs = ((data ?? []) as Array<{ id: string; tier: KnowledgeOption['tier']; title: string | null; description: string; version: number | null; reviewed_at: string | null }>)
+    .filter((row) => packFitsForm(row.id, entityType))
     .map((row) => ({ id: row.id, tier: row.tier, title: row.title ?? row.id, summary: toSummary(row.description, 160), version: row.version, reviewed_at: row.reviewed_at }))
   const own = rows.flatMap((row): KnowledgeOption[] => {
     const skill = ownSkill(row)

@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, ChevronDown, ChevronUp, Plus, Repeat } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
@@ -28,7 +28,7 @@ import { CopyIcon } from './CopyIcon'
 import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
-import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
+import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
 import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
@@ -75,6 +75,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const router = useRouter()
   const knowledgeName = useKnowledgeName()
   const knowledgeDesc = useKnowledgeDesc()
+  const analysisLabel = useAnalysisLabel()
   const isRules = segment.startsWith('kunskap.')
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
   // Always read: a pack's page lists the company's own flows it can be given to.
@@ -85,6 +86,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
   const [connected, setConnected] = useState<AiClient[] | null>(null)
   const [ran, setRan] = useState(false)
+  // A pack's own text is written for the AI (often in English): folded until asked for.
+  const [showBody, setShowBody] = useState(false)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
@@ -98,8 +101,9 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const shared = catalog.data?.find((s) => s.tier === 'community' && communitySegment(s.slug) === segment)
   const builtIn = segment.startsWith('analys.') ? catalog.data?.find((s) => s.source === 'accounted' && s.itemKind === 'analysis' && analysisSegment(s.slug) === segment) : undefined
   const mine = segment.startsWith('egen.') ? catalog.data?.find((s) => s.tier === 'own' && s.slug === `own/${segment.slice(5)}`) : undefined
-  const item: Item | null = builtIn ? {
-    kind: 'analysis', key: builtIn.slug, name: builtIn.name, desc: builtIn.summary, body: builtIn.summary,
+  const builtInLabel = builtIn ? analysisLabel(builtIn.slug, { name: builtIn.name, summary: builtIn.summary }) : null
+  const item: Item | null = builtIn && builtInLabel ? {
+    kind: 'analysis', key: builtIn.slug, name: builtInLabel.name, desc: builtInLabel.summary, body: builtIn.summary,
     atomId: null, version: builtIn.version ?? null, reviewedAt: null, level: null, community: null,
   } : mine ? {
     kind: mine.itemKind ?? 'rules', key: mine.slug, name: mine.name, desc: mine.summary, body: mine.summary,
@@ -168,6 +172,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   // Own items live under Egna.
   const back = item.own ? `${listHref}${listHref.includes('?') ? '&' : '?'}vy=egna` : listHref
   const isFlow = item.kind === 'workflow' && !!item.community
+  // Accounted's knowledge packs lead with what they cover in plain words; the text the AI reads is one click away.
+  const isPack = !builtIn && !mine && !!pack
   // Flows and analyses run in the company's AI; knowledge is given to flows instead.
   // An AI-saved draft is not loadable until it is added, so it cannot run yet.
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
@@ -257,10 +263,19 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                     </Row>
                   )}
                 </div>
-                {!isFlow && <Field label={t('field_contents')} note={t('contents_note')} copy={<CopyIcon text={body.data} label={t('copy_contents')} />}>
-                  <div className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
-                    {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
-                  </div>
+                {!isFlow && <Field label={t('field_contents')} note={isPack ? undefined : t('contents_note')} copy={<CopyIcon text={body.data} label={t('copy_contents')} />}>
+                  {isPack && <p className={styles.packAbout}>{item.desc}</p>}
+                  {isPack && (
+                    <button type="button" className={`${styles.catLink} ${styles.packToggle}`} aria-expanded={showBody} aria-controls="item-body" onClick={() => setShowBody(!showBody)}>
+                      {t(showBody ? 'hide_ai_text' : 'show_ai_text')}
+                      {showBody ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+                    </button>
+                  )}
+                  {(!isPack || showBody) && (
+                    <div id="item-body" className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
+                      {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
+                    </div>
+                  )}
                 </Field>}
                 {mine?.draft && (
                   <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>

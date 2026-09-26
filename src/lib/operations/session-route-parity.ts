@@ -505,7 +505,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/community/submissions/:id/approve': uiOnly('staff review of a community submission: reviewers only'),
   'POST /api/community/submissions/:id/send-back': uiOnly('staff review of a community submission: reviewers only'),
   'POST /api/skills': covered(['gnubok_create_skill']),
-  'POST /api/skills/draft': covered(['gnubok_create_skill']),
   'PATCH /api/skills/:id': gap('P3'),
   'DELETE /api/skills/:id': gap('P3'),
 

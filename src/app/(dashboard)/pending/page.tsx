@@ -59,6 +59,7 @@ import {
   singleActionWarning,
   REJECTION_CATEGORY_LABELS,
 } from '@/components/pending-operations/vocabulary'
+import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -237,6 +238,7 @@ type ViewTab = 'pending' | 'history'
 
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
+  const tSkills = useTranslations('skills_registry')
   const router = useRouter()
   const accountNames = useAccountNamesSource()
   const [operations, setOperations] = useState<PendingOperation[]>([])
@@ -694,6 +696,14 @@ export default function PendingOperationsPage() {
     return Array.from(counts.entries()).map(([type, count]) => ({ type, count }))
   }, [bulkEligible, selectedIds])
 
+  // The instructions the agent retrieved, by the names the Instruktioner page uses: never raw slugs or uuids.
+  const retrievedNames = (slugs: readonly string[]) => [...new Set(describeRetrievedSkills(slugs).map((item) => {
+    if (item.kind === 'workflow') return tSkills(`skills.${item.id}.name`)
+    if (item.kind === 'own') return tSkills('retrieved_own')
+    const key = item.kind === 'knowledge' ? `knowledge_names.${item.id.split('/')[1]}` : item.kind === 'analysis' ? `analyses.${item.slug}.name` : null
+    return key && tSkills.has(key) ? tSkills(key) : item.kind === 'knowledge' ? item.id.split('/')[1] : item.slug
+  }))].join(', ')
+
   // Source/kicker line for a row and the detail panel: operation type,
   // origin (when an agent staged it) and relative age.
   const sourceLine = (op: PendingOperation) => {
@@ -701,7 +711,7 @@ export default function PendingOperationsPage() {
     return [
       operationLabel(op.operation_type, t),
       isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
-      op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: op.agent_metadata.skills_loaded.join(', ') }) : null,
+      op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: retrievedNames(op.agent_metadata.skills_loaded) }) : null,
       formatRelativeTime(op.created_at),
     ]
       .filter(Boolean)

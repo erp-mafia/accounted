@@ -14,6 +14,7 @@ import type { AgentConnectionState, AgentsOverview, KnowledgeMeta } from '@/lib/
 import type { KnowledgeAction, KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { registrySkillSlug, skillsToDoNow, type RegistrySkillId } from '@/lib/agent-skills/registry'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
+import { AUTHOR_HANDLE, isReservedHandle } from '@/lib/agent-skills/validation'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 import { formatDateLong } from '@/lib/utils'
 import { PageHeader } from '@/components/ui/page-header'
@@ -457,8 +458,6 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
   )
 }
 
-const HANDLE = /^[a-z0-9][a-z0-9-]{0,38}$/
-
 /** Share an own agent with the community: it waits for Accounted's review before anyone else sees it. */
 /** Share an own item: Accounted reviews it, and a published one is open to everyone under MIT on accounted.se. */
 export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, preview }: {
@@ -482,7 +481,9 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
     if (ok) setOpen(false)
   }
   const failed = state === 'failed' ? t('share_failed') : undefined
-  const handleOk = HANDLE.test(handle)
+  // The rule is shown from the start; a reserved name (accounted, admin, support ...) is refused here and by the server.
+  const reserved = AUTHOR_HANDLE.test(handle) && isReservedHandle(handle)
+  const handleOk = AUTHOR_HANDLE.test(handle) && !reserved
   if (status === 'submitted' || status === 'published') {
     return (
       <ActionRow title={t('adv_share_title')} desc={t(`share_status_${status}`)} alert={failed} below={status === 'published' && publishedUrl ? <a className={styles.catLink} href={publishedUrl} target="_blank" rel="noreferrer">{t('share_published_link')}</a> : undefined}>
@@ -510,9 +511,9 @@ export function ShareBox({ status, canWrite, onShare, publishedUrl, reviewNote, 
               <span className={styles.shareInput} data-invalid={handle && !handleOk ? '' : undefined}>
                 <span aria-hidden>@</span>
                 <input id="share-handle" type="text" value={handle} placeholder={t('share_handle_placeholder')} autoComplete="off" spellCheck={false} maxLength={39}
-                  onChange={(e) => setHandle(e.target.value.toLowerCase())} aria-invalid={handle !== '' && !handleOk} aria-describedby={handle && !handleOk ? 'share-handle-hint' : undefined} />
+                  onChange={(e) => setHandle(e.target.value.toLowerCase())} aria-invalid={handle !== '' && !handleOk} aria-describedby="share-handle-hint" />
               </span>
-              {handle && !handleOk && <small id="share-handle-hint" className={styles.shareHint}>{t('share_handle_hint')}</small>}
+              <small id="share-handle-hint" className={styles.shareRule} data-invalid={handle && !handleOk ? '' : undefined}>{t(reserved ? 'share_handle_reserved' : 'share_handle_hint')}</small>
             </label>
             <label className={styles.shareCheck} htmlFor="share-confirm">
               <input id="share-confirm" type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />

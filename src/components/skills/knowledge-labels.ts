@@ -24,3 +24,19 @@ export function useKnowledgeDesc() {
     return t.has(key) ? t(key) : fallback
   }
 }
+
+/**
+ * An Accounted analysis's name and one-line summary in the page's language.
+ * The analysis text the AI reads stays Swedish (lib/agent-skills/analyses.ts),
+ * so an analysis without messages falls back to its own name and summary.
+ */
+export function useAnalysisLabel() {
+  const t = useTranslations('skills_registry')
+  return (slug: string, fallback: { name: string; summary: string }) => {
+    const base = `analyses.${slug}`
+    return {
+      name: t.has(`${base}.name`) ? t(`${base}.name`) : fallback.name,
+      summary: t.has(`${base}.summary`) ? t(`${base}.summary`) : fallback.summary,
+    }
+  }
+}

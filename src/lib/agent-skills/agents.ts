@@ -50,8 +50,13 @@ const YEAR_END = 'horizontal/swedish-year-end-closing'
  * the knowledge picker and the share route all read this one switch. Shared
  * items are reviewed by Accounted and published through the public MIT repo
  * erp-mafia/accounted-skills (community-repo.ts, community-sync.ts).
+ *
+ * Closed for the Instruktioner launch (founder, 2026-09-26): "Dra tillbaka"
+ * is one-way today (the author loses the item while a published copy stays
+ * public). It reopens once withdrawing returns the item to private and the
+ * reviewer can finish a withdrawal. Withdrawing an earlier submission still works.
  */
-export const COMMUNITY_OPEN = true
+export const COMMUNITY_OPEN = false
 
 /** What a company's own agent carries until the company changes it: the accounting law every flow stands on. */
 export const OWN_AGENT_KNOWLEDGE: readonly string[] = [COMPLIANCE]
