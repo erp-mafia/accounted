@@ -11113,6 +11113,8 @@
     "signal_no_text_layer_help": "Filen saknar textlager och lästes av modellen. Normalt för foton och skanningar.",
     "signal_inbox_kind": "Typ enligt inkorgens läsning",
     "signal_inbox_kind_help": "Inkorgen läste dokumentet som en leverantörsfaktura eller ett kvitto innan arkivet satte typ. Den läsningen avgör riktningen: bolaget är mottagare, inte utställare.",
+    "signal_verifikat_kind": "Typ enligt verifikatet",
+    "signal_verifikat_kind_help": "Dokumentet är bokfört, och verifikatet visar åt vilket håll pengarna gick: en leverantörsskuld eller en kostnad är ett inköp, en kundfordran eller en intäkt en försäljning. Det avgör om fakturan är en leverantörs- eller kundfaktura.",
     "signal_duplicate_content": "Samma innehåll som ett annat dokument",
     "signal_duplicate_content_help": "Ett annat dokument i arkivet har samma text.",
     "signal_multi_document": "Flera dokument i en fil",

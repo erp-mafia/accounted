@@ -11113,6 +11113,8 @@
     "signal_no_text_layer_help": "The file has no text layer and was read by the model. Normal for photos and scans.",
     "signal_inbox_kind": "Type from the inbox reading",
     "signal_inbox_kind_help": "The inbox read the document as a supplier invoice or a receipt before the archive typed it. That reading decides the direction: the company is the recipient, not the issuer.",
+    "signal_verifikat_kind": "Type from the voucher",
+    "signal_verifikat_kind_help": "The document is booked, and the voucher shows which way the money went: a supplier debt or an expense is a purchase, a customer claim or revenue a sale. That decides whether the invoice is a supplier or a customer invoice.",
     "signal_duplicate_content": "Same content as another document",
     "signal_duplicate_content_help": "Another document in the archive has the same text.",
     "signal_multi_document": "Several documents in one file",
