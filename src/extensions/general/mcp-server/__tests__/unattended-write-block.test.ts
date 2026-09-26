@@ -146,6 +146,18 @@ describe('MCP unattended-session guard', () => {
     expect(JSON.stringify(payload)).toContain('could not be guarded')
   })
 
+  it('refuses an unattended run on a hosted deployment without Upstash, where memory is not shared', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      const response = await handleMcpRequest(mcpToolCall('gnubok_get_task', { kind: 'agent:bookkeep', client: 'claude', unattended: true }, 'routine-run-y'))
+      const { isError, payload } = await parsedToolResult(response)
+      expect(isError).toBe(true)
+      expect(JSON.stringify(payload)).toContain('could not be guarded')
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
   it('scopes the mark to the session when there is one, else the key', () => {
     expect(unattendedScope('s1', 'k1')).toMatchObject({ scope: 'session:s1' })
     expect(unattendedScope(null, 'k1')).toMatchObject({ scope: 'key:k1' })

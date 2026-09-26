@@ -1,4 +1,5 @@
 import { getRedis } from '@/lib/auth/rate-limit-http'
+import { isSelfHosted } from '@/lib/env/public-flags'
 
 /**
  * Unattended MCP runs: a scheduled routine calls get_task with
@@ -13,8 +14,11 @@ import { getRedis } from '@/lib/auth/rate-limit-http'
  * session header is not trusted for authorization and is not used for it: a
  * mark only ever takes rights away.
  *
- * Marks live in Upstash (shared by every server instance), or in memory
- * where Upstash is not configured (self-hosted, one instance, and tests).
+ * Marks live in Upstash, shared by every server instance. Memory is only a
+ * fallback where one process serves everything (self-hosted, and tests): on
+ * a hosted deployment a mark in one instance's memory would not hold back a
+ * call routed to another, so there an unattended run without Upstash is
+ * refused instead (markUnattended throws, and the dispatcher refuses the run).
  */
 export const SESSION_TTL_SECONDS = 6 * 60 * 60
 export const KEY_TTL_SECONDS = 2 * 60 * 60
@@ -38,12 +42,18 @@ export function unattendedScopes(sessionId: string | null | undefined, keyId: st
   ]
 }
 
+/** Whether a mark kept in this process's memory is enough: one process serves every call. */
+function memoryIsShared(): boolean {
+  return isSelfHosted() || process.env.NODE_ENV === 'test'
+}
+
 export async function markUnattended(scope: UnattendedScope, ttlSeconds: number): Promise<void> {
   const redis = getRedis()
   if (redis) {
     await redis.set(`${PREFIX}${scope}`, '1', { ex: ttlSeconds })
     return
   }
+  if (!memoryIsShared()) throw new Error('No shared store for unattended marks (Upstash is not configured)')
   memory.set(scope, Date.now() + ttlSeconds * 1000)
 }
 
