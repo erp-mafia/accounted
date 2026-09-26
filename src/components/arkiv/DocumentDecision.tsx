@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { typeFromSuggestion } from '@/lib/arkiv/suggested-type'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -34,6 +35,8 @@ export interface DecisionDocument {
   addressed_to?: string | null
   summary?: string | null
   suggested_type?: string | null
+  /** An image is shown as itself in the preview; anything else as its highlighted line. */
+  mime_type?: string | null
 }
 
 const GROUPS: string[][] = [
@@ -91,7 +94,9 @@ export function DocumentDecision({
     if (!doc) return
     let cancelled = false
     setExtraction(undefined)
-    setChosen((doc.doc_type as DocType | null) ?? null)
+    // Propose what the model actually guessed when its answer was only "other" (2026-09-26: a Vercel receipt it
+    // described as "payment receipt" was proposed as Övrigt, and the main button saved it as that).
+    setChosen(doc.doc_type && doc.doc_type !== 'other' ? (doc.doc_type as DocType) : (typeFromSuggestion(doc.suggested_type) ?? ((doc.doc_type as DocType | null) ?? null)))
     setPicks({})
     setReason('')
     setShowAll(false)
@@ -175,6 +180,17 @@ export function DocumentDecision({
         <SlideOverHeader kicker={meta} title={title} />
         <SlideOverBody className="space-y-4">
           <div className="grid gap-5 sm:grid-cols-[190px_minmax(0,1fr)]">
+            {doc.mime_type?.startsWith('image/') ? (
+              <div className="flex h-[250px] flex-col rounded-lg border border-border bg-secondary p-2">
+                {/* eslint-disable-next-line @next/next/no-img-element -- a same-origin preview behind auth, not a static asset */}
+                <img src={inlineHref(doc.document_id, null)} alt={doc.file_name} className="min-h-0 flex-1 rounded-sm object-contain" />
+                <p className="mt-2 text-[11px] text-muted-foreground">
+                  <a href={inlineHref(doc.document_id, null)} target="_blank" rel="noreferrer" className="underline decoration-border underline-offset-2 hover:text-foreground">
+                    {t('record_open_document')}
+                  </a>
+                </p>
+              </div>
+            ) : (
             <div className="h-[250px] rounded-lg border border-border bg-secondary p-3.5">
               <div className="mb-2 h-[5px] w-[60%] rounded-sm bg-border" />
               <div className="mb-1.5 h-[5px] w-[90%] rounded-sm bg-border" />
@@ -194,6 +210,7 @@ export function DocumentDecision({
                 </a>
               </p>
             </div>
+            )}
             <div className="min-w-0 space-y-3.5">
               <div>
                 <p className="mb-2 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">{t('decision_we_think')}</p>

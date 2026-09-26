@@ -13,7 +13,7 @@ import { captureArkivEvent } from '@/lib/arkiv/events'
 import { getCompanyGraph } from '@/lib/arkiv/graph/snapshot'
 import { neighbourhoodOf } from '@/lib/arkiv/graph/neighbourhood'
 import { ensureDocumentRead } from '@/lib/documents/read/on-demand'
-import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, typesFor } from '@/lib/arkiv/list-records'
+import { listRecords, LIST_LIMIT_DEFAULT, LIST_LIMIT_MAX, originalsOf, typesFor } from '@/lib/arkiv/list-records'
 import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 
 /**
@@ -345,12 +345,15 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
     .maybeSingle()
   if (error) throw dbError(error)
   if (!entry) return null
-  const { data: docs, error: docError } = await supabase.from('document_attachments').select('id').eq('journal_entry_id', journalEntryId).eq('company_id', companyId).limit(50)
+  const { data: docs, error: docError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('journal_entry_id', journalEntryId).eq('company_id', companyId).limit(50)
   if (docError) throw dbError(docError)
+  const rows = (docs ?? []) as Array<{ id: string; created_at: string; sha256_hash: string | null }>
+  // A later copy of the same file or text says so, so a sum over the verifikat counts it once.
+  const originals = await originalsOf(supabase, companyId, rows)
   const documents = []
-  for (const d of (docs ?? []) as Array<{ id: string }>) {
+  for (const d of rows) {
     const record = await documentRecord(supabase, companyId, d.id)
-    if (record) documents.push(record)
+    if (record) documents.push({ ...record, duplicate_of: originals.has(d.id) ? `document:${originals.get(d.id)}` : null })
   }
   const e = entry as Record<string, unknown> & { id: string }
   return { journal_entry_id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`, entry_date: e.entry_date, description: e.description, documents }
@@ -363,7 +366,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       keywords: ['arkiv', 'dokument', 'avtal', 'fakta', 'sök dokument', 'hyresavtal', 'lån', 'registreringsbevis'],
       title: 'Search Records',
       description:
-        'Search the company archive: document text, agreements and facts. Returns record_refs for gnubok_get_record. Unread documents are not searched; hint says how to reach them.',
+        'Search the archive: document text, agreements and facts. Returns record_refs for gnubok_get_record. Unread documents are not searched: see hint.',
       inputSchema: {
         type: 'object',
         additionalProperties: false,
@@ -389,6 +392,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
                 snippet: { type: ['string', 'null'] },
                 document_id: { type: ['string', 'null'] },
                 page: { type: ['integer', 'null'] },
+                duplicate_of: { type: ['string', 'null'] },
               },
               required: ['record_ref', 'kind', 'title', 'snippet', 'document_id', 'page'],
             },
@@ -409,11 +413,20 @@ export function createArkivTools(deps: Deps): McpTool[] {
         const items = await searchRecords(supabase, companyId, String(args.query ?? ''), { kinds, limit: Number(args.limit ?? SEARCH_LIMIT_DEFAULT) })
         // An empty answer from an archive nobody has read yet is not "no such document" (prod 2026-09-25: a
         // company with 10 unread invoices searched "faktura" and got nothing, with nothing saying why).
+        // A later copy of the same file or text says so, as in list_records, so hits are counted once.
+        const hitIds = [...new Set(items.map((i) => i.document_id).filter((id): id is string => !!id))]
+        let originals = new Map<string, string>()
+        if (hitIds.length) {
+          const { data: hitDocs, error: hitError } = await supabase.from('document_attachments').select('id, created_at, sha256_hash').eq('company_id', companyId).in('id', hitIds)
+          if (hitError) throw dbError(hitError)
+          originals = await originalsOf(supabase, companyId, (hitDocs ?? []) as Array<{ id: string; created_at: string; sha256_hash: string | null }>)
+        }
+        const marked = items.map((i) => ({ ...i, duplicate_of: i.document_id && originals.has(i.document_id) ? `document:${originals.get(i.document_id)}` : null }))
         const unread = await countUnreadDocuments(supabase, companyId)
         const hint = unread > 0
           ? `${unread} document${unread === 1 ? ' is' : 's are'} not read yet and not in this search. Page through gnubok_list_records (read: false) and open one with gnubok_read_document: it is read on the spot.`
           : null
-        return { items, count: items.length, unread, hint }
+        return { items: marked, count: marked.length, unread, hint }
       },
     },
     {

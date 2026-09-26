@@ -281,6 +281,9 @@ export async function countUnclassifiedDocuments(supabase: SupabaseClient, compa
     .eq('relevance', 'relevant')
     .or('doc_type.eq.other,confidence.lt.0.6')
     .gte('document_attachments.created_at', reviewSince())
+    // A booked document is never asked about: the verifikat already says what it is.
+    .is('document_attachments.journal_entry_id', null)
+    .is('document_attachments.journal_entry_line_id', null)
   if (error) return logAndZero('document_unclassified', companyId, error)
   return count ?? 0
 }

@@ -81,12 +81,16 @@ describe('GET /api/arkiv/documents', () => {
       data: [
         { id: 'doc-new', created_at: '2026-09-15T10:00:00Z', file_name: 'scan.pdf', doc_type: null, admission_state: 'admitted', journal_entry_id: null },
         { id: 'doc-other', created_at: '2026-09-14T10:00:00Z', file_name: 'okänd.pdf', doc_type: 'other', admission_state: 'admitted', journal_entry_id: null },
+        { id: 'doc-booked', created_at: '2026-09-13T10:00:00Z', file_name: 'kvitto.pdf', doc_type: 'other', admission_state: 'admitted', journal_entry_id: 'je-9' },
       ],
     })
+    enqueue({ data: [{ id: 'je-9', voucher_series: 'A', voucher_number: 9 }] })
     const { body } = await parseJsonResponse(await call())
     const rows = (body as { data: Array<{ document_id: string; linked: Record<string, unknown> }> }).data
     expect(rows.find((r) => r.document_id === 'doc-new')?.linked).toMatchObject({ unclassified: false, reading: true })
     expect(rows.find((r) => r.document_id === 'doc-other')?.linked).toMatchObject({ unclassified: true, reading: false })
+    // Booked: the verifikat already says what it is, so nobody is asked.
+    expect(rows.find((r) => r.document_id === 'doc-booked')?.linked).toMatchObject({ unclassified: false, voucher: 'A9' })
   })
 
   it('rejects an unknown folder', async () => {

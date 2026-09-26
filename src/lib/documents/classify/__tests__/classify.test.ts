@@ -184,6 +184,13 @@ describe('classifyDocument', () => {
     expect(system).toMatch(/decision\.skatteverket: .*nothing to pay/)
   })
 
+  it('keeps what a document is apart from who it is addressed to', () => {
+    // Prod 2026-09-26: 1 435 documents typed other, most of them receipts addressed to the owner personally.
+    const system = buildClassifySystem(company)
+    expect(system).toMatch(/addressed to a person[\s\S]*is still a receipt or invoice/)
+    expect(system).toMatch(/never because of who it is addressed to/)
+  })
+
   it('tells the model that a bill for an agreement is not the agreement', () => {
     // Prod 2026-09-21: a Bitwarden subscription invoice was typed agreement.subscription and became an agreement with obligations and a deadline.
     const system = buildClassifySystem({ name: 'Arcim Technology AB', orgNumber: '559538-6219' })

@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getDashboardCompanyId } from '../../request-context'
-import { isArkivBrainEnabled } from '@/lib/arkiv/flag'
+import { isArkivBrainEnabled, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { ArkivReview } from '@/components/arkiv/ArkivReview'
 
 /**
@@ -11,6 +11,7 @@ import { ArkivReview } from '@/components/arkiv/ArkivReview'
  */
 export default async function ArkivReviewPage() {
   const companyId = await getDashboardCompanyId()
-  if (!companyId || !isArkivBrainEnabled(companyId)) notFound()
+  // The questions work wherever Dokument is open: a document the model could not name, one held at the door.
+  if (!companyId || (!isArkivBrainEnabled(companyId) && !isArkivSectionEnabled(companyId))) notFound()
   return <ArkivReview />
 }
