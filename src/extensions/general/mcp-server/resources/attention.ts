@@ -5,8 +5,7 @@ import {
   UNLINKED_DOCUMENT_SCAN_CAP,
 } from '@/lib/documents/unlinked-documents'
 import { countReconciliationDue, listExpensePayoutsDue } from '@/lib/worklist/categories'
-import { fetchJunctionLinkedTxIds } from '@/lib/reconciliation/bank-reconciliation'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { countUnbookedBankTransactions, fetchAnchoredTransactionIds } from '@/lib/transactions/unbooked'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -44,7 +43,7 @@ export const attentionResource: McpResource = {
     const horizon = horizonDate.toISOString().slice(0, 10)
 
     const [
-      unbookedIds,
+      unbooked,
       unbookedSamples,
       overdueRows,
       pendingSupplierHead,
@@ -60,26 +59,19 @@ export const attentionResource: McpResource = {
       companySettingsRow,
       unlinkedDocuments,
     ] = await Promise.all([
-      // Ids, not a head count: journal_entry_id IS NULL is only the first of
-      // the "booked" anchors (lib/transactions/is-booked.ts). Rows bulk-booked
-      // into a samlingsverifikat or split over several verifikat (1:N) are
-      // anchored through transaction_voucher_links and are subtracted below.
-      fetchAllRows<{ id: string }>(({ from, to }) =>
-        supabase
-          .from('transactions')
-          .select('id')
-          .eq('company_id', companyId)
-          .is('journal_entry_id', null)
-          .eq('is_business', true)
-          .order('id')
-          .range(from, to),
-      ).catch(() => [] as Array<{ id: string }>),
+      // The shared "no verifikat" count (lib/transactions/unbooked.ts), the
+      // same predicate the period-lock guard, the VAT close check and the
+      // report data_status use. It used to count is_business = true only, so
+      // every never-triaged row was invisible here. A failed count skips the
+      // category rather than claiming zero.
+      countUnbookedBankTransactions(supabase, companyId).catch(() => null),
       supabase
         .from('transactions')
         .select('id, date, amount, currency, description, merchant_name')
         .eq('company_id', companyId)
+        .eq('is_ignored', false)
         .is('journal_entry_id', null)
-        .eq('is_business', true)
+        .or('is_business.is.null,is_business.eq.true')
         .order('date', { ascending: true })
         .limit(SAMPLE_LIMIT * 4),
       supabase
@@ -167,21 +159,24 @@ export const attentionResource: McpResource = {
     const categories: AttentionCategory[] = []
 
     // ── Unbooked business transactions ──────────────────────────────
-    const pointerUnbookedIds = unbookedIds.map((row) => row.id)
-    const junctionLinked =
-      pointerUnbookedIds.length > 0
-        ? await fetchJunctionLinkedTxIds(supabase, companyId, pointerUnbookedIds)
+    const unbookedCount = unbooked?.total ?? 0
+    const sampleCandidates = unbookedSamples.data ?? []
+    const anchoredSamples =
+      unbookedCount > 0 && sampleCandidates.length > 0
+        ? await fetchAnchoredTransactionIds(
+            supabase,
+            sampleCandidates.map((row) => row.id as string),
+          ).catch(() => new Set<string>())
         : new Set<string>()
-    const unbookedCount = pointerUnbookedIds.filter((id) => !junctionLinked.has(id)).length
-    const samples = (unbookedSamples.data ?? [])
-      .filter((row) => !junctionLinked.has(row.id as string))
+    const samples = sampleCandidates
+      .filter((row) => !anchoredSamples.has(row.id as string))
       .slice(0, SAMPLE_LIMIT)
     if (unbookedCount > 0) {
       const oldest = samples[0]
       const oldestAgeDays = oldest?.date ? daysBetween(oldest.date, today) : 0
       categories.push({
         key: 'unbooked_transactions',
-        label_sv: 'Obokförda affärstransaktioner',
+        label_sv: 'Obokförda banktransaktioner',
         severity: oldestAgeDays > 30 ? 'critical' : 'warning',
         count: unbookedCount,
         samples,
