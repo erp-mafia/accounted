@@ -1337,7 +1337,7 @@ Example response `200`:
     ],
     "debtor": {
       "name": "Testbolaget AB",
-      "iban": "SE3550000000054910000003",
+      "iban": "SE35 **** 0003",
       "bic": "ESSESESS"
     },
     "items": [
