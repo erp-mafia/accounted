@@ -13,7 +13,7 @@ export function InstructionDetail({ segment, backHref = '/skills' }: { segment: 
   // "Skriv själv": the item page, empty, with fields to fill in (?typ= picks flow, knowledge or analysis).
   if (decoded === 'ny') return <Suspense><CreateItem backHref={backHref} /></Suspense>
   // Suspense: the item pages read ?rutin= (a routine chosen in Skriv själv).
-  return decoded.startsWith('kunskap.') || decoded.startsWith('community.') || decoded.startsWith('egen.')
+  return decoded.startsWith('kunskap.') || decoded.startsWith('community.') || decoded.startsWith('egen.') || decoded.startsWith('analys.')
     ? <Suspense><ItemDetail segment={decoded} backHref={backHref} /></Suspense>
     : <Suspense><AgentDetail segment={decoded} backHref={backHref} /></Suspense>
 }
