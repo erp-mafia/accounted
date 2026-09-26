@@ -343,6 +343,9 @@ import {
   nextDay,
   reverseLines,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
+import { countMissingUnderlagInPeriod, MISSING_UNDERLAG_MIN_GROSS_SEK } from '@/lib/documents/missing-underlag'
+import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
+import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
@@ -2882,84 +2885,6 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 /**
- * Gross floor for the missing-underlag blocker. ML 17 kap 26-28 § (förenklad
- * faktura) expresses 4 000 kr inclusive of moms, so the comparison is against
- * the gross (sum of debits, equal to sum of credits in a balanced entry). For
- * EU acquisitions and domestic reverse-charge buyer entries the calculated VAT
- * lines inflate that sum, which can pull a sub-threshold purchase above 4 000:
- * a false positive in favour of asking for the underlag, the safe direction.
- */
-const MISSING_UNDERLAG_MIN_GROSS_SEK = 4000
-
-/** One `verifikat_without_documents` page-of-one, used only for its total. */
-async function totalMissingUnderlagSince(
-  supabase: SupabaseClient,
-  companyId: string,
-  since: string
-): Promise<number> {
-  const { data, error } = await supabase.rpc('verifikat_without_documents', {
-    p_company_id: companyId,
-    p_since: since,
-    p_min_amount: MISSING_UNDERLAG_MIN_GROSS_SEK,
-    // p_limit only sizes the page; total_count is computed over the FULL
-    // filtered set in an independent CTE, so 1 is the cheapest valid size.
-    p_limit: 1,
-    p_offset: 0,
-  })
-  if (error) throw new Error(`verifikat_without_documents failed: ${error.message}`)
-  const result = data as { ok?: boolean; code?: string; total_count?: number } | null
-  if (!result?.ok) {
-    throw new Error(`verifikat_without_documents failed: ${result?.code ?? 'unknown error'}`)
-  }
-  return result.total_count ?? 0
-}
-
-/**
- * Posted verifikat dated within [start, end] that genuinely lack an underlag
- * and whose gross reaches MISSING_UNDERLAG_MIN_GROSS_SEK.
- *
- * BFL 5 kap 6-7 §: every affärshändelse needs a verifikation, and the
- * verifikation must reference its underlag. This delegates to the
- * `verifikat_without_documents` RPC, the SINGLE owner of that predicate: the
- * same SQL behind the web worklist badge (countVerifikatMissingDocument) and
- * behind gnubok_list_verifikat_without_documents. It carries three things a
- * hand-rolled scan here kept getting wrong:
- *
- *   1. the needs-doc source types (mirrors NEEDS_DOC_SOURCE_TYPES,
- *      lib/worklist/categories.ts, pinned by
- *      tests/pg/document-surfaces-unification.pg.test.ts). The local list read
- *      'supplier_invoice' and 'receipt', which are not members of the
- *      journal_entries.source_type CHECK at all: PostgREST matched zero rows,
- *      so supplier-invoice verifikat NEVER surfaced here and the momsperiod
- *      got a clean bill of health on exactly the entry types most likely to be
- *      missing their underlag;
- *   2. is_current_version, so a superseded document version does not silence
- *      the warning, and journal_entry_no_doc_required, so an explicit user
- *      waiver does;
- *   3. BFL 5 kap 7 § hänvisning till underlag: a payment verifikat whose
- *      supplier invoice carries an anchored document is covered by that
- *      document even though the doc row hangs on the registration verifikat.
- *      Without this, adding supplier_invoice_paid to the list would flag every
- *      paid supplier invoice in the period (the 2026-07-24 support case).
- *
- * The RPC takes `since` and no upper bound, so the in-period count is the
- * difference between two filter-respecting totals. Both calls run the same
- * predicate, so the subtraction is exact rather than an estimate.
- */
-async function countMissingUnderlagInPeriod(
-  supabase: SupabaseClient,
-  companyId: string,
-  start: string,
-  end: string
-): Promise<number> {
-  const [fromStart, afterEnd] = await Promise.all([
-    totalMissingUnderlagSince(supabase, companyId, start),
-    totalMissingUnderlagSince(supabase, companyId, nextDay(end)),
-  ])
-  return Math.max(0, fromStart - afterEnd)
-}
-
-/**
  * The company's fiscal period that contains an ISO date, or null. A date in a
  * report call names the year the caller wants: "resultatrapporten för 2023"
  * arrives as from_date/to_date, not as a period_id the model would first
@@ -3201,18 +3126,12 @@ export async function computeVatCloseCheck(
   }
 
   // 4) Blocker scans: run in parallel
-  const [uncategorizedRes, unapprovedRes, recon, missingUnderlag] = await Promise.all([
-    // is_ignored = false: a transaction the user ignored on purpose (private,
-    // duplicate feed row) is not waiting to be booked, and the same predicate
-    // drives the Att göra worklist (lib/worklist/categories.ts). The column is
-    // NOT NULL DEFAULT false, so eq is exact.
-    supabase
-      .from('transactions')
-      .select('id', { count: 'exact', head: true })
-      .eq('company_id', companyId)
-      .gte('date', start).lte('date', end)
-      .is('journal_entry_id', null)
-      .eq('is_ignored', false),
+  const [unbooked, unapprovedRes, recon, missingUnderlag] = await Promise.all([
+    // The shared "no verifikat" predicate (lib/transactions/unbooked.ts), the
+    // same one the period-lock guard, attention and report data_status use.
+    // The local journal_entry_id IS NULL count it replaced also counted
+    // private rows and bulk-booked rows anchored via transaction_voucher_links.
+    countUnbookedBankTransactions(supabase, companyId, { fromDate: start, toDate: end }),
     supabase
       .from('supplier_invoices')
       .select('id', { count: 'exact', head: true })
@@ -3260,13 +3179,13 @@ export async function computeVatCloseCheck(
       hint: `Företagets räkenskapsår börjar månad ${configuredStartMonth}. Kontrollera räkenskapsåren med gnubok_list_fiscal_periods och ange year = det år räkenskapsåret slutar.`,
     })
   }
-  const uncategorizedCount = uncategorizedRes.count ?? 0
+  const uncategorizedCount = unbooked.total
   if (uncategorizedCount > 0) {
     blockers.push({
       kind: 'uncategorized_transactions',
       severity: 'high',
       count: uncategorizedCount,
-      message: `${uncategorizedCount} okategoriserade banktransaktioner i perioden`,
+      message: `${uncategorizedCount} banktransaktioner i perioden saknar verifikat`,
       hint: UNCATEGORIZED_TRANSACTIONS_HINT,
     })
   }
@@ -8594,6 +8513,7 @@ export const tools: McpTool[] = [
         account_count: rows.length,
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: await buildReportDataStatus(supabase, companyId, { periodId: period.id }),
       }
     },
   },
@@ -8772,6 +8692,7 @@ export const tools: McpTool[] = [
         total_revenue: incomeStatement.total_revenue,
         total_expenses: incomeStatement.total_expenses,
         months: monthlyBreakdown.months,
+        data_status: await buildReportDataStatus(supabase, companyId, { periodId: period.id }),
       }
     },
   },
@@ -8829,6 +8750,7 @@ export const tools: McpTool[] = [
         ...result,
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: await buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
       }
     },
   },
@@ -10622,6 +10544,7 @@ export const tools: McpTool[] = [
         ...result,
         // Echo the effective window: cumulative from period start to as_of_date.
         period: { start: period.period_start, end: range.toDate ?? period.period_end },
+        data_status: await buildReportDataStatus(supabase, companyId, { periodId: period.id, toDate: range.toDate }),
       }
     },
   },
@@ -10679,6 +10602,7 @@ export const tools: McpTool[] = [
         ...report,
         ...(dimFilter.filter ? { dimension_filter: dimFilter.filter } : {}),
         ...(dimFilter.resolutions.length > 0 ? { dimension_resolutions: dimFilter.resolutions } : {}),
+        data_status: await buildReportDataStatus(supabase, companyId, { periodId: periodId! }),
       }
     },
   },
@@ -23860,7 +23784,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             '• Invoicing: gnubok_list_customers (or gnubok_create_customer) → gnubok_create_invoice → gnubok_send_invoice or gnubok_mark_invoice_as_sent → gnubok_mark_invoice_as_paid. Refund via gnubok_credit_invoice.',
             '• Suppliers: gnubok_list_suppliers (or gnubok_create_supplier) → gnubok_create_supplier_invoice_from_inbox → gnubok_approve_supplier_invoice. Refund via gnubok_credit_supplier_invoice.',
             '• VAT: gnubok_get_vat_report(period_type, year, period). Ruta49 = VAT to pay (positive) or refund (negative). Pass render_ui=true to open the momsdeklaration review widget (claude.ai / Desktop). gnubok_vat_close_check reports filing-readiness blockers.',
-            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal.',
+            '• Reporting: gnubok_get_trial_balance / _income_statement / _balance_sheet / _kpi_report, plus _ar_ledger / _supplier_ledger through gnubok_call_tool: all default to the most recent fiscal period. For account roll-ups use gnubok_get_general_ledger; for ad-hoc line queries (free-text, amount/date/source filters) use gnubok_query_journal. Report results carry data_status: when preliminary is true, say the figures are preliminary and repeat its caveats (unbooked bank rows, open period, stale bank feed, cash method) instead of presenting a final number.',
             '• Interactive review UIs (claude.ai / Claude Desktop only): gnubok_get_vat_report(render_ui=true) renders the VAT widget, gnubok_receipt_matcher opens the receipt↔transaction matcher, and gnubok_list_pending_operations(render_ui=true) opens the approval queue where the user approves/rejects with a click. All also return structured data; other clients ignore the UI and use the data.',
             '• Year-end: run gnubok_year_end_readiness first. For kontantmetoden, resolve kontantmetod_cutoff_required with the searchable gnubok_post_kontantmetod_cutoff tool. Then gnubok_run_year_end on the OPEN period (never gnubok_lock_period first): it posts the closing entry, locks and closes the period and seeds the next period\'s opening balances in one step; gnubok_set_opening_balances, gnubok_close_period and gnubok_lock_period are manual-flow tools, not follow-ups. Verify with gnubok_list_fiscal_periods. Each write stages for human approval; closing is irreversible per BFL.',
             '• Payroll: gnubok_create_salary_run → gnubok_calculate_salary_run → gnubok_book_salary_run → gnubok_generate_agi.',

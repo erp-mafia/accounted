@@ -1,6 +1,29 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
+
+// The unbooked count is the shared lib predicate (lib/transactions/unbooked.ts,
+// tested on its own); here it is a seam so the queue below only carries the
+// resource's own reads.
+const { countUnbooked, fetchAnchored } = vi.hoisted(() => ({
+  countUnbooked: vi.fn(),
+  fetchAnchored: vi.fn(),
+}))
+vi.mock('@/lib/transactions/unbooked', () => ({
+  countUnbookedBankTransactions: countUnbooked,
+  fetchAnchoredTransactionIds: fetchAnchored,
+}))
+
 import { attentionResource } from '../resources/attention'
+
+function setUnbooked(total: number, anchored: string[] = []) {
+  countUnbooked.mockResolvedValue({ total, untriaged: total, business_unbooked: 0 })
+  fetchAnchored.mockResolvedValue(new Set(anchored))
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  setUnbooked(0)
+})
 
 type AttentionResponse = {
   generated_at: string
@@ -22,14 +45,11 @@ const ctx = (supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']) 
 })
 
 /**
- * Enqueues 15 baseline empty results in the order the resource consumes them.
+ * Enqueues 14 baseline empty results in the order the resource consumes them.
  * Tests can override individual slots before invoking by enqueueing in advance.
  */
 function enqueueEmpty(enqueue: (r: { data?: unknown; error?: unknown; count?: number | null }) => void) {
-  // 1. unbookedIds (every pointer-null business row; the junction-linked
-  //    ones are subtracted by a lookup that runs after slot 15 and only
-  //    when this list is non-empty)
-  enqueue({ data: [] })
+  // (The unbooked count itself is the mocked shared helper, not a slot.)
   // 2. unbookedSamples
   enqueue({ data: [] })
   // 3. overdueRows
@@ -91,7 +111,7 @@ describe('Accounted://attention', () => {
       { id: 't-2', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
 
-    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // unbookedIds
+    setUnbooked(2)
     enqueue({ data: txns })          // unbookedSamples
     enqueue({ data: [] })            // overdueRows
     enqueue({ count: 0 })            // pendingSupplierHead
@@ -108,6 +128,8 @@ describe('Accounted://attention', () => {
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
+    // The count is the shared predicate, company-wide (no date range).
+    expect(countUnbooked).toHaveBeenCalledWith(supabase, 'company-1')
     expect(result.categories).toHaveLength(1)
     const cat = result.categories[0]
     expect(cat.key).toBe('unbooked_transactions')
@@ -126,11 +148,12 @@ describe('Accounted://attention', () => {
       { id: 't-split', date: today, amount: -800, currency: 'SEK', description: 'Utlägg', merchant_name: null },
       { id: 't-open', date: today, amount: -200, currency: 'SEK', description: 'Office', merchant_name: 'Clas Ohlson' },
     ]
-    enqueue({ data: txns.map((t) => ({ id: t.id })) }) // 1. unbookedIds
+    // The shared count already excludes the anchored row; the samples query
+    // cannot, so the resource drops anchored ids from the samples itself.
+    setUnbooked(1, ['t-split'])
     enqueue({ data: txns })                            // 2. unbookedSamples
     for (let i = 3; i <= 14; i += 1) enqueue({ data: i === 13 || i === 14 ? null : [], count: 0 })
     enqueue({ data: [] })                              // 15. unlinked-document candidates
-    enqueue({ data: [{ transaction_id: 't-split' }] }) // 16. fetchJunctionLinkedTxIds
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
 
@@ -145,7 +168,7 @@ describe('Accounted://attention', () => {
     const fortyDaysAgo = new Date(Date.now() - 40 * 86_400_000).toISOString().slice(0, 10)
     const txns = [{ id: 't-old', date: fortyDaysAgo, amount: -100, currency: 'SEK', description: 'X', merchant_name: null }]
 
-    enqueue({ data: [{ id: 't-old' }] })
+    setUnbooked(1)
     enqueue({ data: txns })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -174,7 +197,6 @@ describe('Accounted://attention', () => {
       { id: 'i-2', invoice_number: 'F-2024002', customer_id: 'c-1', due_date: tenDaysAgo, total: 500, currency: 'SEK', status: 'sent' },
     ]
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: overdue })
     enqueue({ count: 0 })
@@ -202,7 +224,6 @@ describe('Accounted://attention', () => {
       { id: 'op-2', operation_type: 'create_customer', title: 'Ny kund', risk_level: 'low', actor_label: 'Claude', created_at: new Date().toISOString() },
     ]
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -228,7 +249,7 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     // Slots 1-14 empty, then this test's own candidate set in slot 15 and the
     // eight reference lookups behind it.
-    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-new', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -250,7 +271,7 @@ describe('Accounted://attention', () => {
 
   it('omits the unlinked-documents category when every candidate is claimed', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    for (let i = 0; i < 14; i += 1) enqueue({ data: i === 12 || i === 13 ? null : [], count: 0 })
+    for (let i = 0; i < 13; i += 1) enqueue({ data: i === 11 || i === 12 ? null : [], count: 0 })
     enqueue({
       data: [
         { id: 'doc-1', file_name: 'kvitto.pdf', mime_type: 'application/pdf', file_size_bytes: 900, upload_source: 'api', created_at: '2026-08-20T00:00:00.000Z' },
@@ -269,7 +290,6 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const seriesRows = [{ voucher_series: 'A', fiscal_period_id: 'fp-1' }]
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -305,7 +325,6 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const seriesRows = [{ voucher_series: 'A', fiscal_period_id: 'fp-1' }]
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -335,7 +354,6 @@ describe('Accounted://attention', () => {
       { id: 'bc-1', bank_name: 'SEB', status: 'active', consent_expires: yesterday },
     ]
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -360,7 +378,6 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const inSevenDays = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
 
-    enqueue({ count: 0 })
     enqueue({ data: [] })
     enqueue({ data: [] })
     enqueue({ count: 0 })
@@ -385,7 +402,7 @@ describe('Accounted://attention', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const today = new Date().toISOString().slice(0, 10)
 
-    enqueue({ data: [{ id: 't-1' }] })                                     // unbookedIds
+    setUnbooked(1)
     enqueue({ data: [{ id: 't-1', date: today, amount: -50, currency: 'SEK', description: 'X', merchant_name: null }] })
     enqueue({ data: [] })                                                  // overdueRows
     enqueue({ count: 1 })                                                  // pendingSupplierHead

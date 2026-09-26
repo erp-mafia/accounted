@@ -106,8 +106,18 @@ describe('gnubok_vat_close_check: ignored transactions', () => {
       supabase,
     )
 
-    expect(findCalls('transactions', 'is')).toEqual([['journal_entry_id', null]])
-    expect(findCalls('transactions', 'eq')).toContainEqual(['is_ignored', false])
+    // Both legs of the shared predicate (lib/transactions/unbooked.ts): the
+    // untriaged head count and the triaged-but-unanchored candidates.
+    expect(findCalls('transactions', 'is')).toEqual([
+      ['is_business', null],
+      ['journal_entry_id', null],
+    ])
+    const eqCalls = findCalls('transactions', 'eq')
+    expect(eqCalls.filter((c) => c[0] === 'is_ignored')).toEqual([
+      ['is_ignored', false],
+      ['is_ignored', false],
+    ])
+    expect(eqCalls).toContainEqual(['is_business', true])
     expect(result.blockers).not.toContainEqual(expect.objectContaining({
       kind: 'uncategorized_transactions',
     }))
