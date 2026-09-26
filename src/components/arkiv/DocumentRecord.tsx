@@ -134,7 +134,8 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
             </Button>
           ) : (
             <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
-              {view.doc_type && view.doc_type !== 'other' ? t('record_change_type') : t('linked_say_what')}
+              {/* A booked document is not a question: the verifikat already says what it is. */}
+              {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
             </Button>
           )
         }
@@ -142,7 +143,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       <DocumentDecision
         doc={
           deciding
-            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: deciding, summary: view.classification?.summary ?? null }
+            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: deciding, summary: view.classification?.summary ?? null, suggested_type: view.classification?.suggested_type ?? null, mime_type: view.mime_type }
             : null
         }
         onClose={() => setDeciding(null)}
@@ -157,7 +158,9 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       />
       {view.classification?.summary && (
         <Section title={t('record_classification')}>
+          {/* Written by a model, so it says so: the document itself, beside it, is the source (founder: raw first). */}
           <p className="m-0 text-[13px]">{view.classification.summary}</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">{t('record_classification_note')}</p>
         </Section>
       )}
 

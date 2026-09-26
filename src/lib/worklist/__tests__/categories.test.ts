@@ -827,6 +827,7 @@ describe('countUnclassifiedDocuments', () => {
     expect(since?.[0]).toBe('document_attachments.created_at')
     const days = (Date.now() - new Date(since![1]).getTime()) / 86_400_000
     expect(Math.round(days)).toBe(REVIEW_RECENT_DAYS)
+    expect(findCalls('document_classifications', 'is')).toEqual(expect.arrayContaining([['document_attachments.journal_entry_id', null]]))
   })
 })
 

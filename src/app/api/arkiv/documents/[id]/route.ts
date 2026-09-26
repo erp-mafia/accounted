@@ -26,7 +26,8 @@ export interface DocumentRecordView {
   /** How far the reading got (phase 9f): history the lanes left for a question says so. */
   read: { state: 'read' | 'partial' | 'unread' | 'skipped'; lane: ReadLane }
   journal_entry: { id: string; voucher: string } | null
-  classification: { summary: string | null; confidence: number | null; decided_by: string; signals: string[] } | null
+  classification: { summary: string | null; confidence: number | null; decided_by: string; signals: string[]; suggested_type?: string | null } | null
+  mime_type: string | null
   /** The rows of a receipt or invoice as the Underlag reader saw them; empty for anything else. */
   line_items: Array<{ description: string; quantity: number | null; unit_price: number | null; line_total: number | null; vat_rate: number | null }>
   record: {
@@ -74,7 +75,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
   const none = Promise.resolve({ data: null, error: null })
   const noneList = Promise.resolve({ data: [], error: null })
   const [classification, extraction, facts, links, agreement, entry] = await Promise.all([
-    ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals').eq('document_id', id).eq('is_current', true).maybeSingle(),
+    ctx.supabase.from('document_classifications').select('summary, confidence, decided_by, signals, suggested_type').eq('document_id', id).eq('is_current', true).maybeSingle(),
     brain ? ctx.supabase.from('document_extractions').select('id, schema_type, pass, payload, review_fields').eq('document_id', id).eq('is_current', true).maybeSingle() : none,
     brain ? ctx.supabase
       .from('company_facts')
@@ -129,6 +130,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
       lane: readLaneFor(d),
     },
     journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
+    mime_type: d.mime_type ?? null,
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
     line_items: (d.extracted_data?.lineItems ?? [])
       .filter((li) => li && typeof li === 'object')

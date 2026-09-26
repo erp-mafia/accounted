@@ -88,7 +88,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
 
   let query = ctx.supabase
     .from('document_attachments')
-    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, extracted_data, page_count')
+    .select('id, created_at, file_name, doc_type, admission_state, journal_entry_id, journal_entry_line_id, extracted_data, page_count')
     .eq('company_id', ctx.companyId)
     .in('admission_state', ['admitted', 'held'])
     .or(NOT_STRUCTURED_MIME_FILTER)
@@ -202,7 +202,8 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
         held: d.admission_state === 'held',
         // A person is asked only about what the model read and could not name. A document with no type yet is
         // still being read and typed (prod 2026-09-25: most archives were untyped history, and every row asked).
-        unclassified: d.admission_state === 'admitted' && d.doc_type === 'other',
+        // Never for a booked document: the verifikat already says what it is.
+        unclassified: d.admission_state === 'admitted' && d.doc_type === 'other' && !d.journal_entry_id && !d.journal_entry_line_id,
         reading: d.admission_state === 'admitted' && d.doc_type == null,
       },
       href: agreement ? `/arkiv/avtal/${agreement.id}` : `/arkiv/dokument/${d.id}`,
