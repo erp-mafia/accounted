@@ -13,6 +13,7 @@ import type { ItemKind } from './hues'
 import { Field, SubView } from './AgentDetail'
 import { CopyIcon } from './CopyIcon'
 import { trackInstructions } from './track'
+import { useClaudeTarget } from './claude-target'
 import styles from './skills.module.css'
 
 const CLAUDE_DOWNLOAD = 'https://claude.com/download'
@@ -87,6 +88,9 @@ export function RoutinePanel({ run, name, item, kind, company, onBack, initial, 
   const request = { choice, run, readOnly: kind === 'analysis', company }
   const prompt = routinePrompt(request, translate)
   const claude = AI_CLIENTS.find((c) => c.id === 'claude')!
+  // A phone has no Claude Desktop (the same device check as Starta i Claude).
+  const [, , targets] = useClaudeTarget()
+  const desktop = targets.includes('desktop')
 
   function send(target: RoutineTarget) {
     trackInstructions('instructions_routine_opened', { item, kind, cadence: choice.cadence, target })
@@ -112,10 +116,12 @@ export function RoutinePanel({ run, name, item, kind, company, onBack, initial, 
             <img src={claude.logo} alt="" width={16} height={16} className={styles.btnLogo} />
             {t('routine_go')}
           </Button>
-          <Button variant="outline" className="gap-2" onClick={() => send('desktop')}>
-            <Monitor className="h-4 w-4" aria-hidden />
-            {t('routine_target_desktop')}
-          </Button>
+          {desktop && (
+            <Button variant="outline" className="gap-2" onClick={() => send('desktop')}>
+              <Monitor className="h-4 w-4" aria-hidden />
+              {t('routine_target_desktop')}
+            </Button>
+          )}
         </div>
         <p role="status" className={`${styles.muted} empty:hidden`}>
           {status && <>{t(`routine_sent_${status}`)} {status === 'blocked'
@@ -170,6 +176,8 @@ export function RoutineRow({ value, onChange, target, onTarget }: {
   onTarget: (next: RoutineTarget) => void
 }) {
   const t = useTranslations('skills_registry')
+  const [, , targets] = useClaudeTarget()
+  const desktop = targets.includes('desktop')
   const current = value ?? DEFAULT_CHOICE
   return (
     <div className={styles.routineInline}>
@@ -189,7 +197,7 @@ export function RoutineRow({ value, onChange, target, onTarget }: {
         {value && (
           <select className={styles.routineSelect} value={target} aria-label={t('routine_where')} onChange={(e) => onTarget(e.target.value as RoutineTarget)}>
             <option value="web">{t('routine_target_web')}</option>
-            <option value="desktop">{t('routine_target_desktop')}</option>
+            {desktop && <option value="desktop">{t('routine_target_desktop')}</option>}
           </select>
         )}
       </span>
