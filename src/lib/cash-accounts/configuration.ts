@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSIEAccountRows } from '@/lib/import/account-sync'
+import { hasErrorEntry } from '@/lib/errors/structured-errors'
 
 export interface BankConfigurationSnapshot {
   token: string
@@ -41,9 +42,19 @@ export async function saveBankAccountSelection(
     p_company_id: companyId, p_user_id: userId, p_connection_id: connectionId,
     p_expected_token: expectedToken, p_selections: selections, p_chart_accounts: chartAccounts,
   })
-  if (error) throw Object.assign(new Error(error.message), { code: error.code })
+  if (error) throw selectionError(error)
   if (!data?.status || !Array.isArray(data?.accounts)) throw new Error('Bank selection receipt missing')
   return data as { status: string; accounts: unknown[] }
+}
+
+/**
+ * The RPC raises its refusals by name under a generic SQLSTATE (23514, 23505,
+ * PT409). A registered name becomes the code so the route answers with that
+ * message instead of a generic validation or conflict error.
+ */
+function selectionError(error: { code?: string; message: string }) {
+  const code = hasErrorEntry(error.message) ? error.message : error.code
+  return Object.assign(new Error(error.message), { code, pgCode: error.code })
 }
 
 /** Release the provider route without changing cash IDs or historical links. */

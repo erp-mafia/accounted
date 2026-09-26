@@ -6,9 +6,9 @@ import { agentDefaults, applyKnowledgeChoice, loadKnowledgeOptions } from '@/lib
 
 const failure = (status: number, code: string, message: string, message_en: string) => NextResponse.json({ error: { code, message, message_en } }, { status })
 
-/** The packs a company can give its agents. */
-export const GET = withRouteContext('agents.knowledge.list', async (_request, { supabase }) => {
-  const options = await loadKnowledgeOptions(supabase)
+/** The packs a company can give its agents, and its own knowledge. */
+export const GET = withRouteContext('agents.knowledge.list', async (_request, { supabase, companyId }) => {
+  const options = await loadKnowledgeOptions(supabase, companyId)
   return NextResponse.json({ data: options }, { headers: { 'Cache-Control': 'private, no-store' } })
 })
 
@@ -25,7 +25,7 @@ export const PATCH = withRouteContext('agents.knowledge.update', async (request,
   const defaults = await agentDefaults(supabase, companyId, input.agent_id)
   if (!defaults) return failure(404, 'NOT_FOUND', 'Agenten hittades inte.', 'Agent not found.')
   if (input.action === 'add') {
-    const options = await loadKnowledgeOptions(supabase)
+    const options = await loadKnowledgeOptions(supabase, companyId)
     if (!options.some((o) => o.id === input.atom_id)) return failure(404, 'NOT_FOUND', 'Kunskapen finns inte eller är inte tillgänglig.', 'Knowledge not found or unavailable.')
   }
   await applyKnowledgeChoice(supabase, companyId, input.agent_id, defaults, input.action, input.action === 'reset' ? undefined : input.atom_id)
