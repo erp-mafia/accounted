@@ -898,7 +898,10 @@ The immutable who/when trail behind every metadata rättelse and line strike on 
 Response `200`:
 ```ts
 {
-  data: { id: string, rattelse_type: string, old_description: string | null, new_description: string | null, old_entry_date: string | null, new_entry_date: string | null, struck_lines: (Record<string, unknown>)[] | null, added_lines: (Record<string, unknown>)[] | null, actor: string | null, actor_label: string | null, created_at: string, source: string | null, external_signature: string | null }[],
+  data: {
+    journal_entry_id: string,
+    entries: { rattelse_id: string, rattelse_type: string, old_description: string | null, new_description: string | null, old_entry_date: string | null, new_entry_date: string | null, struck_lines: (Record<string, unknown>)[] | null, added_lines: (Record<string, unknown>)[] | null, actor: string | null, actor_label: string | null, created_at: string, source: string | null, external_signature: string | null }[]
+  },
   meta: {
     request_id: string,
     api_version: string,
@@ -914,35 +917,38 @@ Response `200`:
 Example response `200`:
 ```json
 {
-  "data": [
-    {
-      "id": "5c1e…",
-      "rattelse_type": "lines",
-      "old_description": null,
-      "new_description": null,
-      "old_entry_date": null,
-      "new_entry_date": null,
-      "struck_lines": [
-        {
-          "account_number": "5410",
-          "debit_amount": 500,
-          "credit_amount": 0
-        }
-      ],
-      "added_lines": [
-        {
-          "account_number": "5420",
-          "debit_amount": 500,
-          "credit_amount": 0
-        }
-      ],
-      "actor": "9d2b…",
-      "actor_label": "Anna Svensson",
-      "created_at": "2026-09-12T08:14:00Z",
-      "source": null,
-      "external_signature": null
-    }
-  ],
+  "data": {
+    "journal_entry_id": "7b3a…",
+    "entries": [
+      {
+        "rattelse_id": "5c1e…",
+        "rattelse_type": "lines",
+        "old_description": null,
+        "new_description": null,
+        "old_entry_date": null,
+        "new_entry_date": null,
+        "struck_lines": [
+          {
+            "account_number": "5410",
+            "debit_amount": 500,
+            "credit_amount": 0
+          }
+        ],
+        "added_lines": [
+          {
+            "account_number": "5420",
+            "debit_amount": 500,
+            "credit_amount": 0
+          }
+        ],
+        "actor": "9d2b…",
+        "actor_label": "Anna Svensson",
+        "created_at": "2026-09-12T08:14:00Z",
+        "source": null,
+        "external_signature": null
+      }
+    ]
+  },
   "meta": {
     "request_id": "req_…",
     "api_version": "2026-05-12"
