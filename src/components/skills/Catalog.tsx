@@ -143,7 +143,8 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
     source: 'accounted', meta: null, categories: [], popularity: usage?.[s.id]?.count ?? 0, connections: AGENTS[s.id].connections, lede: t(`skills.${s.id}.desc`),
     status: agentStatus({ id: s.id, aiKnown: true, overview, waiting: undefined, lastAt: undefined, t: (key, values) => t(key, values), formatDate: (iso) => iso }),
   }))
-  const packs: Item[] = options.filter((o) => o.tier !== 'community').map((o) => ({
+  // Accounted's packs only: the company's own knowledge is listed under Egna from the catalog.
+  const packs: Item[] = options.filter((o) => o.tier !== 'community' && o.tier !== 'own').map((o) => ({
     key: o.id, kind: 'rules', title: knowledgeName(o.id, o.title), desc: knowledgeDesc(o.id, o.summary), href: `${hrefBase}/${rulesSegment(o.id)}`,
     source: 'accounted', meta: null, categories: o.tier === 'vertical' || o.tier === 'modifier' ? [o.id] : [], popularity: usedByFlows(o.id), usedByFlows: usedByFlows(o.id),
   }))

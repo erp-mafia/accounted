@@ -33,7 +33,7 @@ import { ClaudeStart } from './ClaudeStart'
 import { trackInstructions } from './track'
 import { RoutinePanel } from './RoutinePanel'
 import { parseRoutineQuery } from '@/lib/agent-skills/routine'
-import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, rulesSegment, simulatedClient, type SkillSummary } from './data'
+import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
 
@@ -236,7 +236,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
                 )}
                 <Row label={t('section_knowledge')} onAdd={canEdit ? () => setView('knowledge') : undefined} addLabel={t('knowledge_add')}>
                   {knowledge.length === 0 ? <span className={styles.muted}>{t(own ? 'knowledge_own' : 'knowledge_none')}</span> : <Capped items={knowledge.map((k) => (
-                    <KnowledgeChip key={k.id} knowledge={k} href={`${backHref}/${rulesSegment(k.id)}`} canEdit={canEdit} onRemove={() => changeKnowledge('remove', k.id)} />
+                    <KnowledgeChip key={k.id} knowledge={k} href={knowledgeHref(backHref, k.id)} canEdit={canEdit} onRemove={() => changeKnowledge('remove', k.id)} />
                   ))} />}
                 </Row>
                 {/* The company's own industry sections for this flow's area, sent in full when the flow starts. */}
@@ -406,14 +406,14 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
   const t = useTranslations('skills_registry')
   const name = useKnowledgeName()
   const describe = useKnowledgeDesc()
-  const [source, setSource] = useState<'accounted' | 'community'>('accounted')
+  const [source, setSource] = useState<'accounted' | 'own' | 'community'>('accounted')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
   const holds = new Set(held.map((k) => k.id))
   const q = query.trim().toLowerCase()
   const shown = options
-    .filter((o) => (source === 'community') === (o.tier === 'community'))
+    .filter((o) => source === 'community' ? o.tier === 'community' : source === 'own' ? o.tier === 'own' : o.tier !== 'community' && o.tier !== 'own')
     .filter((o) => !q || `${name(o.id, o.title)} ${describe(o.id, o.summary)}`.toLowerCase().includes(q))
     .sort((a, b) => GROUPS.indexOf(a.tier as typeof GROUPS[number]) - GROUPS.indexOf(b.tier as typeof GROUPS[number]))
   async function toggle(id: string) {
@@ -424,13 +424,17 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
   return (
     <div className="flex flex-col gap-4">
       <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
-      {COMMUNITY_OPEN && <SegmentedControl aria-label={t('sources_label')} className={styles.sourceSwitch} value={source} onChange={setSource} options={[{ value: 'accounted' as const, label: t('tab_accounted') }, { value: 'community' as const, label: t('tab_community') }]} />}
+      <SegmentedControl aria-label={t('sources_label')} className={styles.sourceSwitch} value={source} onChange={setSource} options={[
+        { value: 'accounted' as const, label: t('tab_accounted') },
+        { value: 'own' as const, label: t('tab_own') },
+        ...(COMMUNITY_OPEN ? [{ value: 'community' as const, label: t('tab_community') }] : []),
+      ]} />
       <label className={styles.search}>
         <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
         <input id="agent-knowledge-search" type="search" value={query} placeholder={t('knowledge_search')} onChange={(e) => setQuery(e.target.value)} />
       </label>
       {failed && <p role="alert" className={styles.muted}>{t('knowledge_save_failed')}</p>}
-      {shown.length === 0 ? <p className={styles.muted}>{t(q ? 'knowledge_no_match' : source === 'community' ? 'knowledge_community_empty' : 'knowledge_all_added')}</p> : (
+      {shown.length === 0 ? <p className={styles.muted}>{t(q ? 'knowledge_no_match' : source === 'community' ? 'knowledge_community_empty' : source === 'own' ? 'knowledge_own_empty' : 'knowledge_all_added')}</p> : (
         <div className={styles.kgrid2}>
           {shown.map((o) => {
             const has = holds.has(o.id)
@@ -443,7 +447,7 @@ export function KnowledgePanel({ held, options, onBack, onChange }: {
                   </Button>
                 </div>
                 <p>{describe(o.id, o.summary)}</p>
-                <small>{o.tier === 'community' ? t('knowledge_by_community') : `${t(`knowledge_group_${o.tier}`)} · ${t('knowledge_by')}`}</small>
+                <small>{o.tier === 'community' ? t('knowledge_by_community') : o.tier === 'own' ? t('knowledge_by_own') : `${t(`knowledge_group_${o.tier}`)} · ${t('knowledge_by')}`}</small>
               </div>
             )
           })}

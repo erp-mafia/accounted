@@ -9,8 +9,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
-import { AGENTS, COMMUNITY_OPEN } from '@/lib/agent-skills/agents'
-import type { RegistrySkillId } from '@/lib/agent-skills/registry'
+import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
 import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
@@ -78,7 +77,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const knowledgeDesc = useKnowledgeDesc()
   const isRules = segment.startsWith('kunskap.')
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
-  const catalog = useSWR(isRules ? null : ['/api/skills', companyId], ([url]) => readCatalog(url))
+  // Always read: a pack's page lists the company's own flows it can be given to.
+  const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const agents = useSWR(['/api/agents', companyId, 'claude'], ([url, , c]) => readAgents(`${url}?client=${c}`))
   // A routine chosen in Skriv själv arrives as ?rutin=… and opens its panel filled in.
   const handedRoutine = parseRoutineQuery(new URLSearchParams(useSearchParams().toString()))
@@ -99,7 +99,8 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   const mine = segment.startsWith('egen.') ? catalog.data?.find((s) => s.tier === 'own' && s.slug === `own/${segment.slice(5)}`) : undefined
   const item: Item | null = mine ? {
     kind: mine.itemKind ?? 'rules', key: mine.slug, name: mine.name, desc: mine.summary, body: mine.summary,
-    atomId: null, version: null, reviewedAt: null, level: null, community: null, own: true,
+    // Own knowledge a person added can be given to flows, as a pack can (own/<id>).
+    atomId: (mine.itemKind ?? 'rules') === 'rules' && !mine.draft ? mine.slug : null, version: null, reviewedAt: null, level: null, community: null, own: true,
   } : pack ? {
     kind: 'rules', key: pack.id, name: knowledgeName(pack.id, pack.title), desc: knowledgeDesc(pack.id, pack.summary), body: pack.summary,
     atomId: pack.id, version: pack.version, reviewedAt: pack.reviewed_at, level: pack.tier === 'community' ? null : pack.tier, community: null,
@@ -173,11 +174,19 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
     const prompt = t('skill_prompt', { name: item!.name, slug: item!.key, client })
     void (client === 'claude' ? openInClaude(target, prompt, false) : copyPromptAndOpen(prompt, client, false)).then(() => setRan(true))
   }
-  const flowsWith = (atomId: string) => SHOWN_FLOWS.map((id) => ({ id })).filter((s) => agents.data?.agents.find((a) => a.id === s.id)?.knowledge.some((k) => k.id === atomId))
-  const holders = item.atomId ? flowsWith(item.atomId) : []
+  // Every flow the company can give knowledge to: Accounted's, then its own.
+  const ownFlows = (catalog.data ?? []).filter((s) => s.tier === 'own' && (s.itemKind ?? 'workflow') === 'workflow' && !s.draft && s.shareStatus !== 'withdrawn' && s.installations[0])
+  const givable = [
+    ...SHOWN_FLOWS.map((id) => ({ id: id as string, name: t(`skills.${id}.name`), task: t(`skills.${id}.short`), hue: itemHue('workflow', id, id), defaults: AGENTS[id].knowledge as readonly string[] })),
+    ...ownFlows.map((s) => ({ id: s.slug, name: s.name, task: s.summary, hue: itemHue('workflow', s.name), defaults: OWN_AGENT_KNOWLEDGE as readonly string[] })),
+  ]
+  const knowledgeOf = (flowId: string) => flowId.startsWith('own/')
+    ? agents.data?.own_knowledge[flowId] ?? agents.data?.own_default
+    : agents.data?.agents.find((a) => a.id === flowId)?.knowledge
+  const holders = item.atomId ? givable.filter((f) => knowledgeOf(f.id)?.some((k) => k.id === item.atomId)) : []
   const reviewed = item.reviewedAt ? formatDateLong(item.reviewedAt, locale) : null
 
-  async function toggle(flow: RegistrySkillId, has: boolean): Promise<void> {
+  async function toggle(flow: string, has: boolean): Promise<void> {
     if (!item?.atomId) return
     const response = await fetch('/api/agents/knowledge', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: has ? 'remove' : 'add', agent_id: flow, atom_id: item.atomId }) })
     if (response.ok) await agents.mutate()
@@ -239,7 +248,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                   {item.atomId && (
                     <Row label={t('row_used_by')} onAdd={canWrite ? () => setView('give') : undefined} addLabel={t('give_to_flow')}>
                       {holders.length === 0 ? <span className={styles.muted}>{t('used_by_none')}</span> : (
-                        <>{holders.slice(0, 2).map((s) => <span key={s.id} className={styles.chip}>{t(`skills.${s.id}.name`)}</span>)}{holders.length > 2 && <span className={styles.chip}>+{holders.length - 2}</span>}</>
+                        <>{holders.slice(0, 2).map((s) => <span key={s.id} className={styles.chip}>{s.name}</span>)}{holders.length > 2 && <span className={styles.chip}>+{holders.length - 2}</span>}</>
                       )}
                     </Row>
                   )}
@@ -267,12 +276,12 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               <SubView title={t('give_to_flow')} onBack={() => setView('main')}>
                 <p className={styles.muted}>{t('give_hint')}</p>
                 <ul className={styles.kgrid2}>
-                  {SHOWN_FLOWS.map((id) => ({ id })).map((s) => {
+                  {givable.map((s) => {
                     const has = holders.some((h) => h.id === s.id)
-                    const isDefault = AGENTS[s.id].knowledge.includes(item.atomId!)
+                    const isDefault = s.defaults.includes(item.atomId!)
                     return (
                       <li key={s.id}>
-                        <GiveCard name={t(`skills.${s.id}.name`)} task={t(`skills.${s.id}.short`)} hue={itemHue('workflow', s.id, s.id)} has={has} note={isDefault ? t('knowledge_default') : undefined} disabled={!canWrite || !agents.data} onToggle={() => toggle(s.id, has)} />
+                        <GiveCard name={s.name} task={s.task} hue={s.hue} has={has} note={isDefault ? t('knowledge_default') : undefined} disabled={!canWrite || !agents.data} onToggle={() => toggle(s.id, has)} />
                       </li>
                     )
                   })}
