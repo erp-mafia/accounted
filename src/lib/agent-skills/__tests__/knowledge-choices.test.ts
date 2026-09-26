@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { agentDefaults, applyKnowledgeChoice, loadKnowledgeOptions, ownKnowledgeId } from '../knowledge-choices'
+import { agentDefaults, applyKnowledgeChoice, loadKnowledgeOptions, ownKnowledgeId, packFitsForm } from '../knowledge-choices'
 import { AGENTS, OWN_AGENT_KNOWLEDGE } from '../agents'
 
 const { supabase, enqueue, reset, findCall } = createQueuedMockSupabase()
@@ -26,6 +26,7 @@ describe('agentDefaults', () => {
 describe('own knowledge', () => {
   const RULES = '00000000-0000-4000-8000-0000000000aa'
   it('lists the company\'s own added knowledge after the packs, never its flows or drafts', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } })
     enqueue({ data: [{ id: 'horizontal/swedish-vat', tier: 'horizontal', title: 'Moms', description: 'VAT.', version: 3, reviewed_at: null }] })
     enqueue({ data: { team_id: null } })
     enqueue({ data: [
@@ -55,5 +56,43 @@ describe('own knowledge', () => {
     await applyKnowledgeChoice(supabase as never, 'company-a', 'bookkeep', [], 'remove', `own/${RULES}`)
     expect(findCall('company_agent_knowledge', 'delete')).toBeDefined()
     expect(findCall('company_agent_knowledge', 'upsert')).toBeUndefined()
+  })
+})
+
+describe('packs by legal form', () => {
+  const pack = (id: string, tier: string) => ({ id, tier, title: id, description: 'D.', version: 1, reviewed_at: null })
+  const PACKS = [
+    pack('horizontal/swedish-vat', 'horizontal'),
+    pack('modifier/holding-ab', 'modifier'),
+    pack('modifier/mixed-verksamhet', 'modifier'),
+    pack('modifier/single-shareholder-ab-fmb', 'modifier'),
+    pack('vertical/konsult-it', 'vertical'),
+  ]
+  const optionsFor = async (entityType: string) => {
+    enqueue({ data: { entity_type: entityType } }); enqueue({ data: PACKS }); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    return (await loadKnowledgeOptions(supabase as never, 'company-a')).map((o) => o.id)
+  }
+
+  it('never offers an enskild firma or a förening the aktiebolag-only packs', async () => {
+    const expected = ['horizontal/swedish-vat', 'modifier/mixed-verksamhet', 'vertical/konsult-it']
+    expect(await optionsFor('enskild_firma')).toEqual(expected)
+    reset()
+    expect(await optionsFor('ideell_forening')).toEqual(expected)
+    expect(findCall('companies', 'select')).toEqual(['entity_type'])
+  })
+
+  it('offers an aktiebolag every pack', async () => {
+    expect(await optionsFor('aktiebolag')).toEqual(PACKS.map((p) => p.id))
+  })
+
+  it('fails instead of guessing when the legal form is unknown', async () => {
+    enqueue({ data: { entity_type: 'handelsbolag' } }); enqueue({ data: PACKS }); enqueue({ data: { team_id: null } }); enqueue({ data: [] })
+    await expect(loadKnowledgeOptions(supabase as never, 'company-a')).rejects.toThrow(/entity_type/)
+  })
+
+  it('treats a pack without a legal-form tag as fitting every form', () => {
+    expect(packFitsForm('vertical/bygg-hantverk', 'enskild_firma')).toBe(true)
+    expect(packFitsForm('modifier/holding-ab', 'enskild_firma')).toBe(false)
+    expect(packFitsForm('modifier/holding-ab', 'aktiebolag')).toBe(true)
   })
 })

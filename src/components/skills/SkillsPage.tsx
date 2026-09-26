@@ -12,7 +12,7 @@ import { createAiStatusPoller, type AiStatusPoller } from '@/lib/onboarding/ai-s
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
-import { SkillCreator, type CreatorMode } from './SkillCreator'
+import { ConnectGate } from './ConnectGate'
 import { Catalog } from './Catalog'
 import { KindsIntro } from './KindsIntro'
 import type { ItemKind } from './hues'
@@ -28,7 +28,7 @@ type PageState = 'loading' | 'locked' | 'waiting' | 'open'
  * Agentinstruktioner: what the company gives the AI it brings (flows,
  * knowledge, analyses), from Accounted, the community or the company itself,
  * as a catalogue (Catalog.tsx). This component owns the AI connection and the
- * creator. `hrefBase` lets the sandbox demo link to its own pages.
+ * connect gate. `hrefBase` lets the sandbox demo link to its own pages.
  */
 export function SkillsPage({ hrefBase = '/skills' }: { hrefBase?: string }) {
   const { company } = useCompany()
@@ -39,7 +39,6 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
   const t = useTranslations('skills_registry')
   const { canWrite } = useCanWrite()
   const { appName } = useBranding()
-  const pageRef = useRef<HTMLDivElement>(null)
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
   const usage = useSWR(['/api/skills/usage', companyId], ([url]) => readUsage(url))
@@ -81,11 +80,11 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
 
   // ── connect ──
   const [addressCopy, setAddressCopy] = useState<'idle' | 'copied' | 'failed'>('idle')
-  const [creator, setCreator] = useState<CreatorMode | null>(null)
+  const [gateOpen, setGateOpen] = useState(false)
   const connectAction = (target: AiClient) => aiConnectAction(target, { origin: window.location.origin, appName })
   function connect(target: AiClient) {
     trackInstructions('instructions_connect_clicked', { client: target, surface: 'page' })
-    setCreator(null)
+    setGateOpen(false)
     setPending(target)
     setAddressCopy('idle')
     setCheckedOnce(false)
@@ -107,7 +106,7 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
   }
   function createAgent(kind: ItemKind) {
     trackInstructions('instructions_create_clicked', { mode: 'ai', kind, connected: isConnected })
-    if (!isConnected) setCreator({ kind: 'gate' })
+    if (!isConnected) setGateOpen(true)
     else openAiConnector(aiPrefilledChatLink(client, t(`create_prompt_${kind}`)))
   }
 
@@ -146,8 +145,11 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
   ) : null
 
   return (
-    <div ref={pageRef} className={styles.page} data-state={state}>
+    <div className={styles.page} data-state={state}>
       <PageHeader title={t('title')} help={<HelpPopover><p>{t('help')}</p></HelpPopover>} />
+
+      {/* The first visit's explanation sits above the catalogue, so it is read before the featured item. */}
+      <KindsIntro companyId={companyId} />
 
       <Catalog
         hrefBase={hrefBase}
@@ -167,17 +169,7 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
       {!canWrite && <p className={styles.note}>{t('viewer_note')}</p>}
       {catalog.error && <p role="alert" className={styles.note}>{t('load_failed')} <button type="button" className="underline underline-offset-4" onClick={() => void catalog.mutate()}>{t('retry')}</button></p>}
 
-      <KindsIntro companyId={companyId} />
-
-      <SkillCreator
-        mode={creator}
-        client={client}
-        pageRef={pageRef}
-        onClose={() => setCreator(null)}
-        onConnect={connect}
-        onSave={async () => null}
-        onSaved={() => { setCreator(null); void catalog.mutate() }}
-      />
+      <ConnectGate open={gateOpen} onClose={() => setGateOpen(false)} onConnect={connect} />
     </div>
   )
 }

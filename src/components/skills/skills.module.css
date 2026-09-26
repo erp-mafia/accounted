@@ -4,14 +4,9 @@
  * tokens only, flat hairline cards with the app's flat hover, the radius
  * ladder (99px / 12px / 8px / 4px), 150ms state and 300ms entry/layout
  * motion on the named curves, shadows only on things that float, and the
- * Button primitive for every action. The spark that lights the list after
- * connecting stays; all motion stops under prefers-reduced-motion.
+ * Button primitive for every action. All motion stops under
+ * prefers-reduced-motion.
  */
-@property --skpan {
-  syntax: '<number>';
-  inherits: true;
-  initial-value: 0;
-}
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 /* a landed or newly lit row: one flat flash of the chip tone */
 @keyframes hitflash { from { background-color: hsl(var(--secondary)); } to { background-color: hsl(var(--background)); } }
@@ -89,21 +84,6 @@
 /* the card's call to action, drawn as the primary small Button (a <button> cannot nest in the card's button) */
 .createCta { margin-top: auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px; border-radius: 99px; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); font-size: 12.5px; font-weight: 500; transition: background-color 150ms var(--ease-out); }
 .createFace:hover:not(:disabled) .createCta { background: hsl(var(--primary) / 0.9); }
-
-/* the Gnista: a small ink dot that hops from the panel to each row */
-.spark {
-  position: absolute;
-  z-index: 5;
-  left: 0;
-  top: 0;
-  width: 8px;
-  height: 8px;
-  margin: -4px 0 0 -4px;
-  border-radius: 99px;
-  background: hsl(var(--foreground));
-  box-shadow: 0 0 0 3px hsl(var(--foreground) / 0.15);
-  pointer-events: none;
-}
 
 /* ── the list below ── */
 .lower { display: flex; flex-direction: column; gap: 24px; }
@@ -254,7 +234,7 @@
 .todoLine b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .nightNote { font-size: 12.5px; color: hsl(var(--muted-foreground)); }
 
-/* ── Helskärm: the creator, on the frame tone, with the halftone skyline ── */
+/* ── Helskärm: the connect gate, on the frame tone, with the halftone skyline ── */
 .full {
   position: fixed;
   z-index: 40;
@@ -305,122 +285,6 @@
 @media (max-width: 480px) { .rows { grid-template-columns: minmax(0, 1fr); } }
 @media (prefers-reduced-motion: reduce) {
   .page *, .page *::before, .page *::after, .full *, .full *::before, .full *::after, .full, .sheet, .sheet *, .sheet *::before { animation: none !important; transition: none !important; }
-}
-
-/*
- * Resan: the creator as a ride along a line over the skyline, one station
- * per step; the skyline pans and the dot rolls as --skpan goes from 0 to 1.
- * Currently switched off (IN_APP_CREATOR in SkillsPage.tsx).
- */
-.full[data-journey] { padding: 0; gap: 0; overflow: hidden; animation: none; }
-.full[data-journey]::before { content: none; }
-.journey { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: hidden; border-radius: inherit; text-align: left; transition: --skpan 300ms var(--ease-emphasized); }
-.jbg { position: absolute; inset: 0; pointer-events: none; }
-.jpan { position: absolute; top: 0; bottom: 0; left: 0; width: 180%; background: url('/illustrations/about-stockholm.webp') center bottom / cover no-repeat; opacity: .12; transform: translateX(calc(var(--skpan) * -44%)); transition: opacity 300ms var(--ease-out), filter 300ms var(--ease-out); }
-:global(.dark) .jpan { filter: invert(1); opacity: .08; }
-.jgrid { position: absolute; inset: 0; opacity: 0; transition: opacity 300ms var(--ease-out) 150ms; background-image: linear-gradient(hsl(var(--foreground) / .06) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground) / .06) 1px, transparent 1px), linear-gradient(hsl(var(--foreground) / .03) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground) / .03) 1px, transparent 1px); background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px; background-position: center; }
-.journey[data-building] .jpan { opacity: .05; filter: grayscale(1) blur(2px); }
-.journey[data-building] .jgrid { opacity: 1; }
-.journey[data-building] .jline, .journey[data-building] .jsign, .journey[data-building] .jcard { opacity: 0; pointer-events: none; }
-.jx { position: absolute; z-index: 5; right: 20px; top: 20px; }
-
-/* the line: five stations, a run of ink and the dot that rides it */
-.jline { position: relative; z-index: 3; margin: 0 auto; width: min(720px, calc(100% - 128px)); padding: 26px 0 0; list-style: none; display: flex; justify-content: space-between; transition: opacity 300ms var(--ease-out); }
-.jline::before { content: ""; position: absolute; left: 8px; right: 8px; top: 33px; height: 5px; border-radius: 99px; background: hsl(var(--border)); }
-.jrun { position: absolute; left: 8px; top: 33px; height: 5px; border-radius: 99px; background: hsl(var(--foreground)); width: calc(var(--skpan) * (100% - 16px)); }
-.jtrain { position: absolute; z-index: 1; top: 25px; left: calc(var(--skpan) * (100% - 20px)); width: 21px; height: 21px; margin-left: -2px; border-radius: 99px; background: hsl(var(--background)); box-shadow: 0 0 0 4px hsl(var(--foreground)); }
-.jline li { position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px; width: 20px; font-size: 12.5px; white-space: nowrap; color: hsl(var(--muted-foreground)); transition: color 300ms var(--ease-out); }
-.jline li::before { content: ""; width: 19px; height: 19px; border-radius: 99px; background: hsl(var(--background)); border: 4px solid hsl(var(--border)); transition: border-color 300ms var(--ease-out); }
-.jline li[data-on] { color: hsl(var(--foreground)); }
-.jline li[data-on]::before { border-color: hsl(var(--foreground)); }
-.jsign { position: relative; z-index: 3; margin-top: 22px; padding: 0 16px; text-align: center; font-family: var(--font-display); font-weight: 400; font-size: 30px; line-height: 1.2; text-wrap: balance; animation: jslide 300ms var(--ease-emphasized) 300ms both; transition: opacity 300ms var(--ease-out); }
-.jsign small { display: block; margin-bottom: 6px; font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
-@keyframes jslide { from { opacity: 0; transform: translateX(40px); } to { opacity: 1; transform: none; } }
-
-/* Mitten: the question, one field and a few small suggestions, centred */
-.jcard { position: relative; z-index: 2; flex: 1; min-height: 0; width: min(640px, calc(100% - 32px)); margin: 0 auto; overflow-y: auto; scrollbar-width: none; display: flex; flex-direction: column; animation: jslide 300ms var(--ease-emphasized) 360ms both; transition: opacity 300ms var(--ease-out); }
-.jmid { margin: auto 0; padding: 24px 0 40px; display: flex; flex-direction: column; align-items: center; gap: 22px; text-align: center; }
-.jq { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 28px; line-height: 1.3; letter-spacing: -.01em; text-wrap: balance; }
-.jcomp { width: 100%; display: flex; align-items: flex-end; gap: 8px; padding: 8px 8px 8px 18px; border-radius: 12px; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); transition: border-color 150ms var(--ease-out); }
-.jcomp:focus-within { border-color: hsl(var(--foreground) / .55); }
-.jcomp textarea { flex: 1; min-height: 24px; max-height: 140px; padding: 7px 0; border: 0; outline: 0; resize: none; background: transparent; color: inherit; font: inherit; font-size: 15px; line-height: 22px; text-align: left; }
-.jcomp textarea::placeholder { color: hsl(var(--muted-foreground)); }
-.jchips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-.jchips button { height: 32px; padding: 0 14px; border-radius: 99px; border: 1px solid hsl(var(--border)); background: hsl(var(--background)); color: hsl(var(--foreground)); font-size: 13px; cursor: pointer; animation: rise 300ms var(--ease-emphasized) both; animation-delay: calc(400ms + var(--n) * 60ms); transition: background-color 150ms var(--ease-out); }
-.jchips button:hover { background: hsl(var(--secondary) / 0.6); }
-.jchips button:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
-.jlink { border: 0; background: none; padding: 0; color: hsl(var(--muted-foreground)); font-size: 13px; text-decoration: underline; text-underline-offset: 4px; cursor: pointer; }
-.jthink { display: flex; gap: 6px; padding: 18px 0; }
-
-/* Kort: the summary at the last station */
-.jsum { margin: auto 0; padding: 22px; border-radius: 12px; background: hsl(var(--background)); border: 1px solid hsl(var(--border)); animation: rise 300ms var(--ease-emphasized) 300ms both; }
-.jsum h3 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 24px; line-height: 1.25; letter-spacing: -.01em; text-wrap: balance; }
-.jsum > p { margin: 6px 0 0; font-size: 13px; color: hsl(var(--muted-foreground)); }
-.jsum ol { counter-reset: jstep; list-style: none; margin: 16px 0 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
-.jsum li { counter-increment: jstep; position: relative; padding-left: 34px; font-size: 13px; line-height: 21px; animation: rise 300ms var(--ease-emphasized) both; animation-delay: calc(400ms + var(--n) * 60ms); }
-.jsum li::before { content: counter(jstep); position: absolute; left: 0; top: -1px; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 4px; border: 1px solid hsl(var(--border)); font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; }
-.jextra { margin: 12px 0 0 34px; font-size: 13px; color: hsl(var(--muted-foreground)); }
-.jextra b { font-weight: 500; color: hsl(var(--foreground)); }
-.jfacts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
-.jfacts span { padding: 3px 10px; border-radius: 99px; border: 1px solid hsl(var(--border)); font-size: 12.5px; color: hsl(var(--muted-foreground)); }
-.jacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
-.jdone { position: absolute; z-index: 6; left: 50%; bottom: 40px; transform: translateX(-50%); width: min(520px, calc(100% - 32px)); text-align: center; }
-.jdone p { margin: 0 0 14px; font-size: 15px; }
-.jdone .jacts { justify-content: center; margin: 0; }
-
-/* Sprängskiss: four plates in 3D fall in, press together, and the camera turns top-down */
-.scene { position: absolute; z-index: 4; inset: 96px 16px 150px; perspective: 1600px; perspective-origin: 50% 30%; pointer-events: none; }
-.rig { position: absolute; left: 50%; top: 62%; width: 0; height: 0; transform-style: preserve-3d; transform: rotateX(58deg) rotateZ(-38deg); transition: transform 300ms var(--ease-emphasized); }
-.scene[data-orbit] .rig { transform: rotateX(56deg) rotateZ(-22deg); }
-.scene[data-flat] .rig { transform: none; }
-.bplate { --z: calc(var(--i) * 105px); position: absolute; left: -160px; top: -78px; width: 320px; height: 156px; border-radius: 12px; border: 1px solid hsl(var(--border)); background: hsl(var(--card)); color: hsl(var(--foreground)); transform-style: preserve-3d; backface-visibility: hidden; opacity: 0; transform: translateZ(calc(var(--z) + 520px)); transition: transform 300ms var(--ease-emphasized), opacity 150ms var(--ease-out), background-color 150ms var(--ease-out), border-color 150ms var(--ease-out); }
-/* the plates float over the creator, so they carry the overlay shadow token */
-.bplate::after { content: ""; position: absolute; inset: 0; border-radius: inherit; box-shadow: var(--shadow-lg); pointer-events: none; }
-.bplate[data-in] { opacity: 1; transform: translateZ(var(--z)); }
-.scene[data-collapse] .bplate { --z: calc(var(--i) * 9px); }
-.scene[data-flat] .bplate { --z: calc(var(--i) * 1px); }
-.scene[data-flat] .bplate:not(.ptop) { opacity: 0; transition-delay: 300ms; }
-.pface { position: absolute; inset: 0; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-.pface > b { font-family: var(--font-geist-mono), ui-monospace, monospace; font-size: 11px; font-weight: 500; letter-spacing: .1em; text-transform: uppercase; color: hsl(var(--muted-foreground)); }
-.pface h4 { margin: 0; font-family: var(--font-display); font-weight: 400; font-size: 20px; line-height: 1.25; color: hsl(var(--foreground)); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.pface p { margin: 0; font-size: 13px; color: hsl(var(--muted-foreground)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ptags { display: flex; flex-wrap: wrap; gap: 6px; }
-.ptags span { padding: 3px 10px; border-radius: 99px; border: 1px solid hsl(var(--border)); font-size: 12.5px; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.psteps { margin: 0; padding: 0 0 0 18px; font-size: 12.5px; line-height: 19px; }
-.psteps li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pleds { display: flex; gap: 6px; justify-content: flex-end; margin-top: auto; }
-.pleds i { width: 16px; height: 3px; border-radius: 99px; background: hsl(var(--border)); transition: background-color 150ms var(--ease-out); }
-.pleds i:nth-child(2) { transition-delay: 150ms; }
-.pleds i:nth-child(3) { transition-delay: 300ms; }
-.ptop { border-color: hsl(var(--foreground) / .4); background: hsl(var(--secondary)); }
-.scene[data-burn] .pleds i { background: hsl(var(--foreground)); }
-
-/* Dörrarna: the page, split down the middle, slides apart */
-.doors { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
-.door { position: absolute; inset: 0; overflow: hidden; background: hsl(var(--background)); transition: transform 300ms var(--ease-drawer); }
-.door[data-side="l"] { clip-path: inset(0 50% 0 0); }
-.door[data-side="r"] { clip-path: inset(0 0 0 50%); }
-.doors[data-open] .door[data-side="l"] { transform: translateX(-52%); }
-.doors[data-open] .door[data-side="r"] { transform: translateX(52%); }
-
-/* Hem: the key flies from the closing creator into its row (appended to body, outside .page) */
-.flykey { position: fixed; z-index: 60; left: 0; top: 0; transform-origin: 0 0; will-change: transform, opacity; border-radius: 12px; background: hsl(var(--secondary)); color: hsl(var(--foreground)); border: 1px solid hsl(var(--border)); box-shadow: var(--shadow-lg); overflow: hidden; pointer-events: none; }
-.flykey .pleds i { background: hsl(var(--foreground)); }
-/* Radix waits for this before unmounting, so the journey fades away under the key instead of cutting. */
-.full[data-journey][data-state="closed"] { animation: jout 300ms var(--ease-out) forwards; }
-@keyframes jout { to { opacity: 0; } }
-
-@media (max-width: 760px) {
-  .jline { width: calc(100% - 96px); }
-  .jline li { font-size: 0; }
-  .jsign { font-size: 24px; }
-  .jq { font-size: 23px; }
-  .scene { inset: 80px 8px 170px; }
-  .rig { scale: .72; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .journey, .journey *, .journey *::before, .journey *::after { animation: none !important; transition: none !important; }
-  .doors { display: none; }
 }
 
 /* ── Agenter: the four parts of an agent in its sheet ── */
@@ -754,6 +618,9 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .catCount { font-size: 12.5px; font-weight: 400; font-variant-numeric: tabular-nums; color: hsl(var(--muted-foreground)); }
 .catLink { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; font: inherit; font-size: 13.5px; color: hsl(var(--foreground)); cursor: pointer; }
 .catLink:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* A knowledge pack's page: what it covers in plain words, then a quiet toggle for the text the AI reads. */
+.packAbout { font-size: 15px; line-height: 22px; color: hsl(var(--foreground)); }
+.packToggle { align-self: flex-start; }
 .featured { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 24px; padding: 32px 36px; border-radius: 18px; }
 .featuredText { display: flex; flex-direction: column; gap: 8px; max-width: 60ch; }
 .featuredText > span { font-size: 13px; color: hsl(var(--foreground) / 0.65); }
@@ -943,6 +810,9 @@ a.apptile:hover { background: hsl(var(--secondary) / 0.6); }
 .shareInput input { flex: 1; min-width: 0; border: 0; background: none; font: inherit; font-size: 14px; color: hsl(var(--foreground)); outline: none; }
 .shareInput input::placeholder { color: hsl(var(--muted-foreground) / 0.6); }
 .shareHint { font-size: 12px; font-weight: 400; color: hsl(var(--destructive)); }
+/* The handle rule, shown before anything is typed; it turns to the error tone only when the handle breaks it. */
+.shareRule { font-size: 12px; font-weight: 400; color: hsl(var(--muted-foreground)); }
+.shareRule[data-invalid] { color: hsl(var(--destructive)); }
 .shareCheck { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 19px; color: hsl(var(--foreground)); }
 .shareCheck input { margin-top: 3px; accent-color: hsl(var(--foreground)); }
 /* Skriv själv's routine (RoutineRow): one row like the others, the choice inline on the right */
