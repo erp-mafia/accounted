@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Plus, Repeat, Search, X } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Plus, Search, X } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -31,8 +31,8 @@ import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
 import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
 import { ClaudeStart } from './ClaudeStart'
 import { trackInstructions } from './track'
-import { RoutinePanel } from './RoutinePanel'
-import { parseRoutineQuery } from '@/lib/agent-skills/routine'
+import { RoutineOffer, RoutinePanel } from './RoutinePanel'
+import { isPeriodFlow, parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
 import { agentIdFromSegment, agentStatus, fetchConnections, readAgents, readCatalog, readOptions, readUsage, readWorklist, knowledgeHref, simulatedClient, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
@@ -59,6 +59,7 @@ export function AgentDetail({ segment, backHref = '/skills' }: { segment: string
 
 function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: string; backHref: string }) {
   const t = useTranslations('skills_registry')
+  const companyName = useCompany().company?.name ?? ''
   const locale = useLocale()
   const router = useRouter()
   const { canWrite } = useCanWrite()
@@ -88,7 +89,9 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
   const bodySlug = curated ? registrySkillSlug(curated, client) : agentId
   const body = useSWR(curated || own ? ['/api/skills', companyId, bodySlug] : null, ([url, , s]) => readBody(`${url}?slug=${encodeURIComponent(s)}`))
   // A routine chosen in Skriv själv arrives as ?rutin=… and opens its panel filled in.
-  const handedRoutine = parseRoutineQuery(new URLSearchParams(useSearchParams().toString()))
+  const handedParams = new URLSearchParams(useSearchParams().toString())
+  const handedRoutine = parseRoutineQuery(handedParams)
+  const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<View>(handedRoutine ? 'routine' : 'main')
   const [runState, setRunState] = useState<'idle' | 'copied' | 'failed'>('idle')
 
@@ -176,6 +179,8 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
     void (client === 'claude' ? openInClaude(target, prompt, !!curated) : copyPromptAndOpen(prompt, client, !!curated)).then((ok) => setRunState(ok ? 'copied' : 'failed'))
   }
   const say = curated ? t(`skills.${curated}.say`) : t('own_say', { name })
+  // A month-end close or VAT flow scheduled weekly first checks whether its period is already done.
+  const routineSay = curated && isPeriodFlow(curated) ? t(`routine_say.${curated}`) : say
   const disconnected = connected !== null && connected.length === 0
 
   return (
@@ -200,10 +205,8 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
                 <ArrowUpRight className="h-4 w-4" aria-hidden />
               </Button>
             )}
-            {/* A routine is scheduled in Claude Desktop, so only for Claude, and never for a draft. */}
-            {!own?.draft && !disconnected && client === 'claude' && (
-              <Button size="lg" variant="outline" className="gap-2" onClick={() => setView('routine')}><Repeat className="h-4 w-4" aria-hidden />{t('routine_open')}</Button>
-            )}
+            {/* A routine is scheduled in Claude, and never for a draft. */}
+            {!own?.draft && <RoutineOffer client={client} disconnected={disconnected} readOnly={false} canWrite={canWrite} onOpen={() => setView('routine')} />}
             {runState !== 'idle' && <span className={styles.stageStatus} role="status">{runState === 'copied' ? t(curated ? 'prefilled_open' : 'copied_open', { client: clientName }) : t('copy_failed')}</span>}
             {/* only a status worth reading: work waiting, a missing connection, no AI yet */}
             {status && status.presence !== 'ready' && <span className={styles.stageStatus}><span className={styles.chipDot} data-presence={status.presence} aria-hidden />{status.text}</span>}
@@ -267,7 +270,7 @@ function Detail({ companyId, agentId, backHref }: { companyId: string; agentId: 
             </SubView>
           )}
           {view === 'routine' && (
-            <RoutinePanel run={t('prompt', { say, agent: agentId, client: 'claude' })} item={curated ?? 'own'} kind="workflow" initial={handedRoutine} onBack={() => setView('main')} />
+            <RoutinePanel run={t('prompt', { say: routineSay, agent: agentId, client: 'claude' })} name={name} item={curated ?? 'own'} kind="workflow" company={{ id: companyId, name: companyName }} initial={handedRoutine} sent={handedSent} onBack={() => setView('main')} />
           )}
           {view === 'advanced' && (
             <SubView title={t('section_advanced')} onBack={() => setView('main')}>
@@ -320,12 +323,12 @@ export function Field({ label, note, copy, children }: { label: string; note?: s
   )
 }
 
-/** A panel sub-view: back to the agent, a title, its content. */
-export function SubView({ title, onBack, children }: { title: string; onBack: () => void; children: ReactNode }) {
+/** A panel sub-view: back to the agent, a title, its content. `backLabel` names the way out where "Klar" would read as saved. */
+export function SubView({ title, onBack, backLabel, children }: { title: string; onBack: () => void; backLabel?: string; children: ReactNode }) {
   const t = useTranslations('skills_registry')
   return (
     <div className="flex flex-col gap-4">
-      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
+      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{backLabel ?? t('knowledge_picker_done')}</button>
       <h2 className={styles.subTitle}>{title}</h2>
       {children}
     </div>
