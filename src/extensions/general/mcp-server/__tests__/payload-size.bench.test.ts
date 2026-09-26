@@ -557,6 +557,12 @@ describe('tools/list payload size guard', () => {
     //     only flows. Paid for by a shorter title and description. Measured
     //     63 498: two tokens of headroom, so the next default-catalog addition
     //     has to trim first. Ceiling unchanged.
+    //   * One definition of nettoomsättning: gnubok_get_income_statement
+    //     names nettoomsattning (3000-3799) as the revenue figure and
+    //     declares it in its outputSchema; the per-figure account
+    //     definitions travel in the response, not the schema. Paid for by
+    //     dropping the description's restatement of the dimensions arg.
+    //     Ceiling unchanged.
     expect(approxTokens).toBeLessThan(63_500)
   })
 
