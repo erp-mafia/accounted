@@ -57,12 +57,9 @@ export interface PreviewDocument {
  */
 export async function ensurePreview(service: SupabaseClient, doc: PreviewDocument, original?: Buffer): Promise<Buffer | null> {
   const path = previewPath(doc.company_id, doc.id)
-  let bucket: ReturnType<SupabaseClient['storage']['from']>
-  try {
-    bucket = service.storage.from('documents')
-  } catch {
-    return null
-  }
+  // A client without storage (a test double, a stripped-down deployment) gets no preview, not an error.
+  if (!service.storage) return null
+  const bucket = service.storage.from('documents')
   try {
     const kept = await bucket.download(path)
     if (kept.data && !kept.error) return Buffer.from(await kept.data.arrayBuffer())
