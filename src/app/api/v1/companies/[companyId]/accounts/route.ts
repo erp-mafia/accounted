@@ -1,10 +1,15 @@
 /**
- * GET /api/v1/companies/{companyId}/accounts
+ * GET  /api/v1/companies/{companyId}/accounts
  *
  * List the company's chart of accounts (kontoplan). Filter by ?class=0..9
  * (the first digit of account_number) and ?active=false (include
  * deactivated accounts). Sorted by account_number, which is the BAS sequence:
  * agents can render the BAS hierarchy directly from this.
+ *
+ * POST /api/v1/companies/{companyId}/accounts
+ *
+ * Add an account (operation accounts.create; contract, docs and rules live in
+ * src/lib/operations/accounts.ts).
  */
 import { z } from 'zod'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -13,6 +18,8 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import { AccountVatTreatmentSchema } from '@/lib/api/schemas'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { accountsCreate } from '@/lib/operations/accounts'
 
 const Account = z.object({
   account_number: z.string(),
@@ -65,7 +72,7 @@ registerEndpoint({
   useWhen:
     'You need account numbers and names to render verifikation tables, build a custom report, check that an account is active before booking to it, or look up an account\'s type, normal balance, SRU code or VAT defaults.',
   doNotUseFor:
-    'Fetching balances: use the trial-balance report. Creating, renaming or deactivating accounts: v1 has no account write endpoint. Use the Kontoplan (chart of accounts) page in the app, or the MCP tools accounted_create_account and accounted_update_account, which stage the change for approval.',
+    'Fetching balances: use the trial-balance report. Creating, editing, deactivating or deleting accounts: POST /accounts, PATCH and DELETE /accounts/{number}, POST /accounts/activate and /accounts/deactivate.',
   pitfalls: [
     'account_number is a STRING: "1930", not 1930. BAS numbers have four digits; a chart imported from another system can also carry longer sub-account numbers such as "19301".',
     'An account missing from this list is not necessarily unusable. Posting to a standard BAS 2026 account that is not in the chart adds it automatically; posting to a deactivated account, or to a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.',
@@ -170,3 +177,5 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     return ok({ accounts }, { requestId: ctx.requestId })
   },
 )
+
+export const POST = v1OperationHandler(accountsCreate)

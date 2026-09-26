@@ -15,6 +15,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { createClient } from '@/lib/supabase/server'
 import { POST } from '../route'
 
+// Refusals answer the canonical { error: { code, message, details } } envelope
+// since the rules moved to lib/core/bookkeeping/fiscal-year-service.ts (they
+// used to be raw English strings in { error }): assertions read the code and
+// details, which agents and the UI both rely on.
+
 function createMockRequest(body: unknown): Request {
   return new Request('http://localhost/api/bookkeeping/fiscal-periods', {
     method: 'POST',
@@ -167,7 +172,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/Overlaps/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_OVERLAP')
   })
 
   // Dropping the "prior year must be locked" gate must not open an overlap
@@ -183,7 +188,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(409)
     const body = await res.json()
-    expect(body.error).toMatch(/Overlaps/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_OVERLAP')
   })
 
   it('rejects forward period with wrong start date', async () => {
@@ -194,7 +199,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must start on 2026-01-01/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_start).toBe('2026-01-01')
   })
 
   // Regression (BFL 5 kap 2 §): this used to be a 409. One unbooked December
@@ -350,7 +356,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must end on 2025-12-31/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2025-12-31')
   })
 
   it('backward chaining skips unclosed period constraint', async () => {
@@ -396,9 +403,10 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req, { params: Promise.resolve({}) })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/1st of a month/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_START_NOT_FIRST_OF_MONTH')
     // The refusal explains the rule instead of only saying no.
-    expect(body.error).toMatch(/first fiscal year may start mid-month/)
+    expect(body.error.message).toMatch(/första räkenskapsår får börja mitt i en månad/)
+    expect(body.error.message_en).toMatch(/first fiscal year may start mid-month/)
   })
 
   // Regression (2026-06-16): a company with FY 2024 + FY 2026 but no
@@ -432,7 +440,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must start on 2025-01-01/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_start).toBe('2025-01-01')
   })
 
   // Regression: the start check only constrains the predecessor side. A gap-fill
@@ -452,7 +461,8 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/must end on 2025-12-31/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+    expect(body.error.details.expected_end).toBe('2025-12-31')
   })
 
   // A gap fill is a backfill (like backward chaining), so the "prior year must be
@@ -483,7 +493,7 @@ describe('POST /api/bookkeeping/fiscal-periods', () => {
     const res = await POST(req)
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/18 months/)
+    expect(body.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
   })
 
   it('rejects invalid body', async () => {

@@ -50,7 +50,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'core.md',
     title: 'Core',
-    members: ['health', 'companies', 'operations', 'settings'],
+    members: ['health', 'companies', 'operations', 'settings', 'peppol'],
     blurb:
       'Connectivity, company discovery, async-operation polling, and company settings. ' +
       'Every session starts with GET /companies to resolve the companyId that all other URLs need.',
@@ -67,7 +67,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'periods.md',
     title: 'Periods and registers',
-    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket'],
+    members: ['fiscal-periods', 'accounts', 'compliance', 'dimensions', 'skatteverket', 'skattekonto'],
     blurb:
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS ' +
       'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +
@@ -93,10 +93,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'suppliers.md',
     title: 'Suppliers (AP)',
-    members: ['suppliers', 'supplier-invoices'],
+    members: ['suppliers', 'supplier-invoices', 'supplier-payment-batches', 'expense-claims'],
     blurb:
-      'Accounts payable: supplier register and received supplier invoices ' +
-      '(register -> approve -> mark-paid, or credit).',
+      'Accounts payable: supplier register, received supplier invoices ' +
+      '(register -> approve -> book if deferred -> pay via a supplier payment file ' +
+      'or mark-paid, or credit), and expense claims (utlägg) with their payouts.',
   },
   {
     file: 'documents.md',
@@ -137,7 +138,7 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'reports.md',
     title: 'Reports',
-    members: ['reports'],
+    members: ['reports', 'audit-trail', 'vat'],
     blurb:
       'Read-only statutory and management reports: trial balance, balance sheet, income statement, ' +
       'general ledger, VAT declaration, AR/AP ledgers, salary journal, and SIE export.',

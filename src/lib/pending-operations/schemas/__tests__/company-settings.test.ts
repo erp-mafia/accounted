@@ -1,121 +1,104 @@
+/**
+ * The machine-door input of settings.update (gnubok_update_company_settings,
+ * PATCH /api/v1/companies/:companyId/settings) and the upgrade of
+ * update_company_settings rows staged in the pre-operation shape.
+ */
 import { describe, it, expect } from 'vitest'
-import { UpdateCompanySettingsParamsSchema } from '../company-settings'
+import { settingsUpdate } from '@/lib/operations/company-settings'
+import { upgradeLegacyCompanySettingsParams } from '../company-settings'
 
-const wrap = (changes: Record<string, unknown>) => ({ changes })
+const parse = (input: Record<string, unknown>) => settingsUpdate.input.parse(input)
 
-describe('UpdateCompanySettingsParamsSchema: widened field set', () => {
+describe('settings.update input: field set', () => {
   it('accepts the original banking and reference fields', () => {
-    const parsed = UpdateCompanySettingsParamsSchema.parse(
-      wrap({
-        bank_name: 'Testbanken',
-        clearing_number: '1234',
-        account_number: '1234567',
-        bankgiro: '5050-1055',
-        default_our_reference: 'Test Contact',
-      }),
-    )
-    expect(parsed.changes.bankgiro).toBe('5050-1055')
-    expect(parsed.changes.default_our_reference).toBe('Test Contact')
+    const parsed = parse({
+      bank_name: 'Testbanken',
+      clearing_number: '1234',
+      account_number: '1234567',
+      bankgiro: '5050-1055',
+      contact_person: 'Test Contact',
+    })
+    expect(parsed.bankgiro).toBe('5050-1055')
+    expect(parsed.contact_person).toBe('Test Contact')
   })
 
-  it('accepts email, phone and website', () => {
-    const parsed = UpdateCompanySettingsParamsSchema.parse(
-      wrap({
-        email: 'faktura@example.se',
-        phone: '08-123 456 78',
-        website: 'https://example.se',
-      }),
-    )
-    expect(parsed.changes.email).toBe('faktura@example.se')
-    expect(parsed.changes.phone).toBe('08-123 456 78')
-    expect(parsed.changes.website).toBe('https://example.se')
+  it('accepts the wider non-legal settings the dashboard writes', () => {
+    const parsed = parse({
+      company_name: 'Acme AB',
+      invoice_email_cc_addresses: ['kopia@example.se'],
+      default_voucher_series: 'B',
+      reminder_days_level_1: 10,
+      quotes_enabled: false,
+    })
+    expect(parsed.invoice_email_cc_addresses).toEqual(['kopia@example.se'])
+    expect(parsed.default_voucher_series).toBe('B')
   })
 
-  it('accepts an empty-string email (clears the value)', () => {
-    const parsed = UpdateCompanySettingsParamsSchema.parse(wrap({ email: '' }))
-    expect(parsed.changes.email).toBe('')
-  })
-
-  it('rejects a malformed email', () => {
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(wrap({ email: 'not-an-email' })),
-    ).toThrow()
-  })
-
-  it('accepts invoice_email_texts overrides for sv and en', () => {
-    const parsed = UpdateCompanySettingsParamsSchema.parse(
-      wrap({
-        invoice_email_texts: {
-          sv: { subject: 'Faktura {fakturanummer}', body: 'Tack for fortroendet.' },
-          en: { greeting: 'Hi {förnamn},', signoff: 'Best regards' },
-        },
-      }),
-    )
-    expect(parsed.changes.invoice_email_texts?.sv?.subject).toBe('Faktura {fakturanummer}')
-    expect(parsed.changes.invoice_email_texts?.en?.greeting).toBe('Hi {förnamn},')
+  it('accepts an empty-string email (clears the value) and rejects a malformed one', () => {
+    expect(parse({ email: '' }).email).toBe('')
+    expect(() => parse({ email: 'not-an-email' })).toThrow()
   })
 
   it('accepts null invoice_email_texts (clears every override)', () => {
-    const parsed = UpdateCompanySettingsParamsSchema.parse(
-      wrap({ invoice_email_texts: null }),
-    )
-    expect(parsed.changes.invoice_email_texts).toBeNull()
+    expect(parse({ invoice_email_texts: null }).invoice_email_texts).toBeNull()
   })
 
   it('requires at least one field', () => {
-    expect(() => UpdateCompanySettingsParamsSchema.parse(wrap({}))).toThrow(/at least one/i)
+    expect(() => parse({})).toThrow(/at least one/i)
   })
-})
 
-describe('UpdateCompanySettingsParamsSchema: excluded fields stay excluded', () => {
   const excluded: Array<[key: string, value: unknown]> = [
     ['vat_registered', true],
-    ['invoice_email_cc_addresses', ['kopia@example.se']],
-    ['invoice_email_bcc_addresses', ['dold@example.se']],
+    ['accounting_method', 'cash'],
     ['defer_invoice_booking', true],
-    ['default_voucher_series', 'B'],
+    ['bookkeeping_locked_through', '2026-01-31'],
     ['org_number', '556677-8899'],
+    ['entity_type', 'aktiebolag'],
+    ['default_our_reference', 'Sneaky'],
+    ['salary_pay_day', 25],
   ]
-
-  it.each(excluded)('rejects %s via .strict()', (key, value) => {
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(wrap({ bank_name: 'Testbanken', [key]: value })),
-    ).toThrow(/unrecognized key/i)
+  it.each(excluded)('rejects %s (another door, or not writable over the API)', (key, value) => {
+    expect(() => parse({ bank_name: 'Testbanken', [key]: value })).toThrow(/unrecognized key/i)
   })
 })
 
-describe('UpdateCompanySettingsParamsSchema: placeholder validation', () => {
-  it('accepts every placeholder in the fixed set', () => {
+describe('settings.update input: machine-door rules', () => {
+  it('rejects a Bankgiro number with a wrong check digit', () => {
+    expect(() => parse({ bankgiro: '991-2345' })).toThrow(/Invalid Bankgiro number/)
+  })
+
+  it('accepts every placeholder in the fixed set, case- and space-insensitive', () => {
     const body =
       'Faktura {fakturanummer} till {kundnamn} ({förnamn}) fran {företag}, forfaller {förfallodatum}, belopp {belopp}.'
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(
-        wrap({ invoice_email_texts: { sv: { body } } }),
-      ),
-    ).not.toThrow()
+    expect(() => parse({ invoice_email_texts: { sv: { body, subject: 'Faktura { Fakturanummer }' } } })).not.toThrow()
   })
 
-  it('normalises placeholder case and whitespace like the renderer does', () => {
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(
-        wrap({ invoice_email_texts: { sv: { subject: 'Faktura { Fakturanummer }' } } }),
-      ),
-    ).not.toThrow()
+  it('rejects an unknown placeholder in any language and field', () => {
+    expect(() => parse({ invoice_email_texts: { sv: { body: 'Betala med OCR {ocr}.' } } })).toThrow(
+      /unknown placeholder \{ocr\}/i,
+    )
+    expect(() => parse({ invoice_email_texts: { en: { subject: 'Invoice {faktura_nr}' } } })).toThrow(
+      /unknown placeholder \{faktura_nr\}/i,
+    )
+  })
+})
+
+describe('upgradeLegacyCompanySettingsParams', () => {
+  it('lifts { changes } to the flat input and renames the reference', () => {
+    expect(
+      upgradeLegacyCompanySettingsParams({ changes: { bankgiro: '5050-1055', default_our_reference: 'Anna' } }),
+    ).toEqual({ bankgiro: '5050-1055', contact_person: 'Anna' })
   })
 
-  it('rejects an unknown placeholder such as {ocr}', () => {
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(
-        wrap({ invoice_email_texts: { sv: { body: 'Betala med OCR {ocr}.' } } }),
-      ),
-    ).toThrow(/unknown placeholder \{ocr\}/i)
+  it('keeps a null reference (it clears the value)', () => {
+    expect(upgradeLegacyCompanySettingsParams({ changes: { default_our_reference: null } })).toEqual({
+      contact_person: null,
+    })
   })
 
-  it('rejects an invented near-miss placeholder in any language and field', () => {
-    expect(() =>
-      UpdateCompanySettingsParamsSchema.parse(
-        wrap({ invoice_email_texts: { en: { subject: 'Invoice {faktura_nr}' } } }),
-      ),
-    ).toThrow(/unknown placeholder \{faktura_nr\}/i)
+  it('passes flat params and anything unexpected through untouched', () => {
+    expect(upgradeLegacyCompanySettingsParams({ phone: '08-1' })).toEqual({ phone: '08-1' })
+    const odd = { changes: { phone: '08-1' }, company_id: 'x' }
+    expect(upgradeLegacyCompanySettingsParams(odd)).toBe(odd)
   })
 })

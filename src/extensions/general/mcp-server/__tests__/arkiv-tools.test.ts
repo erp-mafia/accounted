@@ -180,7 +180,8 @@ describe('Arkiv tools', () => {
 
   it('get_record on a journal entry returns every attachment as a record', async () => {
     enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 12, entry_date: '2026-09-01', description: 'Hyra september' } })
-    enqueue({ data: [{ id: DOC }] })
+    enqueue({ data: [{ id: DOC, created_at: '2026-09-01', sha256_hash: null }] })
+    enqueue({ data: [] }) // no content hashes: nothing to compare
     enqueue({ data: { id: DOC, file_name: 'faktura.pdf', created_at: '2026-09-01', doc_type: 'supplier_invoice', admission_state: 'admitted', page_count: 1, journal_entry_id: JE } })
     enqueue({ data: { id: 'ext-2', schema_type: 'generic', schema_version: 1, pass: 'consensus', payload: { total_amount: { value: 12500, normalized: 12500, page: 1, quote: 'Att betala 12 500', confidence: 1, method: 'consensus' } }, review_fields: [], created_at: '2026-09-01' } })
     enqueue({ data: [] })
@@ -189,6 +190,19 @@ describe('Arkiv tools', () => {
     expect(out.journal_entry.voucher).toBe('A12')
     expect(out.journal_entry.documents).toHaveLength(1)
     expect(out.journal_entry.documents[0].record.fields[0]).toMatchObject({ field: 'total_amount', value: 12500, page: 1 })
+  })
+
+  it('get_record on a journal entry marks a later copy of the same file, so a sum over its documents counts it once', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
+    const COPY = '99999999-9999-4999-8999-999999999999'
+    enqueue({ data: { id: JE, voucher_series: 'A', voucher_number: 82, entry_date: '2026-06-12', description: 'Higgsfield' } })
+    enqueue({ data: [{ id: DOC, created_at: '2026-06-12T08:58:00Z', sha256_hash: 'abc' }, { id: COPY, created_at: '2026-06-12T09:00:00Z', sha256_hash: 'abc' }] })
+    enqueue({ data: [] }) // content hashes
+    enqueue({ data: [{ id: DOC, created_at: '2026-06-12T08:58:00Z', sha256_hash: 'abc' }, { id: COPY, created_at: '2026-06-12T09:00:00Z', sha256_hash: 'abc' }] }) // same bytes
+    enqueue({ data: { id: DOC, file_name: 'Invoice-0002.pdf', created_at: '2026-06-12', doc_type: 'supplier_invoice', admission_state: 'admitted', page_count: 1, journal_entry_id: JE } })
+    enqueue({ data: { id: COPY, file_name: 'Invoice-0002.pdf', created_at: '2026-06-12', doc_type: 'supplier_invoice', admission_state: 'admitted', page_count: 1, journal_entry_id: JE } })
+    const out = (await tool('gnubok_get_record').execute({ record_ref: `journal_entry:${JE}` }, CO, 'user-1', supabase)) as { journal_entry: { documents: Array<{ document_id: string; duplicate_of: string | null }> } }
+    expect(out.journal_entry.documents.map((d) => [d.document_id, d.duplicate_of])).toEqual([[DOC, null], [COPY, `document:${DOC}`]])
   })
 
   it('get_record reports a missing record', async () => {

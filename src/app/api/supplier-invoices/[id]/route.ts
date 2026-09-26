@@ -11,6 +11,8 @@ import {
   isUnsettledSupplierInvoiceStatus,
   resolveUnsettledStatus,
 } from '@/lib/supplier-invoices/lifecycle'
+import { deleteSupplierInvoice } from '@/lib/supplier-invoices/manage'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.get',
@@ -168,141 +170,18 @@ export const PUT = withRouteContext<{ params: Promise<{ id: string }> }>(
   { requireWrite: true },
 )
 
+/**
+ * Delete an unbooked supplier invoice. Rules (never a credit note, only
+ * unpaid states, no verifikat / payment / accrual / payment-batch row) live
+ * in lib/supplier-invoices/manage.ts, shared with v1 supplier-invoices.delete.
+ */
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'supplier_invoice.delete',
-  async (_request, { supabase, companyId, log }, { params }) => {
-  const { id } = await params
-
-  // Only allow deleting registered invoices without journal entries
-  const { data: existing } = await supabase
-    .from('supplier_invoices')
-    .select('status, registration_journal_entry_id, is_credit_note')
-    .eq('id', id)
-    .eq('company_id', companyId)
-    .single()
-
-  if (!existing) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  }
-
-  // Block direct deletion of credit notes: deleting just the row would orphan the
-  // posted reversal JE and silently break momsdeklaration. The user must instead
-  // run "Ångra kreditering" on the original, which storno-reverses the JE and
-  // restores the original's status atomically.
-  if (existing.is_credit_note) {
-    return NextResponse.json(
-      {
-        error:
-          'Kreditfakturor kan inte tas bort direkt. Gå till originalfakturan och välj "Ångra kreditering" för att frigöra numret och återställa bokföringen.',
-      },
-      { status: 400 }
-    )
-  }
-
-  // 'overdue' and 'approved' are included: the daily cron flips unbooked
-  // invoices past due_date from registered/approved to 'overdue', and a
-  // registered-only gate made such an invoice permanently undeletable just by
-  // aging (support case 2026-07-26). What actually protects the books is the
-  // orphan-safety checks below (no registration verifikat, no payments, no
-  // accrual schedule), not the lifecycle label.
-  if (!['registered', 'approved', 'overdue'].includes(existing.status)) {
-    return NextResponse.json(
-      { error: 'Endast obetalda fakturor utan bokföring kan tas bort' },
-      { status: 400 }
-    )
-  }
-
-  // Booked invoices must go through the credit flow (mirrors the credit-note
-  // guard above). Three independent blockers:
-  //   (a) a posted registration verifikat: deleting the row would orphan it
-  //       and silently understate 2440/2641 for the momsdeklaration;
-  //   (b) a payment row: deleting the invoice would orphan the payment's
-  //       journal-entry link (belt-and-braces: payments normally move the
-  //       status to partially_paid/paid, which the gate above already blocks);
-  //   (c) an accrual schedule: accrual_schedules.supplier_invoice_id is
-  //       ON DELETE RESTRICT, so the invoice DELETE below would fail AFTER the
-  //       items were already deleted, leaving a broken invoice with zero rows.
-  if (existing.registration_journal_entry_id) {
-    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
-      details: { reason: 'registration_journal_entry' },
-    })
-  }
-
-  // Both orphan-safety lookups fail CLOSED: a lookup error must block the
-  // delete, otherwise a transient DB/RLS failure would read as "no payment /
-  // no schedule" and let the delete through unverified.
-  const { data: linkedPayment, error: paymentLookupError } = await supabase
-    .from('supplier_invoice_payments')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('supplier_invoice_id', id)
-    .limit(1)
-    .maybeSingle()
-
-  if (paymentLookupError) {
-    return NextResponse.json({ error: getUserErrorMessage(paymentLookupError) }, { status: 500 })
-  }
-
-  if (linkedPayment) {
-    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
-      details: { reason: 'payments', paymentId: linkedPayment.id },
-    })
-  }
-
-  const { data: linkedSchedule, error: scheduleLookupError } = await supabase
-    .from('accrual_schedules')
-    .select('id')
-    .eq('company_id', companyId)
-    .eq('supplier_invoice_id', id)
-    .limit(1)
-    .maybeSingle()
-
-  if (scheduleLookupError) {
-    return NextResponse.json({ error: getUserErrorMessage(scheduleLookupError) }, { status: 500 })
-  }
-
-  if (linkedSchedule) {
-    return errorResponseFromCode('SI_DELETE_HAS_BOOKING', log, {
-      details: { reason: 'accrual_schedule', scheduleId: linkedSchedule.id },
-    })
-  }
-
-  // A payment-batch item documents a payment instruction possibly already
-  // handed to the bank; supplier_payment_batch_items.supplier_invoice_id is
-  // ON DELETE RESTRICT, so like (c) the invoice DELETE would fail AFTER the
-  // items were deleted. Same fail-closed rule as the lookups above.
-  const { data: linkedBatchItem, error: batchLookupError } = await supabase
-    .from('supplier_payment_batch_items')
-    .select('id, batch_id')
-    .eq('company_id', companyId)
-    .eq('supplier_invoice_id', id)
-    .limit(1)
-    .maybeSingle()
-
-  if (batchLookupError) {
-    return NextResponse.json({ error: getUserErrorMessage(batchLookupError) }, { status: 500 })
-  }
-
-  if (linkedBatchItem) {
-    return errorResponseFromCode('SI_DELETE_IN_PAYMENT_BATCH', log, {
-      details: { batchId: linkedBatchItem.batch_id },
-    })
-  }
-
-  // Delete items first, then invoice
-  await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', id)
-
-  const { error } = await supabase
-    .from('supplier_invoices')
-    .delete()
-    .eq('id', id)
-    .eq('company_id', companyId)
-
-  if (error) {
-    return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
-  }
-
-  return NextResponse.json({ success: true })
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
+    const { id } = await params
+    const outcome = await deleteSupplierInvoice({ supabase, companyId, userId: user.id, log }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    return NextResponse.json({ success: true })
   },
   { requireWrite: true },
 )

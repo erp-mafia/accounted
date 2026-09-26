@@ -173,21 +173,19 @@ Example response `200`:
 
 ---
 
-### `PATCH /api/v1/companies/{companyId}/settings`
+### `POST /api/v1/companies/{companyId}/peppol/access-request`
 
-**Partially update company settings.**
-`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+**Ask the operators to switch on Peppol for the company (sending, optionally receiving).**
+`scope:companies:write · risk:medium · idempotent · dry-run`
 
-Patches the company payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC), the contact details shown on invoices (contact_person, email, phone, website), and the custom invoice email texts. All fields optional; at least one must be supplied. Idempotent (mandatory Idempotency-Key). Dry-runnable. The same validation as the MCP staging tool applies: Bankgiro/Plusgiro numbers are Luhn-checked and invoice email texts only accept a fixed placeholder set.
+Peppol is locked per company until the operators grant it (every transmission is billed per document and every receiving id uses a contracted slot). This records the request and notifies the operators by e-mail; they enable it with a sending cap and, when wants_receiving is true, a receiving slot. Idempotent: a second request keeps the first. Dry-runnable.
 
-**Use when:** You need to change the payment or contact details that appear on invoices, or override the invoice email texts, directly over REST instead of the staged MCP flow.
-**Do not use for:** Legal or tax profile changes (org number, VAT registration, fiscal year, accounting method): those are not exposed on the public API. Reading settings (no GET endpoint yet; use the MCP tool gnubok_get_company_settings).
+**Use when:** GET /invoices/{id}/peppol or GET /peppol/registration reports PEPPOL_ACCESS_REQUIRED and the user wants Peppol.
+**Do not use for:** Registering the participant id once access is granted (POST /peppol/registration).
 
 **Pitfalls:**
-- Idempotency-Key is mandatory; calls without it return 400.
-- contact_person is stored as default_our_reference: the default "Our reference" value on new invoices.
-- bankgiro and plusgiro must carry a valid Luhn check digit; null or empty string clears them.
-- invoice_email_texts only accepts the placeholders {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}; any other {token} is rejected. Null clears every override.
+- A company that already has access answers 409 PEPPOL_ACCESS_ALREADY_ENABLED; ask support for a higher cap or a receiving slot instead.
+- Nothing is enabled immediately: poll GET /peppol/registration for access.status=enabled.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -196,31 +194,14 @@ Patches the company payment details (bank account, Bankgiro, Plusgiro, Swish, IB
 
 Request body:
 ```ts
-{
-  bank_name?: string | null,
-  clearing_number?: string | null | "",
-  account_number?: string | null | "",
-  bankgiro?: string | null | "",
-  plusgiro?: string | null | "",
-  swish?: string | null,
-  iban?: string | null | "",
-  bic?: string | null | "",
-  contact_person?: string | null,
-  email?: string | "",
-  phone?: string,
-  website?: string | "",
-  invoice_email_texts?: {
-    sv?: { subject?: string, greeting?: string, body?: string, signoff?: string },
-    en?: { subject?: string, greeting?: string, body?: string, signoff?: string }
-  } | null
-}
+{ note?: string, wants_receiving?: boolean }
 ```
 
 Example request:
 ```json
 {
-  "bankgiro": "991-2346",
-  "contact_person": "Anna Andersson"
+  "wants_receiving": true,
+  "note": "Vi fakturerar kommuner."
 }
 ```
 
@@ -228,7 +209,235 @@ Response `200`:
 ```ts
 {
   data: {
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    created: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "access": {
+      "status": "requested",
+      "send_enabled": false,
+      "receive_enabled": false,
+      "max_sends": null,
+      "sent_count": 0,
+      "remaining_sends": null
+    },
+    "created": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/peppol/registration`
+
+**Read the company's Peppol receiving status: access grant, eligibility and registration.**
+`scope:companies:read · risk:low · idempotent`
+
+Whether this environment has an access point and whether it supports receiving, the company's Peppol access grant (sending cap, receiving slot), whether the company can be registered at all (a 10-digit organisation number that is not a personnummer, a company name), and the registration of its participant id (0007 + org number) with its status and last error.
+
+**Use when:** Before POST /peppol/registration, or to explain why the company does not receive e-invoices.
+**Do not use for:** Sending (GET /invoices/{id}/peppol checks an invoice) or reading received e-invoices (they arrive in the invoice inbox).
+
+**Pitfalls:**
+- participant.ok=false with PEPPOL_REGISTRATION_PERSONAL_NUMBER means a sole trader identified by personnummer: it cannot be published in the Peppol directory.
+- registration.can_retry says whether registering again can help; a permanent verdict (e.g. CONNECTOR_PEPPOL_PARTICIPANT_TAKEN) needs support.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    transport: { available: boolean, provider: string | null, reason: string | null },
+    receiving_supported: boolean,
+    access: { status: "none" | "requested" | "enabled" | "disabled", send_enabled: boolean, receive_enabled?: boolean, max_sends: number | null, sent_count: number, remaining_sends: number | null },
+    participant: { ok: boolean, code: string | null },
+    registration: { registration_id: string, provider: string, participant_scheme: string, participant_identifier: string, status: "pending" | "registered" | "failed" | "deregistered", registered_at: string | null, deregistered_at: string | null, last_error_code: string | null, stale_pending: boolean, can_retry: boolean, updated_at: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transport": {
+      "available": true,
+      "provider": "qvalia",
+      "reason": null
+    },
+    "receiving_supported": true,
+    "access": {
+      "status": "enabled",
+      "send_enabled": true,
+      "receive_enabled": true,
+      "max_sends": 50,
+      "sent_count": 3,
+      "remaining_sends": 47
+    },
+    "participant": {
+      "ok": true,
+      "code": null
+    },
+    "registration": {
+      "registration_id": "4c2d…",
+      "provider": "qvalia",
+      "participant_scheme": "0007",
+      "participant_identifier": "5595386219",
+      "status": "registered",
+      "registered_at": "2026-09-26T10:00:00Z",
+      "deregistered_at": null,
+      "last_error_code": null,
+      "stale_pending": false,
+      "can_retry": false,
+      "updated_at": "2026-09-26T10:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/peppol/registration`
+
+**Register the company as a Peppol participant so it can receive e-invoices.**
+`scope:companies:write · risk:high · idempotent · dry-run`
+
+Publishes the company's participant id (scheme 0007 + organisation number) with a business card (name, country, city, VAT number) at the access point, for BIS Billing 3 invoices and credit notes. Received e-invoices then arrive in the invoice inbox. Needs the operators' receiving grant. A pending attempt older than five minutes is retired and retried. Owner/admin only. The dry run checks everything as reads and contacts no network.
+
+**Use when:** The company wants suppliers to send it e-invoices over Peppol and GET /peppol/registration shows receive_enabled.
+**Do not use for:** Sending e-invoices (that needs no registration of the buyer side here) or asking for access (POST /peppol/access-request).
+
+**Pitfalls:**
+- Without the grant: 403 PEPPOL_ACCESS_REQUIRED; with sending but no receiving slot: 403 PEPPOL_RECEIVING_NOT_ENABLED.
+- A personnummer-based sole trader answers 422 PEPPOL_REGISTRATION_PERSONAL_NUMBER: it would publish personal data in the directory.
+- 502 PEPPOL_REGISTRATION_FAILED is operational and retryable; 422 PEPPOL_REGISTRATION_REJECTED is a verdict on the identifier (details.code says which), do not retry it.
+- 409 PEPPOL_REGISTRATION_CAP_REACHED: every contracted receiving slot is taken; sending still works.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    registration: { registration_id: string, provider: string, participant_scheme: string, participant_identifier: string, status: "pending" | "registered" | "failed" | "deregistered", registered_at: string | null, deregistered_at: string | null, last_error_code: string | null, stale_pending: boolean, can_retry: boolean, updated_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "registration": {
+      "registration_id": "4c2d…",
+      "provider": "qvalia",
+      "participant_scheme": "0007",
+      "participant_identifier": "5595386219",
+      "status": "registered",
+      "registered_at": "2026-09-26T10:00:00Z",
+      "deregistered_at": null,
+      "last_error_code": null,
+      "stale_pending": false,
+      "can_retry": false,
+      "updated_at": "2026-09-26T10:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/settings`
+
+**Read the company settings.**
+`scope:companies:read · risk:low · idempotent`
+
+Returns every company setting the API can write: contact and address, invoice payment details and layout, invoice email texts and recipients, reminders, voucher series, feature toggles, the tax profile (VAT/moms, F-skatt, employer registration, fiscal year, accounting method, share capital) and the bookkeeping lock, plus the fixed legal identity (entity_type, org_number). contact_person is the default "Vår referens" on new invoices.
+
+**Use when:** Before creating invoices (payment details must exist), before any settings change, or to learn how the books are kept (accounting_method: accrual = faktureringsmetoden, cash = kontantmetoden; moms_period).
+**Do not use for:** Payroll settings (GET /salary/settings) or fiscal periods and their locks (GET /fiscal-periods).
+
+**Pitfalls:**
+- Fields that were never set read null, not a default.
+- bookkeeping_locked_through is the company-wide lock: nothing on or before that date can be booked or changed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
     company_id: string,
+    entity_type: string | null,
+    org_number: string | null,
+    onboarding_complete: boolean | null,
+    contact_person: string | null,
+    company_name: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
+    country: string | null,
+    phone: string | null,
+    email: string | null,
+    website: string | null,
+    tax_contact_name: string | null,
+    tax_contact_phone: string | null,
+    tax_contact_email: string | null,
     bank_name: string | null,
     clearing_number: string | null,
     account_number: string | null,
@@ -237,11 +446,80 @@ Response `200`:
     swish: string | null,
     iban: string | null,
     bic: string | null,
-    contact_person: string | null,
-    email: string | null,
-    phone: string | null,
-    website: string | null,
-    invoice_email_texts: { sv?: { subject?: string, greeting?: string, body?: string, signoff?: string }, en?: { subject?: string, greeting?: string, body?: string, signoff?: string } } | null
+    invoice_prefix: string | null,
+    invoice_default_notes: string | null,
+    invoice_company_name_position: string | null,
+    invoice_late_fee_text: string | null,
+    invoice_credit_terms_text: string | null,
+    invoice_email_reply_to: string | null,
+    invoice_primary_color: string | null,
+    invoice_accent_color: string | null,
+    invoice_font_family: string | null,
+    invoice_header_text: string | null,
+    invoice_footer_text: string | null,
+    default_voucher_series: string | null,
+    sector_slug: string | null,
+    salary_vacation_year_basis: string | null,
+    vat_number: string | null,
+    moms_period: string | null,
+    vat_filing_method: string | null,
+    periodisk_sammanstallning_period: string | null,
+    periodisk_sammanstallning_filing_method: string | null,
+    accounting_method: string | null,
+    bookkeeping_locked_through: string | null,
+    ore_rounding: boolean | null,
+    invoice_show_ocr: boolean | null,
+    invoice_show_bankgiro: boolean | null,
+    invoice_show_plusgiro: boolean | null,
+    invoice_show_swish: boolean | null,
+    invoice_show_logo: boolean | null,
+    invoice_show_company_name: boolean | null,
+    invoice_payment_links_enabled: boolean | null,
+    send_invoice_reminders: boolean | null,
+    reminder_fee_enabled: boolean | null,
+    dimensions_enabled: boolean | null,
+    mileage_enabled: boolean | null,
+    sales_orders_enabled: boolean | null,
+    quotes_enabled: boolean | null,
+    proforma_enabled: boolean | null,
+    recurring_invoices_enabled: boolean | null,
+    self_billing_enabled: boolean | null,
+    f_skatt: boolean | null,
+    vat_registered: boolean | null,
+    vat_taxable_base_over_40m: boolean | null,
+    vat_has_eu_trade: boolean | null,
+    periodisk_sammanstallning_enabled: boolean | null,
+    kontrolluppgifter_enabled: boolean | null,
+    rot_rut_enabled: boolean | null,
+    oss_enabled: boolean | null,
+    ioss_enabled: boolean | null,
+    intrastat_enabled: boolean | null,
+    punktskatt_enabled: boolean | null,
+    fyllnadsinbetalning_enabled: boolean | null,
+    pays_salaries: boolean | null,
+    employer_registered: boolean | null,
+    employer_seasonal: boolean | null,
+    defer_invoice_booking: boolean | null,
+    next_invoice_number: number | null,
+    next_arrival_number: number | null,
+    invoice_default_days: number | null,
+    reminder_days_level_1: number | null,
+    reminder_days_level_2: number | null,
+    reminder_days_level_3: number | null,
+    reminder_fee_amount: number | null,
+    reminder_interest_rate_override: number | null,
+    fiscal_year_start_month: number | null,
+    preliminary_tax_monthly: number | null,
+    aktiekapital: number | null,
+    antal_aktier: number | null,
+    auto_lock_period_days: number | null,
+    invoice_payment_accounts?: unknown,
+    invoice_email_texts?: unknown,
+    invoice_email_cc_addresses?: unknown,
+    invoice_email_bcc_addresses?: unknown,
+    reminder_text_overrides?: unknown,
+    default_voucher_series_per_source_type?: unknown,
+    voucher_series_labels?: unknown
   },
   meta: {
     request_id: string,
@@ -260,19 +538,633 @@ Example response `200`:
 {
   "data": {
     "company_id": "aaaa1111-2222-4333-8444-555566667777",
-    "bank_name": "Testbanken",
-    "clearing_number": null,
-    "account_number": null,
-    "bankgiro": "991-2346",
-    "plusgiro": null,
-    "swish": null,
-    "iban": null,
-    "bic": null,
+    "entity_type": "aktiebolag",
+    "company_name": "Acme AB",
     "contact_person": "Anna Andersson",
-    "email": "faktura@acme.example",
-    "phone": null,
-    "website": null,
-    "invoice_email_texts": null
+    "bankgiro": "991-2346",
+    "vat_registered": true,
+    "moms_period": "quarterly",
+    "accounting_method": "accrual",
+    "bookkeeping_locked_through": "2026-06-30"
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/settings`
+
+**Partially update company settings (contact, invoicing, reminders, voucher series, toggles).**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Patches any subset of the non-legal company settings: contact and address, invoice payment details (bank account, Bankgiro, Plusgiro, Swish, IBAN/BIC, per-currency payment accounts), invoice numbering, layout and branding, invoice email texts and fixed copy recipients, reminders, voucher series, feature toggles and the vacation-year basis. Same rules as the settings page. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+
+**Use when:** The payment or contact details on invoices change, invoice texts or reminders should be adjusted, or a feature should be switched on or off.
+**Do not use for:** VAT, F-skatt, fiscal year, accounting method or share capital (PATCH /settings/tax-profile), the bookkeeping lock (PATCH /settings/bookkeeping-lock), payroll settings (PATCH /salary/settings). entity_type and org_number are fixed.
+
+**Pitfalls:**
+- Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
+- contact_person is stored as default_our_reference: the default "Vår referens" on new invoices.
+- bankgiro and plusgiro must carry a valid Luhn check digit; null or empty string clears them.
+- invoice_email_texts only accepts the placeholders {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}.
+- reminder_days_level_1 < _2 < _3 must hold after the change (stored values fill in the ones not sent).
+- The booking engine reads default_voucher_series_per_source_type, not default_voucher_series: send the map to move bookings to another series.
+- salary_vacation_year_basis cannot change while open vacation balances exist.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  company_name?: string,
+  address_line1?: string,
+  address_line2?: string,
+  postal_code?: string,
+  city?: string,
+  country?: string,
+  phone?: string,
+  email?: string | "",
+  website?: string | "",
+  tax_contact_name?: string | null,
+  tax_contact_phone?: string | null,
+  tax_contact_email?: string | null | "",
+  bank_name?: string | null,
+  clearing_number?: string | null | "",
+  account_number?: string | null | "",
+  bankgiro?: string | null | "",
+  plusgiro?: string | null | "",
+  swish?: string | null,
+  iban?: string | null | "",
+  bic?: string | null | "",
+  invoice_payment_accounts?: Record<string, { bank_name?: string | null, clearing_number?: string | null | "", account_number?: string | null | "", bankgiro?: string | null | "", plusgiro?: string | null | "", swish?: string | null, iban?: string | null | "", bic?: string | null | "", bank_code?: string | null | "", foreign_account_number?: string | null | "" }>,
+  invoice_prefix?: string | null,
+  next_invoice_number?: number,
+  next_arrival_number?: number,
+  invoice_default_days?: number,
+  invoice_default_notes?: string | null,
+  ore_rounding?: boolean,
+  invoice_show_ocr?: boolean,
+  invoice_show_bankgiro?: boolean,
+  invoice_show_plusgiro?: boolean,
+  invoice_show_swish?: boolean,
+  invoice_show_logo?: boolean,
+  invoice_show_company_name?: boolean,
+  invoice_company_name_position?: "header" | "footer",
+  invoice_late_fee_text?: string | null,
+  invoice_credit_terms_text?: string | null,
+  invoice_payment_links_enabled?: boolean,
+  invoice_email_texts?: {
+    sv?: { subject?: string, greeting?: string, body?: string, signoff?: string },
+    en?: { subject?: string, greeting?: string, body?: string, signoff?: string }
+  } | null,
+  invoice_email_cc_addresses?: string[] | null,
+  invoice_email_bcc_addresses?: string[] | null,
+  invoice_email_reply_to?: string | null,
+  invoice_primary_color?: string,
+  invoice_accent_color?: string,
+  invoice_font_family?: "Helvetica" | "Times-Roman" | "Courier" | "Source Sans 3" | "Source Serif 4" | "Custom",
+  invoice_header_text?: string | null,
+  invoice_footer_text?: string | null,
+  send_invoice_reminders?: boolean,
+  reminder_days_level_1?: number,
+  reminder_days_level_2?: number,
+  reminder_days_level_3?: number,
+  reminder_text_overrides?: {
+    level_1?: { subject?: string, body?: string },
+    level_2?: { subject?: string, body?: string },
+    level_3?: { subject?: string, body?: string }
+  } | null,
+  reminder_fee_enabled?: boolean,
+  reminder_fee_amount?: number,
+  reminder_interest_rate_override?: number | null,
+  default_voucher_series?: string,
+  default_voucher_series_per_source_type?: Record<string, string>,
+  voucher_series_labels?: Record<string, string>,
+  sector_slug?: string | null,
+  dimensions_enabled?: boolean,
+  mileage_enabled?: boolean,
+  sales_orders_enabled?: boolean,
+  quotes_enabled?: boolean,
+  proforma_enabled?: boolean,
+  recurring_invoices_enabled?: boolean,
+  self_billing_enabled?: boolean,
+  salary_vacation_year_basis?: "calendar" | "statutory_apr_mar",
+  contact_person?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "bankgiro": "991-2346",
+  "contact_person": "Anna Andersson"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    company_id: string,
+    entity_type: string | null,
+    org_number: string | null,
+    onboarding_complete: boolean | null,
+    contact_person: string | null,
+    company_name: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
+    country: string | null,
+    phone: string | null,
+    email: string | null,
+    website: string | null,
+    tax_contact_name: string | null,
+    tax_contact_phone: string | null,
+    tax_contact_email: string | null,
+    bank_name: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    swish: string | null,
+    iban: string | null,
+    bic: string | null,
+    invoice_prefix: string | null,
+    invoice_default_notes: string | null,
+    invoice_company_name_position: string | null,
+    invoice_late_fee_text: string | null,
+    invoice_credit_terms_text: string | null,
+    invoice_email_reply_to: string | null,
+    invoice_primary_color: string | null,
+    invoice_accent_color: string | null,
+    invoice_font_family: string | null,
+    invoice_header_text: string | null,
+    invoice_footer_text: string | null,
+    default_voucher_series: string | null,
+    sector_slug: string | null,
+    salary_vacation_year_basis: string | null,
+    vat_number: string | null,
+    moms_period: string | null,
+    vat_filing_method: string | null,
+    periodisk_sammanstallning_period: string | null,
+    periodisk_sammanstallning_filing_method: string | null,
+    accounting_method: string | null,
+    bookkeeping_locked_through: string | null,
+    ore_rounding: boolean | null,
+    invoice_show_ocr: boolean | null,
+    invoice_show_bankgiro: boolean | null,
+    invoice_show_plusgiro: boolean | null,
+    invoice_show_swish: boolean | null,
+    invoice_show_logo: boolean | null,
+    invoice_show_company_name: boolean | null,
+    invoice_payment_links_enabled: boolean | null,
+    send_invoice_reminders: boolean | null,
+    reminder_fee_enabled: boolean | null,
+    dimensions_enabled: boolean | null,
+    mileage_enabled: boolean | null,
+    sales_orders_enabled: boolean | null,
+    quotes_enabled: boolean | null,
+    proforma_enabled: boolean | null,
+    recurring_invoices_enabled: boolean | null,
+    self_billing_enabled: boolean | null,
+    f_skatt: boolean | null,
+    vat_registered: boolean | null,
+    vat_taxable_base_over_40m: boolean | null,
+    vat_has_eu_trade: boolean | null,
+    periodisk_sammanstallning_enabled: boolean | null,
+    kontrolluppgifter_enabled: boolean | null,
+    rot_rut_enabled: boolean | null,
+    oss_enabled: boolean | null,
+    ioss_enabled: boolean | null,
+    intrastat_enabled: boolean | null,
+    punktskatt_enabled: boolean | null,
+    fyllnadsinbetalning_enabled: boolean | null,
+    pays_salaries: boolean | null,
+    employer_registered: boolean | null,
+    employer_seasonal: boolean | null,
+    defer_invoice_booking: boolean | null,
+    next_invoice_number: number | null,
+    next_arrival_number: number | null,
+    invoice_default_days: number | null,
+    reminder_days_level_1: number | null,
+    reminder_days_level_2: number | null,
+    reminder_days_level_3: number | null,
+    reminder_fee_amount: number | null,
+    reminder_interest_rate_override: number | null,
+    fiscal_year_start_month: number | null,
+    preliminary_tax_monthly: number | null,
+    aktiekapital: number | null,
+    antal_aktier: number | null,
+    auto_lock_period_days: number | null,
+    invoice_payment_accounts?: unknown,
+    invoice_email_texts?: unknown,
+    invoice_email_cc_addresses?: unknown,
+    invoice_email_bcc_addresses?: unknown,
+    reminder_text_overrides?: unknown,
+    default_voucher_series_per_source_type?: unknown,
+    voucher_series_labels?: unknown
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "bankgiro": "991-2346",
+    "contact_person": "Anna Andersson",
+    "email": "faktura@acme.example"
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/settings/bookkeeping-lock`
+
+**Set, move or remove the company-wide bookkeeping lock date.**
+`scope:companies:write · risk:high · idempotent · dry-run · reversible`
+
+Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+
+**Use when:** A period is reconciled and filed and should be protected, or a locked date must be reopened for a correction.
+**Do not use for:** Locking or closing a single fiscal period (POST /fiscal-periods/{id}/lock, /close), or correcting a posted verifikat (storno or rättelse).
+
+**Pitfalls:**
+- Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
+- Refused while an SIE import is still holding a fiscal period (finish the import first).
+- A backwards move is allowed but high risk. When it reopens a filed momsdeklaration period it is refused with 409 BOOKKEEPING_LOCK_REOPENS_FILED_VAT (details.filed_periods) unless acknowledge_filed_vat_periods is true: reopen a filed period only to book a correction and file a corrected declaration for it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  bookkeeping_locked_through?: string | null,
+  auto_lock_period_days?: number | null,
+  acknowledge_filed_vat_periods?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "bookkeeping_locked_through": "2026-06-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    company_id: string,
+    entity_type: string | null,
+    org_number: string | null,
+    onboarding_complete: boolean | null,
+    contact_person: string | null,
+    company_name: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
+    country: string | null,
+    phone: string | null,
+    email: string | null,
+    website: string | null,
+    tax_contact_name: string | null,
+    tax_contact_phone: string | null,
+    tax_contact_email: string | null,
+    bank_name: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    swish: string | null,
+    iban: string | null,
+    bic: string | null,
+    invoice_prefix: string | null,
+    invoice_default_notes: string | null,
+    invoice_company_name_position: string | null,
+    invoice_late_fee_text: string | null,
+    invoice_credit_terms_text: string | null,
+    invoice_email_reply_to: string | null,
+    invoice_primary_color: string | null,
+    invoice_accent_color: string | null,
+    invoice_font_family: string | null,
+    invoice_header_text: string | null,
+    invoice_footer_text: string | null,
+    default_voucher_series: string | null,
+    sector_slug: string | null,
+    salary_vacation_year_basis: string | null,
+    vat_number: string | null,
+    moms_period: string | null,
+    vat_filing_method: string | null,
+    periodisk_sammanstallning_period: string | null,
+    periodisk_sammanstallning_filing_method: string | null,
+    accounting_method: string | null,
+    bookkeeping_locked_through: string | null,
+    ore_rounding: boolean | null,
+    invoice_show_ocr: boolean | null,
+    invoice_show_bankgiro: boolean | null,
+    invoice_show_plusgiro: boolean | null,
+    invoice_show_swish: boolean | null,
+    invoice_show_logo: boolean | null,
+    invoice_show_company_name: boolean | null,
+    invoice_payment_links_enabled: boolean | null,
+    send_invoice_reminders: boolean | null,
+    reminder_fee_enabled: boolean | null,
+    dimensions_enabled: boolean | null,
+    mileage_enabled: boolean | null,
+    sales_orders_enabled: boolean | null,
+    quotes_enabled: boolean | null,
+    proforma_enabled: boolean | null,
+    recurring_invoices_enabled: boolean | null,
+    self_billing_enabled: boolean | null,
+    f_skatt: boolean | null,
+    vat_registered: boolean | null,
+    vat_taxable_base_over_40m: boolean | null,
+    vat_has_eu_trade: boolean | null,
+    periodisk_sammanstallning_enabled: boolean | null,
+    kontrolluppgifter_enabled: boolean | null,
+    rot_rut_enabled: boolean | null,
+    oss_enabled: boolean | null,
+    ioss_enabled: boolean | null,
+    intrastat_enabled: boolean | null,
+    punktskatt_enabled: boolean | null,
+    fyllnadsinbetalning_enabled: boolean | null,
+    pays_salaries: boolean | null,
+    employer_registered: boolean | null,
+    employer_seasonal: boolean | null,
+    defer_invoice_booking: boolean | null,
+    next_invoice_number: number | null,
+    next_arrival_number: number | null,
+    invoice_default_days: number | null,
+    reminder_days_level_1: number | null,
+    reminder_days_level_2: number | null,
+    reminder_days_level_3: number | null,
+    reminder_fee_amount: number | null,
+    reminder_interest_rate_override: number | null,
+    fiscal_year_start_month: number | null,
+    preliminary_tax_monthly: number | null,
+    aktiekapital: number | null,
+    antal_aktier: number | null,
+    auto_lock_period_days: number | null,
+    invoice_payment_accounts?: unknown,
+    invoice_email_texts?: unknown,
+    invoice_email_cc_addresses?: unknown,
+    invoice_email_bcc_addresses?: unknown,
+    reminder_text_overrides?: unknown,
+    default_voucher_series_per_source_type?: unknown,
+    voucher_series_labels?: unknown
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "bookkeeping_locked_through": "2026-06-30",
+    "auto_lock_period_days": null
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/settings/tax-profile`
+
+**Change the tax and legal profile: VAT, F-skatt, employer registration, fiscal year, accounting method.**
+`scope:companies:write · risk:high · idempotent · dry-run · reversible`
+
+Patches the settings that decide how the books are kept and declared: VAT registration, VAT number and moms period, EU trade and periodisk sammanställning, F-skatt, preliminary tax, employer registration, fiscal year start month, accounting method (faktureringsmetoden/kontantmetoden), deferred invoice booking, share capital and the optional deadline reminders. Runs the settings page rules and, like it, regenerates the tax deadlines. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+
+**Use when:** The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, or the fiscal year or accounting method was changed with the authorities.
+**Do not use for:** Invoice, contact or payment details (PATCH /settings), the bookkeeping lock (PATCH /settings/bookkeeping-lock), entity type or org number (fixed).
+
+**Pitfalls:**
+- Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
+- Saving regenerates the system tax deadlines for this year and next; completed deadlines keep their status.
+- vat_registered=true needs vat_number (SE + 12 digits) and moms_period, stored or sent.
+- vat_registered=false also turns off vat_taxable_base_over_40m, vat_has_eu_trade and periodisk_sammanstallning_enabled.
+- vat_taxable_base_over_40m requires moms_period=monthly; periodisk sammanställning requires VAT registration and EU trade.
+- An enskild firma must keep fiscal_year_start_month=1 (BFL 3 kap.).
+- aktiekapital and antal_aktier are set or cleared together.
+- accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).
+- defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.
+- accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  f_skatt?: boolean,
+  vat_registered?: boolean,
+  vat_number?: string | null,
+  moms_period?: "monthly" | "quarterly" | "yearly" | null,
+  vat_taxable_base_over_40m?: boolean,
+  vat_has_eu_trade?: boolean,
+  vat_filing_method?: "electronic" | "paper",
+  periodisk_sammanstallning_enabled?: boolean,
+  periodisk_sammanstallning_period?: "monthly" | "quarterly",
+  periodisk_sammanstallning_filing_method?: "electronic" | "paper",
+  kontrolluppgifter_enabled?: boolean,
+  rot_rut_enabled?: boolean,
+  oss_enabled?: boolean,
+  ioss_enabled?: boolean,
+  intrastat_enabled?: boolean,
+  punktskatt_enabled?: boolean,
+  fyllnadsinbetalning_enabled?: boolean,
+  fiscal_year_start_month?: number,
+  preliminary_tax_monthly?: number | null,
+  pays_salaries?: boolean,
+  employer_registered?: boolean | null,
+  employer_seasonal?: boolean,
+  accounting_method?: "accrual" | "cash",
+  defer_invoice_booking?: boolean,
+  aktiekapital?: number | null,
+  antal_aktier?: number | null
+}
+```
+
+Example request:
+```json
+{
+  "vat_registered": true,
+  "vat_number": "SE556677889901",
+  "moms_period": "quarterly"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    company_id: string,
+    entity_type: string | null,
+    org_number: string | null,
+    onboarding_complete: boolean | null,
+    contact_person: string | null,
+    company_name: string | null,
+    address_line1: string | null,
+    address_line2: string | null,
+    postal_code: string | null,
+    city: string | null,
+    country: string | null,
+    phone: string | null,
+    email: string | null,
+    website: string | null,
+    tax_contact_name: string | null,
+    tax_contact_phone: string | null,
+    tax_contact_email: string | null,
+    bank_name: string | null,
+    clearing_number: string | null,
+    account_number: string | null,
+    bankgiro: string | null,
+    plusgiro: string | null,
+    swish: string | null,
+    iban: string | null,
+    bic: string | null,
+    invoice_prefix: string | null,
+    invoice_default_notes: string | null,
+    invoice_company_name_position: string | null,
+    invoice_late_fee_text: string | null,
+    invoice_credit_terms_text: string | null,
+    invoice_email_reply_to: string | null,
+    invoice_primary_color: string | null,
+    invoice_accent_color: string | null,
+    invoice_font_family: string | null,
+    invoice_header_text: string | null,
+    invoice_footer_text: string | null,
+    default_voucher_series: string | null,
+    sector_slug: string | null,
+    salary_vacation_year_basis: string | null,
+    vat_number: string | null,
+    moms_period: string | null,
+    vat_filing_method: string | null,
+    periodisk_sammanstallning_period: string | null,
+    periodisk_sammanstallning_filing_method: string | null,
+    accounting_method: string | null,
+    bookkeeping_locked_through: string | null,
+    ore_rounding: boolean | null,
+    invoice_show_ocr: boolean | null,
+    invoice_show_bankgiro: boolean | null,
+    invoice_show_plusgiro: boolean | null,
+    invoice_show_swish: boolean | null,
+    invoice_show_logo: boolean | null,
+    invoice_show_company_name: boolean | null,
+    invoice_payment_links_enabled: boolean | null,
+    send_invoice_reminders: boolean | null,
+    reminder_fee_enabled: boolean | null,
+    dimensions_enabled: boolean | null,
+    mileage_enabled: boolean | null,
+    sales_orders_enabled: boolean | null,
+    quotes_enabled: boolean | null,
+    proforma_enabled: boolean | null,
+    recurring_invoices_enabled: boolean | null,
+    self_billing_enabled: boolean | null,
+    f_skatt: boolean | null,
+    vat_registered: boolean | null,
+    vat_taxable_base_over_40m: boolean | null,
+    vat_has_eu_trade: boolean | null,
+    periodisk_sammanstallning_enabled: boolean | null,
+    kontrolluppgifter_enabled: boolean | null,
+    rot_rut_enabled: boolean | null,
+    oss_enabled: boolean | null,
+    ioss_enabled: boolean | null,
+    intrastat_enabled: boolean | null,
+    punktskatt_enabled: boolean | null,
+    fyllnadsinbetalning_enabled: boolean | null,
+    pays_salaries: boolean | null,
+    employer_registered: boolean | null,
+    employer_seasonal: boolean | null,
+    defer_invoice_booking: boolean | null,
+    next_invoice_number: number | null,
+    next_arrival_number: number | null,
+    invoice_default_days: number | null,
+    reminder_days_level_1: number | null,
+    reminder_days_level_2: number | null,
+    reminder_days_level_3: number | null,
+    reminder_fee_amount: number | null,
+    reminder_interest_rate_override: number | null,
+    fiscal_year_start_month: number | null,
+    preliminary_tax_monthly: number | null,
+    aktiekapital: number | null,
+    antal_aktier: number | null,
+    auto_lock_period_days: number | null,
+    invoice_payment_accounts?: unknown,
+    invoice_email_texts?: unknown,
+    invoice_email_cc_addresses?: unknown,
+    invoice_email_bcc_addresses?: unknown,
+    reminder_text_overrides?: unknown,
+    default_voucher_series_per_source_type?: unknown,
+    voucher_series_labels?: unknown,
+    deadlines_regenerated: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "company_id": "aaaa1111-2222-4333-8444-555566667777",
+    "vat_registered": true,
+    "vat_number": "SE556677889901",
+    "moms_period": "quarterly",
+    "deadlines_regenerated": true
   },
   "meta": {
     "request_id": "req_...",

@@ -64,7 +64,8 @@ export interface LinkTransactionJournalEntryResult {
 }
 
 export type LinkTransactionJournalEntryOutcome =
-  | { ok: true; result: LinkTransactionJournalEntryResult }
+  // dryRun: the result the link WOULD produce; nothing was written.
+  | { ok: true; result: LinkTransactionJournalEntryResult; dryRun?: boolean }
   | { ok: false; code: LinkTransactionJournalEntryErrorCode; details?: Record<string, unknown> }
 
 /**
@@ -128,7 +129,8 @@ export async function linkTransactionToJournalEntry(
   supabase: SupabaseClient,
   userId: string,
   companyId: string,
-  params: LinkTransactionJournalEntryParams
+  params: LinkTransactionJournalEntryParams,
+  options: { dryRun?: boolean } = {},
 ): Promise<LinkTransactionJournalEntryOutcome> {
   const { transactionId, journalEntryId, invoiceId } = params
 
@@ -279,6 +281,27 @@ export async function linkTransactionToJournalEntry(
     newRemaining = Math.max(0, Math.round((currentRemaining - paidAmount) * 100) / 100)
     isFullyPaid = newRemaining <= 0
     newStatus = isFullyPaid ? 'paid' : 'partially_paid'
+  }
+
+  // Dry run (the v1 ?dry_run=true door): every check above ran on the same
+  // reads the commit uses; answer the projected result and write nothing.
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      result: {
+        transactionId,
+        journalEntryId,
+        voucherLabel: formatVoucherLabel(
+          journalEntry.voucher_series as string | null,
+          journalEntry.voucher_number as number | null,
+        ),
+        invoiceId: invoiceId ?? null,
+        invoiceStatus: invoice ? newStatus : null,
+        paidAmount: invoice ? newPaidAmount : null,
+        remainingAmount: invoice ? newRemaining : null,
+      },
+    }
   }
 
   // Snapshot tx state so the compensating-rollback path can restore the row

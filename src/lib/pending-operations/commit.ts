@@ -65,7 +65,6 @@ import { buildInvoicePaymentClearingLines } from '@/lib/bookkeeping/invoice-paym
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { booksInvoicesOnIssue, cashPartialBlockReason, creditNoteNeedsJournalEntry, supplierCreditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
-import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { createJournalEntry, findFiscalPeriod, getSwedishLocalDate, reverseEntry, validateBalance } from '@/lib/bookkeeping/engine'
 import {
   canApproveSupplierInvoice,
@@ -143,10 +142,7 @@ import {
 import { linkTransactionToJournalEntry } from '@/lib/transactions/link-journal-entry'
 import { matchTransactionToRotRutPayout } from '@/lib/invoices/rot-rut-match-transaction'
 import { linkRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-link-voucher'
-import {
-  completeInboxItemsForBookedTransaction,
-  resolveVoucherLinkedEntryIds,
-} from '@/lib/transactions/inbox-underlag'
+import { attachDocumentToTransaction } from '@/lib/transactions/document-attach'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { submitSIEJob, requestSIEJobAction } from '@/lib/import/sie-jobs'
 import type { AccountMapping } from '@/lib/import/types'
@@ -200,8 +196,6 @@ import { CreateSupplierParamsSchema } from '@/lib/pending-operations/schemas/cre
 import { CreateArticleParamsSchema, UpdateArticleParamsSchema } from '@/lib/pending-operations/schemas/article'
 import { CreateDimensionValueParamsSchema } from '@/lib/pending-operations/schemas/dimension-value'
 import { RetagLineDimensionsParamsSchema } from '@/lib/pending-operations/schemas/retag-line-dimensions'
-import { CreateAccountParamsSchema, UpdateAccountParamsSchema } from '@/lib/pending-operations/schemas/account'
-import { defaultRateForVatTreatment } from '@/lib/vat/account-vat-treatment'
 import { SetVoucherNoteParamsSchema } from '@/lib/pending-operations/schemas/voucher-note'
 import { IgnoreTransactionParamsSchema } from '@/lib/pending-operations/schemas/ignore-transaction'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
@@ -217,7 +211,6 @@ import { registerSalesOrderDelivery } from '@/lib/sales-orders/register-delivery
 import { createInvoiceFromSalesOrder } from '@/lib/sales-orders/create-invoice-from-order'
 import { convertToSalesOrder } from '@/lib/sales-orders/convert-to-sales-order'
 import type { ServiceFailure } from '@/lib/sales-orders/result'
-import { UpdateCompanySettingsParamsSchema } from '@/lib/pending-operations/schemas/company-settings'
 import { UpdateCustomerParamsSchema } from '@/lib/pending-operations/schemas/customer'
 import {
   CreateRecurringScheduleParamsSchema,
@@ -247,6 +240,8 @@ import { BulkBookInboxSchema, OpeningBalancesBulkSchema } from '@/lib/api/schema
 import { ensureArticleNumber } from '@/lib/articles/ensure-article-number'
 import { isValidRevenueAccount } from '@/lib/articles/validate-revenue-account'
 import { z } from 'zod'
+import { operationForPendingType } from '@/lib/operations/registry'
+import type { AnyOperation } from '@/lib/operations/types'
 import type {
   Transaction,
   TransactionCategory,
@@ -409,6 +404,49 @@ type ExecutorResult = {
   // the dispatcher then lands the op in 'failed_partial' instead of
   // 'rejected' and persists these ids in result_data.posted_ids (issue #842).
   partialPostedIds?: Record<string, string>
+}
+
+/**
+ * Executor for an operation from the registry: re-validates the staged input
+ * at the commit boundary (a tampered pending_operations row must not reach
+ * the books with fields the staging tool never accepted) and runs it for
+ * real. A BookkeepingError is rethrown so the dispatcher's catch handles it
+ * exactly as for a hand-written executor.
+ */
+async function commitRegisteredOperation(
+  operation: AnyOperation,
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  params: Record<string, unknown>,
+): Promise<ExecutorResult> {
+  const upgrade = operation.mcp?.stage?.upgradeParams
+  const parsed = (operation.input as unknown as z.ZodTypeAny).safeParse(upgrade ? upgrade(params) : params)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      error: `Invalid ${issue?.path?.join('.') || 'params'}: ${issue?.message ?? 'validation failed'}`,
+      errorCode: 'VALIDATION_ERROR',
+      status: 400,
+    }
+  }
+  const outcome = await operation.run(
+    { supabase, companyId, userId, log: log.child({ operation: operation.id }) },
+    parsed.data,
+    { dryRun: false },
+  )
+  if (!outcome.ok) {
+    if (outcome.error) throw outcome.error
+    const entry = getErrorEntry(outcome.code)
+    return {
+      // Never an empty string: an empty error reads as success downstream.
+      error: outcome.messageSv || entry?.message_en || outcome.code,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
+    }
+  }
+  if (outcome.dryRun) return { data: outcome.preview }
+  return { data: outcome.data as Record<string, unknown> }
 }
 
 /**
@@ -858,70 +896,6 @@ async function commitUpdateCustomer(
   }
 }
 
-async function commitUpdateCompanySettings(
-  supabase: SupabaseClient,
-  companyId: string,
-  params: Record<string, unknown>,
-): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateCompanySettingsParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return {
-        error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`,
-        status: 400,
-      }
-    }
-    throw err
-  }
-
-  // The bank columns mirror the default SEK payee account (migration
-  // 20260904010000): write the change through FIRST so a failure leaves
-  // nothing half-written, and the invoice PDF prints what the agent set.
-  try {
-    await propagateLegacyPayeeWrite(supabase, companyId, validated.changes)
-  } catch (err) {
-    log.error('update_company_settings: payee write-through failed', err as Error)
-    return { error: err instanceof Error ? err.message : 'Payee write-through failed', status: 500 }
-  }
-
-  const { data: row, error } = await supabase
-    .from('company_settings')
-    .update(validated.changes)
-    .eq('company_id', companyId)
-    .select('bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, default_our_reference, email, phone, website, invoice_email_texts')
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') {
-      return { error: 'Company settings not found', status: 404 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-
-  return {
-    data: {
-      company_id: companyId,
-      bank_name: row.bank_name ?? null,
-      clearing_number: row.clearing_number ?? null,
-      account_number: row.account_number ?? null,
-      bankgiro: row.bankgiro ?? null,
-      plusgiro: row.plusgiro ?? null,
-      swish: row.swish ?? null,
-      iban: row.iban ?? null,
-      bic: row.bic ?? null,
-      contact_person: row.default_our_reference ?? null,
-      email: row.email ?? null,
-      phone: row.phone ?? null,
-      website: row.website ?? null,
-      invoice_email_texts: row.invoice_email_texts ?? null,
-    },
-  }
-}
-
 async function commitCreateRecurringSchedule(
   supabase: SupabaseClient,
   userId: string,
@@ -1353,137 +1327,6 @@ async function commitUpdateArticle(
   await eventBus.emit({ type: 'article.updated', payload: { article: data as Article, userId, companyId } })
 
   return { data: { article_id: data.id } }
-}
-
-async function commitCreateAccount(
-  supabase: SupabaseClient,
-  userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  // Defense in depth: re-validate the staged params at the commit boundary so
-  // a tampered pending_operations row cannot inject unexpected fields into
-  // chart_of_accounts (ASVS V4.5): mirrors commitCreateArticle.
-  let validated
-  try {
-    validated = CreateAccountParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
-
-  // Same row shape as the dashboard create route
-  // (app/api/bookkeeping/accounts/route.ts): class/group/sort_order derive
-  // from the number so the two write paths cannot drift.
-  const defaultVatRate = validated.default_vat_treatment && validated.default_vat_rate == null
-    ? defaultRateForVatTreatment(
-        validated.default_vat_treatment,
-        Number(validated.account_number[0]),
-      )
-    : validated.default_vat_rate ?? null
-
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .insert({
-      user_id: userId,
-      company_id: companyId,
-      account_number: validated.account_number,
-      account_name: validated.account_name,
-      account_class: parseInt(validated.account_number[0]),
-      account_group: validated.account_number.substring(0, 2),
-      account_type: validated.account_type,
-      normal_balance: validated.normal_balance,
-      plan_type: validated.plan_type,
-      is_active: true,
-      is_system_account: false,
-      description: validated.description ?? null,
-      default_vat_code: validated.default_vat_code ?? null,
-      default_vat_rate: defaultVatRate,
-      default_vat_treatment: validated.default_vat_treatment ?? null,
-      sru_code: validated.sru_code ?? null,
-      sort_order: parseInt(validated.account_number),
-    })
-    .select('account_number, account_name')
-    .single()
-
-  if (error) {
-    if (error.code === '23505') {
-      return { error: `Kontonummer ${validated.account_number} finns redan i kontoplanen.`, status: 409 }
-    }
-    return { error: error.message, status: 500 }
-  }
-
-  return { data: { account_number: data.account_number, account_name: data.account_name } }
-}
-
-async function commitUpdateAccount(
-  supabase: SupabaseClient,
-  _userId: string,
-  companyId: string,
-  params: Record<string, unknown>
-): Promise<ExecutorResult> {
-  let validated
-  try {
-    validated = UpdateAccountParamsSchema.parse(params)
-  } catch (err) {
-    if (err instanceof z.ZodError) {
-      const issue = err.issues[0]
-      return { error: `Invalid ${issue?.path?.join('.') ?? 'params'}: ${issue?.message ?? 'validation failed'}`, status: 400 }
-    }
-    throw err
-  }
-
-  const { account_number, ...rest } = validated
-  const updateData: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(rest)) {
-    if (value !== undefined) updateData[key] = value
-  }
-
-  if (validated.default_vat_treatment && validated.default_vat_rate == null) {
-    const { data: current, error: currentError } = await supabase
-      .from('chart_of_accounts')
-      .select('default_vat_rate')
-      .eq('company_id', companyId)
-      .eq('account_number', account_number)
-      .single()
-
-    if (currentError) {
-      if (currentError.code === 'PGRST116') {
-        return { error: 'Kontot hittades inte', status: 404 }
-      }
-      return { error: currentError.message, status: 500 }
-    }
-
-    if (current.default_vat_rate == null) {
-      updateData.default_vat_rate = defaultRateForVatTreatment(
-        validated.default_vat_treatment,
-        Number(account_number.charAt(0)),
-      )
-    } else {
-      delete updateData.default_vat_rate
-    }
-  }
-  if (Object.keys(updateData).length === 0) {
-    return { error: 'Inget att uppdatera', status: 400 }
-  }
-
-  const { data, error } = await supabase
-    .from('chart_of_accounts')
-    .update(updateData)
-    .eq('company_id', companyId)
-    .eq('account_number', account_number)
-    .select('account_number, account_name, is_active')
-    .single()
-
-  if (error) {
-    if (error.code === 'PGRST116') return { error: 'Kontot hittades inte', status: 404 }
-    return { error: error.message, status: 500 }
-  }
-
-  return { data: { account_number: data.account_number, account_name: data.account_name, is_active: data.is_active } }
 }
 
 async function commitSetVoucherNote(
@@ -4054,6 +3897,11 @@ async function commitUncategorizeTransaction(
   return { data: { transaction_id: txId, reversed_journal_entry_id: journalEntryId } }
 }
 
+/**
+ * attach_document_to_transaction (gnubok_attach_document_to_transaction): the
+ * same rules as the dashboard route and the v1 operation
+ * transactions.attach-document, in lib/transactions/document-attach.ts.
+ */
 async function commitAttachDocumentToTransaction(
   supabase: SupabaseClient,
   userId: string,
@@ -4066,198 +3914,25 @@ async function commitAttachDocumentToTransaction(
     return { error: 'transaction_id and document_id are required', status: 400 }
   }
 
-  const { data: tx, error: txError } = await supabase
-    .from('transactions')
-    .select('id, document_id, journal_entry_id')
-    .eq('id', txId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (txError || !tx) return { error: 'Transaction not found', status: 404 }
-
-  const previousDocumentId = (tx.document_id as string | null) ?? null
-
-  // Pre-check: if the tx already has a doc and that doc is räkenskapsinformation,
-  // mirror the DELETE-route 409 instead of letting the DB trigger raise a
-  // raw check_violation. Same compliance message in both places.
-  if (tx.document_id && tx.document_id !== documentId) {
-    const { data: existing } = await supabase
-      .from('document_attachments')
-      .select('journal_entry_id')
-      .eq('id', tx.document_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (existing?.journal_entry_id) {
-      return {
-        error:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
-        status: 409,
-      }
-    }
-  }
-
-  const { data: doc, error: docError } = await supabase
-    .from('document_attachments')
-    .select('id, journal_entry_id')
-    .eq('id', documentId)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (docError || !doc) return { error: 'Document not found', status: 404 }
-
-  // A document that already serves as underlag for a DIFFERENT verifikation
-  // cannot be pinned here: propagating would either corrupt that link or be
-  // blocked by the document-metadata immutability trigger. Same verifikation
-  // is fine (idempotent re-attach; propagation below becomes a no-op). A
-  // bulk-booked tx keeps journal_entry_id null and is anchored through
-  // transaction_voucher_links, so that anchoring counts as "same" too.
-  // Mirrors the REST route in app/api/transactions/[id]/attach-document.
-  const docJournalEntryId = (doc.journal_entry_id as string | null) ?? null
-  if (docJournalEntryId && docJournalEntryId !== tx.journal_entry_id) {
-    const voucherLinked = await resolveVoucherLinkedEntryIds(supabase, companyId, [txId])
-    if (docJournalEntryId !== voucherLinked.get(txId)) {
-      return {
-        error: 'Underlaget är redan kopplat till en annan verifikation.',
-        status: 409,
-      }
-    }
-  }
-
-  // Race-free read of journal_entry_id: use UPDATE ... RETURNING so the value
-  // we propagate against reflects any concurrent categorize that committed
-  // before our UPDATE acquired the row lock. Reading the post-update state
-  // (rather than the pre-staging state) is what makes the
-  // attach-then-categorize and categorize-then-attach orderings produce the
-  // same final state: both end with document_attachments.journal_entry_id
-  // set to the tx's journal_entry_id. (BFL 5 kap 6 § verifikation underlag.)
-  const { data: postUpdate, error: updateError } = await supabase
-    .from('transactions')
-    .update({ document_id: documentId })
-    .eq('id', txId)
-    .eq('company_id', companyId)
-    .select('journal_entry_id')
-    .maybeSingle()
-
-  if (updateError) {
-    // The DB-level immutability trigger raises P0001 with a stable
-    // BFL_DOCUMENT_IMMUTABILITY: prefix when the previous doc is already
-    // räkenskapsinformation. Match on the prefix (not the generic SQLSTATE)
-    // so unrelated future exceptions don't get translated.
-    const errMsg = (updateError as { message?: string }).message ?? ''
-    if (errMsg.includes('BFL_DOCUMENT_IMMUTABILITY')) {
-      return {
-        error:
-          'Bilagan är kopplad till en bokförd verifikation och kan inte ersättas. Storno verifikationen först.',
-        status: 409,
-      }
-    }
-    return { error: 'Failed to attach document', status: 500 }
-  }
-  if (!postUpdate) return { error: 'Transaction not found', status: 404 }
-
-  // If the attached doc came from an invoice_inbox_items row, mark that row
-  // as matched so the inbox UI shows "Kopplad till transaktion". Best-effort:
-  // a failure must not roll back the (compliant) attach. Mirrors the REST
-  // route in app/api/transactions/[id]/attach-document/route.ts so MCP-staged
-  // and REST attaches converge on the same inbox state.
-  //
-  // The Supabase client resolves with { error } rather than rejecting on
-  // RLS/DB errors, so we destructure rather than try/catch.
-  const { error: inboxLinkErr } = await supabase
-    .from('invoice_inbox_items')
-    .update({ matched_transaction_id: txId })
-    .eq('document_id', documentId)
-    .eq('company_id', companyId)
-    .is('matched_transaction_id', null)
-    .is('created_supplier_invoice_id', null)
-  if (inboxLinkErr) {
-    console.error('[commitAttach] Failed to link inbox item:', inboxLinkErr)
-  }
-
-  const journalEntryId = postUpdate.journal_entry_id as string | null
-  // Skip when the doc already points at this verifikation: the period-lock
-  // trigger raises on ANY journal_entry_id write (even a same-value rewrite),
-  // so an unconditional re-run would 500 an otherwise idempotent re-attach
-  // once the period locks.
-  if (journalEntryId && docJournalEntryId !== journalEntryId) {
-    const { error: linkErr } = await supabase
-      .from('document_attachments')
-      .update({ journal_entry_id: journalEntryId })
-      .eq('id', documentId)
-      .eq('company_id', companyId)
-    if (linkErr) {
-      // The enforce_period_lock trigger blocks journal_entry_id writes when
-      // the target entry sits in a closed/locked period. Map to 409: the
-      // dispatcher auto-rejects it, and a retry could never succeed until the
-      // period is unlocked, so "försök igen" would be a false promise.
-      const linkMsg = (linkErr as { message?: string }).message ?? ''
-      if (/locked\/closed fiscal period|Bokföringen är låst/i.test(linkMsg)) {
-        return {
-          error:
-            'Bilagan kopplades till transaktionen men verifikationens period är låst: den kunde inte länkas till verifikationen.',
-          status: 409,
-        }
-      }
-      // Surface the propagation failure rather than logging-and-continuing.
-      // BFL 5 kap 6 § requires the verifikation to reference its underlag, so
-      // a "succeeded" attach that left document_attachments.journal_entry_id
-      // null would be a silent compliance gap. Failing here marks the op
-      // failed; a retry is idempotent (same documentId on tx, same propagate
-      // target) and will replay the document_attachments UPDATE.
-      console.error('[commitAttach] Failed to propagate to journal entry:', linkErr)
-      return {
-        error:
-          'Bilagan kopplades till transaktionen men kunde inte länkas till verifikationen. Försök igen: operationen är idempotent.',
-        status: 500,
-      }
-    }
-  }
-
-  // The transaction may already be booked, directly or via a bulk-book
-  // samlingsverifikat (journal_entry_id null, anchored through
-  // transaction_voucher_links): complete the matched inbox items against the
-  // anchoring verifikat so an after-the-fact attach resolves them instead of
-  // stranding them as "linked" forever. Best-effort, logged inside. Returns
-  // the anchoring verifikat (the direct id when there is one), so the result
-  // and audit trail can report the voucher-linked case too.
-  const effectiveJournalEntryId = await completeInboxItemsForBookedTransaction(
-    supabase,
-    companyId,
+  const outcome = await attachDocumentToTransaction(
+    { supabase, companyId, userId, log: log.child({ operation: 'attach_document_to_transaction' }) },
     txId,
-    { directJournalEntryId: journalEntryId },
+    documentId,
   )
-
-  // Rättelse audit trail (BFL 5 kap 5 §): if we replaced a non-null doc, log
-  // the swap to processing_history so the original is traceable. Best-effort:
-  // a logging failure must not roll back the (compliant) attach.
-  if (previousDocumentId && previousDocumentId !== documentId) {
-    try {
-      await appendProcessingHistory({
-        companyId,
-        correlationId: txId,
-        aggregateType: 'BankTransaction',
-        aggregateId: txId,
-        eventType: 'TransactionDocumentReplaced',
-        payload: {
-          transaction_id: txId,
-          previous_document_id: previousDocumentId,
-          new_document_id: documentId,
-          journal_entry_id: effectiveJournalEntryId,
-        },
-        actor: { type: 'user', id: userId },
-        occurredAt: new Date(),
-      })
-    } catch (logErr) {
-      console.error('[commitAttach] Failed to append rättelse event:', logErr)
+  if (!outcome.ok) {
+    if (outcome.error) {
+      if (isBookkeepingError(outcome.error)) throw outcome.error
+      return { error: 'Failed to attach document', status: 500 }
+    }
+    const entry = getErrorEntry(outcome.code)
+    return {
+      error: outcome.messageSv || entry?.message_sv || outcome.code,
+      errorCode: outcome.code,
+      status: entry?.httpStatus ?? 400,
     }
   }
-
-  return {
-    data: {
-      transaction_id: txId,
-      document_id: documentId,
-      previous_document_id: previousDocumentId,
-      journal_entry_id: effectiveJournalEntryId,
-    },
-  }
+  if (outcome.dryRun) return { data: outcome.preview }
+  return { data: { ...outcome.data } }
 }
 
 /**
@@ -7731,9 +7406,6 @@ async function commitPendingOperationInner(
       case 'update_recurring_schedule':
         result = await commitUpdateRecurringSchedule(supabase, companyId, pendingOp.params)
         break
-      case 'update_company_settings':
-        result = await commitUpdateCompanySettings(supabase, companyId, pendingOp.params)
-        break
       case 'create_article':
         result = await commitCreateArticle(supabase, userId, companyId, pendingOp.params)
         break
@@ -7742,12 +7414,6 @@ async function commitPendingOperationInner(
         break
       case 'create_supplier':
         result = await commitCreateSupplier(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'create_account':
-        result = await commitCreateAccount(supabase, userId, companyId, pendingOp.params)
-        break
-      case 'update_account':
-        result = await commitUpdateAccount(supabase, userId, companyId, pendingOp.params)
         break
       case 'set_voucher_note':
         result = await commitSetVoucherNote(supabase, companyId, pendingOp.params)
@@ -7968,12 +7634,20 @@ async function commitPendingOperationInner(
       case 'submit_agi':
         result = await commitSubmitAgi(supabase, userId, companyId, pendingOp.params)
         break
-      default:
-        return {
-          status: 'failed',
-          error: `Unknown operation type: ${pendingOp.operation_type}`,
-          http_status: 400,
+      default: {
+        // Operations defined once in lib/operations run through the same
+        // run() the v1 and MCP doors use; everything else is unknown.
+        const operation = operationForPendingType(pendingOp.operation_type)
+        if (!operation) {
+          return {
+            status: 'failed',
+            error: `Unknown operation type: ${pendingOp.operation_type}`,
+            http_status: 400,
+          }
         }
+        result = await commitRegisteredOperation(operation, supabase, userId, companyId, pendingOp.params)
+        break
+      }
     }
   } catch (err) {
     // Partial commit (issue #842): the executor already posted an

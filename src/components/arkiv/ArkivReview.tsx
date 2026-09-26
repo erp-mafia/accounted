@@ -29,9 +29,10 @@ export function ArkivReview() {
   const load = useCallback(async () => {
     try {
       const [review, found] = await Promise.all([fetch('/api/arkiv/review'), fetch('/api/arkiv/findings')])
-      if (!review.ok || !found.ok) throw new Error('load')
+      // Findings come from the company brain; without it the page asks the document questions alone.
+      if (!review.ok || (!found.ok && found.status !== 404)) throw new Error('load')
       setData(((await review.json()) as { data: ReviewData }).data)
-      setFindings(((await found.json()) as { data: FindingView[] }).data)
+      setFindings(found.ok ? ((await found.json()) as { data: FindingView[] }).data : [])
       setAnswered(new Set())
       setFailed(false)
     } catch {

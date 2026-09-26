@@ -5,7 +5,7 @@ import { ArrowUpRight, Bot, Check, ChevronDown, Globe, Monitor, type LucideIcon 
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
-import { CLAUDE_TARGETS, type ClaudeTarget } from './run'
+import type { ClaudeTarget, StartOutcome } from './run'
 import { useClaudeTarget } from './claude-target'
 import styles from './skills.module.css'
 
@@ -15,25 +15,34 @@ const TARGET_ICONS: Record<ClaudeTarget, LucideIcon> = { web: Globe, desktop: Mo
  * "Starta i Claude" as the app's split button (components/ui/split-button):
  * one joined button, the caret opens where else it can start. Picking a
  * place starts there and makes it the button's face; the choice is
- * remembered in this browser, so a Desktop user picks it once. Only for
- * Claude; other clients keep their one button.
+ * remembered in this browser, so a Desktop user picks it once. A Desktop or
+ * Cowork launch that opened nothing sets the face back to the web. A phone
+ * has only the web, so it gets the plain button. Only for Claude; other
+ * clients keep their one button.
  */
-export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => void; size?: 'lg' | 'sm' }) {
+export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: ClaudeTarget) => Promise<StartOutcome> | void; size?: 'lg' | 'sm' }) {
   const t = useTranslations('skills_registry')
-  const [target, setTarget] = useClaudeTarget()
+  const [target, setTarget, targets] = useClaudeTarget()
   const logo = AI_CLIENTS.find((c) => c.id === 'claude')!.logo
   function start(next: ClaudeTarget) {
-    setTarget(next)
-    onStart(next)
+    void Promise.resolve(onStart(next)).then((outcome) => { if (outcome === 'no_app') setTarget('web') })
   }
+  function pick(next: ClaudeTarget) {
+    setTarget(next)
+    start(next)
+  }
+  const face = (
+    <Button size={size} className={targets.length > 1 ? 'gap-2 rounded-r-none pl-4' : 'gap-2 pl-4'} onClick={() => start(target)}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={logo} alt="" width={16} height={16} className={styles.btnLogo} />
+      {t(`start_in_${target}`)}
+      <ArrowUpRight className="h-4 w-4" aria-hidden />
+    </Button>
+  )
+  if (targets.length < 2) return face
   return (
     <span className={styles.splitStart}>
-      <Button size={size} className="gap-2 rounded-r-none pl-4" onClick={() => onStart(target)}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={logo} alt="" width={16} height={16} className={styles.btnLogo} />
-        {t(`start_in_${target}`)}
-        <ArrowUpRight className="h-4 w-4" aria-hidden />
-      </Button>
+      {face}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size={size} className="rounded-l-none border-l border-primary-foreground/20 px-2.5" aria-label={t('start_where')}>
@@ -41,10 +50,10 @@ export function ClaudeStart({ onStart, size = 'lg' }: { onStart: (target: Claude
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[260px]">
-          {CLAUDE_TARGETS.map((o) => {
+          {targets.map((o) => {
             const Icon = TARGET_ICONS[o]
             return (
-              <DropdownMenuItem key={o} className="items-start gap-2.5 py-2" onSelect={() => start(o)}>
+              <DropdownMenuItem key={o} className="items-start gap-2.5 py-2" onSelect={() => pick(o)}>
                 <Icon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
                 <span className="min-w-0 flex-1">
                   <span className="block text-[13px] text-foreground">{t(`open_in_${o}`)}</span>

@@ -15,6 +15,11 @@ vi.mock('@/lib/auth/require-write', () => ({
 import { createClient } from '@/lib/supabase/server'
 import { PATCH } from '../route'
 
+// Refusals answer the canonical { error: { code, message, details } } envelope
+// since the rules moved to lib/core/bookkeeping/fiscal-year-service.ts (they
+// used to be bare Swedish strings in { error }): the Swedish sentence is now
+// error.message.
+
 function patchRequest(body: unknown): Request {
   return createMockRequest('/api/bookkeeping/fiscal-periods/period-1', {
     method: 'PATCH',
@@ -38,6 +43,8 @@ function buildMockSupabase(options: {
   postedEntryCount?: number
   earlierPeriodCount?: number
   overlapping?: Array<{ id: string; name: string }>
+  /** The company's other years, for the contiguity check on re-dating. */
+  neighbours?: Array<{ id: string; period_start: string; period_end: string }>
 }) {
   const {
     user = { id: 'user-1' },
@@ -46,6 +53,7 @@ function buildMockSupabase(options: {
     postedEntryCount = 0,
     earlierPeriodCount = 0,
     overlapping = [],
+    neighbours = [],
   } = options
 
   let fiscalPeriodsCall = 0
@@ -112,6 +120,7 @@ function buildMockSupabase(options: {
                       limit: vi.fn().mockResolvedValue({ data: overlapping, error: null }),
                     }),
                   }),
+                  order: vi.fn().mockResolvedValue({ data: neighbours, error: null }),
                 }),
               }),
             }
@@ -179,7 +188,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/31 december/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/31 december/)
     })
 
     it('rejects EF subsequent period when startdatum is not 1 januari', async () => {
@@ -193,7 +203,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/kalenderår/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/kalenderår/)
     })
 
     it('accepts EF subsequent period running 1 jan to 31 dec', async () => {
@@ -222,7 +233,8 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/31 december/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_ENSKILD_FIRMA_CALENDAR_YEAR')
+      expect(body.error.message).toMatch(/31 december/)
     })
 
     // Defense-in-depth: the EF end-date guard runs before validatePeriodDuration.
@@ -237,7 +249,48 @@ describe('PATCH /api/bookkeeping/fiscal-periods/[id]', () => {
       )
       expect(res.status).toBe(400)
       const body = await res.json()
-      expect(body.error).toMatch(/18 months/)
+      expect(body.error.code).toBe('FISCAL_PERIOD_TOO_LONG')
+      expect(body.error.details.months).toBe(24)
+    })
+  })
+
+  describe('contiguity (BFNAR 2013:2)', () => {
+    const LATEST = { id: 'p2', period_start: '2026-01-01', period_end: '2026-12-31', locked_at: null, is_closed: false }
+    const PREVIOUS = { id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31' }
+
+    it('refuses re-dating that opens a gap after the preceding year', async () => {
+      buildMockSupabase({ period: LATEST, entityType: 'aktiebolag', earlierPeriodCount: 1, neighbours: [PREVIOUS] })
+      const res = await PATCH(
+        patchRequest({ period_start: '2026-02-01', period_end: '2026-12-31' }),
+        createMockRouteParams({ id: 'p2' }),
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error.code).toBe('FISCAL_PERIOD_NOT_CONTIGUOUS')
+      expect(body.error.details.expected_start).toBe('2026-01-01')
+    })
+
+    it('lets the latest year move its end date', async () => {
+      buildMockSupabase({ period: LATEST, entityType: 'aktiebolag', earlierPeriodCount: 1, neighbours: [PREVIOUS] })
+      const res = await PATCH(
+        patchRequest({ period_start: '2026-01-01', period_end: '2027-06-30' }),
+        createMockRouteParams({ id: 'p2' }),
+      )
+      expect(res.status).toBe(200)
+    })
+
+    it('refuses moving an end date away from the following year', async () => {
+      buildMockSupabase({
+        period: { id: 'p1', period_start: '2025-01-01', period_end: '2025-12-31', locked_at: null, is_closed: false },
+        entityType: 'aktiebolag',
+        neighbours: [{ id: 'p2', period_start: '2026-01-01', period_end: '2026-12-31' }],
+      })
+      const res = await PATCH(
+        patchRequest({ period_start: '2025-01-01', period_end: '2025-11-30' }),
+        createMockRouteParams({ id: 'p1' }),
+      )
+      expect(res.status).toBe(400)
+      expect((await res.json()).error.details.expected_end).toBe('2025-12-31')
     })
   })
 })

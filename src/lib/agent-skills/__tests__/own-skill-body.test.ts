@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildOwnSkill, ownSkillSteps, OWN_SKILL_COPY, type OwnSkillCopy } from '../own-skill-body'
+import { buildOwnSkill, editedFlowBody, ownItemText, ownSkillSteps, OWN_SKILL_COPY, type OwnSkillCopy } from '../own-skill-body'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { SkillBodySchema } from '../validation'
@@ -62,6 +62,59 @@ describe('ownSkillSteps', () => {
 
   it('returns nothing for a body without a numbered list', () => {
     expect(ownSkillSteps('# Namn\n\n- En regel.')).toEqual([])
+  })
+})
+
+describe('editedFlowBody', () => {
+  // The shape Skriv själv saves (CreateItem.tsx body()).
+  const written = '# Påminn om fakturor\n\nPåminner om obetalda fakturor\n\n## Steg\n\n1. Hämta fakturorna\n2. Välj de sena\n'
+  const edit = { name: 'Påminn om kundfakturor', description: 'Påminner efter 14 dagar', previousDescription: 'Påminner om obetalda fakturor', steps: ['Hämta kundfakturorna', 'Välj de som är 14 dagar sena', 'Föreslå en påminnelse'], stepsHeading: 'Steg' }
+
+  it('rewrites the name, the description and the steps of a hand-written flow', () => {
+    expect(editedFlowBody(written, edit)).toBe('# Påminn om kundfakturor\n\nPåminner efter 14 dagar\n\n## Steg\n\n1. Hämta kundfakturorna\n2. Välj de som är 14 dagar sena\n3. Föreslå en påminnelse\n')
+  })
+
+  it('keeps what the form does not show: the rules and what the user said in an AI-written flow', () => {
+    const built = buildOwnSkill(summary, told, copy)
+    const next = editedFlowBody(built.body, { ...edit, previousDescription: built.description })
+    expect(ownSkillSteps(next)).toEqual(edit.steps)
+    expect(next.startsWith('# Påminn om kundfakturor\n')).toBe(true)
+    expect(next).toContain('## Uppgift\n\nPåminner efter 14 dagar\n')
+    expect(next).toContain('## Regler\n\n- Flagga fel moms.')
+    expect(next).toContain('- Alla leverantörer? Bara återkommande.')
+    expect(next).not.toContain(built.description)
+    expect(SkillBodySchema.safeParse(next).success).toBe(true)
+  })
+
+  it('reads back the same steps it wrote, with fewer steps than before', () => {
+    const next = editedFlowBody(written, { ...edit, steps: ['Bara ett steg'] })
+    expect(ownSkillSteps(next)).toEqual(['Bara ett steg'])
+    expect(next).not.toMatch(/\n{3,}/)
+  })
+
+  it('adds a steps section and a heading to a body that had neither', () => {
+    expect(editedFlowBody('Gör så här.', { ...edit, previousDescription: '' })).toBe('# Påminn om kundfakturor\n\nGör så här.\n\n## Steg\n\n1. Hämta kundfakturorna\n2. Välj de som är 14 dagar sena\n3. Föreslå en påminnelse\n')
+  })
+
+  it('leaves the text alone when the old description is not in it', () => {
+    expect(editedFlowBody(written, { ...edit, previousDescription: 'Något annat' })).toContain('\n\nPåminner om obetalda fakturor\n\n')
+  })
+})
+
+describe('ownItemText', () => {
+  it('drops the heading and the description Skriv själv puts above the text', () => {
+    expect(ownItemText('# Representation\n\nSå bokför vi representation\n\nMoms dras på högst 300 kr.\n\n- Källa: ML\n', 'Så bokför vi representation')).toBe('Moms dras på högst 300 kr.\n\n- Källa: ML')
+  })
+
+  it('round-trips what Skriv själv saves', () => {
+    const text = '## Konton\n\n3001 och 3041 räknas.\n\nMarginalen läses per månad.'
+    expect(ownItemText(`# Bruttomarginal\n\nMarginal per månad\n\n${text}\n`, 'Marginal per månad')).toBe(text)
+  })
+
+  it('keeps a first paragraph that is not the description, and a body without a heading', () => {
+    expect(ownItemText('# Namn\n\nEn annan rad\n\nText', 'Beskrivning')).toBe('En annan rad\n\nText')
+    expect(ownItemText('Bara text', 'Beskrivning')).toBe('Bara text')
+    expect(ownItemText('\n\n', 'Beskrivning')).toBe('')
   })
 })
 

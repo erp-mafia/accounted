@@ -47,8 +47,8 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies': 'companies:read',
   // Issue #1814: programmatic company creation (partner provisioning, agents).
   'POST /api/v1/companies': 'companies:write',
-  // Issue #1348: company-settings write (same field set as the MCP tool
-  // gnubok_update_company_settings; direct write, no staging).
+  // Issue #1348, widened by the operation registry: company settings
+  // (operation settings.update; the MCP tool of the same op stages).
   'PATCH /api/v1/companies/:companyId/settings': 'companies:write',
 
   // Operations (async long-running tasks)
@@ -181,10 +181,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // PR-2 operations substrate.
   // JSON reports: all share `reports:read` (or `payroll:read` for the
   // salary-scoped ones). kpi, audit-trail, periodisk-sammanstallning,
-  // ne-bilaga, and ink2 are deferred to a follow-up PR: kpi composes
-  // multiple lib generators rather than wrapping one; audit-trail lives in
-  // lib/core/audit/ rather than lib/reports/; ne-bilaga + ink2 + periodisk
-  // each have their own lib subdir structure that needs more care.
+  // ne-bilaga and ink2 are operation-registry reads (wave 3, below).
   'GET /api/v1/companies/:companyId/reports/trial-balance': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/balance-sheet': 'reports:read',
   'GET /api/v1/companies/:companyId/reports/income-statement': 'reports:read',
@@ -208,8 +205,7 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'GET /api/v1/companies/:companyId/reports/salary-journal': 'payroll:read',
   'GET /api/v1/companies/:companyId/reports/avgifter-basis': 'payroll:read',
   'GET /api/v1/companies/:companyId/reports/vacation-liability': 'payroll:read',
-  // Binary report: SIE4 text/plain export. JSON variants of INK2 / NE-bilaga
-  // are deferred (see above).
+  // Binary report: SIE4 text/plain export.
   'GET /api/v1/companies/:companyId/reports/sie-export': 'reports:read',
   // Imports: async via the Phase 4 PR-2 operations substrate. Multipart
   // uploads (the file is the request body).
@@ -301,6 +297,125 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Operation registry, wave 4: Peppol, årsredovisning, opening balances,
+  // supplier-invoice actions, inbox matches, Skatteverket helpers.
+  'GET /api/v1/companies/:companyId/invoices/:id/peppol': 'invoices:read',
+  'POST /api/v1/companies/:companyId/invoices/:id/send-peppol': 'invoices:write',
+  'GET /api/v1/companies/:companyId/invoices/:id/peppol/deliveries': 'invoices:read',
+  'GET /api/v1/companies/:companyId/peppol/registration': 'companies:read',
+  'POST /api/v1/companies/:companyId/peppol/registration': 'companies:write',
+  'POST /api/v1/companies/:companyId/peppol/access-request': 'companies:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/narrative': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/compliance': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/versions': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures': 'reports:read',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures/:signatureId': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures/:signatureId': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/pdf': 'reports:read',
+  'GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/ixbrl': 'reports:read',
+  'GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/ixbrl/validate': 'reports:read',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/manual': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/correct': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/imports/skattekonto-file': 'transactions:write',
+  'DELETE /api/v1/companies/:companyId/supplier-invoices/:id': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/uncredit': 'suppliers:write',
+  'PATCH /api/v1/companies/:companyId/supplier-invoices/:id/items/:itemId': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/bank-entered': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/match-supplier': 'documents:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/match-transaction': 'documents:write',
+  'POST /api/v1/companies/:companyId/skatteverket/agi/validate-huvuduppgift': 'compliance:read',
+  'POST /api/v1/companies/:companyId/skatteverket/agi/validate-individuppgift': 'compliance:read',
+  'POST /api/v1/companies/:companyId/skattekonto/sync': 'transactions:write',
+  // Operation registry, wave 3: documents and inbox, transaction actions and
+  // import undo, verifikat rättelse, filing reports and the VAT settlement.
+  'GET /api/v1/companies/:companyId/documents': 'documents:read',
+  'GET /api/v1/companies/:companyId/documents/:id': 'documents:read',
+  'DELETE /api/v1/companies/:companyId/documents/:id': 'documents:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/attach-document': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/detach-document': 'transactions:write',
+  'GET /api/v1/companies/:companyId/inbox-items': 'documents:read',
+  'GET /api/v1/companies/:companyId/inbox-items/:id': 'documents:read',
+  'PATCH /api/v1/companies/:companyId/inbox-items/:id': 'documents:write',
+  'DELETE /api/v1/companies/:companyId/inbox-items/:id': 'documents:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/unmatch-transaction': 'documents:write',
+  'POST /api/v1/companies/:companyId/inbox-items/:id/convert': 'suppliers:write',
+  'DELETE /api/v1/companies/:companyId/transactions/:id': 'transactions:write',
+  'PATCH /api/v1/companies/:companyId/transactions/:id': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/refresh-exchange-rate': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/link-journal-entry': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/match-batch': 'transactions:write',
+  'POST /api/v1/companies/:companyId/transactions/bulk-book': 'transactions:write',
+  'POST /api/v1/companies/:companyId/imports/bank/:id/undo': 'transactions:write',
+  'POST /api/v1/companies/:companyId/imports/sie/:id/undo': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/imports/sie/:id/resume': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/correct-metadata': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/strike-lines': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/redate': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/journal-entries/:id': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/journal-entries/:id/notes': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/:id/no-document-required': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/journal-entries/:id/no-document-required': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/journal-entries/no-document-required': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/journal-entries/:id/rattelse-log': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ink2': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ink2/sru': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ne-bilaga': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/ne-bilaga/sru': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/periodisk-sammanstallning': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/periodisk-sammanstallning/csv': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/eskd': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/vat-declaration/settlement-proposal': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/kassaflodesanalys': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/behandlingshistorik': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/bokslutsbilagor': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/kpi': 'reports:read',
+  'GET /api/v1/companies/:companyId/reports/dimension-pnl': 'reports:read',
+  'GET /api/v1/companies/:companyId/audit-trail': 'reports:read',
+  'POST /api/v1/companies/:companyId/vat/settlement': 'bookkeeping:write',
+  // Operation registry, wave 2: deferred booking, supplier payment files,
+  // expense claims (utlägg), payroll lifecycle.
+  'POST /api/v1/companies/:companyId/salary-runs/:id/send-payslips': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/revert': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/unapprove': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/expense-claims': 'payroll:write',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches/preview': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches': 'suppliers:write',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches/:id': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches/:id/file': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches/:id/cancel': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/invoices/:id/book': 'invoices:write',
+  'POST /api/v1/companies/:companyId/invoices/bulk-book': 'invoices:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/book': 'suppliers:write',
+  'GET /api/v1/companies/:companyId/expense-claims': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/expense-claims/:id': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/expense-claims': 'suppliers:write',
+  'DELETE /api/v1/companies/:companyId/expense-claims/:id': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/expense-claims/payouts': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/match-expense-payout': 'transactions:write',
+  // Operation registry, wave 1 (src/lib/operations): setup capabilities.
+  'POST /api/v1/companies/:companyId/cash-accounts': 'companies:write',
+  'PATCH /api/v1/companies/:companyId/cash-accounts/:id': 'companies:write',
+  'POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary': 'companies:write',
+  'PUT /api/v1/companies/:companyId/cash-accounts/payee-defaults': 'companies:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/fiscal-periods/:id': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/unlock': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/close-external': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/accounts/:number': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/accounts/:number': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts/activate': 'bookkeeping:write',
+  'POST /api/v1/companies/:companyId/accounts/deactivate': 'bookkeeping:write',
+  'GET /api/v1/companies/:companyId/settings': 'companies:read',
+  'PATCH /api/v1/companies/:companyId/settings/tax-profile': 'companies:write',
+  'PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock': 'companies:write',
+  // Dimension registry writes (operations dimensions.create/update/delete).
+  'POST /api/v1/companies/:companyId/dimensions': 'bookkeeping:write',
+  'PATCH /api/v1/companies/:companyId/dimensions/:id': 'bookkeeping:write',
+  'DELETE /api/v1/companies/:companyId/dimensions/:id': 'bookkeeping:write',
   'POST /api/v1/companies/:companyId/dimensions/:id/values': 'bookkeeping:write',
   // Value lifecycle (#895): rename/archive/end-date via PATCH; DELETE only
   // succeeds for unreferenced values (BFL retention trigger guards the rest).

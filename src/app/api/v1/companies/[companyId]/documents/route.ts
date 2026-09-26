@@ -1,4 +1,9 @@
 /**
+ * GET /api/v1/companies/{companyId}/documents
+ *
+ * List document metadata (operation documents.list; contract, docs and rules
+ * in src/lib/operations/documents.ts).
+ *
  * POST /api/v1/companies/{companyId}/documents
  *
  * Multipart upload of a document into the WORM archive. Wraps
@@ -42,6 +47,8 @@ import {
 } from '@/lib/core/documents/document-service'
 import type { DocumentUploadSource } from '@/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { documentsList } from '@/lib/operations/documents'
 
 const DocumentUploaded = z.object({
   id: z.string().uuid(),
@@ -315,3 +322,5 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   },
   { requireIdempotencyKey: true },
 )
+
+export const GET = v1OperationHandler(documentsList)

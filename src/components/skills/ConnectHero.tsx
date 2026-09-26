@@ -25,11 +25,12 @@ export function ConnectHero({ onConnect }: { onConnect: (client: AiClient) => vo
         <span className={styles.connectKicker}>{t('connect_kicker')}</span>
         <h2 id="connect-hero-title">{t('connect_title')}</h2>
         <p>{t('connect_body')}</p>
-        <div className={styles.gateClients}>
+        <div className={`${styles.gateClients} ${styles.connectClients}`}>
           {AI_CLIENTS.map((c, i) => (
-            <Button key={c.id} size="lg" variant={i === 0 ? 'default' : 'outline'} className="gap-2 pl-3.5" onClick={() => onConnect(c.id)}>
+            <Button key={c.id} size="lg" variant={i === 0 ? 'default' : 'outline'} className="gap-2" onClick={() => onConnect(c.id)}>
+              {/* The plain logo, as on every other Claude button: no white plate on the dark pill. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={c.logo} alt="" width={18} height={18} className={styles.clientLogo} />
+              <img src={c.logo} alt="" width={16} height={16} className={styles.btnLogo} />
               {i === 0 ? t('connect_client', { client: c.name }) : c.name}
             </Button>
           ))}

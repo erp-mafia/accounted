@@ -2,40 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateCashAccountSchema } from '@/lib/api/schemas'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { setVoucherSeries, setEnabled, hasOpenTransactions } from '@/lib/cash-accounts/service'
-import { isBankCashAccount, updateCashAccountPayee, type PayeeUpdate } from '@/lib/cash-accounts/invoice-payee'
-import { getCompanyRole } from '@/lib/auth/require-write'
+import { updateCashAccount } from '@/lib/cash-accounts/manage'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { UUID_RE } from '@/lib/invariants/uuid'
-
-/** Canonical 404 for an id that is not one of the company's bank accounts. */
-function notFound(): NextResponse {
-  return NextResponse.json(
-    {
-      error: {
-        code: 'CASH_ACCOUNT_NOT_FOUND',
-        message: 'Bankkontot hittades inte.',
-        message_en: 'Bank account not found.',
-      },
-    },
-    { status: 404 },
-  )
-}
-
-const PAYEE_KEYS = [
-  'name',
-  'bank_name',
-  'clearing_number',
-  'account_number',
-  'bankgiro',
-  'plusgiro',
-  'swish',
-  'iban',
-  'bic',
-  'bank_code',
-  'foreign_account_number',
-  'invoice_payee',
-] as const
 
 /**
  * PATCH /api/cash-accounts/[id]
@@ -49,126 +18,23 @@ const PAYEE_KEYS = [
  *     bank connection holds out of the Konton overview and the booking flows
  *     once the company stops using it. Never a connection-held account
  *     (409); never the primary or one with unbooked transactions (400).
- *     setEnabled() enforces the first two in its UPDATE; importing onto
- *     the ledger turns the account back on.
- * Ledger account and primary flag have their own guarded flows.
+ * Ledger account and primary flag have their own guarded flows. The rules
+ * live in lib/cash-accounts/manage.ts, shared with the v1 operation
+ * cash-accounts.update and gnubok_update_cash_account.
  */
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'cash_accounts.update',
   async (request, { supabase, companyId, log, requestId, user }, { params }) => {
     const { id } = await params
-    // A non-UUID id can never match a row; answer 404 instead of letting the
-    // uuid cast surface as a 500 from Postgres.
-    if (!UUID_RE.test(id)) return notFound()
+    // A non-UUID id can never match a row: 404 before the body is read.
+    if (!UUID_RE.test(id)) return sessionFailureResponse({ ok: false, code: 'CASH_ACCOUNT_NOT_FOUND' }, log, requestId)
     const validation = await validateBody(request, UpdateCashAccountSchema)
     if (!validation.success) return validation.response
-    const body = validation.data
 
-    const payeeUpdate: PayeeUpdate = {}
-    for (const key of PAYEE_KEYS) {
-      if (body[key] !== undefined) {
-        // '' from a cleared form field clears the column.
-        ;(payeeUpdate as Record<string, unknown>)[key] = body[key] === '' ? null : body[key]
-      }
-    }
-    const touchesPayee = Object.keys(payeeUpdate).length > 0
-
-    // enabled rides the payee gate: it is one of the three conditions for an
-    // account to print on invoices (isUsableInvoicePayee), so a member flipping
-    // it would decide whether an approved payee shows. Creating a bank account
-    // (POST /api/cash-accounts) is owner/admin for the same reason.
-    if (touchesPayee || body.enabled !== undefined) {
-      const roleResult = await getCompanyRole(supabase, user.id, { companyId })
-      if (!roleResult.ok) return roleResult.response
-      if (!['owner', 'admin'].includes(roleResult.role)) {
-        return errorResponseFromCode('FORBIDDEN', log, {
-          requestId,
-          details: { required_roles: ['owner', 'admin'] },
-        })
-      }
-    }
-
-    if (touchesPayee) {
-      // Only giro/bank accounts (1920-1999) can be printed as payee. Stripe, Woo and
-      // Shopify clearing rows live in the same table and must stay out.
-      const { data: existing, error: existingError } = await supabase
-        .from('cash_accounts')
-        .select('id, ledger_account')
-        .eq('company_id', companyId)
-        .eq('id', id)
-        .maybeSingle()
-      if (existingError) return errorResponse(existingError, log, { requestId })
-      if (!existing) return notFound()
-      if (!isBankCashAccount(existing as { ledger_account: string })) {
-        return errorResponseFromCode('INVOICE_PAYEE_ACCOUNT_INVALID', log, {
-          requestId,
-          details: { cash_account_id: id, reason: 'not_bank_account' },
-        })
-      }
-    }
-
-    // Why setEnabled() would refuse this row, as a response; null when it would
-    // not. The rules themselves live in setEnabled()'s UPDATE predicate: this
-    // read only turns a refusal into the right message, so it runs up front
-    // for the common case and again if the guarded UPDATE matched nothing (the
-    // row changed in between, e.g. a bank connection claimed it).
-    const explainEnabledRefusal = async (): Promise<NextResponse | null> => {
-      const { data: existing, error: existingError } = await supabase
-        .from('cash_accounts')
-        .select('id, is_primary, bank_connection_id')
-        .eq('company_id', companyId)
-        .eq('id', id)
-        .maybeSingle()
-      if (existingError) return errorResponse(existingError, log, { requestId })
-      if (!existing) return notFound()
-      const row = existing as { is_primary: boolean; bank_connection_id: string | null }
-      if (row.bank_connection_id !== null) {
-        return errorResponseFromCode('CASH_ACCOUNT_ENABLED_BANK_MANAGED', log, {
-          requestId,
-          details: { cash_account_id: id },
-        })
-      }
-      if (body.enabled === false && row.is_primary) {
-        return errorResponseFromCode('CASH_ACCOUNT_DISABLE_PRIMARY', log, {
-          requestId,
-          details: { cash_account_id: id },
-        })
-      }
-      return null
-    }
-
-    if (body.enabled !== undefined) {
-      const refusal = await explainEnabledRefusal()
-      if (refusal) return refusal
-      if (body.enabled === false && (await hasOpenTransactions(supabase, companyId, id))) {
-        return errorResponseFromCode('CASH_ACCOUNT_DISABLE_UNRESOLVED', log, {
-          requestId,
-          details: { cash_account_id: id },
-        })
-      }
-    }
-
-    let updated = null
-    try {
-      if (body.voucher_series !== undefined) {
-        updated = await setVoucherSeries(supabase, companyId, id, body.voucher_series)
-        if (!updated) return notFound()
-      }
-      if (touchesPayee) {
-        updated = await updateCashAccountPayee(supabase, companyId, id, payeeUpdate)
-      }
-      if (body.enabled !== undefined) {
-        updated = await setEnabled(supabase, companyId, id, body.enabled)
-        if (!updated) return (await explainEnabledRefusal()) ?? notFound()
-      }
-    } catch (err) {
-      log.error('cash_accounts update failed', err as Error)
-      return errorResponse(err, log, { requestId })
-    }
-
-    if (!updated) return notFound()
-
-    return NextResponse.json({ data: updated })
+    const outcome = await updateCashAccount({ supabase, companyId, userId: user.id, log }, id, validation.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )

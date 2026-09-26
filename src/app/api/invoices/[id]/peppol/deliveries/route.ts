@@ -2,20 +2,24 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { privateNoStore } from '@/lib/api/private-no-store'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { ensureInitialized } from '@/lib/init'
-import { getPeppolAccessSummary } from '@/lib/invoices/peppol-access'
-import { listPeppolDeliverySummaries } from '@/lib/invoices/peppol-delivery'
-import { getPeppolTransportAvailability } from '@/lib/invoices/peppol-transport'
+import { listInvoicePeppolDeliveries } from '@/lib/invoices/peppol-send-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 import { createServiceClient } from '@/lib/supabase/server'
 
 ensureInitialized()
 
 const paramsSchema = z.object({ id: z.uuid() })
 
+/**
+ * GET /api/invoices/[id]/peppol/deliveries: the invoice's Peppol deliveries
+ * with the transport and access state. Shared with the v1 operation
+ * invoices.peppol-deliveries (lib/invoices/peppol-send-service.ts).
+ */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'invoice.peppol.deliveries.list',
-  async (_request, { supabase, companyId, log, requestId }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const parsedParams = paramsSchema.safeParse(await params)
     if (!parsedParams.success) {
       return privateNoStore(errorResponseFromCode('VALIDATION_ERROR', log, {
@@ -23,32 +27,18 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         details: { fields: parsedParams.error.flatten().fieldErrors },
       }))
     }
-    const invoiceId = parsedParams.data.id
 
-    const { data: invoice, error: invoiceError } = await supabase
-      .from('invoices')
-      .select('id')
-      .eq('id', invoiceId)
-      .eq('company_id', companyId)
-      .single()
-    if (invoiceError || !invoice) {
-      return privateNoStore(errorResponseFromCode('INVOICE_NOT_FOUND', log, { requestId }))
-    }
-
-    try {
-      const deliveries = await listPeppolDeliverySummaries({
-        supabase,
-        companyId,
-        invoiceId,
-      })
-      const access = await getPeppolAccessSummary({ supabase, service: createServiceClient(), companyId })
-      return privateNoStore(NextResponse.json({
-        data: deliveries,
-        transport: getPeppolTransportAvailability(),
-        access,
-      }))
-    } catch (err) {
-      return privateNoStore(errorResponse(err, log, { requestId }))
-    }
+    const outcome = await listInvoicePeppolDeliveries(
+      { supabase, companyId, userId: user.id, log },
+      parsedParams.data.id,
+      { service: createServiceClient() },
+    )
+    if (!outcome.ok) return privateNoStore(sessionFailureResponse(outcome, log, requestId))
+    if (outcome.dryRun) return privateNoStore(NextResponse.json({ data: outcome.preview }))
+    return privateNoStore(NextResponse.json({
+      data: outcome.data.deliveries,
+      transport: outcome.data.transport,
+      access: outcome.data.access,
+    }))
   },
 )

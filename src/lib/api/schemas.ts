@@ -2551,7 +2551,7 @@ const InvoicePaymentAccountSchema = z.object({
  * of InvoicePaymentAccountSchema so the settings form, the legacy settings
  * writers and this route agree on what a valid bankgiro is.
  */
-export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
+export const UpdateCashAccountFieldsSchema = InvoicePaymentAccountSchema.extend({
   voucher_series: UpdateCashAccountVoucherSeriesSchema.shape.voucher_series.optional(),
   name: z.string().trim().min(1).max(100).nullable().optional(),
   invoice_payee: z.boolean().optional(),
@@ -2559,7 +2559,14 @@ export const UpdateCashAccountSchema = InvoicePaymentAccountSchema.extend({
   // enabled state is owned by the AccountPickerDialog (enabled_uids), and
   // setEnabled() refuses it (409), so the shape alone cannot say which.
   enabled: z.boolean().optional(),
-}).strict().refine((body) => Object.keys(body).length > 0, {
+}).strict()
+
+/**
+ * The same fields with the "something to update" rule. Split from
+ * UpdateCashAccountFieldsSchema because a refined object cannot be
+ * extended: the v1 operation adds cash_account_id to the unrefined fields.
+ */
+export const UpdateCashAccountSchema = UpdateCashAccountFieldsSchema.refine((body) => Object.keys(body).length > 0, {
   message: 'Inget att uppdatera',
 })
 

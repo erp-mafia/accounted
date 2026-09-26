@@ -87,7 +87,8 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     )
     const { status, body } = await parseJsonResponse(res)
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Transaction not found' })
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    expect((body as { error: { code: string } }).error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
   })
 
   it('returns 404 when document not in company', async () => {
@@ -99,7 +100,7 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     )
     const { status, body } = await parseJsonResponse(res)
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Document not found' })
+    expect((body as { error: { code: string } }).error.code).toBe('DOC_NOT_FOUND')
   })
 
   it('attaches when both rows exist', async () => {
@@ -167,9 +168,9 @@ describe('POST /api/transactions/[id]/attach-document', () => {
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
     )
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('annan verifikation')
+    expect(body.error.message).toContain('annan verifikation')
   })
 
   it('completes the matched inbox item when the tx is anchored via a bulk-book samlingsverifikat', async () => {
@@ -206,9 +207,9 @@ describe('POST /api/transactions/[id]/attach-document', () => {
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
     )
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('låst')
+    expect(body.error.message).toContain('låst')
   })
 
   it('returns 500 with the idempotent-retry message when propagation fails', async () => {
@@ -222,9 +223,9 @@ describe('POST /api/transactions/[id]/attach-document', () => {
       makeReq({ document_id: '11111111-1111-4111-8111-111111111111' }),
       createMockRouteParams({ id: 'tx-1' }),
     )
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(500)
-    expect(body.error).toContain('idempotent')
+    expect(body.error.message).toContain('idempotent')
     spy.mockRestore()
   })
 
@@ -276,11 +277,9 @@ describe('POST /api/transactions/[id]/attach-document', () => {
     expect(body.data.transaction_id).toBe('tx-1')
     // The Supabase client resolves with { error } rather than rejecting, so
     // we additionally assert that the error was actually inspected and logged
-    // (not silently dropped by a try/catch that never fires).
-    expect(spy).toHaveBeenCalledWith(
-      '[attach-document] Failed to link inbox item:',
-      expect.objectContaining({ message: 'rls denied' }),
-    )
+    // (not silently dropped by a try/catch that never fires). The service
+    // logs through the structured logger now, not a bare console.error tag.
+    expect(spy.mock.calls.flat().join(' ')).toContain('inbox back-link failed')
     spy.mockRestore()
   })
 })
@@ -314,16 +313,17 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
     const { status, body } = await parseJsonResponse(res)
     expect(status).toBe(404)
-    expect(body).toEqual({ error: 'Transaction not found' })
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    expect((body as { error: { code: string } }).error.code).toBe('TX_CATEGORIZE_TX_NOT_FOUND')
   })
 
   it('returns 409 when document is already on a journal entry', async () => {
     enqueue({ data: { id: 'tx-1', document_id: 'doc-1' }, error: null }) // tx fetch
     enqueue({ data: { journal_entry_id: 'je-1' }, error: null }) // doc fetch
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('verifikation')
+    expect(body.error.message).toContain('verifikation')
     // Nothing is written on the immutability path.
     expect(findCalls('invoice_inbox_items', 'update')).toEqual([])
     expect(findCalls('transactions', 'update')).toEqual([])
@@ -392,9 +392,9 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     enqueue({ data: null, error: null }) // inbox unlink
     enqueue({ data: null, error: null }) // pin CAS: 0 rows
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(409)
-    expect(body.error).toContain('samtidigt')
+    expect(body.error.message).toContain('samtidigt')
   })
 
   it('reports a failing inbox unlink as 500 with nothing changed, logging a coded cause only', async () => {
@@ -406,14 +406,15 @@ describe('DELETE /api/transactions/[id]/attach-document', () => {
     enqueue({ data: null, error: { code: '42501', message: 'rls denied: row values here' } }) // unlink fails
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const res = await DELETE(makeReq(null, 'DELETE'), createMockRouteParams({ id: 'tx-1' }))
-    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+    const { status, body } = await parseJsonResponse<{ error: { message: string } }>(res)
     expect(status).toBe(500)
-    expect(body.error).toContain('fortfarande kopplat')
+    expect(body.error.message).toContain('fortfarande kopplat')
     expect(findCalls('transactions', 'update')).toEqual([])
-    // Raw driver messages can quote row values: only the coded cause is logged.
-    expect(spy).toHaveBeenCalledWith('[attach-document] Failed to unlink inbox item:', {
-      cause: '42501',
-    })
+    // Raw driver messages can quote row values: only the coded cause is logged
+    // (through the structured logger since the rules moved to the service).
+    const logged = spy.mock.calls.flat().join(' ')
+    expect(logged).toContain('42501')
+    expect(logged).not.toContain('row values here')
     spy.mockRestore()
   })
 })

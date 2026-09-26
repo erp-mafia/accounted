@@ -194,8 +194,10 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('samtidigt')
+    // Failures ride the structured envelope now (sessionFailureResponse).
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_CONFLICT')
+    expect(body.error.message).toContain('samtidigt')
   })
 
   it('refuses once the item became a supplier invoice', async () => {
@@ -206,7 +208,8 @@ describe('PATCH /items/:id/fields', () => {
     const ctx = buildCtx(mock.supabase)
     const res = await fieldsRoute.handler(makeReq({ totals: { total: 2500 } }), ctx)
     expect(res.status).toBe(409)
-    const { body } = await parseJsonResponse<{ error: string }>(res)
-    expect(body.error).toContain('leverantörsfaktura')
+    const { body } = await parseJsonResponse<{ error: { code: string; message: string } }>(res)
+    expect(body.error.code).toBe('INBOX_ITEM_EDIT_LOCKED')
+    expect(body.error.message).toContain('leverantörsfaktura')
   })
 })

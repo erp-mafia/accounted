@@ -28,6 +28,9 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   return {
     requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
     isCompanyAdmin: (...args: unknown[]) => isAdminMock(...args),
+    // The operations' owner/admin gate (lib/operations/access.ts) reads the
+    // caller's company_members row: real, against the queued mock.
+    getCompanyRole: actual.getCompanyRole,
     companyAdminRequiredResponse: actual.companyAdminRequiredResponse,
   }
 })
@@ -483,7 +486,8 @@ describe('PUT /api/settings', () => {
     }), { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // Validation runs before the settings service reads anything.
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('rejects a foreign payment account without IBAN with valid recipients', async () => {
@@ -498,7 +502,8 @@ describe('PUT /api/settings', () => {
     }), { params: Promise.resolve({}) })
 
     expect(response.status).toBe(400)
-    expect(supabase.from).toHaveBeenCalledTimes(1)
+    // Validation runs before the settings service reads anything.
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 
   it('regenerates deadlines when unchanged tax settings are saved', async () => {

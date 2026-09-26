@@ -32,7 +32,80 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+// The momsredovisning proposal reads its totals through the STABLE RPC
+// get_vat_declaration_totals, whose jsonb payload this generic client cannot
+// shape (it answers every query with rows). The builder is replaced by a
+// fixed, non-empty proposal so gnubok_book_vat_settlement reaches its staging
+// insert; everything after it (lock check, fiscal period, preview) runs for real.
+vi.mock('@/lib/reports/vat-settlement', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/reports/vat-settlement')>()
+  return {
+    ...actual,
+    buildVatSettlementProposal: async () => ({
+      period: { type: 'quarterly', year: 2026, period: 1, start: '2026-01-01', end: '2026-03-31' },
+      period_label: 'Kvartal 1 2026',
+      entry_date: '2026-03-31',
+      description: 'Momsredovisning Kvartal 1 2026',
+      lines: [
+        { account_number: '2611', debit_amount: 250, credit_amount: 0 },
+        { account_number: '2641', debit_amount: 0, credit_amount: 50 },
+        { account_number: '2650', debit_amount: 0, credit_amount: 200, line_description: 'Moms att betala' },
+      ],
+      filed_net: 200,
+      rounding_amount: 0,
+      is_empty: false,
+      existing_entries: [],
+    }),
+  }
+})
+
+// The årsredovisning builder reads the whole ledger through dozens of shaped
+// queries this generic client cannot answer. It is replaced by a fixed,
+// complete K2 model (statements tie, every check green) so
+// gnubok_create_arsredovisning_version reaches its staging insert; the
+// period check, the gates and the content hash run for real.
+vi.mock('@/lib/bokslut/arsredovisning/model', () => ({
+  buildCanonicalAnnualReport: async (_supabase: unknown, companyId: string, fiscalPeriodId: string) => ({
+    schema_version: '1.0',
+    generated_at: '2027-03-01T08:00:00Z',
+    company_id: companyId,
+    fiscal_period_id: fiscalPeriodId,
+    entity_type: 'aktiebolag',
+    report: { accounting_framework: 'k2', signatures: [{ role: 'Styrelseledamot', name: 'Anna Andersson', signed_at: null }] },
+    profile: { company_id: companyId, fiscal_period_id: fiscalPeriodId },
+    disclosures: {},
+    eligibility: { digital_filing_eligible: true },
+    validation: { stage: 'signing', ok: true, error_count: 0, warning_count: 0, issues: [] },
+    ixbrl: null,
+  }),
+}))
+vi.mock('@/lib/bokslut/arsredovisning/version-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/bokslut/arsredovisning/version-service')>()
+  return { ...actual, hasStatementIntegrityErrors: () => false }
+})
+
 import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
+import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
+import { registerPeppolTransport } from '@/lib/invoices/peppol-transport'
+
+// The Peppol tools refuse up front when no access point is configured. A
+// transport whose every network method throws: the previews must never call
+// one (the lookup, the submission and the registration run on commit only),
+// and a call would surface as the tool's failure instead of a staging insert.
+const PEPPOL_TEST_PROVIDER = 'staging-behaviour-peppol'
+process.env.PEPPOL_TRANSPORT_PROVIDER = PEPPOL_TEST_PROVIDER
+const noNetwork = async (): Promise<never> => {
+  throw new Error('a staging preview contacted the Peppol network')
+}
+registerPeppolTransport({
+  provider: PEPPOL_TEST_PROVIDER,
+  lookupRecipient: noNetwork,
+  submit: noNetwork,
+  verifyWebhook: noNetwork,
+  retrieveEvidence: noNetwork,
+  registerRecipient: noNetwork,
+  unregisterRecipient: noNetwork,
+})
 
 type Tool = (typeof tools)[number]
 
@@ -51,7 +124,14 @@ const ALLOWED_MUTATION_TABLES = new Set(['pending_operations', 'idempotency_keys
  * supabase/migrations and requires STABLE or IMMUTABLE, which Postgres itself
  * refuses to let modify data. A VOLATILE function cannot be listed here.
  */
-const READ_ONLY_RPCS = new Set(['sales_order_invoiced_quantities'])
+const READ_ONLY_RPCS = new Set([
+  'sales_order_invoiced_quantities',
+  // The kontoplan usage count: the account delete/deactivate previews read it.
+  'get_account_usage_counts',
+  // The entitlement read (hasCapability): the payslip send preview checks
+  // the email_send capability before listing recipients.
+  'company_capability_grant_rows',
+])
 
 /**
  * RPCs that DO write, tolerated at staging time, each with its reason. This
@@ -79,6 +159,8 @@ interface Recording {
  */
 function createRecordingClient(
   rows: Record<string, Record<string, unknown>> = {},
+  counts: Record<string, number> = {},
+  empty: readonly string[] = [],
 ): { client: never; recording: Recording } {
   const recording: Recording = { mutations: [], rpcs: [] }
   const builder = (table: string): unknown => {
@@ -92,7 +174,11 @@ function createRecordingClient(
         get(_target, prop) {
           if (prop === 'then') {
             return (resolve: (value: unknown) => void) =>
-              resolve({ data: single ? row : [row], error: null, count: 1 })
+              resolve(
+                empty.includes(table)
+                  ? { data: single ? null : [], error: null, count: 0 }
+                  : { data: single ? row : [row], error: null, count: counts[table] ?? 1 },
+              )
           }
           if (prop === 'single' || prop === 'maybeSingle') {
             return () => {
@@ -168,10 +254,14 @@ interface Fixture {
   args?: Record<string, unknown>
   /** Fields merged into the row every query on that table answers with. */
   rows?: Record<string, Record<string, unknown>>
+  /** The `count` a table's queries answer with (default 1). */
+  counts?: Record<string, number>
+  /** Tables whose queries find nothing (an empty list, a null row, count 0). */
+  empty?: string[]
 }
 
 async function observe(tool: Tool, fixture: Fixture = {}): Promise<BehaviourVerdict> {
-  const { client, recording } = createRecordingClient(fixture.rows)
+  const { client, recording } = createRecordingClient(fixture.rows, fixture.counts, fixture.empty)
   const args = {
     ...(synthesize(tool.inputSchema as Record<string, unknown>) as Record<string, unknown>),
     ...(fixture.args ?? {}),
@@ -275,12 +365,274 @@ const SETTLED_SKATTEKONTO_ROW = {
 const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
+const DEFERRED_BOOKING_ROWS: Record<string, Record<string, unknown>> = {
+  company_settings: { accounting_method: 'accrual', entity_type: 'aktiebolag', bookkeeping_locked_through: null },
+  fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+  invoices: {
+    status: 'sent',
+    journal_entry_id: null,
+    credited_invoice_id: null,
+    document_type: 'invoice',
+    invoice_number: 'F-1',
+    invoice_date: '2026-01-15',
+    currency: 'SEK',
+    subtotal: 100,
+    vat_amount: 25,
+    total: 125,
+    vat_treatment: 'standard_25',
+    items: [],
+    customer: { name: 'Kunden AB' },
+  },
+  supplier_invoices: {
+    status: 'registered',
+    registration_journal_entry_id: null,
+    is_credit_note: false,
+    invoice_date: '2026-01-15',
+    currency: 'SEK',
+    total: 125,
+    vat_treatment: 'standard_25',
+    reverse_charge: false,
+    arrival_number: 1,
+    items: [{ account_number: '6110', line_total: 100, vat_rate: 0.25, vat_amount: 25 }],
+    supplier: { id: SOME_UUID, name: 'Leverantören AB', supplier_type: 'swedish_business' },
+  },
+}
+
+// Peppol: a sent BIS-valid SEK invoice to a Swedish aktiebolag buyer from an
+// aktiebolag seller with a Bankgiro, and a company the operators granted
+// Peppol (sending and a receiving slot).
+const PEPPOL_SELLER = makeCompanySettings({
+  company_name: 'Säljare AB',
+  entity_type: 'aktiebolag',
+  org_number: '556016-0680',
+  vat_number: 'SE556016068001',
+  bankgiro: '991-2346',
+})
+const PEPPOL_INVOICE = makeInvoice({
+  id: SOME_UUID,
+  invoice_number: 'F-2026-42',
+  invoice_date: '2026-01-15',
+  due_date: '2026-02-14',
+  status: 'sent',
+  subtotal: 100,
+  vat_amount: 25,
+  total: 125,
+  remaining_amount: 125,
+  vat_treatment: 'standard_25',
+  your_reference: 'KST-100',
+})
+const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
+  company_members: { role: 'owner' },
+  company_settings: { ...PEPPOL_SELLER, is_sandbox: false },
+  peppol_access: { status: 'enabled', max_sends: null, receive_enabled: true },
+  invoices: {
+    ...PEPPOL_INVOICE,
+    customer: makeCustomer({ name: 'Kund AB', org_number: '556677-8899', vat_number: 'SE556677889901' }),
+    items: [{
+      id: 'item-1', invoice_id: SOME_UUID, sort_order: 0, line_type: 'product', description: 'Rådgivning',
+      quantity: 1, unit: 'tim', unit_price: 100, line_total: 100, vat_rate: 25, vat_amount: 25,
+    }],
+  },
+}
+
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Bank file undo: a completed import the owner undoes; the preview counts
+  // the batch rows it would delete and skip (reads only).
+  gnubok_undo_bank_import: {
+    rows: { bank_file_imports: { status: 'completed' }, company_members: { role: 'owner' } },
+  },
+  // Inline rättelse and redate of a posted verifikat in an open, unlocked
+  // 2026 (lib/core/bookkeeping/journal-entry-corrections.ts): the previews
+  // replay the RPC rules as reads and never call correct_entry_* or the engine.
+  gnubok_correct_entry_metadata: {
+    args: { description: 'Hyra lokal januari 2026' },
+    rows: {
+      journal_entries: { status: 'posted', description: 'Hyra', entry_date: '2026-01-15', source_type: 'manual', voucher_series: 'A', voucher_number: 1 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+  },
+  // One 5410 line struck, replaced by a balanced 5420 / 2440 pair; nothing
+  // anchored to a bank row or payment, no underlag on the struck line.
+  gnubok_correct_entry_lines: {
+    args: {
+      strike_line_ids: [SOME_UUID],
+      lines: [
+        { account_number: '5420', debit_amount: 500, credit_amount: 0 },
+        { account_number: '2440', debit_amount: 0, credit_amount: 500 },
+      ],
+    },
+    rows: {
+      journal_entries: { status: 'posted', description: 'Programvara', entry_date: '2026-01-15', source_type: 'manual', voucher_series: 'A', voucher_number: 1 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null, opening_balance_entry_id: null },
+      company_settings: { bookkeeping_locked_through: null },
+      journal_entry_lines: { account_number: '5410', debit_amount: 500, credit_amount: 0, currency: 'SEK', line_description: null, dimensions: {}, sort_order: 0 },
+    },
+    empty: ['document_attachments', 'transactions', 'transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'],
+  },
+  gnubok_redate_entry: {
+    args: { new_entry_date: '2026-02-15' },
+    rows: {
+      journal_entries: {
+        status: 'posted',
+        description: 'Hyra',
+        entry_date: '2026-01-15',
+        voucher_series: 'A',
+        voucher_number: 1,
+        correction_of_id: null,
+        reverses_id: null,
+        lines: [
+          { account_number: '5010', debit_amount: 1000, credit_amount: 0, line_description: null, currency: 'SEK', dimensions: {}, sort_order: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1000, line_description: null, currency: 'SEK', dimensions: {}, sort_order: 1 },
+        ],
+      },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+      chart_of_accounts: { account_number: '5010', is_active: true },
+    },
+  },
+  // Every synthesized id "belongs" to the company as a posted verifikat.
+  gnubok_mark_no_document_required: { args: { reason: 'Avskrivning enligt plan' } },
+  // Deferred Bokför (#967): a sent/registered, unbooked invoice under
+  // faktureringsmetoden in an open, unlocked year. The preview builds the
+  // real generator's lines, which reads the fiscal period and writes nothing.
+  gnubok_book_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  gnubok_bulk_book_invoices: { rows: DEFERRED_BOOKING_ROWS },
+  gnubok_book_supplier_invoice: { rows: DEFERRED_BOOKING_ROWS },
+  // Supplier-invoice actions (lib/supplier-invoices/manage.ts, item-account.ts).
+  // Delete: an unbooked, unpaid invoice with nothing hanging off it.
+  gnubok_delete_supplier_invoice: {
+    rows: { supplier_invoices: { status: 'registered', registration_journal_entry_id: null, is_credit_note: false } },
+    empty: ['supplier_invoice_payments', 'accrual_schedules', 'supplier_payment_batch_items'],
+  },
+  // Uncredit: a credited original whose live credit note has a posted
+  // verifikat in an open, unlocked 2026; the preview never calls reverseEntry.
+  gnubok_uncredit_supplier_invoice: {
+    rows: {
+      supplier_invoices: { status: 'credited', registration_journal_entry_id: SOME_UUID, total: 125, due_date: '2099-12-31', payments: [] },
+      journal_entries: { status: 'posted', entry_date: '2026-01-15', voucher_series: 'A', voucher_number: 1 },
+      company_settings: { bookkeeping_locked_through: null },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+    },
+  },
+  // Line move on an invoice whose registration verifikat is posted in an
+  // open 2026: the preview plans the strike-and-replace and replays the
+  // inline rättelse rules as reads (no correct_entry_lines_inline, no backfill).
+  // The harness answers one row per table, so the single 6580 line nets to
+  // zero (800/800): no exact match, the plan splits it into 6580 credit 500 +
+  // 6550 debit 500, and the corrected entry has two lines and balances.
+  gnubok_update_supplier_invoice_item_account: {
+    args: { account_number: '6550' },
+    rows: {
+      supplier_invoices: { status: 'registered', registration_journal_entry_id: SOME_UUID },
+      supplier_invoice_items: { account_number: '6580', line_total: 500, description: 'Juridiskt biträde' },
+      journal_entries: { status: 'posted', description: 'Leverantörsfaktura', entry_date: '2026-01-15', source_type: 'supplier_invoice_registered', voucher_series: 'A', voucher_number: 1 },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null, opening_balance_entry_id: null },
+      company_settings: { bookkeeping_locked_through: null },
+      journal_entry_lines: { account_number: '6580', debit_amount: 800, credit_amount: 800, currency: 'SEK', line_description: null, dimensions: {}, sort_order: 0 },
+      chart_of_accounts: { account_number: '6550', is_active: true },
+    },
+    empty: ['document_attachments', 'transactions', 'transaction_voucher_links', 'invoice_payments', 'supplier_invoice_payments'],
+  },
+  // Momsredovisning: the (mocked, see top) Q1 proposal in an open, unlocked
+  // 2026 with no company lock date.
+  gnubok_book_vat_settlement: {
+    args: { period_type: 'quarterly', year: 2026, period: 1 },
+    rows: {
+      company_settings: { bookkeeping_locked_through: null },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+    },
+  },
+  // Utlägg (expense claims): an aktiebolag owner's open claim on 2893, nothing
+  // on a payslip, both payout accounts in the chart, an unbooked SEK outflow
+  // equal to the claim for the bank match.
+  gnubok_create_expense_claim: {
+    args: { description: 'USB-hubb', amount: 500, vat_amount: 100, expense_account: '5410', claimant_name: 'Anna Svensson', currency: 'SEK' },
+    rows: { companies: { entity_type: 'aktiebolag' } },
+  },
+  gnubok_delete_expense_claim: {
+    rows: { expense_claims: { status: 'registered', journal_entry_id: SOME_UUID }, journal_entries: { status: 'posted' } },
+    empty: ['salary_line_items'],
+  },
+  gnubok_record_expense_payout: {
+    args: { cash_account: '1930' },
+    rows: {
+      expense_claims: { status: 'registered', employee_id: null, claimant_name: 'Anna Svensson', liability_account: '2893', amount_sek: 500 },
+      chart_of_accounts: { is_active: true },
+    },
+    empty: ['salary_line_items'],
+  },
+  gnubok_match_expense_payout: {
+    rows: {
+      transactions: { date: '2026-01-15', amount: -500, currency: 'SEK', journal_entry_id: null, cash_account_id: null, transaction_voucher_links: [] },
+      cash_accounts: { ledger_account: '1930' },
+      expense_claims: { status: 'registered', employee_id: null, claimant_name: 'Anna Svensson', liability_account: '2893', amount_sek: 500 },
+      chart_of_accounts: { is_active: true },
+    },
+    empty: ['salary_line_items'],
+  },
+  // Operation registry, wave 1: bank accounts and settings are owner/admin
+  // only on every door, so the preview reads the caller's role.
+  gnubok_update_company_tax_profile: { args: { f_skatt: true }, rows: { company_members: { role: 'owner' } } },
+  gnubok_update_bookkeeping_lock: { args: { auto_lock_period_days: 30 }, rows: { company_members: { role: 'owner' } } },
+  gnubok_create_cash_account: { rows: { company_members: { role: 'owner' } } },
+  gnubok_update_cash_account: { args: { voucher_series: 'B' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  gnubok_set_primary_cash_account: { rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  gnubok_set_invoice_payee_default: { args: { currency: 'SEK' }, rows: { company_members: { role: 'owner' }, cash_accounts: { ledger_account: '1930', enabled: true, currency: 'SEK', invoice_payee: true, payee_iban: 'SE4550000000058398257466' } } },
+  // The company's first year: no neighbours, nothing to overlap.
+  gnubok_create_fiscal_period: {
+    args: { name: 'Räkenskapsår 2027', period_start: '2027-01-01', period_end: '2027-12-31' },
+    empty: ['fiscal_periods'],
+  },
+  gnubok_update_fiscal_period: { args: { name: 'Räkenskapsår 2026' }, rows: { fiscal_periods: { is_closed: false, locked_at: null } } },
+  // Klarmarkera: an ended, imported year with every bank row booked.
+  gnubok_close_fiscal_period_external: {
+    rows: { fiscal_periods: { ...ENDED_FISCAL_YEAR, closing_entry_id: null, locked_at: null } },
+    counts: { transactions: 0 },
+    empty: ['transactions'],
+  },
+  // Salary-run lifecycle: each needs the run in the status its verb starts from.
+  gnubok_send_payslips: {
+    rows: {
+      salary_runs: { status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' },
+      'rpc:company_capability_grant_rows': { expires_at: null },
+      salary_run_employees: { employee_id: SOME_UUID, employee: { first_name: 'Anna', last_name: 'Andersson', email: null } },
+    },
+  },
+  gnubok_revert_salary_run: { rows: { salary_runs: { status: 'review' } } },
+  gnubok_unapprove_salary_run: {
+    rows: { salary_runs: { status: 'approved', agi_submitted_at: null }, agi_declarations: { status: 'generated' } },
+  },
+  gnubok_attach_salary_expense_claims: {
+    rows: { expense_claims: { description: 'Tågbiljett', expense_date: '2026-09-03', amount_sek: 450, liability_account: '2820' } },
+  },
+  gnubok_reopen_fiscal_period_external: {
+    rows: { fiscal_periods: { is_closed: true, closed_externally: true, closing_entry_id: null } },
+  },
+  // Betalfil: a payable SEK invoice with a valid bankgiro, complete company
+  // bank details, and no active batch holding the invoice.
+  gnubok_create_supplier_payment_batch: {
+    rows: {
+      companies: { name: 'Testbolaget AB', org_number: '556677-8899' },
+      company_settings: { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: null },
+      supplier_invoices: {
+        status: 'approved', approved_at: '2026-08-01T10:00:00Z', due_date: '2099-08-20', remaining_amount: 737.5, currency: 'SEK',
+        is_credit_note: false, payment_reference: null, supplier_invoice_number: 'CD3014794407',
+        supplier: { id: SOME_UUID, name: 'Derome Bygg AB', city: 'Varberg', bankgiro: '5050-1055', plusgiro: null, bank_account: null, clearing_number: null, account_number: null },
+      },
+    },
+    empty: ['supplier_payment_batch_items'],
+  },
+  gnubok_cancel_supplier_payment_batch: { rows: { supplier_payment_batches: { status: 'created', item_count: 1, total_amount: 737.5, download_count: 0 } } },
+  // A custom (non-system) dimension: system dimensions are never deleted.
+  gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.
   gnubok_propose_fact: { args: { subject_ref: `company:${COMPANY_ID}`, predicate: 'vat_period', value: 'kvartal', rationale: 'Enligt registreringsbeviset' } },
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
-  gnubok_update_company_settings: { args: { phone: '08-123 45 67' } },
+  gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
+  // Settings are owner/admin only on every door: the preview reads the caller's role.
+  gnubok_update_company_settings: { args: { phone: '08-123 45 67' }, rows: { company_members: { role: 'owner' } } },
   gnubok_update_recurring_schedule: { args: { name: 'Hyra' } },
   gnubok_update_salary_run: { args: { notes: 'Rättad utbetalningsdag' } },
   // Bounded integers the generic 100 overshoots.
@@ -330,6 +682,67 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     },
     rows: { fiscal_periods: FISCAL_YEAR_2026, journal_entries: { voucher_series: 'A', voucher_number: 1, status: 'posted' } },
   },
+  // Documents and the invoice inbox (wave 3): an unlinked document, an
+  // unbooked transaction whose pin is not räkenskapsinformation, and inbox
+  // items never converted or booked.
+  gnubok_delete_document: { rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } } },
+  gnubok_detach_document_from_transaction: {
+    rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
+  },
+  gnubok_delete_inbox_item: {
+    rows: { invoice_inbox_items: { document_id: SOME_UUID, created_supplier_invoice_id: null, created_journal_entry_id: null } },
+  },
+  gnubok_unmatch_inbox_item_transaction: {
+    rows: { invoice_inbox_items: { document_id: SOME_UUID, matched_transaction_id: SOME_UUID } },
+  },
+  // Årsredovisning workflow (wave 4): a period of the company with no
+  // registrerad submission and no duplicate signer; the version model is the
+  // fixed one mocked at the top.
+  gnubok_update_arsredovisning_narrative: {
+    args: { description: 'Bolaget bedriver konsultverksamhet.' },
+    empty: ['arsredovisning_submissions'],
+  },
+  gnubok_update_arsredovisning_compliance: { args: { is_public_limited_company: false } },
+  gnubok_create_arsredovisning_version: { args: { action: 'finalize' } },
+  gnubok_add_arsredovisning_signature: {
+    args: { role: 'Styrelseledamot', signer_name: 'Anna Andersson' },
+    empty: ['arsredovisning_signature_requests'],
+  },
+  // Ingående balanser by hand (wave 4): an open, unlocked 2026 without an IB
+  // and no company lock date; the preview reads the chart for the accounts
+  // it would activate and never reaches the engine.
+  gnubok_set_opening_balances_manual: {
+    args: { lines: [{ account_number: '1930', amount: 1000 }, { account_number: '2099', amount: -1000 }] },
+    rows: {
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null, opening_balances_set: false, opening_balance_entry_id: null },
+      company_settings: { bookkeeping_locked_through: null },
+      chart_of_accounts: { account_number: '1930' },
+    },
+  },
+  // The same year with its IB (A1) and no bokslut: the storno preview reads
+  // the original lines for the per-account change, writes nothing.
+  gnubok_correct_opening_balances: {
+    args: { lines: [{ account_number: '1930', amount: 1200 }, { account_number: '2099', amount: -1200 }] },
+    rows: {
+      fiscal_periods: {
+        ...FISCAL_YEAR_2026,
+        locked_at: null,
+        opening_balances_set: true,
+        opening_balance_entry_id: SOME_UUID,
+        opening_balance_entry: { voucher_series: 'A', voucher_number: 1 },
+      },
+      company_settings: { bookkeeping_locked_through: null },
+      chart_of_accounts: { account_number: '1930' },
+      journal_entry_lines: { journal_entry_id: SOME_UUID, account_number: '1930', debit_amount: 1000, credit_amount: 0, line_description: null, dimensions: null },
+    },
+    counts: { journal_entries: 0 },
+  },
+  // Peppol (wave 4): the previews validate with reads and never reach the
+  // (throwing) transport registered at the top. No registration yet, so
+  // registering is new.
+  gnubok_send_invoice_peppol: { rows: PEPPOL_ROWS },
+  gnubok_register_peppol_participant: { rows: PEPPOL_ROWS, empty: ['peppol_registrations'] },
+  gnubok_request_peppol_access: { rows: { ...PEPPOL_ROWS, peppol_access: { status: 'none' } } },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

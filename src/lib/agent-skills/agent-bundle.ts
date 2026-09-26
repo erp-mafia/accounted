@@ -99,14 +99,16 @@ function meta(row: AtomRow, source: KnowledgeMeta['source'] = 'default'): Knowle
 interface KnowledgeChoice { added: string[]; removed: Set<string> }
 
 async function loadKnowledgeChoices(supabase: SupabaseClient, companyId: string): Promise<Map<string, KnowledgeChoice>> {
-  const { data, error } = await supabase.from('company_agent_knowledge').select('agent_id, atom_id, included, created_at')
+  const { data, error } = await supabase.from('company_agent_knowledge').select('agent_id, atom_id, own_skill_id, included, created_at')
     .eq('company_id', companyId).order('created_at', { ascending: true })
   if (error) throw new Error(`Failed to load agent knowledge choices: ${error.message}`)
   const choices = new Map<string, KnowledgeChoice>()
-  for (const row of (data ?? []) as Array<{ agent_id: string; atom_id: string; included: boolean }>) {
+  for (const row of (data ?? []) as Array<{ agent_id: string; atom_id: string | null; own_skill_id: string | null; included: boolean }>) {
     const choice = choices.get(row.agent_id) ?? { added: [], removed: new Set<string>() }
-    if (row.included) choice.added.push(row.atom_id)
-    else choice.removed.add(row.atom_id)
+    // The company's own knowledge goes by `own/<id>`, as it does everywhere else.
+    const id = row.own_skill_id ? `own/${row.own_skill_id}` : row.atom_id!
+    if (row.included) choice.added.push(id)
+    else choice.removed.add(id)
     choices.set(row.agent_id, choice)
   }
   return choices
@@ -132,6 +134,22 @@ async function loadAtoms(supabase: SupabaseClient, ids: string[], withBody: bool
   if (error) throw new Error(`Failed to load agent knowledge: ${error.message}`)
   const rows = (data ?? []) as unknown as AtomRow[]
   return new Map(rows.filter((row) => row.is_active && row.mcp_exposed).map((row) => [row.id, row]))
+}
+
+/**
+ * The company's own knowledge items among `ids`, shaped as registry rows so
+ * they list and inline like packs. Only what a person added and has not
+ * withdrawn (ownSkill); anything else is simply not there.
+ */
+async function loadOwnKnowledge(supabase: SupabaseClient, companyId: string, ids: string[], withBody: boolean): Promise<Map<string, AtomRow>> {
+  const wanted = new Set(ids.filter((id) => id.startsWith('own/')))
+  if (wanted.size === 0) return new Map()
+  const rows = await loadCompanySkillRows(supabase, companyId)
+  return new Map(rows.flatMap((row): Array<[string, AtomRow]> => {
+    const skill = ownSkill(row)
+    if (!skill || skill.itemKind !== 'rules' || !wanted.has(skill.slug)) return []
+    return [[skill.slug, { id: skill.slug, tier: 'own', title: skill.name, description: skill.summary, version: null, reviewed_at: null, is_active: true, mcp_exposed: true, parent_atom_id: null, ...(withBody ? { body: skill.body } : {}) }]]
+  }))
 }
 
 async function loadProfileAtoms(supabase: SupabaseClient, companyId: string): Promise<string[]> {
@@ -201,8 +219,9 @@ export async function loadAgentsOverview(supabase: SupabaseClient, companyId: st
   const [profileIds, choices] = await Promise.all([loadProfileAtoms(supabase, companyId), loadKnowledgeChoices(supabase, companyId)])
   const chosen = [...choices.values()].flatMap((c) => c.added)
   const ids = [...new Set([...Object.values(AGENTS).flatMap((a) => [...a.knowledge, ...a.references]), ...profileIds, ...chosen])]
-  const [atoms, states, facts, agreements, remembered, documents, sections] = await Promise.all([
+  const [registryAtoms, ownAtoms, states, facts, agreements, remembered, documents, sections] = await Promise.all([
     loadAtoms(supabase, ids, false),
+    loadOwnKnowledge(supabase, companyId, ids, false),
     loadConnectionStates(supabase, companyId),
     supabase.from('company_facts').select('predicate').eq('company_id', companyId).eq('subject_kind', 'company').is('sys_to', null).neq('rank', 'deprecated').eq('status', 'confirmed').limit(500),
     supabase.from('agreements').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'active'),
@@ -211,6 +230,7 @@ export async function loadAgentsOverview(supabase: SupabaseClient, companyId: st
     // Every tagged section once; each agent keeps those in its areas below.
     loadIndustrySections(supabase, profileIds, AREAS, false),
   ])
+  const atoms = new Map([...registryAtoms, ...ownAtoms])
   const company = companyAtoms(atoms, profileIds)
   const livePacks = new Set(company.map((c) => c.id))
   const sectionsFor = (areas: readonly Area[]) => sections
@@ -258,7 +278,8 @@ export interface CompanyKnowledge {
   onboarding_summary: string | null
   facts: Array<{ label: string; value: string; valid_from: string | null }>
   agreements?: ArkivMap['agreements']
-  remembered: string[]
+  /** What agents were told (remember_fact), newest first, so a later fact can settle an earlier one. */
+  remembered: Array<{ text: string; saved_at: string | null }>
   documents: { total: number; look_up: string[] }
 }
 
@@ -286,7 +307,8 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
     // The map is best-effort: an archive that cannot be read never blocks the agent.
     buildArkivMap(supabase, companyId).catch(() => null),
     supabase.from('agent_profiles').select('profile_summary').eq('company_id', companyId).maybeSingle(),
-    supabase.from('agent_memory').select('content').eq('company_id', companyId).eq('is_active', true)
+    // A memory that a newer one replaced (superseded_by) never reaches the agent.
+    supabase.from('agent_memory').select('content, created_at').eq('company_id', companyId).eq('is_active', true).is('superseded_by', null)
       .order('relevance_score', { ascending: false, nullsFirst: false }).limit(REMEMBERED),
   ])
   const order = def.facts ? new Map(def.facts.map((f, i) => [f, i])) : null
@@ -300,9 +322,16 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
     onboarding_summary: profile.error ? null : profile.data?.profile_summary ?? null,
     facts,
     ...(def.agreements ? { agreements: map?.agreements ?? [] } : {}),
-    remembered: memory.error ? [] : ((memory.data ?? []) as Array<{ content: string }>).map((m) => m.content),
+    remembered: memory.error ? [] : newestFirst((memory.data ?? []) as Array<{ content: string; created_at: string | null }>),
     documents: { total: map?.documents.total ?? 0, look_up: map?.how_to ?? [] },
   }
+}
+
+/** The most relevant memories, dated and newest first: without dates two that disagree could not be told apart. */
+function newestFirst(rows: Array<{ content: string; created_at: string | null }>): CompanyKnowledge['remembered'] {
+  return rows
+    .map((m) => ({ text: m.content, saved_at: m.created_at ?? null }))
+    .sort((a, b) => (b.saved_at ?? '').localeCompare(a.saved_at ?? ''))
 }
 
 export { isAgentId } from './agents'
@@ -311,8 +340,21 @@ import { isAgentId } from './agents'
 /**
  * Knowledge bodies inlined per run, shared by the knowledge and then the
  * company's industry sections; what does not fit is listed to load on demand.
+ * 30K keeps a whole bundle well under a client's tool-output cap (an 80 KB
+ * Bokför transaktioner bundle was diverted to a file in Claude Code), while
+ * every flow's default packs still fit with room for the industry sections.
  */
-const INLINE_BUDGET = 60_000
+const INLINE_BUDGET = 30_000
+
+/**
+ * A whole industry or company-form pack a company added to a flow by hand
+ * (a 30K pack can be more than the rest of the bundle). The sections of the
+ * company's own packs that concern the flow are inlined as industry_sections;
+ * the whole pack is listed to load on demand.
+ */
+function isAddedPack(row: AtomRow, source: KnowledgeMeta['source']): boolean {
+  return source === 'added' && (row.tier === 'vertical' || row.tier === 'modifier')
+}
 
 function splitByBudget(rows: AtomRow[], list: Array<{ id: string; source: KnowledgeMeta['source'] }>) {
   const byId = new Map(rows.map((r) => [r.id, r]))
@@ -322,9 +364,11 @@ function splitByBudget(rows: AtomRow[], list: Array<{ id: string; source: Knowle
   for (const { id, source } of list) {
     const row = byId.get(id)
     if (!row?.body || row.parent_atom_id) continue
-    if (used + row.body.length <= INLINE_BUDGET) {
-      inline.push({ ...meta(row, source), body: row.body })
-      used += row.body.length
+    // The frontmatter routes the pack in Claude Code; the agent reads the text below it.
+    const body = stripFrontmatter(row.body)
+    if (!isAddedPack(row, source) && used + body.length <= INLINE_BUDGET) {
+      inline.push({ ...meta(row, source), body })
+      used += body.length
     } else overflow.push({ id: row.id, title: row.title ?? row.id })
   }
   return { inline, overflow, used }
@@ -367,15 +411,16 @@ export async function loadAgentBundle(supabase: SupabaseClient, companyId: strin
 
   const [profileIds, choices] = await Promise.all([loadProfileAtoms(supabase, companyId), loadKnowledgeChoices(supabase, companyId)])
   const list = effectiveKnowledge(curated?.knowledge ?? OWN_AGENT_KNOWLEDGE, choices.get(id))
-  const [bodies, metaRows, states, companyKnowledge, sectionRows] = await Promise.all([
+  const [bodies, ownBodies, metaRows, states, companyKnowledge, sectionRows] = await Promise.all([
     loadAtoms(supabase, list.map((k) => k.id), true),
+    loadOwnKnowledge(supabase, companyId, list.map((k) => k.id), true),
     loadAtoms(supabase, [...(curated?.references ?? []), ...profileIds], false),
     loadConnectionStates(supabase, companyId),
     loadCompanyKnowledge(supabase, companyId, { facts: curated?.facts ?? null, agreements: curated?.agreements ?? true }),
     // Own agents name no areas, so they get no sections (the query is skipped).
     loadIndustrySections(supabase, profileIds, curated?.areas ?? [], true),
   ])
-  const { inline, overflow, used } = splitByBudget([...bodies.values()], list)
+  const { inline, overflow, used } = splitByBudget([...bodies.values(), ...ownBodies.values()], list)
   const company = companyAtoms(metaRows, profileIds)
   const livePacks = new Set(company.map((c) => c.id))
   const sections = splitSections(sectionRows.filter((s) => livePacks.has(s.parent_atom_id!)), used)

@@ -548,7 +548,7 @@ export default function AttGoraSection({
                     )}
                     {counts.document_unclassified > 0 && (
                       <WorklistRow
-                        href="/arkiv"
+                        href="/arkiv/granska#typ"
                         icon={FileQuestion}
                         label={t('row_document_unclassified')}
                         count={counts.document_unclassified}

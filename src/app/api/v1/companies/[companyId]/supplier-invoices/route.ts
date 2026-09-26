@@ -21,7 +21,6 @@
  */
 
 import { z } from 'zod'
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { created, paginated } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import {
@@ -34,23 +33,8 @@ import { registerEndpoint, listEnvelope, dataEnvelope } from '@/lib/api/v1/regis
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
-import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
-import {
-  resolveSupplierInvoiceExchangeRate,
-  supplierInvoiceSekAmounts,
-} from '@/lib/currency/supplier-invoice-rate'
-import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
-import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
-import {
-  defaultVatRateForTreatment,
-  treatmentDeductsInputVat,
-} from '@/lib/vat/supplier-invoice-line-checks'
-import { reverseEntry } from '@/lib/bookkeeping/engine'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { eventBus } from '@/lib/events'
-import type { SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { createSupplierInvoice } from '@/lib/supplier-invoices/create'
 
 const SupplierInvoiceStatus = z.enum([
   'registered',
@@ -321,7 +305,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'Register a new supplier invoice.',
   description:
-    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
     'You\'re registering an incoming leverantörsfaktura. Use dry-run first to validate VAT calculations + period-lock state before committing.',
   doNotUseFor:
@@ -336,6 +320,10 @@ registerEndpoint({
     'exchange_rate is SEK per 1 unit of the invoice currency and must satisfy 0 < rate < 100000, the same bounds the supplier_invoices CHECK enforces. Out-of-range values return 400 VALIDATION_ERROR; passing an invoice total where a rate belongs is the usual cause.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). The registration JE lines are tagged accordingly. When the company has the dimension registry enabled, unknown or archived codes are rejected with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'Tjänstepension invoices (Avanza etc.): set items[].apply_slp=true on the 741x premium line and the registration JE also books särskild löneskatt (debit 7533 / credit 2514 at 24.26% of the line amount) beyond the payable: 2440 stays at the invoice total. apply_slp on a non-741x account returns 400 SI_CREATE_SLP_INVALID_ACCOUNT.',
+    'Underlag: upload the invoice PDF with POST /documents first and pass its id as document_id. The document is stored on the invoice and linked to the registration verifikat. A document that is missing, belongs to another company, or is already linked returns 400 SI_CREATE_INVALID_INPUT.',
+    'Paid privately (eget utlägg): set paid_with_private_funds=true. The invoice is registered as paid and one verifikat books the expense against the payer: the owner (2893 AB, 2018 EF; claimant_name names them) or an employee (employee_id, 2820). payment_date is the out-of-pocket date (defaults to invoice_date). inbox_item_id takes the underlag from an inbox item and is only accepted on this path. Not combinable with reverse charge or periodisering.',
+    'Periodisering: items[].accrual_period_start + accrual_period_end (and optionally accrual_balance_account, defaulting from the cost account) defer the cost over the period under faktureringsmetoden. Refused under kontantmetoden and with reverse charge.',
+    'A company that is not VAT-registered cannot book input VAT: a line with vat_rate or vat_amount above 0 returns 400 SI_CREATE_INVALID_INPUT, and an omitted vat_rate defaults to 0. items[].vat_amount overrides line_total × vat_rate (partial deduction, rounding on the supplier\'s side).',
   ],
   example: {
     request: {
@@ -370,90 +358,13 @@ registerEndpoint({
   response: { success: dataEnvelope(SupplierInvoiceCreated) },
 })
 
-interface ComputedItem {
-  sort_order: number
-  description: string
-  quantity: number
-  unit: string
-  unit_price: number
-  line_total: number
-  account_number: string
-  vat_code: string | null
-  vat_rate: number
-  vat_amount: number
-  reverse_charge_rate: number | null
-  apply_slp: boolean
-  dimensions: Record<string, string>
-}
-
 // Swedish VAT rates per ML 2 kap 1 § + Skatteverket's 2026 satser. Allow
 // 0 (export / undantag / reverse charge), 6 (livsmedel / kultur), 12 (food
 // service / hotel), 25 (default). A misstated rate flows straight into the
-// registration JE → momsdeklaration Ruta 48 + INK2R, so reject anything
-// else at the surface rather than silently book a wrong figure.
+// registration JE → momsdeklaration Ruta 48 + INK2R, so an API caller's rate
+// is checked here. The dashboard form takes any typed percentage, which is
+// why this stays a door rule and not a service rule.
 const ALLOWED_SV_VAT_RATES = new Set<number>([0, 0.06, 0.12, 0.25])
-
-function computeItemsAndTotals(
-  input: z.infer<typeof CreateSupplierInvoiceSchema>,
-  vatTreatment: string,
-):
-  | { ok: true; items: ComputedItem[]; subtotal: number; vatAmount: number; total: number }
-  | { ok: false; field: string; message: string; attempted_rate: number; index: number } {
-  const items: ComputedItem[] = []
-  for (let index = 0; index < input.items.length; index++) {
-    const item = input.items[index]
-    // An omitted rate follows the invoice's vat_treatment, not a blanket
-    // 25 % (issue #2553): exempt, export and reverse_charge carry no
-    // Swedish moms at all, and reduced_12 / reduced_6 are 12 % / 6 %.
-    const vatRate = item.vat_rate ?? defaultVatRateForTreatment(vatTreatment)
-    if (!ALLOWED_SV_VAT_RATES.has(vatRate)) {
-      return {
-        ok: false,
-        field: `items[${index}].vat_rate`,
-        message: 'vat_rate must be one of 0, 0.06, 0.12, or 0.25 (ML 2 kap 1 §).',
-        attempted_rate: vatRate,
-        index,
-      }
-    }
-    const lineTotal = item.amount != null
-      ? Math.round(item.amount * 100) / 100
-      : Math.round((item.quantity ?? 1) * (item.unit_price ?? 0) * 100) / 100
-    const vatAmount = Math.round(lineTotal * vatRate * 100) / 100
-    items.push({
-      sort_order: index,
-      description: item.description,
-      quantity: item.amount != null ? 1 : (item.quantity ?? 1),
-      unit: item.amount != null ? 'st' : (item.unit || 'st'),
-      unit_price: item.amount != null ? lineTotal : (item.unit_price ?? 0),
-      line_total: lineTotal,
-      account_number: item.account_number,
-      vat_code: item.vat_code || null,
-      vat_rate: vatRate,
-      vat_amount: vatAmount,
-      // Self-assessed RC rate (0.06/0.12/0.25) or null. For reverse charge the
-      // line vat_rate is 0 (validated below); the engine self-assesses at this
-      // rate, defaulting to 25% huvudregeln when null.
-      reverse_charge_rate: item.reverse_charge_rate ?? null,
-      // Särskild löneskatt (SLP): booking injects the self-balancing
-      // 7533/2514 pair for this line. Validated in the POST handler
-      // (741x accounts only, never together with periodisering).
-      apply_slp: item.apply_slp === true,
-      // Dimensions PR7: per-item bag, merged over the invoice's
-      // default_dimensions on the expense line at booking.
-      dimensions: item.dimensions ?? {},
-    })
-  }
-  const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
-  const vatAmount = items.reduce((sum, i) => sum + i.vat_amount, 0)
-  const total = Math.round((subtotal + vatAmount) * 100) / 100
-  return {
-    ok: true,
-    items,
-    subtotal: Math.round(subtotal * 100) / 100,
-    vatAmount: Math.round(vatAmount * 100) / 100,
-    total,
-  }
-}
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
   'supplier-invoices.create',
@@ -467,474 +378,67 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     const rawBodyResult = await readV1JsonBody(request, ctx)
     if (!rawBodyResult.ok) return rawBodyResult.response
-    const rawBody = rawBodyResult.body
 
-    const parsed = CreateSupplierInvoiceSchema.safeParse(rawBody)
+    const parsed = CreateSupplierInvoiceSchema.safeParse(rawBodyResult.body)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
     const body = parsed.data
 
-    // Särskild löneskatt (SLP): the 7533/2514 pair is only lawful on 741x
-    // pension premiums and cannot be combined with periodisering on the same
-    // item. Same guards as POST /api/supplier-invoices.
-    if (body.items.some((it) => it.apply_slp && !isSlpPensionAccount(it.account_number))) {
-      return v1ErrorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-    if (
-      body.items.some(
-        (it) =>
-          it.apply_slp &&
-          (it.accrual_period_start || it.accrual_period_end || it.accrual_balance_account),
-      )
-    ) {
-      return v1ErrorResponseFromCode('SI_CREATE_SLP_ACCRUAL', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Supplier lookup. Scoped to company; deny soft-archived.
-    const { data: supplier, error: supplierErr } = await ctx.supabase
-      .from('suppliers')
-      .select('id, name, supplier_type, archived_at')
-      .eq('company_id', ctx.companyId!)
-      .eq('id', body.supplier_id)
-      .maybeSingle()
-
-    if (supplierErr) {
-      return v1ErrorResponse(supplierErr, ctx.log, { requestId: ctx.requestId })
-    }
-    if (!supplier || supplier.archived_at) {
-      return v1ErrorResponseFromCode('SUPPLIER_NOT_FOUND', ctx.log, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Application-layer period-lock check on invoice_date. The DB trigger
-    // remains authoritative; this is for ergonomics so agents get a
-    // structured PERIOD_LOCKED instead of a generic 500.
-    const lockVerdict = await checkPeriodLock(ctx.supabase, ctx.companyId!, body.invoice_date)
-    if (lockVerdict.locked) {
-      return v1ErrorResponseFromCode('PERIOD_LOCKED', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          reason: lockVerdict.reason,
-          fiscal_period_id: lockVerdict.fiscal_period_id,
-        },
-      })
-    }
-
-    // Derive a sensible default for vat_treatment + reverse_charge from the
-    // supplier_type. EU/non-EU suppliers default to reverse-charge unless the
-    // caller explicitly overrides; Swedish suppliers default to standard 25%.
-    // The treatment is a booking contract, not metadata: the engine reads
-    // `invoice.reverse_charge` for the fiktiv-moms route and `vat_treatment`
-    // for whether any ingående moms may be deducted at all (issue #2553), and
-    // it decides the rate a line that omits vat_rate falls back to. Resolved
-    // here, before the items are computed, because computeItemsAndTotals
-    // needs it.
-    const foreignSupplier =
-      supplier.supplier_type === 'eu_business' || supplier.supplier_type === 'non_eu_business'
-    const reverseCharge = body.reverse_charge ?? foreignSupplier
-    // Force `vat_treatment` to track the resolved `reverse_charge` flag.
-    // Otherwise a caller could pass `vat_treatment: 'standard_25'` explicitly
-    // and have it co-exist with `reverse_charge=true` (driven by
-    // supplier_type), producing inconsistent metadata: the engine books via
-    // `reverse_charge` (Ruta 30 / 48) but a downstream momsdeklaration
-    // export reading `vat_treatment` would mis-classify. Normalisation here
-    // keeps the two fields in lock-step; an explicit override only sticks
-    // when it agrees with the boolean flag.
-    const vatTreatment = reverseCharge
-      ? 'reverse_charge'
-      : (body.vat_treatment ?? 'standard_25')
-
-    const totalsResult = computeItemsAndTotals(body, vatTreatment)
-    if (!totalsResult.ok) {
+    const badRate = body.items.findIndex(
+      (item) => item.vat_rate != null && !ALLOWED_SV_VAT_RATES.has(item.vat_rate),
+    )
+    if (badRate !== -1) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: {
-          issues: [{ field: totalsResult.field, message: totalsResult.message }],
-          attempted_rate: totalsResult.attempted_rate,
+          issues: [
+            {
+              field: `items[${badRate}].vat_rate`,
+              message: 'vat_rate must be one of 0, 0.06, 0.12, or 0.25 (ML 2 kap 1 §).',
+            },
+          ],
+          attempted_rate: body.items[badRate].vat_rate,
           allowed_rates: [0, 0.06, 0.12, 0.25],
         },
       })
     }
-    const { items, subtotal, vatAmount, total } = totalsResult
 
-    // Currency policy is shared with POST /api/supplier-invoices and the inbox
-    // convert route (lib/currency/supplier-invoice-rate.ts): a non-SEK invoice
-    // that arrives without a rate gets one fetched from Riksbanken for the
-    // invoice date, and if none can be had the create is refused rather than
-    // persisted with exchange_rate = NULL. Agents are the main caller here and
-    // the ones most likely to omit the field entirely; a NULL-rate row would
-    // only fail later, inside the booking path, with SI_FX_RATE_MISSING.
-    // Resolved before the arrival-number allocation and before the dry-run
-    // branch, so a dry run surfaces the same refusal a live commit would.
-    const fx = await resolveSupplierInvoiceExchangeRate(ctx.supabase, {
-      currency: body.currency,
-      invoiceDate: body.invoice_date,
-      suppliedRate: body.exchange_rate,
-    })
-    if (!fx.ok) {
-      return v1ErrorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, {
+    // Every rule lives in the shared service, so this door and the dashboard
+    // register an invoice the same way (lib/supplier-invoices/create.ts).
+    const result = await createSupplierInvoice(
+      { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: ctx.log },
+      body,
+      { dryRun: ctx.dryRun },
+    )
+    if (!result.ok) {
+      if (result.error) return v1ErrorResponse(result.error, ctx.log, { requestId: ctx.requestId })
+      return v1ErrorResponseFromCode(result.code, ctx.log, {
         requestId: ctx.requestId,
-        details: { currency: fx.currency, invoice_date: fx.invoiceDate },
+        details: result.details,
       })
     }
-    const exchangeRate = fx.rate.exchangeRate
-    const exchangeRateDate = fx.rate.exchangeRateDate
-    // SEK resolves to rate 1, so total_sek === total instead of NULL.
-    const {
-      subtotal_sek: subtotalSek,
-      vat_amount_sek: vatAmountSek,
-      total_sek: totalSek,
-    } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount, total })
-
-    // Cross-field constraint for reverse-charge invoices: the Swedish supplier
-    // does not charge VAT, the buyer self-assesses (ML 1 kap 2§ p.4b /
-    // 16 kap 6 § / 16 kap 13 §). All item vat_rates MUST be 0: otherwise the
-    // engine will mis-book ingående moms in Ruta 30 / 48 (BAS 2614 / 2645 /
-    // 2641). Reject up front rather than booking a phantom VAT line.
-    if (reverseCharge) {
-      const offending = items.findIndex((it) => it.vat_rate !== 0)
-      if (offending !== -1) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: `items[${offending}].vat_rate`,
-            message:
-              'reverse_charge invoices must have vat_rate=0 on every line item: the buyer self-assesses VAT.',
-            attempted_rate: items[offending].vat_rate,
-            reverse_charge: true,
-          },
-        })
-      }
+    if (result.dryRun) {
+      return dryRunPreview(result.preview, { requestId: ctx.requestId, log: ctx.log })
     }
 
-    // Same cross-field constraint for the treatments that carry no Swedish
-    // moms at all (issue #2553). An `exempt` purchase is undantagen (ML 10
-    // kap: bank, försäkring, hyra, vård, utbildning) and an `export` purchase
-    // carries no Swedish moms either, so neither has any debiterad ingående
-    // moms to deduct: the gross is the cost. A line claiming a rate or an
-    // amount contradicts the treatment, so refuse it here rather than store a
-    // figure the engine will refuse to book (2641 / Ruta 48).
-    if (!treatmentDeductsInputVat(vatTreatment)) {
-      const offending = items.findIndex((it) => it.vat_rate !== 0 || it.vat_amount !== 0)
-      if (offending !== -1) {
-        return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            field: `items[${offending}].vat_rate`,
-            message:
-              `vat_treatment '${vatTreatment}' invoices must have vat_rate=0 and vat_amount=0 on every line item: the supplier charges no Swedish VAT, so there is no input VAT to deduct.`,
-            attempted_rate: items[offending].vat_rate,
-            vat_treatment: vatTreatment,
-          },
-        })
-      }
-    }
-
-    // Dry-run preview: no arrival_number is allocated (would burn a sequence
-    // number on a non-commit).
-    if (ctx.dryRun) {
-      return dryRunPreview(
-        {
-          supplier_id: body.supplier_id,
-          supplier_invoice_number: body.supplier_invoice_number,
-          invoice_date: body.invoice_date,
-          due_date: body.due_date,
-          delivery_date: body.delivery_date ?? null,
-          status: 'registered',
-          currency: fx.rate.currency,
-          exchange_rate: exchangeRate,
-          exchange_rate_date: exchangeRateDate,
-          vat_treatment: vatTreatment,
-          reverse_charge: reverseCharge,
-          subtotal,
-          subtotal_sek: subtotalSek,
-          vat_amount: vatAmount,
-          vat_amount_sek: vatAmountSek,
-          total,
-          total_sek: totalSek,
-          remaining_amount: total,
-          is_credit_note: false,
-          notes: body.notes ?? null,
-          default_dimensions: body.default_dimensions ?? {},
-          items,
-          // Indicate what the live commit would do; the actual JE row is not
-          // staged in pending_operations because the SI write path is
-          // orchestrated here, not via the staging substrate.
-          would_create_registration_journal_entry: true,
-        },
-        { requestId: ctx.requestId, log: ctx.log },
-      )
-    }
-
-    // Allocate arrival_number (atomic, per-company sequence).
-    const { data: arrivalNum, error: arrivalErr } = await ctx.supabase
-      .rpc('get_next_arrival_number', { p_company_id: ctx.companyId! })
-
-    if (arrivalErr || arrivalNum == null) {
-      ctx.log.error('arrival_number allocation failed', (arrivalErr as Error) ?? new Error('null arrival_number'))
-      return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { step: 'arrival_number' },
-      })
-    }
-
-    // Insert SI row.
-    const { data: invoice, error: invoiceErr } = await ctx.supabase
-      .from('supplier_invoices')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        supplier_id: body.supplier_id,
-        arrival_number: arrivalNum,
-        supplier_invoice_number: body.supplier_invoice_number,
-        invoice_date: body.invoice_date,
-        due_date: body.due_date,
-        delivery_date: body.delivery_date ?? null,
-        status: 'registered',
-        currency: fx.rate.currency,
-        exchange_rate: exchangeRate,
-        exchange_rate_date: exchangeRateDate,
-        vat_treatment: vatTreatment,
-        reverse_charge: reverseCharge,
-        payment_reference: body.payment_reference ?? null,
-        subtotal,
-        subtotal_sek: subtotalSek,
-        vat_amount: vatAmount,
-        vat_amount_sek: vatAmountSek,
-        total,
-        total_sek: totalSek,
-        remaining_amount: total,
-        notes: body.notes ?? null,
-        // Dimensions PR7: invoice-level bag; generators apply it to every line.
-        default_dimensions: body.default_dimensions ?? {},
-      })
-      .select(SI_RESPONSE_COLUMNS)
-      .single()
-
-    if (invoiceErr || !invoice) {
-      const pgErr = invoiceErr as { code?: string; message?: string } | null
-      const isDuplicateNumber =
-        pgErr?.code === '23505' &&
-        (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
-      if (isDuplicateNumber) {
-        return v1ErrorResponseFromCode('SI_CREATE_DUPLICATE_INVOICE_NUMBER', ctx.log, {
-          requestId: ctx.requestId,
-          details: {
-            supplier_id: body.supplier_id,
-            supplier_invoice_number: body.supplier_invoice_number,
-          },
-        })
-      }
-      ctx.log.error('supplier invoice insert failed', invoiceErr, {
-        companyId: ctx.companyId,
-        pgCode: pgErr?.code,
-      })
-      return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { pg_code: pgErr?.code },
-      })
-    }
-
-    const invoiceId = (invoice as { id: string }).id
-
-    // Insert items; rollback the parent on failure.
-    const itemInserts = items.map((item) => ({ supplier_invoice_id: invoiceId, ...item }))
-    const { error: itemsErr } = await ctx.supabase
-      .from('supplier_invoice_items')
-      .insert(itemInserts)
-    if (itemsErr) {
-      // items_insert fires before any engine call: no JE could exist.
-      await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'items_insert', false)
-      return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-        requestId: ctx.requestId,
-        details: { step: 'items_insert', pg_code: (itemsErr as { code?: string }).code },
-      })
-    }
-
-    // Registration JE is only posted when the company books at issue:
-    // kontantmetoden books at payment, and defer_invoice_booking (#967)
-    // books via the explicit Bokför step. Same gate as POST /api/supplier-invoices.
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method, defer_invoice_booking')
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
-    const bookingSettings = settings as
-      | { accounting_method?: string | null; defer_invoice_booking?: boolean | null }
-      | null
-
-    let registrationJournalEntryId: string | null = null
-    if (booksInvoicesOnIssue(bookingSettings)) {
-      try {
-        const entry = await createSupplierInvoiceRegistrationEntry(
-          ctx.supabase,
-          ctx.companyId!,
-          ctx.userId,
-          invoice as unknown as SupplierInvoice,
-          itemInserts as unknown as SupplierInvoiceItem[],
-          supplier.supplier_type,
-          supplier.name,
-        )
-        if (entry) {
-          registrationJournalEntryId = entry.id
-          const { error: linkErr } = await ctx.supabase
-            .from('supplier_invoices')
-            .update({ registration_journal_entry_id: entry.id })
-            .eq('id', invoiceId)
-            .eq('company_id', ctx.companyId!)
-          if (linkErr) {
-            // The JE is posted but the SI denormalised back-reference failed
-            // to update. Storno the orphan JE first, then roll back the SI row
-            // to preserve strict-mode atomicity (otherwise a subsequent GET
-            // would show registration_journal_entry_id=null with a live JE on
-            // the books). reverseEntry takes the entry id directly.
-            ctx.log.error('SI register: JE link update failed, stornoing JE and rolling back row', linkErr, {
-              invoiceId,
-              companyId: ctx.companyId,
-              userId: ctx.userId,
-              journalEntryId: entry.id,
-            })
-            try {
-              await reverseEntry(ctx.supabase, ctx.companyId!, ctx.userId, entry.id, body.invoice_date)
-            } catch (revErr) {
-              ctx.log.error('JE storno failed after SI link-update error, manual reconciliation required', revErr as Error, {
-                invoiceId,
-                companyId: ctx.companyId,
-                userId: ctx.userId,
-                journalEntryId: entry.id,
-              })
-            }
-            // je_link_failed: the JE was posted (and we just stornoed it
-            // above). Soft-mark keeps the audit trail visible per BFL 5:5.
-            await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'je_link_failed', true)
-            return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-              requestId: ctx.requestId,
-              details: { step: 'registration_journal_entry_link' },
-            })
-          }
-        } else {
-          // Engine returned null (no open fiscal period). Strict-mode: roll back.
-          // Engine returned null before posting: no JE exists.
-          await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'no_fiscal_period', false)
-          return v1ErrorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', ctx.log, {
-            requestId: ctx.requestId,
-            details: { step: 'registration_journal_entry', invoice_date: body.invoice_date },
-          })
-        }
-      } catch (err) {
-        // Engine threw: conservatively assume the JE may have committed
-        // before the throw (createJournalEntry is the atomic write inside
-        // the engine; a throw after that point would still leave a posted
-        // JE). Soft-mark to preserve any half-committed audit trail.
-        await rollbackSupplierInvoice(ctx.supabase, invoiceId, ctx.companyId!, ctx.log, 'registration_journal_entry', true)
-        if (isBookkeepingError(err)) {
-          return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
-        }
-        ctx.log.error('supplier-invoice registration JE creation failed', err as Error, {
-          invoiceId,
-          companyId: ctx.companyId,
-        })
-        return v1ErrorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-          requestId: ctx.requestId,
-          details: { step: 'registration_journal_entry' },
-        })
-      }
-    }
-
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.registered',
-        payload: {
-          supplierInvoice: invoice as unknown as SupplierInvoice,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-        },
-      })
-    } catch (err) {
-      ctx.log.warn('supplier_invoice.registered emit failed', err as Error)
-    }
-
-    // Refetch with the registration_journal_entry_id populated and items.
+    // Refetch with the response projection and the items.
     const { data: complete } = await ctx.supabase
       .from('supplier_invoices')
       .select(`${SI_RESPONSE_COLUMNS}, items:supplier_invoice_items(${SI_ITEMS_RESPONSE_COLUMNS})`)
       .eq('company_id', ctx.companyId!)
-      .eq('id', invoiceId)
+      .eq('id', result.invoice.id)
       .maybeSingle()
 
     return created(
-      complete ?? { ...invoice, items: itemInserts, registration_journal_entry_id: registrationJournalEntryId },
-      { requestId: ctx.requestId },
+      complete ?? {
+        ...result.invoice,
+        items: result.items,
+        registration_journal_entry_id: result.registrationJournalEntryId,
+      },
+      {
+        requestId: ctx.requestId,
+        ...(result.warnings.length > 0 ? { warnings: result.warnings } : {}),
+      },
     )
   },
   { requireIdempotencyKey: true },
 )
-
-async function rollbackSupplierInvoice(
-  supabase: SupabaseClient,
-  invoiceId: string,
-  companyId: string,
-  log: import('@/lib/logger').Logger,
-  reason: string,
-  journalEntryPosted: boolean,
-) {
-  // BFL 5 kap 5 § applies once a verifikation has been committed to the
-  // books. A failed insert that never produced a JE (items_insert error,
-  // engine returning null because no fiscal period covers the date) is a
-  // failed insertion, not a bokföringspost: a row with status='reversed'
-  // and registration_journal_entry_id=null would be a dangling
-  // räkenskapsinformation entry harder to audit than a clean removal.
-  //
-  // So: soft-mark `reversed` ONLY when a JE existed at the point of
-  // failure. Pre-JE failures hard-delete (with explicit items wipe in case
-  // the items insert partially succeeded: which Postgres makes atomic for
-  // a single INSERT, but the defense is cheap).
-  if (!journalEntryPosted) {
-    await supabase.from('supplier_invoice_items').delete().eq('supplier_invoice_id', invoiceId)
-    const { error: parentErr } = await supabase
-      .from('supplier_invoices')
-      .delete()
-      .eq('id', invoiceId)
-      .eq('company_id', companyId)
-    if (parentErr) {
-      log.error('supplier-invoice hard-rollback failed, orphan row', parentErr, {
-        invoiceId,
-        companyId,
-        rollbackReason: reason,
-      })
-    } else {
-      log.warn('supplier-invoice hard-rolled back (no JE existed)', {
-        invoiceId,
-        companyId,
-        rollbackReason: reason,
-      })
-    }
-    return
-  }
-
-  // Post-JE soft-mark. Status='reversed' is the same flag the dashboard
-  // uses for "Ångra kreditering"; the row + items remain queryable, the
-  // already-stornoed verifikation pair stays visible on the JE side.
-  const { error: updateErr } = await supabase
-    .from('supplier_invoices')
-    .update({ status: 'reversed', reversed_at: new Date().toISOString() })
-    .eq('id', invoiceId)
-    .eq('company_id', companyId)
-  if (updateErr) {
-    log.error('supplier-invoice soft-rollback failed, manual reconciliation required', updateErr, {
-      invoiceId,
-      companyId,
-      rollbackReason: reason,
-    })
-  } else {
-    log.warn('supplier-invoice soft-rolled back (status=reversed)', {
-      invoiceId,
-      companyId,
-      rollbackReason: reason,
-    })
-  }
-}

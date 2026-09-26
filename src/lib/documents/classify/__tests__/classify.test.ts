@@ -17,6 +17,8 @@ interface Scripted {
   pages?: Row[]
   /** Twins the duplicate check finds for the document. */
   duplicates?: Row[]
+  /** What the period lock says to an update of the document row, when it refuses it. */
+  rowRefusal?: string
 }
 type Write = { table: string; op: 'insert' | 'update'; payload: Row; filters: Row }
 
@@ -46,6 +48,8 @@ function makeSupabase(script: Scripted) {
     api.insert = (payload: Row) => { writes.push({ table, op: 'insert', payload, filters: {} }); return Promise.resolve({ error: null }) }
     // An update chain ends on its last .eq(): resolve when awaited.
     api.then = (resolve: (v: unknown) => void) => {
+      // The period lock refuses every update of a document row in a closed period: nothing is written.
+      if (state.op === 'update' && table === 'document_attachments' && script.rowRefusal) return resolve({ error: { message: script.rowRefusal } })
       if (state.op === 'update') writes.push({ table, op: 'update', payload: state.payload!, filters: state.filters })
       resolve({ error: null })
     }
@@ -184,6 +188,13 @@ describe('classifyDocument', () => {
     expect(system).toMatch(/decision\.skatteverket: .*nothing to pay/)
   })
 
+  it('keeps what a document is apart from who it is addressed to', () => {
+    // Prod 2026-09-26: 1 435 documents typed other, most of them receipts addressed to the owner personally.
+    const system = buildClassifySystem(company)
+    expect(system).toMatch(/addressed to a person[\s\S]*is still a receipt or invoice/)
+    expect(system).toMatch(/never because of who it is addressed to/)
+  })
+
   it('tells the model that a bill for an agreement is not the agreement', () => {
     // Prod 2026-09-21: a Bitwarden subscription invoice was typed agreement.subscription and became an agreement with obligations and a deadline.
     const system = buildClassifySystem({ name: 'Arcim Technology AB', orgNumber: '559538-6219' })
@@ -201,5 +212,16 @@ describe('recordHumanClassification', () => {
     expect(out).toMatchObject({ status: 'classified', admission: 'admitted' })
     expect(writes[1].payload).toMatchObject({ decided_by: 'human', decided_by_user_id: 'user-1', confidence: 1, doc_type: 'receipt', summary: 'Kvitto från restaurang.', relevance_reason: 'Lunch med kund' })
     expect(writes[2].payload).toMatchObject({ admission_state: 'admitted', admission_reason: 'Lunch med kund' })
+  })
+
+  it('keeps the type on the classification when the period lock refuses the document row', async () => {
+    const { supabase, writes } = makeSupabase({ document: { ...doc, admission_state: 'admitted' }, current: null, rowRefusal: 'Cannot attach documents to entries in a locked/closed fiscal period' })
+    const out = await recordHumanClassification(supabase, 'doc-1', 'user-1', { docType: 'receipt', relevance: 'relevant' })
+    expect(out).toMatchObject({ status: 'classified', admission: 'admitted' })
+    expect(writes.map((w) => [w.table, w.op])).toEqual([
+      ['document_classifications', 'update'],
+      ['document_classifications', 'insert'],
+    ])
+    expect(writes[1].payload).toMatchObject({ doc_type: 'receipt', decided_by: 'human', is_current: true })
   })
 })

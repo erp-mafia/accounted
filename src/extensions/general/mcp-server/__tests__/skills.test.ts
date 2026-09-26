@@ -197,9 +197,9 @@ describe('Skills registry', () => {
       // Legal: the v1 :send/:mark-sent descriptions say the agent verb is missing, not the capability.
       expect('a v1 or MCP Peppol send action is not yet available').not.toMatch(pattern)
     }
-    // No MCP tool or v1 action sends via Peppol yet: no text may hand an agent a Peppol send verb.
-    expect(allBodies).not.toMatch(/gnubok_send_invoice[^.\n]*Peppol/i)
-    expect(allBodies).not.toMatch(/gnubok_send_peppol|gnubok_peppol_send/i)
+    // The agent verb exists since the operation registry's wave 4: the texts name the right tool
+    // (gnubok_send_invoice_peppol), never an invented one.
+    expect(allBodies).not.toMatch(/gnubok_send_peppol\b|gnubok_peppol_send/i)
 
     const truthfulSkills = ['invoicing-rules', 'customer-onboarding'].map((slug) => {
       const skill = skills.find((candidate) => candidate.slug === slug)
@@ -228,8 +228,8 @@ describe('Skills registry', () => {
       expect(text).toMatch(/no reverse charge/i)
       expect(text).toMatch(/no ROT\/RUT deductions/i)
       expect(text).toMatch(/Er referens/)
-      // No agent-callable send verb yet.
-      expect(text).toMatch(/no MCP tool[^.\n]*Peppol|MCP tool[^.\n]*not (?:yet )?available/i)
+      // The agent-callable send verb, staged for a person to approve.
+      expect(text).toContain('gnubok_send_invoice_peppol')
       // A successful dashboard send issues the invoice; mark-sent is only the issuance-failure recovery.
       expect(text).toMatch(/successful dashboard Peppol send issues the invoice itself/i)
       expect(text).toMatch(/could not be marked as sent/i)
@@ -264,7 +264,7 @@ describe('Skills registry', () => {
       }
       // The pre-#546 framing listed Peppol as an external channel next to postal mail.
       expect(text).not.toMatch(/\(Peppol, postal/)
-      expect(text).toMatch(/a v1 or MCP Peppol send action is not yet available/)
+      expect(text).toMatch(/send-peppol/)
       expect(text).toMatch(/per-company access grant/)
       expect(text).toContain('Inställningar > Fakturering (Settings > Invoicing)')
       expect(text).toMatch(/aktiebolag senders, standard invoices only/)
@@ -420,6 +420,23 @@ describe('gnubok_list_skills tool', () => {
     }
     expect(result.count).toBe(1)
     expect(result.skills[0].slug).toBe('vertical/konsult-it')
+  })
+
+  it('says whether each own item is a workflow, knowledge or an analysis, and marks Accounted analyses', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const own = (n: number, kind?: 'workflow' | 'rules' | 'analysis') => ({
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`, name: `Own ${n}`, description: 'd', body: 'Steps.', share_status: 'private',
+      atom_id: null, company_id: 'company-1', team_id: null, ...(kind ? { kind } : {}),
+    })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, null, [own(1, 'workflow'), own(2, 'rules'), own(3, 'analysis'), own(4)])
+    const result = (await tool.execute({ include_all: true, __keyScopes: ['agent:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; tier: string; item_kind?: string }>
+    }
+    const kindOf = (slug: string) => result.skills.find((s) => s.slug === slug)?.item_kind
+    expect([1, 2, 3, 4].map((n) => kindOf(`own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`))).toEqual(['workflow', 'rules', 'analysis', 'workflow'])
+    expect(kindOf('analys-kassaprognos')).toBe('analysis')
+    // A curated workflow has no kind to tell apart, so it carries none.
+    expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('item_kind')
   })
 })
 

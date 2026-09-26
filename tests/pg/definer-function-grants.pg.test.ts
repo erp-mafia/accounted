@@ -50,6 +50,9 @@ const ANON_CALLABLE_ALLOWLIST: string[] = []
 const SERVICE_ROLE_ONLY = [
   'sync_team_to_company(uuid,uuid)',
   'claim_due_webhook_deliveries(integer,timestamp with time zone)',
+  // The actor id is trusted input from the v1/MCP service-role doors
+  // (20260926020100): no session may name an actor.
+  'stage_peppol_delivery_as_actor(uuid,uuid,uuid,text,text,text,text,text,text,text)',
 ]
 
 // Called on the user's session client by the app, so authenticated keeps

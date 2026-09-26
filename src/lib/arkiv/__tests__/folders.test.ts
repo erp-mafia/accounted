@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { FOLDER_ORDER, folderFor, groupByFolder, openByDefault } from '../folders'
+import { FOLDER_ORDER, folderFor, folderQuery, foldersFromCounts, openByDefault } from '../folders'
+import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
 
 describe('folderFor', () => {
-  it('puts every type on one shelf and the untyped last', () => {
+  it('puts every type on one shelf, a booked document with no type on its own, and the untyped last', () => {
     expect(folderFor('agreement.loan')).toBe('agreements')
     expect(folderFor('registration.bolagsverket')).toBe('authority')
     expect(folderFor('filing.bolagsverket')).toBe('authority')
@@ -19,28 +20,9 @@ describe('folderFor', () => {
     expect(folderFor('other')).toBe('other')
     expect(folderFor(null)).toBe('untyped')
     expect(folderFor('')).toBe('untyped')
-  })
-})
-
-describe('groupByFolder', () => {
-  it('keeps the folder order, leaves empty folders out, and counts the types inside a folder', () => {
-    const rows = [
-      { id: 1, doc_type: 'receipt' },
-      { id: 2, doc_type: null },
-      { id: 3, doc_type: 'filing.bolagsverket' },
-      { id: 4, doc_type: 'agreement.loan' },
-      { id: 5, doc_type: 'filing.bolagsverket' },
-      { id: 6, doc_type: 'decision.skatteverket' },
-    ]
-    const folders = groupByFolder(rows)
-    expect(folders.map((f) => f.key)).toEqual(['agreements', 'authority', 'receipts', 'untyped'])
-    expect(folders[1].rows.map((r) => r.id)).toEqual([3, 5, 6])
-    expect(folders[1].types).toEqual([
-      { doc_type: 'filing.bolagsverket', count: 2 },
-      { doc_type: 'decision.skatteverket', count: 1 },
-    ])
-    expect(folders[3].types).toEqual([])
-    expect(FOLDER_ORDER.indexOf('untyped')).toBe(FOLDER_ORDER.length - 1)
+    expect(folderFor(null, true)).toBe('booked')
+    expect(folderFor('receipt', true)).toBe('receipts')
+    expect(FOLDER_ORDER.slice(-2)).toEqual(['booked', 'untyped'])
   })
 })
 
@@ -52,3 +34,41 @@ describe('openByDefault', () => {
     expect(openByDefault('receipts', 174)).toBe(false)
   })
 })
+
+describe('folderQuery', () => {
+  it('asks every folder for exactly its own types, the other folder for everything no folder names, the untyped for no type', () => {
+    expect(folderQuery('receipts')).toEqual({ mode: 'in', types: ['receipt'] })
+    expect(folderQuery('supplier_invoices').types).toEqual(expect.arrayContaining(['supplier_invoice', 'credit_note']))
+    expect(folderQuery('untyped')).toEqual({ mode: 'untyped', types: null })
+    expect(folderQuery('booked')).toEqual({ mode: 'booked', types: null })
+    const other = folderQuery('other')
+    expect(other.mode).toBe('not_in')
+    // Every known type lands in exactly one folder: the other folder excludes all the rest and nothing of its own.
+    for (const t of DOC_TYPES) expect(other.types?.includes(t)).toBe(folderFor(t) !== 'other')
+  })
+})
+
+describe('foldersFromCounts', () => {
+  it('sums the database counts into folders in order, the mix most common first, empty folders left out', () => {
+    const folders = foldersFromCounts([
+      { doc_type: 'credit_note', n: 2 },
+      { doc_type: 'supplier_invoice', n: 30 },
+      { doc_type: 'supplier_invoice', booked: true, n: 4 },
+      { doc_type: null, n: 5 },
+      { doc_type: null, booked: true, n: 2170 },
+      { doc_type: 'receipt', n: 0 },
+    ])
+    expect(folders.map((f) => [f.key, f.count])).toEqual([
+      ['supplier_invoices', 36],
+      ['booked', 2170],
+      ['untyped', 5],
+    ])
+    expect(folders[0].types).toEqual([
+      { doc_type: 'supplier_invoice', count: 34 },
+      { doc_type: 'credit_note', count: 2 },
+    ])
+    expect(folders[1].types).toEqual([])
+    expect(folders[2].types).toEqual([])
+  })
+})
+

@@ -63,26 +63,15 @@ import {
   findCompanyForRecipientDomains,
   applyDomainStatusFromWebhook,
 } from './lib/custom-domains'
-import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
-import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
-import { createSchedulesForSupplierInvoice } from '@/lib/bookkeeping/accruals/from-invoices'
-import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { createJournalEntry } from '@/lib/bookkeeping/engine'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import {
-  resolveSupplierInvoiceExchangeRate,
-  supplierInvoiceSekAmounts,
-} from '@/lib/currency/supplier-invoice-rate'
 import { roundOre } from '@/lib/money'
-import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
 import { CreateSupplierInvoiceSchema, BookInboxItemDirectlySchema, BulkBookInboxSchema } from '@/lib/api/schemas'
 import { bulkBookMatchedInboxItems } from '@/lib/transactions/categorize-core'
 import {
-  completeInboxItemsForBookedTransaction,
   resolveBookedJournalEntryIds,
   resolveUnderlagAnchoring,
   type UnderlagAnchoring,
@@ -104,12 +93,22 @@ import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { Transaction, EntityType } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-without-underlag'
+import { sessionFailureResponse } from '@/lib/operations/session'
+import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import type { OperationContext } from '@/lib/operations/types'
+import {
+  deleteInboxItem,
+  unmatchInboxItemTransaction,
+  updateInboxItemFields,
+  UpdateInboxItemFieldsSchema,
+  type UpdateInboxItemFieldsInput,
+} from '@/lib/documents/inbox-item-actions'
+import { convertInboxItemToSupplierInvoice } from '@/lib/documents/inbox-convert'
 import { lookupPortal } from '@/lib/receipt-hunt/portal-directory'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { checkInboxUploadRateLimit } from '@/lib/rate-limits/inbox'
-import { backfillSupplierPaymentDetails, type SupplierPaymentDetails } from '@/lib/supplier-invoices/payment-details-backfill'
 import { simpleParser } from 'mailparser'
-import type { InboxChannelContext, InvoiceExtractionResult, InvoiceInboxItem, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 
 const MAX_ATTACHMENTS_PER_EMAIL = 20
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
@@ -126,56 +125,13 @@ const INBOUND_HISTORY_LIMIT = 200
 // arrived and was not processed, so no company is left without a trace.
 const MAX_INBOUND_TARGETS_PER_EMAIL = 5
 
-// Partial-update schema for the /items/:id/fields PATCH route. Only the
-// scalar fields the UI exposes for inline editing: line items and
-// vatBreakdown stay AI-managed for now and are preserved by the merge.
-const NullableString = z.string().trim().max(500).nullable()
-const NullableDate = z
-  .string()
-  .regex(
-    /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/,
-    'Invalid date: expected YYYY-MM-DD'
-  )
-  // Catch impossible calendar dates like 2026-02-30 that pass the regex.
-  .refine((v) => !Number.isNaN(Date.parse(v)), 'Invalid calendar date')
-  .nullable()
-const NullableNumber = z.number().nullable()
+// The partial-update schema for PATCH /items/:id/fields lives with its rules
+// in lib/documents/inbox-item-actions.ts (UpdateInboxItemFieldsSchema).
 
-const UpdateExtractedDataSchema = z.object({
-  supplier: z
-    .object({
-      name: NullableString,
-      orgNumber: NullableString,
-      vatNumber: NullableString,
-      address: NullableString,
-      bankgiro: NullableString,
-      plusgiro: NullableString,
-    })
-    .partial()
-    .optional(),
-  invoice: z
-    .object({
-      invoiceNumber: NullableString,
-      invoiceDate: NullableDate,
-      dueDate: NullableDate,
-      paymentReference: NullableString,
-      // ISO 4217: three uppercase letters. We accept the user's edit only
-      // if it looks like a real currency code; loose strings would otherwise
-      // flow into the supplier-invoice-creation step and produce a faktura
-      // with an invalid currency (cf. ML 17 kap 24§ p.9).
-      currency: z.string().regex(/^[A-Z]{3}$/, 'Currency must be a 3-letter ISO 4217 code'),
-    })
-    .partial()
-    .optional(),
-  totals: z
-    .object({
-      subtotal: NullableNumber,
-      vatAmount: NullableNumber,
-      total: NullableNumber,
-    })
-    .partial()
-    .optional(),
-})
+/** The operation context the shared inbox services take, from the extension's. */
+function operationContext(ctx: ExtensionContext): OperationContext {
+  return { supabase: ctx.supabase, companyId: ctx.companyId, userId: ctx.userId, log: extensionLog }
+}
 
 // Claim body for POST /inbox/domain. Length-capped only: real validation
 // (punycode, hostname shape, blocklist) lives in normalizeInboundDomain /
@@ -864,6 +820,9 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Update extracted_data fields (manual user edits) ────
+    // Rules (merge, supplier-invoice lock, optimistic concurrency) live in
+    // lib/documents/inbox-item-actions.ts, shared with the v1 operation
+    // inbox-items.update-extracted-data.
     {
       method: 'PATCH',
       path: '/items/:id/fields',
@@ -874,10 +833,10 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        let body: z.infer<typeof UpdateExtractedDataSchema>
+        let body: UpdateInboxItemFieldsInput
         try {
           const json = await request.json()
-          body = UpdateExtractedDataSchema.parse(json)
+          body = UpdateInboxItemFieldsSchema.parse(json)
         } catch (err) {
           return NextResponse.json(
             { error: err instanceof Error ? err.message : 'Invalid request body' },
@@ -885,77 +844,10 @@ export const invoiceInboxExtension: Extension = {
           )
         }
 
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, extracted_data, created_supplier_invoice_id, updated_at')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json(
-            { error: 'Posten är redan kopplad till en leverantörsfaktura och kan inte ändras.' },
-            { status: 409 }
-          )
-        }
-
-        // Merge user edits into existing extracted_data so we don't lose
-        // line items, vatBreakdown, or AI-confidence on partial updates.
-        //
-        // The spread of `current` is load-bearing and must come first. Naming
-        // the surviving keys one by one, as this did, silently destroyed every
-        // field the list happened not to mention: documentKind,
-        // merchantCategory, legibility, purchaseTime, payment and
-        // suggestedTemplateId were all wiped the first time somebody corrected
-        // a single field by hand. The classification is not recoverable
-        // afterwards without re-running extraction, and nothing surfaced the
-        // loss. Spreading means anything added to InvoiceExtractionResult later
-        // survives by default instead of waiting to be noticed missing.
-        const current = (item.extracted_data ?? {}) as InvoiceExtractionResult
-        const merged: InvoiceExtractionResult = {
-          ...current,
-          supplier: { ...current.supplier, ...body.supplier },
-          invoice: { ...current.invoice, ...body.invoice },
-          totals: { ...current.totals, ...body.totals },
-          lineItems: current.lineItems ?? [],
-          vatBreakdown: current.vatBreakdown ?? [],
-          confidence: current.confidence ?? 0,
-        }
-        // A human touching TOTALT settles it: the value stops being a
-        // promoted prominent amount (totalSource 'prominent', fallback-grade
-        // in matching) and becomes a user-verified total at full weight.
-        if (body.totals && 'total' in body.totals) {
-          merged.totalSource = null
-        }
-
-        // Optimistic concurrency on the row's trigger-maintained updated_at:
-        // this handler is read-merge-write over the whole jsonb blob, so a
-        // write racing another autosave would silently restore the loser's
-        // stale copy of every field it did not touch: including a
-        // totalSource: 'prominent' stamp a concurrent TOTALT edit had just
-        // cleared. Zero rows updated means the row moved under us; the client
-        // gets a 409 and its next debounced save re-reads and re-applies.
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ extracted_data: merged as unknown as Record<string, unknown> })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .eq('updated_at', (item as { updated_at: string }).updated_at)
-          .select('id, extracted_data')
-          .maybeSingle()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-        if (!updated) {
-          return NextResponse.json(
-            { error: 'Posten ändrades samtidigt av någon annan. Försök igen.' },
-            { status: 409 }
-          )
-        }
-
-        return NextResponse.json({ data: updated })
+        const outcome = await updateInboxItemFields(operationContext(ctx), id, body)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: outcome.data })
       },
     },
 
@@ -1247,6 +1139,7 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Match a supplier to an inbox item ───────────────────
+    // Rules in lib/documents/inbox-match.ts (v1: inbox-items.match-supplier).
     {
       method: 'POST',
       path: '/items/:id/match-supplier',
@@ -1267,36 +1160,18 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'supplier_id required' }, { status: 400 })
         }
 
-        // Confirm supplier exists in this company before linking.
-        const { data: supplier } = await ctx.supabase
-          .from('suppliers')
-          .select('id')
-          .eq('id', body.supplier_id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-        if (!supplier) {
-          return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
-        }
-
-        const { error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ matched_supplier_id: body.supplier_id })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-        return NextResponse.json({ data: { id, matched_supplier_id: body.supplier_id } })
+        const outcome = await matchInboxItemSupplier(operationContext(ctx), id, body.supplier_id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: outcome.data })
       },
     },
 
     // ── Match a bank transaction to an inbox item ──────────
     // Sets invoice_inbox_items.matched_transaction_id. Used by the
     // TransactionMatchPicker dialog after the user picks a candidate from
-    // the confidence-scored list. The transaction.categorization agent
-    // intent already reads this column in its capture() so the agent will
-    // see the inbox metadata as underlag on its next invocation.
+    // the confidence-scored list. Rules in lib/documents/inbox-match.ts
+    // (v1: inbox-items.match-transaction).
     {
       method: 'POST',
       path: '/items/:id/match-transaction',
@@ -1317,77 +1192,16 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'transaction_id required' }, { status: 400 })
         }
 
-        // Confirm transaction belongs to this company before linking. RLS
-        // would also catch it on the update, but failing fast keeps the
-        // error specific. Also fetch the existing document_id so we can
-        // decide whether to backfill it from the inbox doc below.
-        const { data: tx } = await ctx.supabase
-          .from('transactions')
-          .select('id, document_id')
-          .eq('id', body.transaction_id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-        if (!tx) {
-          return NextResponse.json({ error: 'Transaction not found' }, { status: 404 })
-        }
-
-        // Fetch the inbox item's document_id so we can mirror it to
-        // transactions.document_id below: the TransactionInboxCard reads
-        // that column to decide whether to show the paperclip/file-check
-        // indicators on the /transactions list. Without this, a row that
-        // has a matched inbox item still appears doc-less in the UI.
-        const { data: inboxItem } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ matched_transaction_id: body.transaction_id })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .select('id, matched_transaction_id')
-          .single()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // Mirror the inbox document onto the transaction so the list view
-        // reflects "underlag bifogat" immediately. Only when the tx has
-        // no other doc already (we never overwrite an existing link).
-        if (inboxItem?.document_id && !tx.document_id) {
-          const { error: txUpdateError } = await ctx.supabase
-            .from('transactions')
-            .update({ document_id: inboxItem.document_id })
-            .eq('id', body.transaction_id)
-            .eq('company_id', ctx.companyId)
-            .is('document_id', null)
-          if (txUpdateError) {
-            // Non-fatal: the match itself succeeded; the UI indicator just
-            // won't flip until next page refresh. Log but don't roll back.
-            console.error('[invoice-inbox/match-transaction] tx.document_id backfill failed:', txUpdateError)
-          }
-        }
-
-        // The matched transaction may already be booked (directly or via a
-        // bulk-book samlingsverifikat): complete the item against the
-        // anchoring verifikat (underlag link + consumed stamp) so matching
-        // to a settled purchase resolves the item instead of stranding it
-        // as "linked". Best-effort, logged inside.
-        await completeInboxItemsForBookedTransaction(
-          ctx.supabase,
-          ctx.companyId,
-          body.transaction_id,
-        )
-
-        return NextResponse.json({ data: updated })
+        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: outcome.data })
       },
     },
 
     // ── Clear matched_transaction_id (user mistake / re-match) ────
+    // Rules in lib/documents/inbox-item-actions.ts (v1:
+    // inbox-items.unmatch-transaction).
     {
       method: 'POST',
       path: '/items/:id/unmatch-transaction',
@@ -1398,44 +1212,10 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        // Capture the current match before clearing so we can mirror the
-        // unmatch onto transactions.document_id below.
-        const { data: existing } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, document_id, matched_transaction_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        const { data: updated, error: updateError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ matched_transaction_id: null })
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .select('id, matched_transaction_id')
-          .single()
-
-        if (updateError) {
-          return NextResponse.json({ error: updateError.message }, { status: 500 })
-        }
-
-        // Clear the mirrored tx.document_id only when it currently points
-        // at the same doc this inbox item brought in. Guards against
-        // clobbering a doc that came from another source (paperclip
-        // upload, SIE import, etc.).
-        if (existing?.matched_transaction_id && existing.document_id) {
-          const { error: txUpdateError } = await ctx.supabase
-            .from('transactions')
-            .update({ document_id: null })
-            .eq('id', existing.matched_transaction_id)
-            .eq('company_id', ctx.companyId)
-            .eq('document_id', existing.document_id)
-          if (txUpdateError) {
-            console.error('[invoice-inbox/unmatch-transaction] tx.document_id clear failed:', txUpdateError)
-          }
-        }
-
-        return NextResponse.json({ data: updated })
+        const outcome = await unmatchInboxItemTransaction(operationContext(ctx), id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+        return NextResponse.json({ data: { id: outcome.data.id, matched_transaction_id: null } })
       },
     },
 
@@ -2652,6 +2432,7 @@ export const invoiceInboxExtension: Extension = {
     },
 
     // ── Delete inbox item ──────────────────────────────────
+    // Rules in lib/documents/inbox-item-actions.ts (v1: inbox-items.delete).
     {
       method: 'DELETE',
       path: '/items/:id',
@@ -2662,39 +2443,16 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        const { data: item } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('id, created_supplier_invoice_id, created_journal_entry_id')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .maybeSingle()
-
-        if (!item) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json(
-            { error: 'Posten är kopplad till en leverantörsfaktura och kan inte tas bort.' },
-            { status: 409 }
-          )
-        }
-        if (item.created_journal_entry_id) {
-          return NextResponse.json(
-            { error: 'Posten är bokförd och kan inte tas bort.' },
-            { status: 409 }
-          )
-        }
-
-        const { error } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .delete()
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-
-        if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+        const outcome = await deleteInboxItem(operationContext(ctx), id)
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: { id, deleted: true } })
       },
     },
 
     // ── Convert inbox item to supplier invoice ─────────────
+    // Rules in lib/documents/inbox-convert.ts, shared with the v1 operation
+    // inbox-items.convert-to-supplier-invoice.
     {
       method: 'POST',
       path: '/items/:id/convert',
@@ -2705,18 +2463,6 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        const { data: item, error: fetchError } = await ctx.supabase
-          .from('invoice_inbox_items')
-          .select('*')
-          .eq('id', id)
-          .eq('company_id', ctx.companyId)
-          .single()
-
-        if (fetchError || !item) return NextResponse.json({ error: 'Inbox item not found' }, { status: 404 })
-        if (item.created_supplier_invoice_id) {
-          return NextResponse.json({ error: 'Posten är redan kopplad till en leverantörsfaktura.' }, { status: 409 })
-        }
-
         let body: ReturnType<typeof CreateSupplierInvoiceSchema.parse>
         try {
           const json = await request.json()
@@ -2726,416 +2472,17 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: message }, { status: 400 })
         }
 
-        const { data: supplier, error: supplierError } = await ctx.supabase
-          .from('suppliers')
-          .select('*')
-          .eq('id', body.supplier_id)
-          .eq('company_id', ctx.companyId)
-          .single()
-
-        if (supplierError || !supplier) {
-          return NextResponse.json({ error: 'Supplier not found' }, { status: 404 })
-        }
-
-        // The scan read the supplier's giro or IBAN with everything else: a
-        // supplier that lacks them takes them now, so the invoice can go
-        // into a betalfil without a detour to the supplier card.
-        const scannedSupplier = (item.extracted_data as { supplier?: SupplierPaymentDetails } | null)?.supplier
-        if (scannedSupplier) await backfillSupplierPaymentDetails(ctx.supabase, ctx.companyId, supplier.id as string, scannedSupplier)
-
-        // Särskild löneskatt (SLP): same guards as /api/supplier-invoices.
-        // The 7533/2514 pair is only lawful on 741x pension premiums and
-        // cannot be combined with periodisering on the same row.
-        if (
-          body.items.some(
-            (bodyItem) => bodyItem.apply_slp && !isSlpPensionAccount(bodyItem.account_number),
-          )
-        ) {
-          return errorResponseFromCode('SI_CREATE_SLP_INVALID_ACCOUNT', ctx.log)
-        }
-        if (
-          body.items.some(
-            (bodyItem) =>
-              bodyItem.apply_slp &&
-              (bodyItem.accrual_period_start ||
-                bodyItem.accrual_period_end ||
-                bodyItem.accrual_balance_account),
-          )
-        ) {
-          return errorResponseFromCode('SI_CREATE_SLP_ACCRUAL', ctx.log)
-        }
-
-        // Periodisering requires faktureringsmetoden: mirror the main
-        // /api/supplier-invoices guard so kontantmetod companies never store
-        // accrual fields the booking would silently ignore.
-        const hasAccrualItems = body.items.some(
-          (bodyItem) => bodyItem.accrual_period_start && bodyItem.accrual_period_end,
-        )
-        if (hasAccrualItems && body.reverse_charge) {
-          // Omvänd skattskyldighet: the expense line carries the VAT base for
-          // rutor 20-32: deferring the net to a 17xx interim account would
-          // corrupt the momsdeklaration. Same guard as /api/supplier-invoices.
-          return errorResponseFromCode('SI_CREATE_ACCRUAL_REVERSE_CHARGE', ctx.log)
-        }
-        if (hasAccrualItems) {
-          const { data: methodSettings } = await ctx.supabase
-            .from('company_settings')
-            .select('accounting_method')
-            .eq('company_id', ctx.companyId)
-            .single()
-          if ((methodSettings?.accounting_method || 'accrual') !== 'accrual') {
-            return errorResponseFromCode('SI_CREATE_INVALID_INPUT', ctx.log, {
-              details: { reason: 'periodisering requires faktureringsmetoden (accrual)' },
-            })
-          }
-        }
-
-        // Same currency policy as POST /api/supplier-invoices and the v1 REST
-        // route (lib/currency/supplier-invoice-rate.ts): a non-SEK invoice with
-        // no caller-supplied rate gets one fetched from Riksbanken for the
-        // invoice date, and an unresolvable rate refuses the conversion instead
-        // of writing exchange_rate = NULL. That matters most here: inbox items
-        // are AI-extracted, the currency comes off the PDF and the rate never
-        // does, so this path produced unconverted rows most readily. Resolved
-        // before the arrival number so a refusal burns no ankomstnummer.
-        const fx = await resolveSupplierInvoiceExchangeRate(ctx.supabase, {
-          currency: body.currency,
-          invoiceDate: body.invoice_date,
-          suppliedRate: body.exchange_rate,
+        const outcome = await convertInboxItemToSupplierInvoice(operationContext(ctx), id, body, {
+          emit: (event) => ctx.emit(event),
         })
-        if (!fx.ok) {
-          return errorResponseFromCode('SI_FX_RATE_MISSING', ctx.log, {
-            details: { currency: fx.currency, invoice_date: fx.invoiceDate },
-          })
-        }
-
-        const { data: arrivalNum, error: arrivalError } = await ctx.supabase
-          .rpc('get_next_arrival_number', { p_company_id: ctx.companyId })
-
-        if (arrivalError) {
-          return NextResponse.json({ error: 'Failed to get arrival number' }, { status: 500 })
-        }
-
-        // The stored treatment, resolved once: it decides what a line that
-        // omits vat_rate falls back to and whether the engine may book any
-        // ingaende moms at all (#2553).
-        const vatTreatment = body.vat_treatment || 'standard_25'
-
-        const items = body.items.map((bodyItem, index) => {
-          // An omitted rate follows the invoice's vat_treatment, not a
-          // blanket 25 % (#2553): exempt, export and reverse_charge carry no
-          // Swedish moms, reduced_12 / reduced_6 carry their own rate.
-          const vatRate = bodyItem.vat_rate ?? defaultVatRateForTreatment(vatTreatment)
-          const lineTotal = bodyItem.amount != null
-            ? Math.round(bodyItem.amount * 100) / 100
-            : Math.round((bodyItem.quantity ?? 1) * (bodyItem.unit_price ?? 0) * 100) / 100
-          const vatAmount = Math.round(lineTotal * vatRate * 100) / 100
-          return {
-            sort_order: index,
-            description: bodyItem.description,
-            quantity: bodyItem.amount != null ? 1 : (bodyItem.quantity ?? 1),
-            unit: bodyItem.amount != null ? 'st' : (bodyItem.unit || 'st'),
-            unit_price: bodyItem.amount != null ? lineTotal : (bodyItem.unit_price ?? 0),
-            line_total: lineTotal,
-            account_number: bodyItem.account_number,
-            vat_code: bodyItem.vat_code || null,
-            vat_rate: vatRate,
-            vat_amount: vatAmount,
-            // Self-assessed RC rate (0.06/0.12/0.25) or null: engine defaults
-            // to 25% huvudregeln when null for a reverse-charge invoice.
-            reverse_charge_rate: body.reverse_charge ? (bodyItem.reverse_charge_rate ?? null) : null,
-            // Periodisering: frozen onto the line; the balance account
-            // defaults from the cost account's BAS convention.
-            accrual_period_start:
-              bodyItem.accrual_period_start && bodyItem.accrual_period_end
-                ? bodyItem.accrual_period_start
-                : null,
-            accrual_period_end:
-              bodyItem.accrual_period_start && bodyItem.accrual_period_end
-                ? bodyItem.accrual_period_end
-                : null,
-            accrual_balance_account:
-              bodyItem.accrual_period_start && bodyItem.accrual_period_end
-                ? (bodyItem.accrual_balance_account ??
-                  suggestBalanceAccount('expense', bodyItem.account_number))
-                : null,
-            // Särskild löneskatt (SLP): booking injects the self-balancing
-            // 7533/2514 pair for this line. Guarded above (741x, no accrual).
-            apply_slp: bodyItem.apply_slp === true,
-          }
-        })
-
-        const subtotal = items.reduce((sum, i) => sum + i.line_total, 0)
-        const totalVat = items.reduce((sum, i) => sum + i.vat_amount, 0)
-        // roundOre, not the naive form: `total` and `total_sek` must round
-        // identically or a SEK invoice ends up one öre apart.
-        const total = roundOre(subtotal + totalVat)
-
-        // SEK resolves to rate 1, so total_sek === total rather than NULL.
-        const {
-          subtotal_sek: subtotalSek,
-          vat_amount_sek: vatAmountSek,
-          total_sek: totalSek,
-        } = supplierInvoiceSekAmounts(fx.rate, { subtotal, vatAmount: totalVat, total })
-
-        const { data: invoice, error: invoiceError } = await ctx.supabase
-          .from('supplier_invoices')
-          .insert({
-            user_id: ctx.userId,
-            company_id: ctx.companyId,
-            supplier_id: body.supplier_id,
-            arrival_number: arrivalNum,
-            supplier_invoice_number: body.supplier_invoice_number,
-            invoice_date: body.invoice_date,
-            due_date: body.due_date,
-            delivery_date: body.delivery_date || null,
-            status: 'registered',
-            currency: fx.rate.currency,
-            exchange_rate: fx.rate.exchangeRate,
-            // Which day's kurs the SEK amounts were translated at: the audit
-            // trail that makes them verifiable (BFL 5 kap).
-            exchange_rate_date: fx.rate.exchangeRateDate,
-            vat_treatment: vatTreatment,
-            reverse_charge: body.reverse_charge || false,
-            payment_reference: body.payment_reference || null,
-            subtotal: roundOre(subtotal),
-            subtotal_sek: subtotalSek,
-            vat_amount: roundOre(totalVat),
-            vat_amount_sek: vatAmountSek,
-            total,
-            total_sek: totalSek,
-            remaining_amount: total,
-            document_id: item.document_id || null,
-            // WhatsApp-sourced items: when the request carries NO notes field
-            // at all, default to the rendered chat context (representation
-            // deltagare + syfte, sender note) so the human answers from the
-            // chat reach the leverantörsfaktura. Presence decides, not
-            // truthiness: `notes: ""` is an explicit clear and stays empty
-            // (same rule as book-direct, where the value lands on an
-            // immutable verifikat). The caption is excluded: this form never
-            // shows the chat context, so nobody reviewed it.
-            notes:
-              body.notes === undefined
-                ? renderChannelContextNotes(
-                    (item as { channel_context?: InboxChannelContext | null }).channel_context,
-                  )
-                : body.notes.trim() || null,
-          })
-          .select()
-          .single()
-
-        if (invoiceError || !invoice) {
-          // A unique-index hit on (company_id, supplier_id,
-          // supplier_invoice_number) is a recoverable conflict: the user
-          // already registered this invoice (often manually, then tried to
-          // convert the same inbox document). Mirror the main
-          // /api/supplier-invoices route and return a friendly 409 with the
-          // existing invoice, instead of letting the raw Postgres message
-          // surface as a generic 500 ("Ett oväntat serverfel uppstod").
-          const pgErr = invoiceError as { code?: string; message?: string } | null
-          const isDuplicateNumber =
-            pgErr?.code === '23505' &&
-            (pgErr.message || '').includes('idx_supplier_invoices_company_supplier_number')
-
-          if (isDuplicateNumber) {
-            // Tenancy: ctx.supabase is the cookie-scoped RLS client and the
-            // supplier_invoices SELECT policy is
-            // `company_id IN (SELECT user_company_ids())`. Combined with the
-            // explicit company_id filter below, this lookup can only ever
-            // resolve an invoice the caller's own company owns: the returned
-            // details are never cross-tenant (OWASP ASVS V8.2.1; ISO 27001
-            // A.8.3; GDPR art.25(2)).
-            const { data: existing } = await ctx.supabase
-              .from('supplier_invoices')
-              .select('id, supplier_invoice_number, status')
-              .eq('company_id', ctx.companyId)
-              .eq('supplier_id', body.supplier_id)
-              .eq('supplier_invoice_number', body.supplier_invoice_number)
-              .maybeSingle()
-
-            let creditNoteId: string | null = null
-            if (existing?.status === 'credited') {
-              const { data: creditNote } = await ctx.supabase
-                .from('supplier_invoices')
-                .select('id')
-                .eq('company_id', ctx.companyId)
-                .eq('credited_invoice_id', existing.id)
-                .eq('is_credit_note', true)
-                .maybeSingle()
-              creditNoteId = creditNote?.id ?? null
-            }
-
-            // Return ONLY server-authoritative fields the recovery dialog needs
-            // (the existing row, read under RLS). The raw request body
-            // (supplier_id / supplier_invoice_number) is deliberately not
-            // echoed back: the client already holds it from its own form state,
-            // and reflecting user-supplied values widens the response surface
-            // for no benefit (GDPR art.5(1)(c) data minimisation; OWASP ASVS
-            // V4.5). The Postgres constraint name is used only to classify the
-            // error above and is never placed in the response.
-            return errorResponseFromCode('SI_CREATE_DUPLICATE_INVOICE_NUMBER', ctx.log, {
-              details: {
-                existing: existing
-                  ? {
-                      id: existing.id,
-                      supplier_invoice_number: existing.supplier_invoice_number,
-                      status: existing.status,
-                      credit_note_id: creditNoteId,
-                    }
-                  : null,
-              },
-            })
-          }
-
-          return NextResponse.json({ error: invoiceError?.message || 'Failed to create invoice' }, { status: 500 })
-        }
-
-        const itemInserts = items.map((lineItem) => ({
-          supplier_invoice_id: invoice.id,
-          ...lineItem,
-        }))
-
-        const { data: insertedItems, error: itemsError } = await ctx.supabase
-          .from('supplier_invoice_items')
-          .insert(itemInserts)
-          .select('id, sort_order')
-
-        if (itemsError) {
-          await ctx.supabase.from('supplier_invoices').delete().eq('id', invoice.id)
-          return NextResponse.json({ error: itemsError.message }, { status: 500 })
-        }
-
-        const { data: settings } = await ctx.supabase
-          .from('company_settings')
-          .select('accounting_method, defer_invoice_booking')
-          .eq('company_id', ctx.companyId)
-          .single()
-
-        let registrationJournalEntryId: string | null = null
-
-        // #967: deferred companies register WITHOUT booking (same gate as
-        // POST /api/supplier-invoices); ekonomi books later via Bokför.
-        if (booksInvoicesOnIssue(settings)) {
-          try {
-            const journalEntry = await createSupplierInvoiceRegistrationEntry(
-              ctx.supabase,
-              ctx.companyId,
-              ctx.userId,
-              invoice as SupplierInvoice,
-              items as SupplierInvoiceItem[],
-              supplier.supplier_type,
-              supplier.name
-            )
-            if (journalEntry) {
-              registrationJournalEntryId = journalEntry.id
-              ;(invoice as SupplierInvoice).registration_journal_entry_id = journalEntry.id
-              await ctx.supabase
-                .from('supplier_invoices')
-                .update({ registration_journal_entry_id: journalEntry.id })
-                .eq('id', invoice.id)
-
-              if (item.document_id) {
-                await ctx.supabase
-                  .from('document_attachments')
-                  .update({ journal_entry_id: journalEntry.id })
-                  .eq('id', item.document_id)
-                  .eq('company_id', ctx.companyId)
-              }
-
-              if (hasAccrualItems) {
-                // Schedules + catch-up dissolutions for deferred lines. Never
-                // fatal: the registration entry is committed; failures are
-                // retried/surfaced via the periodiseringar page.
-                const idBySortOrder = new Map(
-                  ((insertedItems ?? []) as Array<{ id: string; sort_order: number }>).map(
-                    (row) => [row.sort_order, row.id],
-                  ),
-                )
-                const itemsWithIds = items.map((lineItem) => ({
-                  ...lineItem,
-                  id: idBySortOrder.get(lineItem.sort_order) ?? null,
-                }))
-                const scheduleResult = await createSchedulesForSupplierInvoice(
-                  ctx.supabase,
-                  ctx.companyId,
-                  ctx.userId,
-                  invoice as SupplierInvoice,
-                  itemsWithIds as unknown as SupplierInvoiceItem[],
-                  journalEntry.id,
-                )
-                if (scheduleResult.failed > 0) {
-                  ctx.log.error('accrual schedule creation failed on inbox convert', {
-                    supplierInvoiceId: invoice.id,
-                    failed: scheduleResult.failed,
-                  })
-                }
-              }
-            } else {
-              // createSupplierInvoiceRegistrationEntry returns null ONLY when no
-              // fiscal period covers invoice_date (every other failure throws).
-              // Roll back so we never mark the inbox item converted against an
-              // unbooked supplier invoice (orphan understating 2440/2641).
-              await ctx.supabase
-                .from('supplier_invoices')
-                .delete()
-                .eq('id', invoice.id)
-                .eq('company_id', ctx.companyId)
-              return errorResponseFromCode('SI_CREATE_NO_FISCAL_PERIOD', ctx.log, {
-                details: { invoiceDate: (invoice as SupplierInvoice).invoice_date },
-              })
-            }
-          } catch (err) {
-            // Engine threw (period lock, unbalanced entry, etc.) instead of
-            // cleanly returning null. Roll back the supplier invoice so the inbox
-            // item is never marked converted against an unbooked invoice (an orphan
-            // understating 2440/2641), then surface the error: mirroring the main
-            // /api/supplier-invoices route's registration catch.
-            await ctx.supabase
-              .from('supplier_invoices')
-              .delete()
-              .eq('id', invoice.id)
-              .eq('company_id', ctx.companyId)
-            const typed = bookkeepingErrorResponse(err)
-            if (typed) return typed
-            return errorResponseFromCode('SI_CREATE_FAILED', ctx.log, {
-              details: {
-                reason: err instanceof Error ? err.message : 'unknown',
-                step: 'registration_journal_entry',
-              },
-            })
-          }
-        }
-
-        try {
-          await ctx.emit({
-            type: 'supplier_invoice.registered',
-            payload: { supplierInvoice: invoice as SupplierInvoice, companyId: ctx.companyId, userId: ctx.userId },
-          })
-        } catch { /* non-blocking */ }
-
-        await ctx.supabase
-          .from('invoice_inbox_items')
-          .update({ created_supplier_invoice_id: invoice.id })
-          .eq('id', id)
-
-        try {
-          await ctx.emit({
-            type: 'supplier_invoice.confirmed',
-            payload: {
-              inboxItem: { ...item, created_supplier_invoice_id: invoice.id } as InvoiceInboxItem,
-              supplierInvoice: invoice as SupplierInvoice,
-              userId: ctx.userId,
-              companyId: ctx.companyId,
-            },
-          })
-        } catch { /* non-blocking */ }
-
+        if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
+        if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({
           data: {
-            ...invoice,
-            items: itemInserts,
-            registration_journal_entry_id: registrationJournalEntryId,
-            inbox_item_id: id,
+            ...outcome.data.invoice,
+            items: outcome.data.items,
+            registration_journal_entry_id: outcome.data.registration_journal_entry_id,
+            inbox_item_id: outcome.data.inbox_item_id,
           },
         })
       },

@@ -205,6 +205,401 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/cash-accounts`
+
+**Create a bank account by hand (no bank connection), with the payee details invoices print.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company has a bank account that is not connected through the bank integration (a savings account, a currency account, a bank without PSD2) and it should appear in Konton, the booking flows or on invoices.
+**Do not use for:** Connecting a bank (the bank connection flow creates its own accounts), changing an existing account (PATCH /cash-accounts/{id}) or choosing which account invoices print by default (PUT /cash-accounts/payee-defaults).
+
+**Pitfalls:**
+- An IBAN another account of the company already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE: one physical account must exist once.
+- A ledger_account another cash account holds returns 409 CASH_ACCOUNT_LEDGER_TAKEN; omit it to get the next free one.
+- ledger_account is a STRING in 1920-1999 ("1931"), never a number, and never a till (1910-1919) or a PSP clearing account.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+- Creating an account does not make it the default payee: set that with PUT /cash-accounts/payee-defaults.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  name: string,
+  currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF",
+  ledger_account?: string,
+  invoice_payee?: boolean,
+  payee?: {
+    bank_name?: string | null,
+    clearing_number?: string | null | "",
+    account_number?: string | null | "",
+    bankgiro?: string | null | "",
+    plusgiro?: string | null | "",
+    swish?: string | null,
+    iban?: string | null | "",
+    bic?: string | null | "",
+    bank_code?: string | null | "",
+    foreign_account_number?: string | null | ""
+  }
+}
+```
+
+Example request:
+```json
+{
+  "name": "Sparkonto",
+  "currency": "SEK",
+  "payee": {
+    "bank_name": "SEB",
+    "bankgiro": "5050-1234"
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": false,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/cash-accounts/{id}`
+
+**Edit a bank account: verifikationsserie, payee details, name, or turn it on/off.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Sparse update of one cash account. voucher_series (one letter A-Z, null clears) sets the verifikationsserie for entries booked from the account. The payee fields (bank_name, clearing_number, account_number, bankgiro, plusgiro, swish, iban, bic, bank_code, foreign_account_number), name and invoice_payee decide what customer invoices print; "" or null clears a field. enabled=false hides an account no bank connection holds from Konton and the booking flows. The ledger account and the primary flag are not editable here. Idempotent. Dry-runnable.
+
+**Use when:** The company changes bank details customers pay to, wants its own voucher series per bank account, or stops using a manually added account.
+**Do not use for:** Making an account the primary (POST /cash-accounts/{id}/set-primary), choosing the default payee per currency (PUT /cash-accounts/payee-defaults) or moving a transaction to another account.
+
+**Pitfalls:**
+- Payee fields, name, invoice_payee and enabled are owner/admin only (403 FORBIDDEN); voucher_series alone is open to any writer.
+- Payee fields on a PSP clearing account or a till return 400 INVOICE_PAYEE_ACCOUNT_INVALID: only 1920-1999 bank accounts print on invoices.
+- enabled on an account a bank connection holds returns 409 CASH_ACCOUNT_ENABLED_BANK_MANAGED; disabling the primary returns 400 CASH_ACCOUNT_DISABLE_PRIMARY, and one with unbooked transactions 400 CASH_ACCOUNT_DISABLE_UNRESOLVED.
+- An iban another account already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE.
+- Changing voucher_series only affects entries booked afterwards; nothing posted is renumbered.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  bank_name?: string | null,
+  clearing_number?: string | null | "",
+  account_number?: string | null | "",
+  bankgiro?: string | null | "",
+  plusgiro?: string | null | "",
+  swish?: string | null,
+  iban?: string | null | "",
+  bic?: string | null | "",
+  bank_code?: string | null | "",
+  foreign_account_number?: string | null | "",
+  voucher_series?: string | null,
+  name?: string | null,
+  invoice_payee?: boolean,
+  enabled?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "bankgiro": "5050-1234",
+  "invoice_payee": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": false,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/cash-accounts/{id}/set-primary`
+
+**Make a bank account the company's primary.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+The primary is where bookings land when nothing else says which bank account they belong to: the skattekonto counter leg and transactions with no cash account. It must be an enabled SEK giro or bank account (BAS 1920-1999). The flag moves in one transaction and the change is logged with the acting user. Only bookings made afterwards follow the new primary; nothing posted changes. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company's main business account is not the one marked primary (typically the seeded 1930).
+**Do not use for:** Choosing which account invoices print (PUT /cash-accounts/payee-defaults) or moving transactions between accounts.
+
+**Pitfalls:**
+- A disabled, non-SEK or non-bank account (till, PSP clearing) returns 400 CASH_ACCOUNT_PRIMARY_INELIGIBLE with details.reason.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+- Takes no body; the account id is in the path.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    cash_account_id: string,
+    ledger_account: string,
+    name: string | null,
+    currency: string,
+    iban: string | null,
+    source: "enable_banking" | "manual" | "sie_import",
+    bank_connected: boolean,
+    enabled: boolean,
+    is_primary: boolean,
+    voucher_series: string | null,
+    invoice_payee: boolean,
+    payee: { bank_name: string | null, clearing_number: string | null, account_number: string | null, bankgiro: string | null, plusgiro: string | null, swish: string | null, iban: string | null, bic: string | null, bank_code: string | null, foreign_account_number: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "cash_account_id": "7f3a…",
+    "ledger_account": "1931",
+    "name": "Sparkonto",
+    "currency": "SEK",
+    "iban": "SE4550000000058398257466",
+    "source": "manual",
+    "bank_connected": false,
+    "enabled": true,
+    "is_primary": true,
+    "voucher_series": null,
+    "invoice_payee": true,
+    "payee": {
+      "bank_name": "SEB",
+      "clearing_number": null,
+      "account_number": null,
+      "bankgiro": "5050-1234",
+      "plusgiro": null,
+      "swish": null,
+      "iban": "SE4550000000058398257466",
+      "bic": "ESSESESS",
+      "bank_code": null,
+      "foreign_account_number": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PUT /api/v1/companies/{companyId}/cash-accounts/payee-defaults`
+
+**Choose which bank account invoices in a currency tell the customer to pay to.**
+`scope:companies:write · risk:medium · idempotent · dry-run · reversible`
+
+Sets (or clears with cash_account_id null) the default payee account for one currency: every new invoice in that currency prints this account's payment details unless the invoice picks another. The account must be a bank account (1920-1999), enabled, flagged invoice_payee, and carry what the currency needs (an IBAN for anything but SEK). Answers every per-currency default after the change. Owner/admin only. Idempotent. Dry-runnable.
+
+**Use when:** The company wants EUR invoices paid to its EUR account, or changes which SEK account customers pay to.
+**Do not use for:** Editing the bank details themselves (PATCH /cash-accounts/{id}) or the primary account (set-primary).
+
+**Pitfalls:**
+- An account that cannot print for the currency returns 400 INVOICE_PAYEE_ACCOUNT_INVALID with details.reason (not_bank_account, disabled, not_payee, unusable_for_currency).
+- Invoices already sent keep the payment details they were sent with.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF", cash_account_id: string | null }
+```
+
+Example request:
+```json
+{
+  "currency": "EUR",
+  "cash_account_id": "7f3a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: { defaults: { currency: string, cash_account_id: string }[] },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "defaults": [
+      {
+        "currency": "EUR",
+        "cash_account_id": "7f3a…"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/imports/bank`
 
 **Import a bank-file (CSV / XML / CAMT053).**
@@ -253,6 +648,67 @@ Example response `200`:
     "status": "queued",
     "poll_url": "/api/v1/operations/op_a8f1…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/imports/bank/{id}/undo`
+
+**Undo a bank file import: delete the rows it created that are still unbooked.**
+`scope:transactions:write · risk:high · idempotent · dry-run`
+
+Hard-deletes every transaction the import created that is still unbooked (ignored rows included) and marks the import undone, so the same file can be imported again. Rows that are booked or linked to a verifikat, and rows with payment match history, are never touched: they are counted in skipped_booked and skipped_match_history, and their verifikat stay as they are (unlink or reverse them separately). Owner/admin only. Idempotent. Dry-runnable (the dry run counts what would be deleted and skipped).
+
+**Use when:** The wrong file, the wrong account or a duplicate file was imported and its rows should go.
+**Do not use for:** Removing single rows (DELETE /transactions/{id} for manual rows; ignore bank rows), bank-feed rows (they have no import), or SIE imports (POST /imports/sie/{id}/undo).
+
+**Pitfalls:**
+- Only a completed import can be undone: 409 BANK_FILE_UNDO_NOT_COMPLETED otherwise.
+- Owner or admin only: a member key gets 403 BANK_FILE_UNDO_FORBIDDEN.
+- Booked rows survive the undo (skipped_booked > 0): to remove them, reverse their verifikat first, then delete or ignore the rows.
+- Imports made before rows were stamped with their import id delete nothing (deleted_transactions 0).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    bank_file_import_id: string,
+    deleted_transactions: number,
+    skipped_booked: number,
+    skipped_match_history: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "bank_file_import_id": "9a8b…",
+    "deleted_transactions": 212,
+    "skipped_booked": 3,
+    "skipped_match_history": 0
   },
   "meta": {
     "request_id": "req_…",
@@ -319,6 +775,130 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/imports/sie/{id}/resume`
+
+**Resume an interrupted SIE import from where it stopped.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Re-queues a paused or interrupted durable SIE import (or an interrupted undo) so the worker continues from the last committed chunk; entries already posted are not posted again. A finished run (completed, undone, failed) is answered unchanged. Allowed to the user who ran the import and to owners/admins. Idempotent. Dry-runnable.
+
+**Use when:** An SIE import stopped part-way (state paused, or running with no progress) and should continue.
+**Do not use for:** Starting a new import (POST /imports/sie) or cancelling one (POST /imports/sie/{id}/undo).
+
+**Pitfalls:**
+- Another user's import needs an owner or admin key: 403 FORBIDDEN otherwise.
+- Legacy imports made before durable jobs return 409 SIE_IMPORT_LEGACY_REVIEW_REQUIRED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    import_id: string,
+    action: "undo" | "resume",
+    state: string,
+    phase: string | null,
+    accepted: true
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "import_id": "7ce9…",
+    "action": "resume",
+    "state": "running",
+    "phase": "vouchers",
+    "accepted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/imports/sie/{id}/undo`
+
+**Undo an SIE import by batch storno: every entry it posted is reversed, nothing is deleted.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Queues a batch storno of the import: each verifikat the import posted gets a reversing entry (BFL 5 kap 5 §) and the originals stay in the ledger. Asynchronous: the answer carries state "undoing" and the worker finishes in the background (state "undone"). Refused while another SIE run is active, while a reversal of an imported voucher is already in progress, while an imported voucher has a live correction, or when the period is closed or locked. Owner/admin only. Idempotent. Dry-runnable (the dry run counts the entries that would be reversed).
+
+**Use when:** An SIE file was imported into the wrong company or year, or with a wrong mapping, and its entries must be cancelled before a corrected import.
+**Do not use for:** Removing single vouchers (POST /journal-entries/{id}/reverse), bank file imports (POST /imports/bank/{id}/undo), or legacy imports made before durable jobs (409 SIE_IMPORT_LEGACY_REVIEW_REQUIRED: review them in the app).
+
+**Pitfalls:**
+- Nothing is deleted: the ledger keeps both the imported entries and their reversals, and voucher numbers are never reused.
+- A closed or locked period, another active run or a live correction returns 409 SIE_IMPORT_ACTION_CONFLICT with details.reason.
+- Owner or admin only: a member key gets 403 FORBIDDEN.
+- Undoing an already undone import answers its state unchanged.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    import_id: string,
+    action: "undo" | "resume",
+    state: string,
+    phase: string | null,
+    accepted: true
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "import_id": "7ce9…",
+    "action": "undo",
+    "state": "undoing",
+    "phase": "undo",
+    "accepted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/imports/sie/upload`
 
 **Reserve a direct SIE upload.**
@@ -372,6 +952,99 @@ Example response `200`:
     "storagePath": "company/sie-intake/upload.se",
     "uploadUrl": "https://storage.example/upload",
     "filename": "export.se"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/imports/skattekonto-file`
+
+**Import a skattekontoutdrag file (Skatteverket tax account statement) into the skattekonto rows.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Parses the statement (the CSV export or legacy .skv from Skatteverket's Skattekonto e-tjänst, sent as base64), deduplicates it server-side against the skattekonto rows already stored, inserts the new events (source file_import), promotes upcoming rows the statement proves settled and skips duplicates. Books nothing: the rows are booked afterwards through the skattekonto rules, like synced rows. A file already imported is refused; a file naming another organisation number or not summing is refused unless confirmed. Idempotent. Dry-runnable: the dry run parses and counts and writes nothing.
+
+**Use when:** The company has no Skatteverket connection (self-hosted, or not yet connected) and the skattekonto should be reconciled and booked from the statement file.
+**Do not use for:** Companies with a Skatteverket connection (the hourly sync fetches the same events), bank statements (POST /imports/bank), or booking the rows (the skattekonto booking tools).
+
+**Pitfalls:**
+- Send the file bytes base64-encoded in content_base64, up to about 3 MB of file; the filename matters for legacy .skv detection.
+- A file already imported answers 409 SKATTEKONTO_FILE_DUPLICATE with details.import_id.
+- A header organisation number that is not the company's answers 409 SKATTEKONTO_FILE_ORG_NUMBER_MISMATCH: check the file, then resend with confirm_org_number_mismatch=true.
+- A statement whose saldo markers do not sum (filtered, truncated or edited) answers 409 SKATTEKONTO_FILE_SUM_MISMATCH: resend with confirm_sum_mismatch=true only if the gap is understood.
+- A file that is not a skattekontoutdrag answers 400 SKATTEKONTO_FILE_NOT_RECOGNIZED: a bank CSV is never accepted here.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  filename: string,
+  content_base64: string,
+  confirm_org_number_mismatch?: boolean,
+  confirm_sum_mismatch?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "filename": "Kontoutdrag 556677-8899 2026-05-03--2026-08-01.csv",
+  "content_base64": "U2thdHRla29udG8…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    import_id: string,
+    imported: number,
+    duplicates: number,
+    promoted: number,
+    errors: number,
+    date_from: string,
+    date_to: string,
+    closing_saldo: number | null,
+    file_hash: string,
+    variant: "csv" | "skv",
+    row_count: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "import_id": "1f0c…",
+    "imported": 14,
+    "duplicates": 2,
+    "promoted": 1,
+    "errors": 0,
+    "date_from": "2026-05-03",
+    "date_to": "2026-08-01",
+    "closing_saldo": 23490,
+    "file_hash": "9a1b…",
+    "variant": "csv",
+    "row_count": 17
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
   }
 }
 ```
@@ -1561,6 +2234,204 @@ Example response `200`:
 
 ---
 
+### `PATCH /api/v1/companies/{companyId}/transactions/{id}`
+
+**Edit an unbooked transaction: its working title, or which bank account it belongs to.**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+description replaces the working title (the bank's original stays in original_description; sending it back restores the "not edited" state). account_number (a BAS 19xx account of one of the company's cash accounts, as a string) moves the row to that account, for rows that landed on the wrong account or on none; a disabled, unconnected target is turned back on. Only rows that are neither booked nor matched. Idempotent. Dry-runnable.
+
+**Use when:** A bank label is cryptic and the user wants a readable title before booking, or a row sits under the wrong bank account and can never be reconciled there.
+**Do not use for:** Booked rows (reverse the verifikat and rebook), changing the amount or date (bank data is never edited), or categorizing (POST /transactions/{id}/categorize).
+
+**Pitfalls:**
+- Send at least one of description or account_number.
+- A booked or matched row returns 409 TRANSACTION_TITLE_LOCKED (title) or TRANSACTION_MOVE_BOOKED (move); a row bulk-booked into a samlingsverifikat also returns TRANSACTION_MOVE_BOOKED for a move.
+- account_number is a STRING like "1931", never a number; an account that is not one of the company's cash accounts returns 404 TRANSACTION_MOVE_UNKNOWN_ACCOUNT, one in another currency 400 TRANSACTION_MOVE_CURRENCY_MISMATCH.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ description?: string, account_number?: string }
+```
+
+Example request:
+```json
+{
+  "description": "Lunch med kund"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    description: string | null,
+    title_edited_at: string | null,
+    cash_account_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "description": "Lunch med kund",
+    "title_edited_at": "2026-06-01T10:00:00Z",
+    "cash_account_id": "7f3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/transactions/{id}`
+
+**Delete an unbooked transaction that was added by hand (e.g. a duplicate you created).**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Hard-deletes one transaction the company created in Accounted (manual entry or POST /transactions/ingest). Bank-synced and bank-file rows are an external record of money that moved and are never deleted: ignore them (POST /transactions/{id}/ignore). A booked or matched row is räkenskapsinformation and is never deleted either: unlink it or reverse (storno) its verifikat. Idempotent. Dry-runnable.
+
+**Use when:** A manually added or API-ingested row is a mistake or a duplicate and has not been booked.
+**Do not use for:** Rows from the bank feed or a bank file (POST /transactions/{id}/ignore), booked rows (unlink, or reverse the verifikat), or undoing a whole bank file (POST /imports/bank/{id}/undo).
+
+**Pitfalls:**
+- A booked or matched row returns 409 TRANSACTION_DELETE_BOOKED.
+- A bank-synced or file-imported row returns 409 TRANSACTION_DELETE_IMPORTED: ignore it instead.
+- A row with payment match history returns 409 TRANSACTION_DELETE_HAS_AUDIT_TRAIL at commit (the history is append-only); the dry run cannot see it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { transaction_id: string, deleted: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "a8f1…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/attach-document`
+
+**Pin a document (receipt, invoice) to a bank transaction as its underlag.**
+`scope:transactions:write · risk:medium · idempotent · dry-run · reversible`
+
+Pins the document to the transaction. On an unbooked transaction the pin rides along when it is categorized; on a booked one the document becomes the verifikat's underlag at once (BFL 5 kap 6 §). The inbox item the document came from is marked matched. Attaching another document replaces the pin and is logged as a rättelse. Idempotent. Dry-runnable.
+
+**Use when:** A receipt or invoice in the archive belongs to a bank transaction (same date, amount, counterparty).
+**Do not use for:** Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).
+
+**Pitfalls:**
+- A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.
+- Replacing a pinned document that is already linked to a verifikat returns 409 DOC_ATTACH_REPLACES_POSTED: reverse the entry first.
+- On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED.
+- Check date, amount and counterparty on both sides first: once the transaction is booked the link is immutable.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ document_id: string }
+```
+
+Example request:
+```json
+{
+  "document_id": "4f1c…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transaction_id: string,
+    document_id: string,
+    previous_document_id: string | null,
+    journal_entry_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "1f2e…",
+    "document_id": "4f1c…",
+    "previous_document_id": null,
+    "journal_entry_id": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/categorize`
 
 **Categorize a transaction and create the journal entry.**
@@ -1642,6 +2513,60 @@ Example response `200`:
     "journal_entry_created": true,
     "journal_entry_id": "je_…",
     "category": "expense_office"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/detach-document`
+
+**Take the pinned document off a bank transaction that is not booked against it.**
+`scope:transactions:write · risk:low · idempotent · dry-run · reversible`
+
+Clears the transaction's document pin and releases the inbox item matched to it, so the next booking does not anchor the detached document. Refused once the document is linked to a verifikat (BFL 5 kap 6 §): only a storno undoes that. A transaction with no document answers success. Answers detached_document_id. Idempotent. Dry-runnable.
+
+**Use when:** The wrong receipt was attached to a transaction that is not yet booked.
+**Do not use for:** A booked transaction (reverse or uncategorize it first), deleting the document (DELETE /documents/{id}) or releasing an inbox item's match (POST /inbox-items/{id}/unmatch-transaction).
+
+**Pitfalls:**
+- A document linked to a verifikat returns 409 DOC_DETACH_POSTED.
+- A concurrent attach wins: the detach then answers 409 DOC_DETACH_CONCURRENT and changes nothing.
+- The document itself stays in the archive.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { transaction_id: string, document_id: unknown, detached_document_id: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "1f2e…",
+    "document_id": null,
+    "detached_document_id": "4f1c…"
   },
   "meta": {
     "request_id": "req_…",
@@ -1750,6 +2675,255 @@ Example response `200`:
     "transaction_id": "tx_…",
     "is_ignored": false,
     "was_ignored": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/link-journal-entry`
+
+**Link a bank transaction to a verifikat that already books it (no new bookkeeping).**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Anchors the row to an existing POSTED journal entry: the row counts as booked and leaves the to-book list, and nothing new is posted. With invoice_id the customer invoice is also settled against that same verifikat (an invoice_payments row, status paid or partially_paid), same currency only. A dry run answers the result the link would produce. Idempotent. Dry-runnable.
+
+**Use when:** The affärshändelse was already booked by hand (a manual verifikat, a payment registered before the bank row arrived) and the bank row must point at it instead of being booked twice.
+**Do not use for:** Booking the row (POST /transactions/{id}/categorize), matching it to an invoice with a new payment verifikat (POST /transactions/{id}/match-invoice), or one row against several vouchers (reconciliation links).
+
+**Pitfalls:**
+- A row already linked to a posted verifikat returns 409 LINK_TX_TX_ALREADY_LINKED; a pointer left by a storno does not count.
+- The verifikat must be posted: LINK_TX_JE_NOT_POSTED otherwise.
+- invoice_id: the invoice must be open (sent, overdue, partially_paid), not a credit note, and in the transaction currency (LINK_TX_INVOICE_CURRENCY_MISMATCH); cross-currency payments go through match-invoice.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ journal_entry_id: string, invoice_id?: string }
+```
+
+Example request:
+```json
+{
+  "journal_entry_id": "4d2a…"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    transaction_id: string,
+    journal_entry_id: string,
+    voucher_label: string,
+    invoice_id: string | null,
+    invoice_status: "paid" | "partially_paid" | null,
+    paid_amount: number | null,
+    remaining_amount: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "a8f1…",
+    "journal_entry_id": "4d2a…",
+    "voucher_label": "A-12",
+    "invoice_id": null,
+    "invoice_status": null,
+    "paid_amount": null,
+    "remaining_amount": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/match-batch`
+
+**Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Allocates the transaction across N invoices of one kind: one samlingsverifikation (bank against 1510 or 2440, kursdifferens on 3960/7960 for foreign invoices, öresavrundning on 3740) and one payment row per invoice, atomically. The allocations must sum to the transaction amount. The dry run answers the exact lines (expected_lines) the verifikat would carry. Idempotent. Dry-runnable.
+
+**Use when:** One incoming payment covers several customer invoices, or one outgoing transfer pays several supplier invoices.
+**Do not use for:** One invoice (POST /transactions/{id}/match-invoice or match-supplier-invoice), mixing customer and supplier invoices, or invoices never booked under kontantmetoden.
+
+**Pitfalls:**
+- The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.
+- A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.
+- Under kontantmetoden an invoice with no booking yet returns 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.
+- Proformas and quotes return 400 MATCH_INVOICE_NOT_INVOICE_TYPE.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  allocations: { kind: "customer_invoice", invoice_id: string, amount: number } | { kind: "supplier_invoice", supplier_invoice_id: string, amount: number }[],
+  force?: boolean,
+  expected_journal_entry_ids?: string[]
+}
+```
+
+Example request:
+```json
+{
+  "allocations": [
+    {
+      "kind": "customer_invoice",
+      "invoice_id": "2b1c…",
+      "amount": 500
+    },
+    {
+      "kind": "customer_invoice",
+      "invoice_id": "3c2d…",
+      "amount": 750
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string,
+    voucher_number: number,
+    allocations: { kind: "customer_invoice" | "supplier_invoice", invoice_id?: string, supplier_invoice_id?: string, payment_id: string, status: "paid" | "partially_paid", paid_amount: number, remaining_amount: number, amount: number }[],
+    total_allocated: number,
+    leftover: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "4d2a…",
+    "voucher_series": "A",
+    "voucher_number": 12,
+    "allocations": [],
+    "total_allocated": 1250,
+    "leftover": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/{id}/match-expense-payout`
+
+**Book an outgoing bank transaction as the repayment of one person's expense claims.**
+`scope:transactions:write · risk:medium · idempotent · dry-run`
+
+Books the bank row as the payout of the given registered claims: Debit their liability account (2013 for an enskild firma owner's 2018), Credit the transaction's own cash account, dated the transaction date, and links the row to the verifikat in the same transaction, so it can never be booked twice. The claims' total must equal the outflow to the öre. Idempotent. Dry-runnable.
+
+**Use when:** An unbooked SEK outflow is the transfer that paid an owner or employee back for their utlägg.
+**Do not use for:** A transfer with no bank row in Accounted (POST /expense-claims/payouts), partial repayments, or salary.
+
+**Pitfalls:**
+- The sum of the picked claims must equal |amount| exactly: 400 EXPENSE_PAYOUT_MATCH_AMOUNT otherwise.
+- Only unbooked outgoing SEK rows: incoming returns EXPENSE_PAYOUT_MATCH_NOT_EXPENSE, another currency EXPENSE_PAYOUT_MATCH_CURRENCY, an already booked row EXPENSE_PAYOUT_MATCH_TX_ALREADY_LINKED.
+- All claims must belong to one person and one liability account.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ claim_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "claim_ids": [
+    "5a0a…",
+    "7b1c…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    batch_id: string,
+    journal_entry_id: string,
+    voucher_number: number | null,
+    total_sek: number,
+    claim_count: number,
+    transaction_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "1f2e…",
+    "batch_id": "e1f0…",
+    "journal_entry_id": "4d2a…",
+    "voucher_number": 119,
+    "total_sek": 1596,
+    "claim_count": 2
   },
   "meta": {
     "request_id": "req_…",
@@ -1921,6 +3095,71 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/transactions/{id}/refresh-exchange-rate`
+
+**Fill in the Riksbanken rate and SEK amount of an unbooked foreign-currency transaction.**
+`scope:transactions:write · risk:low · idempotent · dry-run`
+
+For an unbooked non-SEK row with no amount_sek/exchange_rate, fetches the Riksbanken rate for the transaction date and stores amount_sek, exchange_rate and exchange_rate_date. A SEK row, or one that already has both, is answered unchanged with refreshed=false. Idempotent. Dry-runnable (the dry run does not call Riksbanken).
+
+**Use when:** A foreign-currency row shows no SEK amount (the rate lookup failed at ingest) and it is about to be booked.
+**Do not use for:** Booked rows (the verifikat carries the rate; correct it with storno) or overriding a rate that is already set.
+
+**Pitfalls:**
+- A booked row returns 409 TX_EXCHANGE_RATE_BOOKED.
+- Riksbanken unavailable returns 502 TX_EXCHANGE_RATE_UNAVAILABLE (retryable).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    transaction_id: string,
+    currency: string,
+    amount: number,
+    amount_sek: number | null,
+    exchange_rate: number | null,
+    exchange_rate_date: string | null,
+    refreshed: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "transaction_id": "a8f1…",
+    "currency": "EUR",
+    "amount": -100,
+    "amount_sek": -1150.4,
+    "exchange_rate": 11.504,
+    "exchange_rate_date": "2026-05-12",
+    "refreshed": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/transactions/{id}/uncategorize`
 
 **Reverse the categorization of a transaction (storno + reset).**
@@ -2055,6 +3294,99 @@ Example response `200`:
       "succeeded": 1,
       "failed": 0
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/transactions/bulk-book`
+
+**Book several same-day SEK bank transactions as one samlingsverifikat.**
+`scope:transactions:write · risk:high · idempotent · dry-run`
+
+Books up to 200 transactions of the same date into ONE verifikat (samlingsverifikation, BFL 5 kap 6 §), in exactly one of three ways: existing_journal_entry_id links them to an already-posted voucher whose bank net equals their sum (nothing new is posted); template_id + mode + entry_description expands a booking template per row (one_line_per_tx) or on the sum (sum_per_account); manual_lines + entry_description posts caller-built balanced lines. SEK only. The dry run answers the lines and the signed sum (tx_sum). Idempotent. Dry-runnable.
+
+**Use when:** Many small same-day rows of one kind (Swish sales, card fees, a daily settlement) should be one verifikat.
+**Do not use for:** Rows on different dates, foreign-currency rows (book them one by one), or one row against invoices (POST /transactions/{id}/match-batch).
+
+**Pitfalls:**
+- All rows must share one date and direction, and currency SEK: BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.
+- A row that looks already booked returns 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE naming it; resend with force=true only after reviewing the candidate (each dismissal is logged in behandlingshistorik).
+- manual_lines accounts must be active in the company's chart (BULK_BOOK_INVALID_ACCOUNT) and balance; amounts are kronor, account numbers strings.
+- A posted samlingsverifikat is permanent: undo with storno (POST /journal-entries/{id}/reverse).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  tx_ids: string[],
+  existing_journal_entry_id?: string,
+  template_id?: string,
+  mode?: "one_line_per_tx" | "sum_per_account",
+  entry_description?: string,
+  manual_lines?: { account_number: string, debit_amount: number, credit_amount: number, currency?: string, line_description?: string, dimensions?: Record<string, string> }[],
+  default_dimensions?: Record<string, string>,
+  force?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "tx_ids": [
+    "a8f1…",
+    "b9e2…"
+  ],
+  "template_id": "5e4f…",
+  "mode": "sum_per_account",
+  "entry_description": "Swish-försäljning 2026-05-12"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    mode: "link_existing" | "create_new",
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    linked_tx_count: number,
+    tx_sum: number,
+    docs_linked: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "mode": "create_new",
+    "journal_entry_id": "4d2a…",
+    "voucher_series": "A",
+    "voucher_number": 57,
+    "linked_tx_count": 2,
+    "tx_sum": 1250,
+    "docs_linked": 0
   },
   "meta": {
     "request_id": "req_…",

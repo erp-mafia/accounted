@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { communitySlug, githubNewFileUrl, parseCommunitySkillMd, privacyFindings, publicBody, toCommunitySkillMd } from '../community-repo'
+import { communitySlug, githubNewFileUrl, isReservedCommunitySlug, parseCommunitySkillMd, privacyFindings, publicBody, toCommunitySkillMd } from '../community-repo'
 
 const submission = {
   slug: 'manadsavstamning-bank', title: 'Månadsavstämning av banken', description: 'Stämmer av bankkontot varje månad.',
@@ -11,6 +11,15 @@ describe('community-repo', () => {
   it('makes a folder name from a Swedish title', () => {
     expect(communitySlug('Månadsavstämning av banken')).toBe('manadsavstamning-av-banken')
     expect(communitySlug('  !!  ')).toBe('instruktion')
+  })
+
+  it('never names a community folder like one of Accounted\'s own packs (swedish-*)', () => {
+    expect(communitySlug('Swedish VAT')).toBe('community-swedish-vat')
+    expect(communitySlug('Swedish')).toBe('swedish')
+    expect(communitySlug(`Swedish ${'x'.repeat(80)}`)).toHaveLength(60)
+    expect(isReservedCommunitySlug(communitySlug(`Swedish ${'x'.repeat(80)}`))).toBe(false)
+    const md = toCommunitySkillMd({ ...submission, slug: 'swedish-vat' })
+    expect(parseCommunitySkillMd('swedish-vat', md)).toMatchObject({ error: expect.stringContaining('reserved') })
   })
 
   it('keeps the user\'s own words out of what goes public', () => {

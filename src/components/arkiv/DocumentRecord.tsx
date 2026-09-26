@@ -134,7 +134,8 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
             </Button>
           ) : (
             <Button size="sm" variant="outline" onClick={() => setDeciding('type')}>
-              {view.doc_type && view.doc_type !== 'other' ? t('record_change_type') : t('linked_say_what')}
+              {/* A booked document is not a question: the verifikat already says what it is. */}
+              {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
             </Button>
           )
         }
@@ -142,7 +143,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       <DocumentDecision
         doc={
           deciding
-            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: deciding, summary: view.classification?.summary ?? null }
+            ? { document_id: view.document_id, file_name: view.file_name, created_at: view.created_at, page_count: view.page_count, doc_type: view.doc_type, question: deciding, summary: view.classification?.summary ?? null, suggested_type: view.classification?.suggested_type ?? null, mime_type: view.mime_type }
             : null
         }
         onClose={() => setDeciding(null)}
@@ -157,14 +158,16 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
       />
       {view.classification?.summary && (
         <Section title={t('record_classification')}>
+          {/* Written by a model, so it says so: the document itself, beside it, is the source (founder: raw first). */}
           <p className="m-0 text-[13px]">{view.classification.summary}</p>
+          <p className="mt-1 text-[12.5px] text-muted-foreground">{t('record_classification_note')}</p>
         </Section>
       )}
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
         {/* The document itself, first: what was read from it sits beside it. */}
         <div className="lg:sticky lg:top-4 lg:self-start">
-          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} page={initialPage} className="h-[72vh]" />
+          <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} mime={view.mime_type ?? 'application/octet-stream'} page={initialPage} className="h-[72vh]" />
         </div>
         <div className="space-y-8">
         {view.record && (
@@ -252,14 +255,20 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     {view.read.lane === 'history_tied' ? ` ${t('record_text_lane_tied')}` : ''}
                   </p>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={reading}
-                  className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
-                  onClick={() => void loadText()}
-                >
+                <Button size="sm" variant="outline" loading={reading} onClick={() => void loadText()}>
                   {reading ? t('record_text_reading') : view.read.state === 'read' ? t('record_text_show') : t('record_text_read_now')}
-                </button>
+                </Button>
+                {/* A read the model does takes seconds: say what is happening, and show where the text will land. */}
+                {reading && view.read.state !== 'read' ? (
+                  <>
+                    <p className="text-[12.5px] text-muted-foreground">{t('record_text_reading_hint', { count: view.page_count ?? 0 })}</p>
+                    <div className="space-y-2 pt-1">
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-5/6" />
+                      <Skeleton className="h-4 w-2/3" />
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-4">

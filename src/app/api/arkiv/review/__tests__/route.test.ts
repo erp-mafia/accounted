@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase: mockSupabase, enqueue, reset } = createQueuedMockSupabase()
+const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 vi.mock('@/lib/company/context', () => ({ getActiveCompanyId: vi.fn() }))
@@ -21,9 +21,23 @@ beforeEach(() => {
 })
 
 describe('GET /api/arkiv/review', () => {
-  it('is not there outside the rollout', async () => {
+  it('is not there where neither the brain nor the Dokument section is on', async () => {
     process.env.ARKIV_BRAIN_COMPANY_IDS = ''
+    process.env.ARKIV_COMPANY_IDS = ''
     expect((await parseJsonResponse(await call())).status).toBe(404)
+  })
+
+  it('asks the document questions wherever Dokument is open, without field questions, and never about a booked document', async () => {
+    process.env.ARKIV_BRAIN_COMPANY_IDS = ''
+    process.env.ARKIV_COMPANY_IDS = 'company-1'
+    enqueue({ data: [], error: null }) // held
+    enqueue({ data: [{ document_id: 'u1', doc_type: 'other', confidence: 0.5, relevance: 'relevant', relevance_reason: null, addressed_to: null, summary: null, suggested_type: 'intyg' }], error: null })
+    enqueue({ data: [{ id: 'u1', file_name: 'intyg.pdf', created_at: '2026-09-13T10:00:00Z', page_count: 1, doc_type: 'other' }], error: null })
+    const { status, body } = await parseJsonResponse(await call())
+    expect(status).toBe(200)
+    expect((body as { data: { unclassified: unknown[]; fields: unknown[] } }).data).toMatchObject({ unclassified: [{ document_id: 'u1' }], fields: [] })
+    expect(findCalls('document_attachments', 'is')).toEqual(expect.arrayContaining([['journal_entry_id', null], ['journal_entry_line_id', null]]))
+    delete process.env.ARKIV_COMPANY_IDS
   })
 
   it('returns the held documents with their reason and the admitted ones the model could not type', async () => {

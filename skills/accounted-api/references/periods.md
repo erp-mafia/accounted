@@ -15,7 +15,7 @@ are in SKILL.md and are not repeated per endpoint.
 Returns the company's own chart of accounts (kontoplan), ordered by account_number, which is the BAS sequence (a longer sub-account number such as 19301 sorts directly after 1930). This is not the full BAS 2026 catalogue: a new company starts with a small set of accounts seeded for its company form, and standard BAS accounts join the chart when the user activates them, when an import brings them in, or automatically the first time a verifikat posts to one. Filter with ?class=<0-9>, the first digit of account_number: 1 assets; 2 equity, untaxed reserves and liabilities; 3 operating revenue; 4 goods, materials and subcontracted services; 5 external expenses for premises, leasing, energy, consumables, repairs, vehicles, freight, travel, and advertising and PR; 6 other external expenses such as selling costs, office supplies, telecom, insurance, administration, accounting, IT and consulting services, and hired staff; 7 personnel costs, plus write-downs and depreciation (77xx-78xx); 8 financial items, year-end appropriations (88xx), and tax and the year's result (89xx). Classes 0 and 9 are outside BAS's 1-8 (free for company use) and appear only on internal accounts, typically carried over from an imported chart. Only active accounts are returned by default; pass ?active=false to include deactivated ones.
 
 **Use when:** You need account numbers and names to render verifikation tables, build a custom report, check that an account is active before booking to it, or look up an account's type, normal balance, SRU code or VAT defaults.
-**Do not use for:** Fetching balances: use the trial-balance report. Creating, renaming or deactivating accounts: v1 has no account write endpoint. Use the Kontoplan (chart of accounts) page in the app, or the MCP tools accounted_create_account and accounted_update_account, which stage the change for approval.
+**Do not use for:** Fetching balances: use the trial-balance report. Creating, editing, deactivating or deleting accounts: POST /accounts, PATCH and DELETE /accounts/{number}, POST /accounts/activate and /accounts/deactivate.
 
 **Pitfalls:**
 - account_number is a STRING: "1930", not 1930. BAS numbers have four digits; a chart imported from another system can also carry longer sub-account numbers such as "19301".
@@ -88,6 +88,441 @@ Example response `200`:
         "sort_order": 0
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accounts`
+
+**Add an account to the chart of accounts (kontoplan).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Adds an account to the company's kontoplan. A BAS 2026 number needs nothing but the number: name, account_type, normal_balance, description and SRU code are prefilled from the catalogue, and anything you send wins. A number outside BAS 2026 must name account_name, account_type and normal_balance. account_class and account_group derive from the number. A default_vat_treatment without a default_vat_rate derives the booking rate. Idempotent. Dry-runnable.
+
+**Use when:** A verifikat needs an account the chart does not carry: a company-specific sub-account, or a BAS account the company has not used yet.
+**Do not use for:** Reactivating a deactivated account (PATCH is_active=true, or POST /accounts/activate) or bulk-adding standard BAS accounts (POST /accounts/activate).
+
+**Pitfalls:**
+- account_number is a STRING of exactly 4 digits: "5410", not 5410.
+- The account_type must fit the class, the first digit: 1 asset; 2 equity, liability or untaxed_reserves (21xx only); 3 revenue; 4-7 expense; 8 revenue or expense. A mismatch returns 400 ACCOUNT_TYPE_CLASS_CONFLICT.
+- A number already in the chart returns 409 ACCOUNT_EXISTS, or ACCOUNT_EXISTS_INACTIVE when it was deactivated: reactivate it instead.
+- default_vat_rate is a fraction (0, 0.06, 0.12, 0.25), not a percentage.
+- vat_box (momsruta override) only fits 26xx VAT accounts other than 2650.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  account_number: string,
+  account_name?: string,
+  account_type?: "asset" | "equity" | "liability" | "revenue" | "expense" | "untaxed_reserves",
+  normal_balance?: "debit" | "credit",
+  description?: string,
+  default_vat_code?: string,
+  default_vat_rate?: 0,
+  default_vat_treatment?: "standard_25",
+  vat_box?: "10",
+  sru_code?: string
+}
+```
+
+Example request:
+```json
+{
+  "account_number": "5410"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    account_number: string,
+    account_name: string,
+    account_class: number,
+    account_group: string,
+    account_type: "asset" | "equity" | "liability" | "revenue" | "expense" | "untaxed_reserves",
+    normal_balance: "debit" | "credit",
+    plan_type: string | null,
+    is_active: boolean,
+    is_system_account: boolean,
+    description: string | null,
+    default_vat_code: string | null,
+    default_vat_rate: number | null,
+    default_vat_treatment: "standard_25" | "reduced_12" | "reduced_6" | "exempt" | "reverse_charge_domestic" | "reverse_charge_eu_goods" | "reverse_charge_eu_services" | "reverse_charge_non_eu_services" | "export_goods" | "export_services" | "vmb" | "rental_voluntary" | "oss" | "triangulation_eu_goods" | "own_use" | "import_goods" | null,
+    vat_box: "10" | "11" | "12" | "30" | "31" | "32" | "48" | "60" | "61" | "62" | null,
+    sru_code: string | null,
+    sort_order: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "8d0e…",
+    "account_number": "5410",
+    "account_name": "Förbrukningsinventarier",
+    "account_class": 5,
+    "account_group": "54",
+    "account_type": "expense",
+    "normal_balance": "debit",
+    "plan_type": "full_bas",
+    "is_active": true,
+    "is_system_account": false,
+    "description": null,
+    "default_vat_code": null,
+    "default_vat_rate": null,
+    "default_vat_treatment": null,
+    "vat_box": null,
+    "sru_code": "7321",
+    "sort_order": 5410
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/accounts/{number}`
+
+**Edit or deactivate an account in the chart of accounts.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update of one kontoplan account: name, description, VAT defaults (code, booking rate, treatment), momsruta override (vat_box), SRU code and is_active (false deactivates it: history and balances stay, new verifikat cannot use it). An empty string or null clears a text field. The number, class, type and normal balance are fixed: an account that should be something else is a new account. A treatment without a rate derives the booking rate only when none is stored. Idempotent. Dry-runnable.
+
+**Use when:** An account needs a clearer name, other VAT defaults or SRU mapping, or should stop (or start again) being offered for bookings.
+**Do not use for:** Removing an unused account (DELETE) or deactivating many at once (POST /accounts/deactivate).
+
+**Pitfalls:**
+- The path takes the account number as a STRING, e.g. /accounts/5410.
+- At least one field must be sent: an empty body returns 400 ACCOUNT_NOTHING_TO_UPDATE.
+- default_vat_treatment must fit the class (400 ACCOUNT_VAT_TREATMENT_CLASS); null restores the BAS mapping.
+- vat_box only fits 26xx VAT accounts other than 2650; null restores the BAS momsruta.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `number` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  account_name?: string,
+  description?: string,
+  default_vat_code?: string,
+  default_vat_rate?: 0,
+  default_vat_treatment?: "standard_25",
+  vat_box?: "10",
+  sru_code?: string,
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "account_name": "Verktyg och inventarier"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    account_number: string,
+    account_name: string,
+    account_class: number,
+    account_group: string,
+    account_type: "asset" | "equity" | "liability" | "revenue" | "expense" | "untaxed_reserves",
+    normal_balance: "debit" | "credit",
+    plan_type: string | null,
+    is_active: boolean,
+    is_system_account: boolean,
+    description: string | null,
+    default_vat_code: string | null,
+    default_vat_rate: number | null,
+    default_vat_treatment: "standard_25" | "reduced_12" | "reduced_6" | "exempt" | "reverse_charge_domestic" | "reverse_charge_eu_goods" | "reverse_charge_eu_services" | "reverse_charge_non_eu_services" | "export_goods" | "export_services" | "vmb" | "rental_voluntary" | "oss" | "triangulation_eu_goods" | "own_use" | "import_goods" | null,
+    vat_box: "10" | "11" | "12" | "30" | "31" | "32" | "48" | "60" | "61" | "62" | null,
+    sru_code: string | null,
+    sort_order: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "8d0e…",
+    "account_number": "5410",
+    "account_name": "Verktyg och inventarier",
+    "account_class": 5,
+    "account_group": "54",
+    "account_type": "expense",
+    "normal_balance": "debit",
+    "plan_type": "full_bas",
+    "is_active": true,
+    "is_system_account": false,
+    "description": null,
+    "default_vat_code": null,
+    "default_vat_rate": null,
+    "default_vat_treatment": null,
+    "vat_box": null,
+    "sru_code": "7321",
+    "sort_order": 5410
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/accounts/{number}`
+
+**Delete an account nothing has been booked on.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Removes an account from the kontoplan. Refused for system accounts and for any account with journal lines in this company, on any entry status including drafts (BFL: a verifikat is immutable and its lines must keep resolving to an account). Deactivate those with PATCH is_active=false instead. Idempotent. Dry-runnable.
+
+**Use when:** An account was added by mistake, or an imported chart carries accounts the company never used.
+**Do not use for:** Retiring an account that has been used: deactivate it (PATCH is_active=false).
+
+**Pitfalls:**
+- An account with any journal line returns 409 ACCOUNT_IN_USE with details.usage_count.
+- System accounts (seeded at company creation) return 400 ACCOUNT_SYSTEM_DELETE.
+- A standard BAS account can be re-added later with POST /accounts or POST /accounts/activate.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `number` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, account_number: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "account_number": "5410"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accounts/activate`
+
+**Activate BAS accounts in bulk.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Makes each listed account bookable: a standard BAS 2026 number missing from the chart is added from the catalogue, a deactivated account is reactivated, an active one is skipped. Numbers that are neither in the chart nor in BAS 2026 are reported in `unknown`, not refused: add those one at a time with POST /accounts. Idempotent. Dry-runnable.
+
+**Use when:** A booking failed with ACCOUNTS_NOT_IN_CHART, or you want a set of standard BAS accounts available before importing or booking.
+**Do not use for:** A company-specific account outside BAS 2026 (POST /accounts with name, type and normal balance).
+
+**Pitfalls:**
+- account_numbers are STRINGS: ["5410", "6570"].
+- Up to 2000 numbers per call; duplicates are counted once.
+- Check `unknown` in the answer: those numbers were not added.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ account_numbers: string[] }
+```
+
+Example request:
+```json
+{
+  "account_numbers": [
+    "5410",
+    "6570"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accounts: { account_number: string }[],
+    activated: number,
+    reactivated: number,
+    skipped: number,
+    unknown: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_number": "5410"
+      }
+    ],
+    "activated": 1,
+    "reactivated": 0,
+    "skipped": 1,
+    "unknown": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accounts/deactivate`
+
+**Deactivate accounts in bulk.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Deactivates each listed account so it stops being offered for new bookings; history and balances stay. System accounts are always skipped, and accounts with journal lines are skipped unless include_used=true (deactivating a used account hides its balance from the kontoplan). Already inactive numbers are counted, numbers not in the chart reported in `unknown`. Idempotent. Dry-runnable.
+
+**Use when:** Tidying a chart imported from a previous system, where hundreds of accounts were never posted to.
+**Do not use for:** Removing accounts for good (DELETE /accounts/{number}, unused accounts only).
+
+**Pitfalls:**
+- account_numbers are STRINGS.
+- include_used defaults to false: used accounts come back in skipped_used.
+- Reactivate with POST /accounts/activate or PATCH is_active=true.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ account_numbers: string[], include_used?: boolean }
+```
+
+Example request:
+```json
+{
+  "account_numbers": [
+    "6991",
+    "7699"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accounts: { account_number: string }[],
+    deactivated: number,
+    skipped_system: string[],
+    skipped_used: string[],
+    skipped_inactive: number,
+    unknown: string[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accounts": [
+      {
+        "account_number": "6991"
+      }
+    ],
+    "deactivated": 1,
+    "skipped_system": [],
+    "skipped_used": [
+      "7699"
+    ],
+    "skipped_inactive": 0,
+    "unknown": []
   },
   "meta": {
     "request_id": "req_…",
@@ -198,7 +633,7 @@ Response `200`:
 ```ts
 {
   data: {
-    dimensions: { id: string, sie_dim_no: number, name: string, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
+    dimensions: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number, values: { id: string, code: string, name: string, is_active: boolean, start_date: string | null, end_date: string | null }[] }[]
   },
   meta: {
     request_id: string,
@@ -221,6 +656,7 @@ Example response `200`:
         "id": "0e9c…",
         "sie_dim_no": 1,
         "name": "Kostnadsställe",
+        "parent_sie_dim_no": null,
         "resets_annually": true,
         "is_system": true,
         "is_active": true,
@@ -237,6 +673,211 @@ Example response `200`:
         ]
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/dimensions`
+
+**Create a custom dimension (e.g. Avdelning, Kund, Fordon).**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Adds a dimension to the registry (SIE #DIM). Omit sie_dim_no and the next free number from 20 is used: SIE reserves 1-19 for standardized meanings (1 Kostnadsställe, 6 Projekt, 7 Anställd, ...). parent_sie_dim_no declares an #UNDERDIM hierarchy and must name an existing dimension. Add values afterwards with POST /dimensions/{id}/values. Idempotent. Dry-runnable.
+
+**Use when:** The company wants to follow up on something beyond kostnadsställe and projekt, and no existing dimension fits.
+**Do not use for:** Adding a cost centre or project code: those are values of the system dimensions 1 and 6 (POST /dimensions/{id}/values).
+
+**Pitfalls:**
+- An explicit sie_dim_no that is taken returns 409 DIMENSION_NUMBER_TAKEN; omit it to get the next free number.
+- Numbers 1-19 have standardized SIE meanings: only use one when the dimension really is that (e.g. 7 Anställd).
+- resets_annually defaults to true (balances reset each fiscal year, like kostnadsställe); set false for things that accumulate, like projekt.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name: string, sie_dim_no?: number, resets_annually?: boolean, parent_sie_dim_no?: number | null }
+```
+
+Example request:
+```json
+{
+  "name": "Avdelning"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    dimension: { id: string, sie_dim_no: number, name: string, parent_sie_dim_no: number | null, resets_annually: boolean, is_system: boolean, is_active: boolean, sort_order: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "dimension": {
+      "id": "3c1d…",
+      "sie_dim_no": 20,
+      "name": "Avdelning",
+      "parent_sie_dim_no": null,
+      "resets_annually": true,
+      "is_system": false,
+      "is_active": true,
+      "sort_order": 100
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/dimensions/{id}`
+
+**Rename, archive or reorder a dimension.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Sparse update of a dimension: name, is_active (false archives it, hiding it from pickers while history keeps its tags) and sort_order. The system dimensions 1 (Kostnadsställe) and 6 (Projekt) can be archived and reordered but not renamed. sie_dim_no is immutable. Idempotent. Dry-runnable.
+
+**Use when:** A dimension needs a clearer name, should stop being offered for new tags, or should move in the pickers.
+**Do not use for:** Changing a value (use PATCH /dimensions/{id}/values/{valueId}) or removing a dimension (DELETE).
+
+**Pitfalls:**
+- Renaming a system dimension returns 400 DIMENSION_SYSTEM_RENAME.
+- At least one of name, is_active, sort_order must be sent.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name?: string, is_active?: boolean, sort_order?: number }
+```
+
+Example request:
+```json
+{
+  "is_active": false
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    sie_dim_no: number,
+    name: string,
+    parent_sie_dim_no: number | null,
+    resets_annually: boolean,
+    is_system: boolean,
+    is_active: boolean,
+    sort_order: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "3c1d…",
+    "sie_dim_no": 20,
+    "name": "Avdelning",
+    "parent_sie_dim_no": null,
+    "resets_annually": true,
+    "is_system": false,
+    "is_active": false,
+    "sort_order": 100
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/dimensions/{id}`
+
+**Delete a custom dimension nobody has booked on.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Removes a custom dimension and its values. Refused for the system dimensions and for any dimension whose number is tagged on a posted or reversed verifikat line (BFL 7 kap: booked history is never pulled out from under a verifikat). Archive it with PATCH is_active=false instead. Idempotent. Dry-runnable.
+
+**Use when:** A dimension was created by mistake and nothing has been booked on it.
+**Do not use for:** Retiring a dimension that has been used: archive it (PATCH is_active=false).
+
+**Pitfalls:**
+- A dimension used on any posted line returns 409 DIMENSION_REFERENCED naming it.
+- System dimensions return 400 DIMENSION_SYSTEM_DELETE.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { deleted: true, dimension_id: string },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "deleted": true,
+    "dimension_id": "3c1d…"
   },
   "meta": {
     "request_id": "req_…",
@@ -477,7 +1118,7 @@ Example response `200`:
 Returns every fiscal period for the company ordered by period_start DESC. is_closed=true means bokslut has been signed; locked_at non-null means writes are blocked at the DB-trigger level.
 
 **Use when:** You need to find the active period before booking, build a year-selector UI, or audit the period-lock history.
-**Do not use for:** Creating, locking, or closing periods: those land in Phase 4 (`POST /fiscal-periods/{id}/lock`, `:close`, `:year-end`). Use the dashboard or wait for Phase 4.
+**Do not use for:** Creating, editing, locking or closing periods: use POST /fiscal-periods, PATCH /fiscal-periods/{id}, POST /fiscal-periods/{id}/lock, /unlock, /close and /year-end.
 
 **Pitfalls:**
 - previous_period_id chains the bokslut continuity (BFNAR 2013:2). A null value on a non-first period is a data-quality red flag.
@@ -520,6 +1161,921 @@ Example response `200`:
         "locked_at": null
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods`
+
+**Create a fiscal year (räkenskapsår).**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+Creates a räkenskapsår and links it into the continuity chain (previous_period_id, BFNAR 2013:2). The year must be at most 18 months, end on a month end, and start on the 1st unless it becomes the earliest year (BFL 3 kap. 1 and 3 §§). It must be contiguous with its neighbours: appended, it starts the day after the latest year ends; filling a gap, it also ends the day before the next year starts; prepended, it ends the day before the earliest year starts. A still-open prior year does not block: the 201 carries a PRIOR_FISCAL_YEAR_STILL_OPEN warning. Idempotent. Dry-runnable.
+
+**Use when:** The company needs the next räkenskapsår to book in (e.g. January arrives), or an earlier year must exist before its SIE file or opening balances can be imported.
+**Do not use for:** Closing the prior year (run the year-end), or changing an existing year (PATCH /fiscal-periods/{id}).
+
+**Pitfalls:**
+- A start that does not continue the preceding year answers 400 FISCAL_PERIOD_NOT_CONTIGUOUS with details.expected_start (or details.expected_end): retry with that date.
+- Overlapping an existing year answers 409 FISCAL_PERIOD_OVERLAP.
+- An enskild firma normally runs the calendar year; a brutet räkenskapsår needs Skatteverket's permission.
+- There is no delete: a wrong year can be re-dated with PATCH only while nothing is posted in it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name: string, period_start: string, period_end: string }
+```
+
+Example request:
+```json
+{
+  "name": "Räkenskapsår 2027",
+  "period_start": "2027-01-01",
+  "period_end": "2027-12-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    fiscal_period: { id: string, name: string, period_start: string, period_end: string, is_closed: boolean, closed_at: string | null, closed_externally: boolean, locked_at: string | null, previous_period_id: string | null, created_at: string }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "fiscal_period": {
+      "id": "a8f1…",
+      "name": "Räkenskapsår 2027",
+      "period_start": "2027-01-01",
+      "period_end": "2027-12-31",
+      "is_closed": false,
+      "closed_at": null,
+      "closed_externally": false,
+      "locked_at": null,
+      "previous_period_id": "5c2e…",
+      "created_at": "2026-12-01T09:00:00Z"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}`
+
+**Rename or re-date an open fiscal year.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Sparse update of an open, unlocked räkenskapsår: name, period_start, period_end. The name can change at any time on an open year; the dates only while no posted or reversed verifikat exist in it. New dates follow the same BFL 3 kap. rules as create (18-month cap, month-end end, 1st-of-month start unless it is the earliest year, calendar year for an enskild firma) and may not overlap another year. Idempotent. Dry-runnable.
+
+**Use when:** A year was created with the wrong dates or name and nothing has been booked in it yet.
+**Do not use for:** Moving verifikat between years, changing a locked or closed year, or lengthening a year that already has bookings.
+
+**Pitfalls:**
+- Any posted or reversed verifikat in the year answers 409 FISCAL_PERIOD_HAS_POSTED_ENTRIES when dates are sent: send only name to rename.
+- A locked year answers 409 FISCAL_PERIOD_UPDATE_LOCKED, a closed one 409 FISCAL_PERIOD_UPDATE_CLOSED.
+- Re-dating does not re-chain previous_period_id: keep the years contiguous yourself.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ name?: string, period_start?: string, period_end?: string }
+```
+
+Example request:
+```json
+{
+  "period_end": "2027-06-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2027",
+    "period_start": "2027-01-01",
+    "period_end": "2027-06-30",
+    "is_closed": false,
+    "closed_at": null,
+    "closed_externally": false,
+    "locked_at": null,
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance`
+
+**Answer the årsredovisning compliance questions and record the confirmations.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
+
+**Use when:** The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
+**Do not use for:** The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).
+
+**Pitfalls:**
+- An unanswered question is null, never false: false is a legal assertion that the condition does not apply.
+- signer_roster_confirmed asserts the roster matches the board and VD registered at Bolagsverket; any later roster change clears it.
+- is_parent_company false also clears parent_group_size and prepares_consolidated_accounts.
+- Send at least one field (400 VALIDATION_ERROR otherwise).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  is_public_limited_company?: boolean | null,
+  is_in_liquidation?: boolean | null,
+  securities_traded_on_regulated_market?: boolean | null,
+  is_parent_company?: boolean | null,
+  parent_group_size?: "none" | "small" | "large" | null,
+  prepares_consolidated_accounts?: boolean | null,
+  has_foreign_branch?: boolean | null,
+  has_crypto_assets?: boolean | null,
+  has_share_based_payments?: boolean | null,
+  has_convertible_debt?: boolean | null,
+  building_revenue_share_pct?: number | null,
+  has_material_deferred_tax?: boolean | null,
+  reporting_currency?: "SEK" | "EUR",
+  auditor_report_required?: boolean | null,
+  auditor_report_included?: boolean,
+  dividend_prudence_confirmed?: boolean | null,
+  narrative_confirmed?: boolean,
+  k2_assessment_confirmed?: boolean,
+  signer_roster_confirmed?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "is_public_limited_company": false,
+  "k2_assessment_confirmed": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    profile: Record<string, unknown>,
+    disclosures: Record<string, unknown>,
+    eligibility: Record<string, unknown>,
+    validation: Record<string, unknown>,
+    capabilities: Record<string, unknown>,
+    report_summary: { proposed_dividend: number | null, distributable_equity: number | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "profile": {
+      "annual_report_profile_id": "9d3a…",
+      "is_public_limited_company": false
+    },
+    "validation": {
+      "stage": "draft",
+      "ok": true,
+      "error_count": 0,
+      "warning_count": 1,
+      "issues": []
+    },
+    "report_summary": {
+      "proposed_dividend": 0,
+      "distributable_equity": 412000
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl`
+
+**The K2 årsredovisning as an inline XBRL (XHTML) document.**
+`scope:reports:read · risk:low · idempotent`
+
+Generates the iXBRL document Bolagsverket's digital filing takes (K2, Bolagsverket taxonomy), for the live draft or a frozen version (version_id). The XHTML is also the human-readable document. It is not a filing: digital filing goes through connected software with the fastställelseintyg signed by BankID, which this API does not do.
+
+**Use when:** Archiving the digital document, or validating it with external tools.
+**Do not use for:** The pre-flight result as JSON (GET .../arsredovisning/ixbrl/validate) or a printable copy (GET .../arsredovisning/pdf).
+
+**Pitfalls:**
+- K2 aktiebolag only.
+- The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
+- proposed_dividend (whole SEK) applies to the live draft only.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+| `proposed_dividend` | query | `number` | no | Live draft only: proposed dividend in whole SEK for the resultatdisposition. |
+
+Response `200` (`application/xhtml+xml`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl/validate`
+
+**Pre-flight the generated iXBRL årsredovisning against Bolagsverket's kontrollera rules.**
+`scope:reports:read · risk:low · idempotent`
+
+Generates the K2 inline XBRL document (the live draft, or a frozen version with version_id) and runs the local mirror of Bolagsverket's kontrollera checks on it, plus a generation dry run and the 5 MB size limit. Issues carry the Bolagsverket code where one exists (e.g. 1107 missing signers) or ACC-*. Nothing is sent to Bolagsverket. Read-only.
+
+**Use when:** Before a digital filing, or to see why the iXBRL document is not ready.
+**Do not use for:** The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).
+
+**Pitfalls:**
+- K2 aktiebolag only: the iXBRL generator does not produce K3 documents.
+- A validation with issues still answers 200; read ok and error_count.
+- An unknown version_id answers 404 NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+| `proposed_dividend` | query | `number` | no | Live draft only: proposed dividend in whole SEK for the resultatdisposition. |
+
+Response `200`:
+```ts
+{
+  data: {
+    ok: boolean,
+    issues: { code: string, severity: "error" | "warn", message: string }[],
+    error_count: number,
+    warning_count: number,
+    generated_bytes: number,
+    entry_point: string,
+    period: { start: string, end: string },
+    annual_report_version_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "ok": false,
+    "issues": [
+      {
+        "code": "1107",
+        "severity": "error",
+        "message": "Underskrifter saknas."
+      }
+    ],
+    "error_count": 1,
+    "warning_count": 0,
+    "generated_bytes": 84211,
+    "entry_point": "k2-ab-risbs-2024-09-12",
+    "period": {
+      "start": "2026-01-01",
+      "end": "2026-12-31"
+    },
+    "annual_report_version_id": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/narrative`
+
+**Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
+
+**Use when:** Writing or correcting the texts of the årsredovisning before a version is frozen for signing.
+**Do not use for:** The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).
+
+**Pitfalls:**
+- A version already frozen keeps its text: freeze a new version after editing.
+- agm_disposition_outcome alternative_decision needs agm_disposition_decision text (400 VALIDATION_ERROR).
+- parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.
+- Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.
+- Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  description?: string | null,
+  important_events?: string | null,
+  resultatdisposition?: string | null,
+  proposed_dividend?: number | null,
+  agm_date?: string | null,
+  long_term_debt_over_five_years?: number | null,
+  securities_pledged?: string | null,
+  contingent_liabilities?: string | null,
+  parent_company_name?: string | null,
+  parent_company_org_number?: "" | string | null,
+  parent_company_city?: string | null,
+  medelantal_anstallda_override?: number | null,
+  long_term_debt_over_five_years_confirmed?: boolean,
+  securities_pledged_confirmed?: boolean,
+  contingent_liabilities_confirmed?: boolean,
+  parent_company_confirmed?: boolean,
+  agm_disposition_outcome?: "proposal_approved" | "alternative_decision" | null,
+  agm_disposition_decision?: string | null,
+  note_overrides?: Record<string, string | null>,
+  omit_kassaflodesanalys?: boolean,
+  kassaflodesanalys_omission_confirmed?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "description": "Bolaget bedriver konsultverksamhet inom IT.",
+  "agm_date": "2027-05-20"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    narrative_id: string,
+    fiscal_period_id: string,
+    description: string | null,
+    important_events: string | null,
+    resultatdisposition: string | null,
+    proposed_dividend: number | null,
+    agm_date: string | null,
+    long_term_debt_over_five_years: number | null,
+    securities_pledged: string | null,
+    contingent_liabilities: string | null,
+    parent_company_name: string | null,
+    parent_company_org_number: string | null,
+    parent_company_city: string | null,
+    medelantal_anstallda_override: number | null,
+    agm_disposition_outcome: "proposal_approved" | "alternative_decision" | null,
+    agm_disposition_decision: string | null,
+    note_overrides: Record<string, string>,
+    omit_kassaflodesanalys: boolean,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "narrative_id": "1f0e…",
+    "fiscal_period_id": "7c2b…",
+    "description": "Bolaget bedriver konsultverksamhet inom IT.",
+    "agm_date": "2027-05-20",
+    "updated_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/pdf`
+
+**The årsredovisning as PDF: the live draft or a frozen version.**
+`scope:reports:read · risk:low · idempotent`
+
+Renders the årsredovisning for the räkenskapsår (K2 or K3 template by the framework) as the dashboard does. Without version_id it is the live draft from the books, named ...-utkast.pdf; with version_id it is that immutable version with the signatures recorded on it, named ...-papperskopia.pdf once signed. Nothing is sent to Bolagsverket.
+
+**Use when:** A printable copy for the board to sign on paper, the archive, or a review.
+**Do not use for:** The inline XBRL document for digital filing (GET .../arsredovisning/ixbrl) or the report as JSON (gnubok_preview_arsredovisning).
+
+**Pitfalls:**
+- The live draft is refused while an SIE import is unfinished (409); a frozen version stays readable.
+- An unknown version_id answers 404 NOT_FOUND.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `version_id` | query | `string` | no | A frozen version (annual_report_version_id); omit for the live draft. |
+
+Response `200` (`application/pdf`).
+
+---
+
+### `GET /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures`
+
+**The årsredovisning signer roster and its signatures.**
+`scope:reports:read · risk:low · idempotent`
+
+The current signer slots for the räkenskapsår: the unbound pending roster while one exists, otherwise the slots bound to the latest version with their status, signing date, method and evidence reference. The signature_id values are what PATCH and DELETE .../signatures/{signatureId} take; finalizing a version may create new slots bound to it. Read-only.
+
+**Use when:** Before adding a signer (avoid duplicates) or to find the slot to record a signature on after a version is finalized.
+**Do not use for:** The report content (gnubok_preview_arsredovisning) or the version list (gnubok_list_arsredovisning_versions).
+
+**Pitfalls:**
+- Declined slots are listed too; they do not appear in the document.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    signatures: { signature_id: string, fiscal_period_id: string, annual_report_version_id: string | null, role: string, signer_name: string, status: "pending" | "signed" | "declined", signed_at: string | null, signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null, evidence_reference: string | null, evidence_recorded_at: string | null, created_at: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signatures": [
+      {
+        "signature_id": "5b1c…",
+        "fiscal_period_id": "7c2b…",
+        "annual_report_version_id": null,
+        "role": "Styrelseledamot",
+        "signer_name": "Anna Andersson",
+        "status": "pending",
+        "signed_at": null,
+        "signing_method": null,
+        "evidence_reference": null,
+        "evidence_recorded_at": null,
+        "created_at": "2027-03-02T09:00:00Z"
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures`
+
+**Add a board member or the VD to the årsredovisning signer roster.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Adds a pending signer slot (role and name) to the roster for the räkenskapsår. ÅRL 2 kap. 7 § requires every ordinarie styrelseledamot and the VD, if any, to sign. This records who is to sign; it signs nothing and involves no BankID. Any roster change clears the signer roster confirmation. Answers 201 with the slot. Idempotent. Dry-runnable.
+
+**Use when:** Setting up who signs, before finalizing a version (POST .../arsredovisning/versions action finalize).
+**Do not use for:** Recording that someone signed (PATCH .../signatures/{signatureId}) or filing with Bolagsverket.
+
+**Pitfalls:**
+- The same role and name twice on the unbound roster answers 409 ARSREDOVISNING_SIGNER_ALREADY_EXISTS.
+- signer_name is the name as registered at Bolagsverket; a personnummer is refused (400).
+- Confirm the roster afterwards: PATCH .../compliance {"signer_roster_confirmed": true}.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör",
+  signer_name: string
+}
+```
+
+Example request:
+```json
+{
+  "role": "Styrelseledamot",
+  "signer_name": "Anna Andersson"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signature_id: string,
+    fiscal_period_id: string,
+    annual_report_version_id: string | null,
+    role: string,
+    signer_name: string,
+    status: "pending" | "signed" | "declined",
+    signed_at: string | null,
+    signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null,
+    evidence_reference: string | null,
+    evidence_recorded_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "fiscal_period_id": "7c2b…",
+    "annual_report_version_id": null,
+    "role": "Styrelseledamot",
+    "signer_name": "Anna Andersson",
+    "status": "pending",
+    "signed_at": null,
+    "signing_method": null,
+    "evidence_reference": null,
+    "evidence_recorded_at": null,
+    "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId}`
+
+**Record that a signer signed the frozen årsredovisning version, or declined.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version's finalization and today. Idempotent. Dry-runnable.
+
+**Use when:** The board has signed the printed or e-signed document and the signatures are to be registered.
+**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).
+
+**Pitfalls:**
+- A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.
+- A slot already signed or declined, bound to another version, or of another period answers 409 SIGNATURE_INVALID_TRANSITION.
+- A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.
+- evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.
+- Recorded signatures cannot be undone: finalize a new version instead.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `signatureId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  status: "signed" | "declined",
+  annual_report_version_id?: string,
+  signing_method?: "paper_original" | "advanced_e_signature" | "bankid",
+  evidence_reference?: string,
+  signed_at?: string
+}
+```
+
+Example request:
+```json
+{
+  "status": "signed",
+  "annual_report_version_id": "4e7d…",
+  "signing_method": "paper_original",
+  "evidence_reference": "archive:AR-2026-1",
+  "signed_at": "2027-03-05T10:00:00Z"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signature_id: string,
+    fiscal_period_id: string,
+    annual_report_version_id: string | null,
+    role: string,
+    signer_name: string,
+    status: "pending" | "signed" | "declined",
+    signed_at: string | null,
+    signing_method: "paper_original" | "advanced_e_signature" | "bankid" | "bolagsverket" | null,
+    evidence_reference: string | null,
+    evidence_recorded_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "fiscal_period_id": "7c2b…",
+    "annual_report_version_id": "4e7d…",
+    "role": "Styrelseledamot",
+    "signer_name": "Anna Andersson",
+    "status": "signed",
+    "signed_at": "2027-03-05T10:00:00Z",
+    "signing_method": "paper_original",
+    "evidence_reference": "archive:AR-2026-1",
+    "evidence_recorded_at": null,
+    "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId}`
+
+**Remove a signer from the årsredovisning roster before a version binds it.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Deletes a pending signer slot that no version has bound yet. Slots bound to a finalized version stay (they are part of what gets signed): finalize a new version with the corrected roster instead. Any roster change clears the signer roster confirmation. Idempotent. Dry-runnable.
+
+**Use when:** A signer was added by mistake or has left the board before the version is finalized.
+**Do not use for:** Declining a bound slot (PATCH .../signatures/{signatureId} {"status": "declined"}).
+
+**Pitfalls:**
+- A bound, signed or declined slot answers 409 ARSREDOVISNING_SIGNER_ROSTER_LOCKED.
+- Takes no body.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `signatureId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { signature_id: string, deleted: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signature_id": "5b1c…",
+    "deleted": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions`
+
+**Freeze an immutable årsredovisning version: a draft snapshot, or the version that gets signed.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Builds the årsredovisning from a complete read of the books (refused while an SIE import is unfinished) and stores it as an immutable version with its content hash. action snapshot stores a draft; action finalize requires every signing-stage check to pass, marks the version ready_for_signature, supersedes an earlier ready or signed version and binds the signer roster to it. certificate_signer names who signs the fastställelseintyg. expected_content_hash (from a dry run) makes the call refuse when the content has changed since. Answers 201 with the version. Idempotent. Dry-runnable: the dry run answers the content hash and the validation counts.
+
+**Use when:** The texts, compliance answers and signer roster are done and the document is to be signed (finalize), or a checkpoint of the draft is wanted (snapshot).
+**Do not use for:** Filing with Bolagsverket (dashboard only, BankID), recording signatures (PATCH .../signatures/{signatureId}) or reading the document (GET .../arsredovisning/pdf).
+
+**Pitfalls:**
+- Statements that do not tie, or (finalize) any signing-stage error, answer 409 ARSREDOVISNING_INCOMPLETE with the validation in details: run gnubok_validate_arsredovisning with stage signing first.
+- finalize needs a confirmed signer roster (PATCH .../compliance {"signer_roster_confirmed": true}) and at least one signer.
+- Content changed since the hash you pass: 409 ARSREDOVISNING_CONTENT_CHANGED; dry-run again and review.
+- A new finalize supersedes the previous ready_for_signature version; signatures recorded on it do not carry over.
+- Refused while an SIE import is unfinished: complete or undo it first.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  action: "snapshot" | "finalize",
+  certificate_signer?: {
+    first_name: string,
+    last_name: string,
+    role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör"
+  },
+  expected_content_hash?: string
+}
+```
+
+Example request:
+```json
+{
+  "action": "finalize",
+  "certificate_signer": {
+    "first_name": "Anna",
+    "last_name": "Andersson",
+    "role": "Styrelseledamot"
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    annual_report_version_id: string,
+    version_number: number,
+    status: "draft" | "ready_for_signature" | "signed" | "filed" | "registered" | "superseded",
+    framework: string,
+    content_hash: string,
+    taxonomy_version: string | null,
+    entry_point: string | null,
+    finalized_at: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "annual_report_version_id": "4e7d…",
+    "version_number": 2,
+    "status": "ready_for_signature",
+    "framework": "k2",
+    "content_hash": "9f86d081…",
+    "taxonomy_version": "2024-09-12",
+    "entry_point": "k2-ab-risbs-2024-09-12",
+    "finalized_at": "2027-03-02T09:00:00Z",
+    "created_at": "2027-03-02T09:00:00Z"
   },
   "meta": {
     "request_id": "req_…",
@@ -573,6 +2129,78 @@ Example response `200`:
     "id": "a8f1…",
     "is_closed": true,
     "closed_at": "2026-05-12T14:30:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/close-external`
+
+**Mark a migrated fiscal year as closed in the previous system (klarmarkera).**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
+
+Closes and locks an imported historical räkenskapsår whose bokslut was done in the previous bookkeeping software, without a closing entry here, and writes the decision to the audit log. Only for migrated years: the year must have ended, have no closing entry in Accounted, and hold imported verifikat, no verifikat, or balance-sheet-only verifikat with the next year's IB already posted. Unbooked bank transactions in the year block it, as for a lock. Undo with reopen-external. Idempotent. Dry-runnable.
+
+**Use when:** After an SIE migration, the earlier years show as pending bokslut although their bokslut was done in the old system.
+**Do not use for:** Closing a year bookkept in Accounted: run the year-end (POST /fiscal-periods/{id}/year-end), which transfers the result and carries the balances forward.
+
+**Pitfalls:**
+- A year bookkept here with result accounts answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NATIVE_BOOKKEEPING: run the year-end instead.
+- A running year answers 409 FISCAL_PERIOD_CLOSE_EXTERNAL_NOT_ENDED.
+- Unbooked bank transactions answer 400 PERIOD_HAS_UNBOOKED_TRANSACTIONS with the count in details.reason.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2024",
+    "period_start": "2024-01-01",
+    "period_end": "2024-12-31",
+    "is_closed": true,
+    "closed_at": "2026-09-25T09:00:00Z",
+    "closed_externally": true,
+    "locked_at": "2026-09-25T09:00:00Z",
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
   },
   "meta": {
     "request_id": "req_…",
@@ -669,7 +2297,7 @@ Sets locked_at on the period. Refuses if uncategorised business transactions rem
 **Pitfalls:**
 - Idempotency-Key is mandatory.
 - A period with uncategorised business transactions cannot be locked; the response surfaces the count.
-- Locking is reversible until /close. The unlock endpoint is not in v1; use the dashboard.
+- Locking is reversible until /close: POST /fiscal-periods/{id}/unlock lifts it.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -775,6 +2403,368 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/correct`
+
+**Correct a year's ingående balanser by storno: the full corrected IB replaces the old one.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Books the corrected IB verifikat from the lines given (the complete IB, not a difference), stornoes the old IB verifikat and relinks the year to the new one (BFL 5 kap 5 §: nothing posted is edited). The new verifikat's text references the one it corrects. With cascade=true the per-account change is also carried into every later year's IB; years that are closed, locked, behind the lock date or have a bokslut are skipped and reported. Only for an open, unlocked year with an IB and no bokslut. Idempotent. Dry-runnable: the dry run previews the new verifikat and the per-account change and writes nothing.
+
+**Use when:** The IB booked for a year was wrong (a typo, a balance the previous system corrected later).
+**Do not use for:** A year without an IB (POST /fiscal-periods/{id}/opening-balances/manual), a single wrong line in an open year (POST /journal-entries/{id}/strike-lines on the IB verifikat corrects inside the same verifikat), or a year that is locked, closed or has a bokslut (unwind those first).
+
+**Pitfalls:**
+- Send the COMPLETE corrected IB: accounts left out end at zero.
+- A year without an IB answers 409 OB_CORRECT_NO_EXISTING; one with a posted bokslut 409 OB_CORRECT_YEAR_END_EXISTS.
+- A company lock date on or after the year's start answers 409 OB_COMPANY_LOCK_DATE.
+- If the storno or relink fails the new IB is stornoed again and 500 OB_CORRECT_FAILED names both entry ids: the year keeps its old IB.
+- cascade is best effort per later year: read cascade.skipped in the response and correct those years by hand.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, amount?: number }[],
+  cascade?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "1930",
+      "amount": 84250.5
+    },
+    {
+      "account_number": "1510",
+      "debit_amount": 12500,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "2440",
+      "amount": -9800
+    },
+    {
+      "account_number": "2081",
+      "amount": -25000
+    },
+    {
+      "account_number": "2099",
+      "amount": -61950.5
+    }
+  ],
+  "cascade": true
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    reversed_entry_id: string,
+    fiscal_period_id: string,
+    lines_created: number,
+    total_debit: number,
+    total_credit: number,
+    cascade?: { corrected: { fiscal_period_id: string, period_name: string | null, journal_entry_id: string, reversed_entry_id: string | null }[], skipped: { fiscal_period_id: string, period_name: string | null, reason: string }[], failed?: boolean }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "8c1e…",
+    "voucher_series": "A",
+    "voucher_number": 42,
+    "reversed_entry_id": "4d2a…",
+    "fiscal_period_id": "7b3a…",
+    "lines_created": 5,
+    "total_debit": 96750.5,
+    "total_credit": 96750.5,
+    "cascade": {
+      "corrected": [],
+      "skipped": []
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/opening-balances/manual`
+
+**Book a fiscal year's ingående balanser (IB) from explicit lines, for a company new to Accounted.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts the IB verifikat (source_type opening_balance, series A, dated the year's first day) through the bookkeeping engine and links it to the year, as the dashboard's opening balance import does. Lines are balance sheet accounts only (class 1-2), zero rows dropped, at least two left, debit equal to credit. BAS accounts missing from the chart are activated. Refused when the year already has an IB, is closed or locked, or starts on or before the company lock date. Idempotent. Dry-runnable: the dry run previews the verifikat and writes nothing.
+
+**Use when:** The company moved from another system without an SIE file and its first year in Accounted needs the balances from the previous system's balansräkning.
+**Do not use for:** Carrying the IB forward from a year closed in Accounted (POST /fiscal-periods/{id}/opening-balances, or the year-end which does it), an SIE migration (POST /imports/sie brings its own IB), or changing an IB already booked (POST /fiscal-periods/{id}/opening-balances/correct).
+
+**Pitfalls:**
+- A year that already has an IB answers 409 OB_PERIOD_ALREADY_HAS_BALANCES with details.existingEntryId: correct it instead.
+- Class 3-8 accounts answer 400 OB_PNL_ACCOUNT, class 0 and 9 400 OB_NON_BALANCE_SHEET_ACCOUNT: an IB holds balance sheet accounts only, earlier years' results sit in equity (20xx).
+- Debit and credit must match to the öre: 400 OB_UNBALANCED with details.diff.
+- A company lock date on or after the year's start answers 409 OB_SET_COMPANY_LOCK_DATE; a closed or locked year 400 OB_PERIOD_CLOSED or OB_PERIOD_LOCKED.
+- The IB is a posted verifikat: it is never edited or deleted, only corrected by storno through /opening-balances/correct.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  lines: { account_number: string, debit_amount?: number, credit_amount?: number, amount?: number }[]
+}
+```
+
+Example request:
+```json
+{
+  "lines": [
+    {
+      "account_number": "1930",
+      "amount": 84250.5
+    },
+    {
+      "account_number": "1510",
+      "debit_amount": 12500,
+      "credit_amount": 0
+    },
+    {
+      "account_number": "2440",
+      "amount": -9800
+    },
+    {
+      "account_number": "2081",
+      "amount": -25000
+    },
+    {
+      "account_number": "2099",
+      "amount": -61950.5
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    fiscal_period_id: string,
+    entry_date: string,
+    lines_created: number,
+    total_debit: number,
+    total_credit: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "4d2a…",
+    "voucher_series": "A",
+    "voucher_number": 1,
+    "fiscal_period_id": "7b3a…",
+    "entry_date": "2026-01-01",
+    "lines_created": 5,
+    "total_debit": 96750.5,
+    "total_credit": 96750.5
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/reopen-external`
+
+**Undo klarmarkera: reopen a year marked closed in the previous system.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
+
+Reopens and unlocks a räkenskapsår that close-external closed, and writes the decision to the audit log. Only while that close is still the klarmarkera one: a year closed by a year-end run in Accounted is never reopened. Typical need: the prior-year SIE file was wrong and must be replaced. Idempotent. Dry-runnable.
+
+**Use when:** A year was marked closed in the previous system by mistake, or its imported contents must be replaced.
+**Do not use for:** Reopening a year closed by a year-end here (not possible), or unlocking a locked year (POST /fiscal-periods/{id}/unlock).
+
+**Pitfalls:**
+- An open year answers 409 PERIOD_REOPEN_NOT_CLOSED.
+- A year closed by a year-end run here answers 409 PERIOD_REOPEN_NOT_EXTERNAL.
+- The lock is cleared too: lock or klarmarkera the year again once the correction is done.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2024",
+    "period_start": "2024-01-01",
+    "period_end": "2024-12-31",
+    "is_closed": false,
+    "closed_at": null,
+    "closed_externally": false,
+    "locked_at": null,
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/unlock`
+
+**Unlock a locked (not closed) fiscal year.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run · reversible`
+
+Clears locked_at so the year accepts postings again, and writes the unlock to the audit log (BFNAR 2013:2 behandlingshistorik). A closed year is never unlocked: past a close, corrections go into an open year as storno. Re-lock with POST /fiscal-periods/{id}/lock after the correction. Idempotent. Dry-runnable.
+
+**Use when:** The user asked to correct something in a locked year, or a year-end must run on a year that was locked beforehand.
+**Do not use for:** Getting a booking past a lock without the user asking for that correction, or reopening a closed year (a year marked closed in a previous system: POST /fiscal-periods/{id}/reopen-external).
+
+**Pitfalls:**
+- A closed year answers 409 PERIOD_UNLOCK_CLOSED; an unlocked one 409 PERIOD_UNLOCK_NOT_LOCKED.
+- The company-wide lock date (bookkeeping_locked_through) is a separate lock this does not touch.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2027",
+    "period_start": "2027-01-01",
+    "period_end": "2027-12-31",
+    "is_closed": false,
+    "closed_at": null,
+    "closed_externally": false,
+    "locked_at": null,
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/year-end`
 
 **Execute year-end closing (currency revaluation + closing entry).**
@@ -826,6 +2816,249 @@ Example response `200`:
     "status": "succeeded",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skattekonto/sync`
+
+**Fetch the skattekonto from Skatteverket now instead of waiting for the hourly sync.**
+`scope:transactions:write · risk:low · idempotent · dry-run`
+
+Reads the company's skattekonto saldo and transactions (booked and upcoming) from Skatteverket and stores them, then refreshes the booking proposals and the reconciliation snapshot. Books nothing: booking skattekonto rows is a separate step. Read-only on Skatteverket's side. Runs on the company's connection (any member's BankID connection, or a verified läsombud grant). Idempotent. Dry-runnable: the dry run checks the connection locally and never calls Skatteverket.
+
+**Use when:** A payment to or from the skattekonto was just made and the reconciliation or the booking proposals should see it now.
+**Do not use for:** Booking skattekonto rows, or importing a skattekonto file (POST /imports/skattekonto-file).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- The paid Skatteverket capability is required: 403 SKATTEVERKET_CAPABILITY_BLOCKED otherwise.
+- Skatteverket only returns roughly the last 555 days; older history comes from a skattekonto file import.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    booked: number,
+    upcoming: number,
+    skipped: number,
+    saldo_skatteverket: number,
+    saldo_kronofogden: number,
+    synced_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "booked": 3,
+    "upcoming": 1,
+    "skipped": 0,
+    "saldo_skatteverket": -1240,
+    "saldo_kronofogden": 0,
+    "synced_at": "2026-09-26T08:00:00.000Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skatteverket/agi/validate-huvuduppgift`
+
+**Pre-validate an AGI huvuduppgift at Skatteverket without filing anything.**
+`scope:compliance:read · risk:low · idempotent`
+
+Sends one arbetsgivardeklaration huvuduppgift (AGI API v1.7 section 7: agRegistreradId, redovisningsPeriod, the totals) to Skatteverket's /kontrollera and answers its kontrollsvar: an overall status and each finding. Skatteverket saves nothing; the only local write is the regulator audit row. Uses the calling user's own Skatteverket connection. Live call, not cached.
+
+**Use when:** Checking a hand-built or externally generated huvuduppgift before filing it, e.g. from a payroll system outside Accounted.
+**Do not use for:** Filing (POST /salary-runs/{id}/generate-agi, then the BankID-signed submission) or checking a salary run booked in Accounted (the submission flow validates it).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- redovisningsPeriod is YYYYMM and no earlier than 201807; amounts are whole kronor.
+- A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
+- status OK or INFO means Skatteverket would accept the figures; it never checks them against the books.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  agRegistreradId: string,
+  redovisningsPeriod: string,
+  summaSkatteavdr?: number,
+  summaArbAvgSlf?: number,
+  totalSjuklonekostnad?: number
+}
+```
+
+Example request:
+```json
+{
+  "agRegistreradId": "165560000167",
+  "redovisningsPeriod": "202609",
+  "summaSkatteavdr": 0
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    uppgift: "huvuduppgift" | "individuppgift",
+    status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE",
+    fel: { status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE", felmeddelande: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "uppgift": "huvuduppgift",
+    "status": "INFO",
+    "fel": [
+      {
+        "status": "INFO",
+        "felmeddelande": "Summa skatteavdrag är 0."
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/skatteverket/agi/validate-individuppgift`
+
+**Pre-validate one AGI individuppgift at Skatteverket without filing anything.**
+`scope:compliance:read · risk:low · idempotent`
+
+Sends one individuppgift (AGI API v1.7 section 8: the payee, specifikationsnummer, cash pay, benefits, preliminary tax and flags) to Skatteverket's /kontrollera and answers its kontrollsvar. Skatteverket saves nothing; the only local write is the regulator audit row. Uses the calling user's own Skatteverket connection. Live call, not cached.
+
+**Use when:** Checking a hand-built or externally generated individuppgift before filing it.
+**Do not use for:** Filing, or salary runs booked in Accounted (the AGI submission flow builds and validates their individuppgifter).
+
+**Pitfalls:**
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- betalningsmottagarId is the payee's personnummer (12 digits): it is sent to Skatteverket and not stored by Accounted beyond the audit row's metadata.
+- forstaAnstalld and vaxaStod are mutually exclusive (400 VALIDATION_ERROR).
+- A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Request body:
+```ts
+{
+  agRegistreradId: string,
+  redovisningsPeriod: string,
+  betalningsmottagarId: string,
+  specifikationsnummer: number,
+  kontantErsattningUlagAG?: number,
+  avdrPrelSkatt?: number,
+  skatteplBilformanUlagAG?: number,
+  drivmVidBilformanUlagAG?: number,
+  kostformanUlagAG?: number,
+  skatteplOvrigaFormanerUlagAG?: number,
+  bostadsformanSmahusUlagAG?: boolean,
+  bostadsformanEjSmahusUlagAG?: boolean,
+  kontantErsattningEjUlagSA?: number,
+  skatteplBilformanEjUlagSA?: number,
+  drivmVidBilformanEjUlagSA?: number,
+  kostformanEjUlagSA?: number,
+  skatteplOvrigaFormanerEjUlagSA?: number,
+  bostadsformanSmahusEjUlagSA?: boolean,
+  bostadsformanEjSmahusEjUlagSA?: boolean,
+  formanHarJusterats?: boolean,
+  forstaAnstalld?: boolean,
+  vaxaStod?: boolean,
+  borttag?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "agRegistreradId": "165560000167",
+  "redovisningsPeriod": "202609",
+  "betalningsmottagarId": "19800101XXXX",
+  "specifikationsnummer": 1,
+  "kontantErsattningUlagAG": 35000,
+  "avdrPrelSkatt": 8200
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    uppgift: "huvuduppgift" | "individuppgift",
+    status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE",
+    fel: { status: "OK" | "INFO" | "ARENDE" | "STOPP" | "AVVISANDE", felmeddelande: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "uppgift": "individuppgift",
+    "status": "OK",
+    "fel": []
   },
   "meta": {
     "request_id": "req_…",

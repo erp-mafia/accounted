@@ -3,6 +3,9 @@
  *
  * Returns the full verifikation including lines, source links
  * (reverses_id, reversed_by_id, correction_of_id), and dimensions.
+ *
+ * PATCH edits a DRAFT in place (operation journal-entries.update-draft,
+ * contract and rules in src/lib/operations/journal-entries.ts).
  */
 
 import { z } from 'zod'
@@ -14,6 +17,8 @@ import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { cancelDraftEntry } from '@/lib/bookkeeping/engine'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { v1OperationHandler } from '@/lib/operations/v1'
+import { journalEntriesUpdateDraft } from '@/lib/operations/journal-entries'
 
 const JE_LINE_COLUMNS =
   'id, account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, cost_center, project, sort_order'
@@ -259,3 +264,5 @@ export const DELETE = withApiV1<{ params: Promise<{ companyId: string; id: strin
     }
   },
 )
+
+export const PATCH = v1OperationHandler(journalEntriesUpdateDraft)

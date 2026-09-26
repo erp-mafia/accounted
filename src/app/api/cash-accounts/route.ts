@@ -2,10 +2,9 @@ import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { CreateCashAccountSchema } from '@/lib/api/schemas'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { listForCompany } from '@/lib/cash-accounts/service'
-import { createManualBankAccount } from '@/lib/cash-accounts/invoice-payee'
-import { getCompanyRole } from '@/lib/auth/require-write'
+import { createCashAccount } from '@/lib/cash-accounts/manage'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 /**
  * GET /api/cash-accounts
@@ -36,41 +35,19 @@ export const GET = withRouteContext('cash_accounts.list', async (request, ctx) =
  * A bank account the user types in (no bank connection): name, currency and
  * the payee details customers pay to. Gets the next free 19xx ledger slot
  * for its currency unless one is given. Owner/admin only: it becomes a
- * printable payee.
+ * printable payee. The rules live in lib/cash-accounts/manage.ts, shared
+ * with the v1 operation cash-accounts.create and gnubok_create_cash_account.
  */
 export const POST = withRouteContext(
   'cash_accounts.create',
   async (request, { supabase, companyId, log, requestId, user }) => {
     const validation = await validateBody(request, CreateCashAccountSchema)
     if (!validation.success) return validation.response
-    const body = validation.data
 
-    const roleResult = await getCompanyRole(supabase, user.id, { companyId })
-    if (!roleResult.ok) return roleResult.response
-    if (!['owner', 'admin'].includes(roleResult.role)) {
-      return errorResponseFromCode('FORBIDDEN', log, {
-        requestId,
-        details: { required_roles: ['owner', 'admin'] },
-      })
-    }
-
-    const payee = Object.fromEntries(
-      Object.entries(body.payee ?? {}).map(([key, value]) => [key, value === '' ? null : value]),
-    )
-
-    try {
-      const account = await createManualBankAccount(supabase, companyId, user.id, {
-        name: body.name,
-        currency: body.currency,
-        ledger_account: body.ledger_account ?? null,
-        invoice_payee: body.invoice_payee,
-        payee,
-      })
-      return NextResponse.json({ data: account }, { status: 201 })
-    } catch (err) {
-      log.error('cash_accounts create failed', err as Error)
-      return errorResponse(err, log, { requestId })
-    }
+    const outcome = await createCashAccount({ supabase, companyId, userId: user.id, log }, validation.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data }, { status: 201 })
   },
   { requireWrite: true },
 )
