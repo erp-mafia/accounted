@@ -389,6 +389,8 @@ import {
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { createArkivTools } from './arkiv-tools'
+import { createOperationTools } from './operation-tools'
+import { OPERATIONS } from '@/lib/operations/registry'
 import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createHash } from 'node:crypto'
 import { extractInvoiceFields, ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/extensions/general/invoice-inbox/lib/extract-invoice-fields'
@@ -23616,6 +23618,15 @@ export const tools: McpTool[] = [
     },
   },
   ...createArkivTools({ readOnly: ANNOTATIONS_READ_ONLY, stagedWrite: ANNOTATIONS_STAGED_WRITE, stagedSchema: STAGED_OPERATION_SCHEMA, stagePendingOperation }),
+  // Operations defined once in src/lib/operations: the same contract and
+  // rules as their v1 endpoints (operation-tools.ts).
+  ...createOperationTools(OPERATIONS, {
+    readOnly: ANNOTATIONS_READ_ONLY,
+    stagedWrite: ANNOTATIONS_STAGED_WRITE,
+    stagedSchema: STAGED_OPERATION_SCHEMA,
+    stagingArgs: STAGING_ARGS_PROPERTIES,
+    stagePendingOperation,
+  }),
 ]
 
 // Drift guard for the gnubok_get_agent_briefing recommended_tools loadouts:

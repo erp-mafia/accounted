@@ -276,10 +276,13 @@ const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // A custom (non-system) dimension: system dimensions are never deleted.
+  gnubok_delete_dimension: { rows: { dimensions: { is_system: false, sie_dim_no: 20, name: 'Avdelning' } } },
   // Arkiv: a fact about the company itself; the predicate must belong to the subject kind.
   gnubok_propose_fact: { args: { subject_ref: `company:${COMPANY_ID}`, predicate: 'vat_period', value: 'kvartal', rationale: 'Enligt registreringsbeviset' } },
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
+  gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_company_settings: { args: { phone: '08-123 45 67' } },
   gnubok_update_recurring_schedule: { args: { name: 'Hyra' } },
   gnubok_update_salary_run: { args: { notes: 'Rättad utbetalningsdag' } },

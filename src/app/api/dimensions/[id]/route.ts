@@ -21,8 +21,8 @@ import { ensureInitialized } from '@/lib/init'
 import { validateBody } from '@/lib/api/validate'
 import { UpdateDimensionSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { deleteDimension, updateDimension } from '@/lib/dimensions/registry-service'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 ensureInitialized()
 
@@ -30,7 +30,7 @@ export const PATCH = withRouteContext(
   'dimension.update',
   async (request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ dimensionId: id })
 
     const result = await validateBody(request, UpdateDimensionSchema, {
@@ -38,50 +38,11 @@ export const PATCH = withRouteContext(
       operation: 'dimension.update',
     })
     if (!result.success) return result.response
-    const body = result.data
 
-    const { data: existing, error: fetchError } = await supabase
-      .from('dimensions')
-      .select('id, name, is_system')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-
-    if (fetchError) {
-      opLog.error('dimension fetch failed', fetchError)
-      return errorResponse(fetchError, opLog, { requestId })
-    }
-    if (!existing) {
-      return errorResponseFromCode('DIMENSION_NOT_FOUND', opLog, { requestId })
-    }
-
-    if (existing.is_system && body.name !== undefined && body.name !== existing.name) {
-      return errorResponseFromCode('DIMENSION_SYSTEM_RENAME', opLog, { requestId })
-    }
-
-    // Sparse update: only the fields the caller actually sent.
-    const updateData: Record<string, unknown> = {}
-    for (const key of ['name', 'is_active', 'sort_order'] as const) {
-      if (body[key] !== undefined) updateData[key] = body[key]
-    }
-
-    const { data, error } = await supabase
-      .from('dimensions')
-      .update(updateData)
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select('id, sie_dim_no, name, resets_annually, is_system, is_active, sort_order')
-      .single()
-
-    if (error) {
-      opLog.error('dimension update failed', error)
-      return errorResponseFromCode('DIMENSION_UPDATE_FAILED', opLog, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    return NextResponse.json({ data })
+    const outcome = await updateDimension({ supabase, companyId, userId: user.id, log: opLog }, id, result.data)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    return NextResponse.json({ data: outcome.data })
   },
   { requireWrite: true },
 )
@@ -90,55 +51,11 @@ export const DELETE = withRouteContext(
   'dimension.delete',
   async (_request, ctx, { params }: { params: Promise<{ id: string }> }) => {
     const { id } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, user, log, requestId } = ctx
     const opLog = log.child({ dimensionId: id })
 
-    const { data: existing, error: fetchError } = await supabase
-      .from('dimensions')
-      .select('id, name, is_system')
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-
-    if (fetchError) {
-      opLog.error('dimension fetch failed', fetchError)
-      return errorResponse(fetchError, opLog, { requestId })
-    }
-    if (!existing) {
-      return errorResponseFromCode('DIMENSION_NOT_FOUND', opLog, { requestId })
-    }
-    if (existing.is_system) {
-      return errorResponseFromCode('DIMENSION_SYSTEM_DELETE', opLog, { requestId })
-    }
-
-    const { data, error } = await supabase
-      .from('dimensions')
-      .delete()
-      .eq('id', id)
-      .eq('company_id', companyId)
-      .select('id')
-
-    if (error) {
-      // P0001 = plpgsql RAISE EXCEPTION: the registry guard (or the value
-      // retention trigger on the cascade) refusing the delete. Surface its
-      // Swedish message verbatim: it names the dimension / code.
-      if (error.code === 'P0001') {
-        return errorResponseFromCode('DIMENSION_REFERENCED', opLog, {
-          requestId,
-          messageSv: error.message,
-        })
-      }
-      opLog.error('dimension delete failed', error)
-      return errorResponseFromCode('DIMENSION_DELETE_FAILED', opLog, {
-        requestId,
-        details: { reason: getUserErrorMessage(error) },
-      })
-    }
-
-    if (!data || data.length === 0) {
-      return errorResponseFromCode('DIMENSION_NOT_FOUND', opLog, { requestId })
-    }
-
+    const outcome = await deleteDimension({ supabase, companyId, userId: user.id, log: opLog }, id)
+    if (!outcome.ok) return sessionFailureResponse(outcome, opLog, requestId)
     return NextResponse.json({ success: true })
   },
   { requireWrite: true },

@@ -30,6 +30,9 @@ export const OPERATION_LABEL_KEYS: Record<string, string> = {
   create_account: 'type_create_account',
   update_account: 'type_update_account',
   create_dimension_value: 'type_create_dimension_value',
+  create_dimension: 'type_create_dimension',
+  update_dimension: 'type_update_dimension',
+  delete_dimension: 'type_delete_dimension',
   // Supplier invoices
   create_supplier_invoice_from_inbox: 'type_create_supplier_invoice_from_inbox',
   create_self_billed_supplier_invoice: 'type_create_self_billed_supplier_invoice',
@@ -109,6 +112,7 @@ export const singleActionWarnings: Record<string, string> = {
   // Low/medium risk: light verifikation work
   create_transaction: 'Genom att klicka godkänn så skapar du en transaktion.',
   create_customer: 'Genom att klicka godkänn så skapar du en kund.',
+  delete_dimension: 'Genom att klicka godkänn så tas dimensionen och dess värden bort. Det går bara om inget har bokförts på den.',
   create_invoice: 'Genom att klicka godkänn så skapas ett fakturautkast (det skickas inte).',
   categorize_transaction: 'Genom att klicka godkänn så kategoriseras transaktionen och en verifikation skapas.',
   match_transaction_invoice: 'Genom att klicka godkänn så matchas transaktionen mot fakturan.',

@@ -4922,6 +4922,16 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
     message_sv: 'Dimensionen kunde inte tas bort.',
     message_en: 'Failed to delete dimension.',
   },
+  DIMENSION_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Dimensionsnumret finns redan i registret.',
+    message_en: 'That dimension number is already in the registry. Omit sie_dim_no to get the next free number from 20.',
+  },
+  DIMENSION_PARENT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Den överordnade dimensionen finns inte i registret.',
+    message_en: 'parent_sie_dim_no must name another existing dimension in the registry.',
+  },
   DIMENSION_VALUE_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Dimensionsvärdet kunde inte hittas.',
