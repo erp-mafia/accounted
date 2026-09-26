@@ -7771,7 +7771,7 @@
     "ai_kvittojakten_prereq_mailbox": "Din brevlåda behöver vara kopplad i {client}: lägg till Gmail eller Outlook under Kopplingar. Vi ser inte dina kopplingar härifrån, så {client} säger till med en gång om den saknas.",
     "ai_kvittojakten_prereq_open": "Kopplingar i {client}",
     "ai_kvittojakten_prereq_run": "Kör Kvittojakten",
-    "ai_kvittojakten_prompt": "Kör Kvittojakten i Accounted. Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den: hitta underlagen som saknas i min mejl, lägg in dem i Accounted och föreslå kopplingar som jag får godkänna. Är ingen brevlåda kopplad här, säg det direkt och vad jag ska göra.",
+    "ai_kvittojakten_prompt": "Kör Kvittojakten i Accounted: anropa get_task med kind \"agent:kvittojakten\" och client \"{client}\" och följ det du får tillbaka. Hitta underlagen som saknas i min mejl, lägg in dem i Accounted och föreslå kopplingar som jag får godkänna. Är ingen brevlåda kopplad här, säg det direkt och vad jag ska göra.",
     "ai_task_overdue_invoice": "{count, plural, one {En kundfaktura i Accounted har förfallit. Visa vem, hur mycket och hur många dagar, och skriv en vänlig påminnelse jag kan skicka.} other {# kundfakturor i Accounted har förfallit. Visa vem som är sen, hur mycket och hur många dagar, och skriv en vänlig påminnelse per kund som jag kan skicka.}}",
     "ai_task_deadline_action": "{count, plural, one {Det finns en deadline mot Skatteverket i Accounted som kräver åtgärd. Visa vilken, vad som ska in och ta fram underlaget så jag kan kontrollera det innan det skickas.} other {Det finns # deadlines mot Skatteverket i Accounted som kräver åtgärd. Lista dem, säg vad som ska in och ta fram underlaget för den närmaste så jag kan kontrollera det innan det skickas.}}",
     "ai_task_reconciliation_due": "{count, plural, one {Ett konto i Accounted behöver stämmas av för förra månaden. Jämför bokföringen mot bankens saldo, visa avvikelserna och föreslå hur de rättas.} other {# konton i Accounted behöver stämmas av för förra månaden. Gå igenom dem, jämför bokföringen mot bankens saldo, visa avvikelserna och föreslå hur de rättas.}}",
@@ -10657,7 +10657,6 @@
         "say": "Räkna på min skatt inför årsskiftet."
       }
     },
-    "prompt_own": "{say} Ladda skillen \"{skill}\" från Accounted (load_skill) och följ den.",
     "tab_accounted": "Accounted",
     "tab_own": "Egna",
     "tab_own": "Egna",

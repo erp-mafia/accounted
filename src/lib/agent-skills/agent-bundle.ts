@@ -278,7 +278,8 @@ export interface CompanyKnowledge {
   onboarding_summary: string | null
   facts: Array<{ label: string; value: string; valid_from: string | null }>
   agreements?: ArkivMap['agreements']
-  remembered: string[]
+  /** What agents were told (remember_fact), newest first, so a later fact can settle an earlier one. */
+  remembered: Array<{ text: string; saved_at: string | null }>
   documents: { total: number; look_up: string[] }
 }
 
@@ -306,7 +307,8 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
     // The map is best-effort: an archive that cannot be read never blocks the agent.
     buildArkivMap(supabase, companyId).catch(() => null),
     supabase.from('agent_profiles').select('profile_summary').eq('company_id', companyId).maybeSingle(),
-    supabase.from('agent_memory').select('content').eq('company_id', companyId).eq('is_active', true)
+    // A memory that a newer one replaced (superseded_by) never reaches the agent.
+    supabase.from('agent_memory').select('content, created_at').eq('company_id', companyId).eq('is_active', true).is('superseded_by', null)
       .order('relevance_score', { ascending: false, nullsFirst: false }).limit(REMEMBERED),
   ])
   const order = def.facts ? new Map(def.facts.map((f, i) => [f, i])) : null
@@ -320,9 +322,16 @@ async function loadCompanyKnowledge(supabase: SupabaseClient, companyId: string,
     onboarding_summary: profile.error ? null : profile.data?.profile_summary ?? null,
     facts,
     ...(def.agreements ? { agreements: map?.agreements ?? [] } : {}),
-    remembered: memory.error ? [] : ((memory.data ?? []) as Array<{ content: string }>).map((m) => m.content),
+    remembered: memory.error ? [] : newestFirst((memory.data ?? []) as Array<{ content: string; created_at: string | null }>),
     documents: { total: map?.documents.total ?? 0, look_up: map?.how_to ?? [] },
   }
+}
+
+/** The most relevant memories, dated and newest first: without dates two that disagree could not be told apart. */
+function newestFirst(rows: Array<{ content: string; created_at: string | null }>): CompanyKnowledge['remembered'] {
+  return rows
+    .map((m) => ({ text: m.content, saved_at: m.created_at ?? null }))
+    .sort((a, b) => (b.saved_at ?? '').localeCompare(a.saved_at ?? ''))
 }
 
 export { isAgentId } from './agents'
@@ -331,8 +340,21 @@ import { isAgentId } from './agents'
 /**
  * Knowledge bodies inlined per run, shared by the knowledge and then the
  * company's industry sections; what does not fit is listed to load on demand.
+ * 30K keeps a whole bundle well under a client's tool-output cap (an 80 KB
+ * Bokför transaktioner bundle was diverted to a file in Claude Code), while
+ * every flow's default packs still fit with room for the industry sections.
  */
-const INLINE_BUDGET = 60_000
+const INLINE_BUDGET = 30_000
+
+/**
+ * A whole industry or company-form pack a company added to a flow by hand
+ * (a 30K pack can be more than the rest of the bundle). The sections of the
+ * company's own packs that concern the flow are inlined as industry_sections;
+ * the whole pack is listed to load on demand.
+ */
+function isAddedPack(row: AtomRow, source: KnowledgeMeta['source']): boolean {
+  return source === 'added' && (row.tier === 'vertical' || row.tier === 'modifier')
+}
 
 function splitByBudget(rows: AtomRow[], list: Array<{ id: string; source: KnowledgeMeta['source'] }>) {
   const byId = new Map(rows.map((r) => [r.id, r]))
@@ -342,9 +364,11 @@ function splitByBudget(rows: AtomRow[], list: Array<{ id: string; source: Knowle
   for (const { id, source } of list) {
     const row = byId.get(id)
     if (!row?.body || row.parent_atom_id) continue
-    if (used + row.body.length <= INLINE_BUDGET) {
-      inline.push({ ...meta(row, source), body: row.body })
-      used += row.body.length
+    // The frontmatter routes the pack in Claude Code; the agent reads the text below it.
+    const body = stripFrontmatter(row.body)
+    if (!isAddedPack(row, source) && used + body.length <= INLINE_BUDGET) {
+      inline.push({ ...meta(row, source), body })
+      used += body.length
     } else overflow.push({ id: row.id, title: row.title ?? row.id })
   }
   return { inline, overflow, used }

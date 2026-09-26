@@ -557,6 +557,13 @@ describe('tools/list payload size guard', () => {
     //     only flows. Paid for by a shorter title and description. Measured
     //     63 498: two tokens of headroom, so the next default-catalog addition
     //     has to trim first. Ceiling unchanged.
+    //   * Routines and own item kinds (Instruktioner audit): gnubok_get_task
+    //     takes `unattended` and gnubok_list_skills declares `item_kind`.
+    //     Paid for by dropping the list_skills sentence that repeated
+    //     include_all's own description, two output descriptions that
+    //     restated their property names, and get_task no longer saying "the
+    //     skills to load" (agent runs and analyses arrive whole). Measured
+    //     63 486. Ceiling unchanged.
     expect(approxTokens).toBeLessThan(63_500)
   })
 

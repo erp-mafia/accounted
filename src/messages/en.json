@@ -7771,7 +7771,7 @@
     "ai_kvittojakten_prereq_mailbox": "Your mailbox needs to be connected in {client}: add Gmail or Outlook under Connectors. We cannot see your connectors from here, so {client} will say so right away if it is missing.",
     "ai_kvittojakten_prereq_open": "Connectors in {client}",
     "ai_kvittojakten_prereq_run": "Run Kvittojakten",
-    "ai_kvittojakten_prompt": "Run Kvittojakten in Accounted. Load the skill \"{skill}\" from Accounted (load_skill) and follow it: find the missing supporting documents in my mail, bring them into Accounted and propose links for me to approve. If no mailbox is connected here, say so right away and tell me what to do.",
+    "ai_kvittojakten_prompt": "Run Kvittojakten in Accounted: call get_task with kind \"agent:kvittojakten\" and client \"{client}\" and follow what it returns. Find the missing supporting documents in my mail, bring them into Accounted and propose links for me to approve. If no mailbox is connected here, say so right away and tell me what to do.",
     "ai_task_overdue_invoice": "{count, plural, one {One customer invoice in Accounted is overdue. Show who, how much and how many days, and write a friendly reminder I can send.} other {# customer invoices in Accounted are overdue. Show who is late, how much and how many days, and write a friendly reminder per customer that I can send.}}",
     "ai_task_deadline_action": "{count, plural, one {There is one Skatteverket deadline in Accounted that needs action. Show which, what has to be filed and prepare the figures so I can check them before filing.} other {There are # Skatteverket deadlines in Accounted that need action. List them, say what has to be filed and prepare the figures for the nearest one so I can check them before filing.}}",
     "ai_task_reconciliation_due": "{count, plural, one {One account in Accounted needs reconciling for last month. Compare the books against the bank balance, show the differences and suggest how to correct them.} other {# accounts in Accounted need reconciling for last month. Go through them, compare the books against the bank balance, show the differences and suggest how to correct them.}}",
@@ -10657,7 +10657,6 @@
         "say": "Work out my tax before year end."
       }
     },
-    "prompt_own": "{say} Load the skill \"{skill}\" from Accounted (load_skill) and follow it.",
     "tab_accounted": "Accounted",
     "tab_own": "Own",
     "tab_own": "Yours",

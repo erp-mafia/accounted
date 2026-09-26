@@ -421,6 +421,23 @@ describe('gnubok_list_skills tool', () => {
     expect(result.count).toBe(1)
     expect(result.skills[0].slug).toBe('vertical/konsult-it')
   })
+
+  it('says whether each own item is a workflow, knowledge or an analysis, and marks Accounted analyses', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_list_skills')!
+    const own = (n: number, kind?: 'workflow' | 'rules' | 'analysis') => ({
+      id: `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`, name: `Own ${n}`, description: 'd', body: 'Steps.', share_status: 'private',
+      atom_id: null, company_id: 'company-1', team_id: null, ...(kind ? { kind } : {}),
+    })
+    const supabase = makeSupabaseWithEmptyAtomRegistry([], {}, null, [own(1, 'workflow'), own(2, 'rules'), own(3, 'analysis'), own(4)])
+    const result = (await tool.execute({ include_all: true, __keyScopes: ['agent:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      skills: Array<{ slug: string; tier: string; item_kind?: string }>
+    }
+    const kindOf = (slug: string) => result.skills.find((s) => s.slug === slug)?.item_kind
+    expect([1, 2, 3, 4].map((n) => kindOf(`own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa${n}`))).toEqual(['workflow', 'rules', 'analysis', 'workflow'])
+    expect(kindOf('analys-kassaprognos')).toBe('analysis')
+    // A curated workflow has no kind to tell apart, so it carries none.
+    expect(result.skills.find((s) => s.slug === 'month-end-close')).not.toHaveProperty('item_kind')
+  })
 })
 
 describe('gnubok_load_skill tool', () => {
