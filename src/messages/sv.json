@@ -11238,8 +11238,6 @@
     "folder_untyped": "Utan typ",
     "folder_untyped_hint": "typas medan de läses in",
     "tree_show_more": "Visa {count} till",
-    "tree_show_fewer": "Visa färre",
-    "tree_capped": "Visar de {count} senaste dokumenten.",
     "tree_pages": "{count} s.",
     "tree_count": "{count, plural, one {1 dokument} other {# dokument}}",
     "tree_untyped_count": "{count} utan typ",
