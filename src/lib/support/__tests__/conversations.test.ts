@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { displayStatus, listTickets, loadThread, pickActiveTicket, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
+import { displayStatus, listTickets, loadThread, pickActiveTicket, pickTicketToOpen, replyInThread, startThread, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
 
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
@@ -30,6 +30,36 @@ describe('pickActiveTicket', () => {
   })
   it('is null when everything is resolved', () => {
     expect(pickActiveTicket([t('done', 'resolved', '2026-09-14')])).toBeNull()
+  })
+})
+
+describe('pickTicketToOpen', () => {
+  it('opens an unresolved ticket for replying, even beside a newer unread resolved one', () => {
+    const tickets = [t('done', 'resolved', '2026-09-20', 1), t('open', 'open', '2026-09-10')]
+    expect(pickTicketToOpen(tickets, null)).toEqual({ ticket: tickets[1], mode: 'reply' })
+  })
+  it('keeps the SDK current ticket first while it is open', () => {
+    const tickets = [t('a', 'open', '2026-09-10'), t('cur', 'pending', '2026-09-01')]
+    expect(pickTicketToOpen(tickets, 'cur')).toEqual({ ticket: tickets[1], mode: 'reply' })
+  })
+  // Support answered and then resolved: the unread answer is what the
+  // customer came for, not an empty composer.
+  it('with nothing open, opens the most recently active resolved ticket with unread messages read-only', () => {
+    const tickets = [
+      t('seen', 'resolved', '2026-09-20'),
+      t('older', 'resolved', '2026-09-05', 2),
+      t('newer', 'resolved', '2026-09-15', 1),
+    ]
+    expect(pickTicketToOpen(tickets, 'seen')).toEqual({ ticket: tickets[2], mode: 'read' })
+  })
+  it('never makes the read-only ticket the one to reply in', () => {
+    const tickets = [t('done', 'resolved', '2026-09-14', 1)]
+    expect(pickTicketToOpen(tickets, 'done')?.mode).toBe('read')
+    expect(pickActiveTicket(tickets, 'done')).toBeNull()
+  })
+  it('is null when nothing is open and every answer has been read', () => {
+    expect(pickTicketToOpen([t('done', 'resolved', '2026-09-14')], 'done')).toBeNull()
+    expect(pickTicketToOpen([])).toBeNull()
   })
 })
 
