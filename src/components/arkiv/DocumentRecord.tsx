@@ -255,14 +255,20 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                     {view.read.lane === 'history_tied' ? ` ${t('record_text_lane_tied')}` : ''}
                   </p>
                 ) : null}
-                <button
-                  type="button"
-                  disabled={reading}
-                  className="text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground disabled:opacity-50"
-                  onClick={() => void loadText()}
-                >
+                <Button size="sm" variant="outline" loading={reading} onClick={() => void loadText()}>
                   {reading ? t('record_text_reading') : view.read.state === 'read' ? t('record_text_show') : t('record_text_read_now')}
-                </button>
+                </Button>
+                {/* A read the model does takes seconds: say what is happening, and show where the text will land. */}
+                {reading && view.read.state !== 'read' ? (
+                  <>
+                    <p className="text-[12.5px] text-muted-foreground">{t('record_text_reading_hint', { count: view.page_count ?? 0 })}</p>
+                    <div className="space-y-2 pt-1">
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-5/6" />
+                      <Skeleton className="h-4 w-2/3" />
+                    </div>
+                  </>
+                ) : null}
               </div>
             ) : (
               <div className="space-y-4">

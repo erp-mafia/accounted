@@ -82,3 +82,22 @@ export async function ensurePreview(service: SupabaseClient, doc: PreviewDocumen
     return null
   }
 }
+
+/**
+ * The kept preview, or null when none was made yet. The reader uses it as the
+ * model's input for a photo: the same JPEG the viewer already built (at most
+ * IMAGE_MAX_DIMENSION, the model's size), so a HEIC is not decoded a second
+ * time when a person presses "Läs dokumentet" (2026-09-26: that decode was
+ * most of a 10 s wait). Never throws.
+ */
+export async function keptPreview(service: SupabaseClient, doc: { id: string; company_id: string }): Promise<Buffer | null> {
+  if (!service.storage) return null
+  try {
+    const { data, error } = await service.storage.from('documents').download(previewPath(doc.company_id, doc.id))
+    if (error || !data) return null
+    return Buffer.from(await data.arrayBuffer())
+  } catch {
+    return null
+  }
+}
+

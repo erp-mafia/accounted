@@ -7,6 +7,7 @@ import { isArkivEnabled } from '@/lib/arkiv/flag'
 import { createLogger } from '@/lib/logger'
 import { recordArkivUsage } from '@/lib/arkiv/usage'
 import { readDocumentBytes } from './router'
+import { keptPreview } from '@/lib/documents/preview'
 import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
 import { READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
 
@@ -59,16 +60,25 @@ export async function readAndStoreDocument(
   if (kind === null) return stamp(supabase, doc.id, { status: 'skipped', reason: 'unsupported_mime' }, null)
   if (kind === 'structured') return stamp(supabase, doc.id, { status: 'skipped', reason: 'structured' }, null)
 
-  const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
-  if (error || !blob) {
-    return stamp(supabase, doc.id, { status: 'error', reason: `download_failed: ${error?.message ?? 'no data'}` }, null)
+  // A photo the viewer already sized is read from that JPEG: no second HEIC decode, no second resize.
+  const preview = kind === 'claude_vision' ? await keptPreview(supabase, { id: doc.id, company_id: doc.company_id }) : null
+  let bytes: Buffer
+  let mime = doc.mime_type
+  if (preview) {
+    bytes = preview
+    mime = 'image/jpeg'
+  } else {
+    const { blob, error } = await downloadDocumentObject(supabase, doc.storage_path, doc.company_id)
+    if (error || !blob) {
+      return stamp(supabase, doc.id, { status: 'error', reason: `download_failed: ${error?.message ?? 'no data'}` }, null)
+    }
+    bytes = Buffer.from(await blob.arrayBuffer())
   }
-  const bytes = Buffer.from(await blob.arrayBuffer())
 
   let outcome: ReadOutcome
   try {
     outcome = await withAiMeter({ feature: 'document_read', companyId: doc.company_id }, () =>
-      readDocumentBytes(bytes, doc.mime_type, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) }),
+      readDocumentBytes(bytes, mime, { allowModel, maxModelPages: opts.maxModelPages ?? null, ...(opts.tier ? { tier: opts.tier } : {}) }),
     )
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
