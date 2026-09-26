@@ -62,13 +62,19 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/auth/rate-limit-http', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/rate-limit-http')>()
+  return { ...actual, getRedis: vi.fn(() => null) }
+})
+
 vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/entitlements/has-capability')>()
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
 import { handleMcpRequest } from '../server'
-import { resetUnattendedForTests } from '../unattended'
+import { resetUnattendedForTests, unattendedScope, unattendedScopes } from '../unattended'
+import { getRedis } from '@/lib/auth/rate-limit-http'
 
 function mcpToolCall(name: string, args: Record<string, unknown> = {}, sessionId?: string): Request {
   return new Request('http://localhost:3000/api/extensions/ext/mcp-server/mcp', {
@@ -122,6 +128,29 @@ describe('MCP unattended-session guard', () => {
     expect(approve.isError).toBe(true)
     expect(approve.kind).toBe('unattended_write_blocked')
     expect(approve.latencyMs).toBe(0)
+  })
+
+  it('marks the whole key when the run sends no session id, so nothing on the key commits meanwhile', async () => {
+    await kindOf(mcpToolCall('gnubok_get_task', { kind: 'agent:bookkeep', client: 'claude', unattended: true }))
+    const headerless = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }))
+    expect(headerless.kind).toBe('unattended_write_blocked')
+    const withSession = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }, 'another-chat'))
+    expect(withSession.kind).toBe('unattended_write_blocked')
+  })
+
+  it('refuses to start an unattended run it cannot mark', async () => {
+    vi.mocked(getRedis).mockReturnValueOnce({ set: () => Promise.reject(new Error('upstash down')) } as never)
+    const response = await handleMcpRequest(mcpToolCall('gnubok_get_task', { kind: 'agent:bookkeep', client: 'claude', unattended: true }, 'routine-run-x'))
+    const { isError, payload } = await parsedToolResult(response)
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toContain('could not be guarded')
+  })
+
+  it('scopes the mark to the session when there is one, else the key', () => {
+    expect(unattendedScope('s1', 'k1')).toMatchObject({ scope: 'session:s1' })
+    expect(unattendedScope(null, 'k1')).toMatchObject({ scope: 'key:k1' })
+    expect(unattendedScope(null, null)).toBeNull()
+    expect(unattendedScopes('s1', 'k1')).toEqual(['session:s1', 'key:k1'])
   })
 
   it('leaves other sessions, and calls without a session id, alone', async () => {

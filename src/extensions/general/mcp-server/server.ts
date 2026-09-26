@@ -1,5 +1,5 @@
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
-import { markUnattended, isUnattended } from './unattended'
+import { isAnyUnattended, markUnattended, unattendedScope, unattendedScopes } from './unattended'
 import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
@@ -24319,16 +24319,34 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         }
       }
 
-      // A scheduled routine's session reads and stages, never commits
-      // (unattended.ts). get_task with unattended: true marks the session; any
-      // later write that does not merely stage (an approval, a direct commit)
-      // is refused here, whatever the AI was told by what it read.
-      if (sessionId && toolName === 'gnubok_get_task' && (toolArgs as Record<string, unknown>).unattended === true) {
-        await markUnattended(sessionId).catch((err) => log.warn('Could not mark an unattended MCP session', { error: err instanceof Error ? err.message : String(err) }))
+      // A scheduled routine reads and stages, never commits (unattended.ts).
+      // get_task with unattended: true marks the run (its session, or without
+      // one its key); any later write that does not merely stage (an approval,
+      // a direct commit) is refused here, whatever the AI was told by what it
+      // read. A mark that cannot be written refuses the run instead of letting
+      // it start unguarded.
+      if (toolName === 'gnubok_get_task' && (toolArgs as Record<string, unknown>).unattended === true) {
+        const mark = unattendedScope(sessionId, actor?.id ?? null)
+        const marked = mark ? await markUnattended(mark.scope, mark.ttl).then(() => true, (err) => {
+          log.warn('Could not mark an unattended MCP run', { error: err instanceof Error ? err.message : String(err) })
+          return false
+        }) : false
+        if (!marked) {
+          const refused = toToolError(
+            codedError('INTERNAL_ERROR', 'Den schemalagda körningen kunde inte startas säkert just nu. Försök igen om en stund. (The unattended run could not be guarded, so it was not started.)'),
+            { toolName }
+          )
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(refused, toolNamespace), null, 2) }],
+              isError: true,
+            }))
+          )
+        }
       }
-      if (sessionId && tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isUnattended(sessionId).catch(() => false)) {
+      if (tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch(() => false)) {
         const blocked = toToolError(
-          codedError('FORBIDDEN', 'Den här körningen är schemalagd och ingen är med, så den får bara läsa och lägga förslag. Förslagen väntar på godkännande i Accounted. (Unattended run: approvals and direct writes are refused; staged proposals wait for a person in Accounted.)'),
+          codedError('FORBIDDEN', 'En schemalagd körning pågår och ingen är med, så den får bara läsa och lägga förslag. Godkänn förslagen i Accounted. (An unattended run is active on this connection: approvals and direct writes are refused for a while; staged proposals wait for a person in Accounted.)'),
           { toolName }
         )
         emitToolCallTelemetry({
