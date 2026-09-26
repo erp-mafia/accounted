@@ -85,7 +85,7 @@ Med arkiveringstid 7 år avses till och med det sjunde året efter utgången av 
 
 | Dokument | Form | Lagringsplats | Arkiveringstid |
 |---|---|---|---|
-| Systemdokumentation | Elektronisk | [Accounted / Egen lagring] | Samma som den räkenskapsinformation den avser |
+| Systemdokumentation (genererad: **Rapporter > Export & arkiv > Systemdokumentation**, samt denna mall) | Elektronisk | [Accounted / Egen lagring] | Samma som den räkenskapsinformation den avser |
 | Behandlingshistorik | Elektronisk | Accounted (automatiskt genererad) | Samma som den räkenskapsinformation den avser |
 | Denna arkivplan | [Elektronisk/Papper] | [Ange lagringsplats] | Samma som den räkenskapsinformation den avser |
 
