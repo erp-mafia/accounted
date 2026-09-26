@@ -47,7 +47,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices/:id/approve',
   summary: 'Approve a registered or overdue supplier invoice.',
   description:
-    'Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`). The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual, or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.',
+    'Attests a supplier invoice that has not been approved yet (status `registered` or `overdue`). The resulting status is `approved`, or `overdue` when the invoice is still past its due date. No journal entry is posted here: the registration JE was already booked at :create under accrual (or, under defer_invoice_booking, is posted by POST /supplier-invoices/{id}/book), or is deferred to :mark-paid under cash. Idempotent. Dry-runnable.',
   useWhen:
     'A registered SI has been reviewed and you want to mark it ready for payment. Many AP workflows gate :mark-paid behind an explicit approval step.',
   doNotUseFor:

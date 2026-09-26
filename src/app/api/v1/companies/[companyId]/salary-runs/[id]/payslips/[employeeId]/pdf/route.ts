@@ -29,7 +29,7 @@ registerEndpoint({
   useWhen:
     'You need the payslip document itself: archiving, forwarding to the employee outside the Accounted send flow, or attaching to an external HR system.',
   doNotUseFor:
-    'The payslip DATA (amounts, line items): use GET /salary-runs/{id}/employees/{employeeId}, which is cheaper and structured. Emailing payslips to employees: the send flow is internal-only today.',
+    'The payslip DATA (amounts, line items): use GET /salary-runs/{id}/employees/{employeeId}, which is cheaper and structured. Emailing payslips to employees: POST /salary-runs/{id}/send-payslips sends each a secure link.',
   pitfalls: [
     'The PDF renders whatever the run currently holds: for a draft run that has not been calculated, amounts are 0.',
     'PDF rendering takes a few hundred milliseconds; cache on the client if requesting repeatedly.',

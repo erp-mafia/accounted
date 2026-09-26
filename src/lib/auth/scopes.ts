@@ -301,6 +301,27 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   // reports:read (registry data feeds report filters/pickers); value creation
   // is bookkeeping:write (it mints codes that journal lines reference).
   'GET /api/v1/companies/:companyId/dimensions': 'reports:read',
+  // Operation registry, wave 2: deferred booking, supplier payment files,
+  // expense claims (utlägg), payroll lifecycle.
+  'POST /api/v1/companies/:companyId/salary-runs/:id/send-payslips': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/revert': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/unapprove': 'payroll:write',
+  'POST /api/v1/companies/:companyId/salary-runs/:id/employees/:employeeId/expense-claims': 'payroll:write',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches/preview': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches': 'suppliers:write',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches/:id': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/supplier-payment-batches/:id/file': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/supplier-payment-batches/:id/cancel': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/invoices/:id/book': 'invoices:write',
+  'POST /api/v1/companies/:companyId/invoices/bulk-book': 'invoices:write',
+  'POST /api/v1/companies/:companyId/supplier-invoices/:id/book': 'suppliers:write',
+  'GET /api/v1/companies/:companyId/expense-claims': 'suppliers:read',
+  'GET /api/v1/companies/:companyId/expense-claims/:id': 'suppliers:read',
+  'POST /api/v1/companies/:companyId/expense-claims': 'suppliers:write',
+  'DELETE /api/v1/companies/:companyId/expense-claims/:id': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/expense-claims/payouts': 'suppliers:write',
+  'POST /api/v1/companies/:companyId/transactions/:id/match-expense-payout': 'transactions:write',
   // Operation registry, wave 1 (src/lib/operations): setup capabilities.
   'POST /api/v1/companies/:companyId/cash-accounts': 'companies:write',
   'PATCH /api/v1/companies/:companyId/cash-accounts/:id': 'companies:write',

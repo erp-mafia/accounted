@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
 import { ensureInitialized } from '@/lib/init'
 import { withRouteContext } from '@/lib/api/with-route-context'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { addOpenExpenseClaimsToPayslip } from '@/lib/salary/expense-claim-lines'
+import { attachOpenExpenseClaims } from '@/lib/salary/expense-claim-lines'
+import { sessionFailureResponse } from '@/lib/operations/session'
 
 ensureInitialized()
 
@@ -11,25 +11,24 @@ ensureInitialized()
  * of the employee on this draft run's payslip as tax-free
  * expense_reimbursement lines (#2331). The server resolves the claims; the
  * client never sends amounts. Booking the run later marks exactly these
- * claims paid.
+ * claims paid. The rules live in lib/salary/expense-claim-lines.ts, shared
+ * with the v1 operation salary-runs.attach-expense-claims and
+ * gnubok_attach_salary_expense_claims.
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string; employeeId: string }> }>(
   'salary.run.employee.expense_claims.add',
   async (_request, ctx, { params }) => {
     const { id, employeeId } = await params
-    const { supabase, companyId, log, requestId } = ctx
+    const { supabase, companyId, log, requestId, user } = ctx
 
-    const result = await addOpenExpenseClaimsToPayslip(supabase, {
-      companyId,
-      salaryRunId: id,
-      employeeId,
-    })
+    const outcome = await attachOpenExpenseClaims(
+      { supabase, companyId, userId: user.id, log },
+      { salaryRunId: id, employeeId },
+    )
+    if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
+    if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
 
-    if (!result.ok) {
-      return errorResponseFromCode(result.code, log, { requestId, details: result.details })
-    }
-
-    return NextResponse.json({ data: result.data }, { status: 201 })
+    return NextResponse.json({ data: outcome.data }, { status: 201 })
   },
   { requireWrite: true },
 )

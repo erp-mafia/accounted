@@ -205,7 +205,7 @@ registerEndpoint({
   useWhen:
     'You are starting a new month\'s payroll. Use dry-run first to validate the period + voucher_series choice without committing.',
   doNotUseFor:
-    'Adding employees to an existing run (that is a separate surface: see internal /salary/runs/{id}/employees for Phase 5 PR-1; promoting it to v1 is deferred to a follow-up).',
+    'Adding employees to an existing run (POST /salary-runs/{id}/employees).',
   pitfalls: [
     'Idempotency-Key is mandatory.',
     'Duplicate (period_year, period_month) for the same company returns 409 SALARY_RUN_DUPLICATE_PERIOD.',

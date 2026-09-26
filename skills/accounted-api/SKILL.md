@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 193 endpoints.
+  pagination, scopes), and all 212 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -142,7 +142,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 193 operations. Paths are shown without
+API version `2026-05-12`, 212 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (8)
@@ -209,7 +209,7 @@ POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end clos
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (12)
+### Invoices (AR) (14)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -219,12 +219,14 @@ POST /companies/{companyId}/invoices : Create a draft invoice, proforma, or deli
 GET /companies/{companyId}/invoices/{id} : Retrieve a single invoice by id [scope:invoices:read risk:low idempotent]
 PATCH /companies/{companyId}/invoices/{id} : Update a draft invoice (metadata fields, optionally replacing line items) [scope:invoices:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/invoices/{id} : Delete a draft invoice (hard delete if unnumbered, makulering if numbered) [scope:invoices:write risk:high dry-run]
+POST /companies/{companyId}/invoices/{id}/book : Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step) [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/credit : Issue a credit note (kreditfaktura) against an invoice [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-paid : Record a payment against an invoice [scope:invoices:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/invoices/{id}/mark-sent : Transition a draft invoice to sent (without emailing) [scope:invoices:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/invoices/{id}/pdf : Download the rendered invoice PDF [scope:invoices:read risk:low idempotent]
 POST /companies/{companyId}/invoices/{id}/quote-status : Record the customer decision on a quote (offert) [scope:invoices:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/invoices/{id}/send : Send a draft invoice to the customer by email [scope:invoices:write risk:high idempotent dry-run]
+POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:write risk:medium idempotent dry-run reversible]
 ```
 
@@ -242,18 +244,30 @@ DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) 
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (13)
+### Suppliers (AP) (25)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
 ```text
+GET /companies/{companyId}/expense-claims : List expense claims (utlägg): what the company owes owners and employees for private purchases [scope:suppliers:read risk:low idempotent]
+POST /companies/{companyId}/expense-claims : Register an expense claim (utlägg) and post its verifikat [scope:suppliers:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/expense-claims/{id} : Read one expense claim (utlägg) [scope:suppliers:read risk:low idempotent]
+DELETE /companies/{companyId}/expense-claims/{id} : Delete a registered expense claim; its verifikat is reversed by storno, never deleted [scope:suppliers:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/expense-claims/payouts : Record that the company paid a person back for their expense claims [scope:suppliers:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/supplier-invoices : List supplier invoices for a company [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-invoices : Register a new supplier invoice [scope:suppliers:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/supplier-invoices/{id} : Retrieve a single supplier invoice by id [scope:suppliers:read risk:low idempotent]
 PATCH /companies/{companyId}/supplier-invoices/{id} : Update a registered supplier invoice [scope:suppliers:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/approve : Approve a registered or overdue supplier invoice [scope:suppliers:write risk:low idempotent dry-run]
+POST /companies/{companyId}/supplier-invoices/{id}/book : Book a registered supplier invoice that was registered without a verifikat (the deferred Bokför step) [scope:suppliers:write risk:high idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/credit : Issue a credit note for a supplier invoice [scope:suppliers:write risk:high idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/mark-paid : Record a payment against a supplier invoice [scope:suppliers:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/supplier-payment-batches : List supplier payment batches (betalfiler), newest first, with settlement progress [scope:suppliers:read risk:low idempotent]
+POST /companies/{companyId}/supplier-payment-batches : Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices [scope:suppliers:write risk:high idempotent dry-run]
+GET /companies/{companyId}/supplier-payment-batches/{id} : Read one supplier payment batch (betalfil) with its lines and live settlement [scope:suppliers:read risk:low idempotent]
+POST /companies/{companyId}/supplier-payment-batches/{id}/cancel : Cancel (makulera) a supplier payment batch [scope:suppliers:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/supplier-payment-batches/{id}/file : Download the pain.001 payment file of a supplier payment batch [scope:suppliers:write risk:low idempotent]
+POST /companies/{companyId}/supplier-payment-batches/preview : Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings [scope:suppliers:read risk:low idempotent]
 GET /companies/{companyId}/suppliers : List suppliers for a company [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/suppliers : Create a supplier [scope:suppliers:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/suppliers/{id} : Retrieve a single supplier by id [scope:suppliers:read risk:low idempotent]
@@ -273,7 +287,7 @@ POST /companies/{companyId}/documents/{id}/link : Link a document to a journal e
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 ```
 
-### Banking (32)
+### Banking (33)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -305,6 +319,7 @@ GET /companies/{companyId}/transactions/{id} : Retrieve a single transaction by 
 POST /companies/{companyId}/transactions/{id}/categorize : Categorize a transaction and create the journal entry [scope:transactions:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/transactions/{id}/ignore : Ignore a bank transaction (no verifikat, allowed in locked periods) [scope:transactions:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/transactions/{id}/ignore : Restore an ignored bank transaction to the "to book" list [scope:transactions:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/transactions/{id}/match-expense-payout : Book an outgoing bank transaction as the repayment of one person's expense claims [scope:transactions:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/transactions/{id}/match-invoice : Match a positive bank transaction to a customer invoice [scope:transactions:write risk:high idempotent]
 POST /companies/{companyId}/transactions/{id}/match-supplier-invoice : Match a negative bank transaction to a supplier invoice [scope:transactions:write risk:high idempotent]
 POST /companies/{companyId}/transactions/{id}/uncategorize : Reverse the categorization of a transaction (storno + reset) [scope:transactions:write risk:medium idempotent dry-run]
@@ -345,7 +360,7 @@ PATCH /companies/{companyId}/salary/settings : Partially update the company payr
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]
 ```
 
-### Salary runs (22)
+### Salary runs (26)
 
 Full detail: [references/salary-runs.md](references/salary-runs.md)
 
@@ -364,6 +379,7 @@ POST /companies/{companyId}/salary-runs/{id}/employees : Add an employee to a dr
 GET /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Get one employee's payslip in a salary run [scope:payroll:read risk:low idempotent]
 PATCH /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Set this run's base salary for one employee [scope:payroll:write risk:medium idempotent dry-run reversible]
 DELETE /companies/{companyId}/salary-runs/{id}/employees/{employeeId} : Remove an employee from a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/salary-runs/{id}/employees/{employeeId}/expense-claims : Repay an employee's open expense claims (utlägg) with this salary run [scope:payroll:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/employees/{employeeId}/lines : Add a payslip line to an employee in a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary-runs/{id}/generate-agi : Generate the Skatteverket AGI XML for a salary run [scope:payroll:write risk:medium idempotent]
 PATCH /companies/{companyId}/salary-runs/{id}/lines/{lineId} : Update a payslip line in a draft salary run [scope:payroll:write risk:low idempotent dry-run reversible]
@@ -372,6 +388,9 @@ POST /companies/{companyId}/salary-runs/{id}/mark-paid : Mark an approved salary
 POST /companies/{companyId}/salary-runs/{id}/payment-file : Generate the bank payment file (pain.001 or Bankgirot LB) for a salary run [scope:payroll:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/salary-runs/{id}/payment-files : List the archived bank payment files of a salary run [scope:payroll:read risk:low idempotent]
 GET /companies/{companyId}/salary-runs/{id}/payslips/{employeeId}/pdf : Download one employee's payslip as PDF [scope:payroll:read risk:low idempotent]
+POST /companies/{companyId}/salary-runs/{id}/revert : Send a salary run in review back to draft so it can be edited [scope:payroll:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/salary-runs/{id}/send-payslips : Email every employee on an approved salary run a secure link to their payslip [scope:payroll:write risk:medium idempotent dry-run]
+POST /companies/{companyId}/salary-runs/{id}/unapprove : Recall the approval of a salary run (approved back to review) [scope:payroll:write risk:medium idempotent dry-run reversible]
 ```
 
 ### Reports (19)

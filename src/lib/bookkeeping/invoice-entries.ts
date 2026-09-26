@@ -393,12 +393,34 @@ export async function createInvoiceJournalEntry(
    * customLines: user-edited rows from the send dialog. Booked verbatim
    * (caller validates balance); line generation is skipped entirely.
    */
-  options?: {
-    descriptionPrefix?: string
-    numberOverride?: string | null
-    customLines?: CreateJournalEntryLineInput[]
-  }
+  options?: InvoiceJournalEntryOptions
 ): Promise<JournalEntry | null> {
+  const input = await buildInvoiceJournalEntryInput(supabase, companyId, invoice, entityType, customerName, options)
+  if (!input) return null
+  return createJournalEntry(supabase, companyId, userId, input)
+}
+
+export interface InvoiceJournalEntryOptions {
+  descriptionPrefix?: string
+  numberOverride?: string | null
+  customLines?: CreateJournalEntryLineInput[]
+}
+
+/**
+ * The verifikat createInvoiceJournalEntry would post, without posting it: the
+ * fiscal period lookup is the only database read, and nothing is written. The
+ * deferred "Bokför" dry run previews these lines. Returns null when no open
+ * fiscal period covers invoice_date. Throws the same generator errors
+ * (InvoiceFxRateMissingError) the committing path throws.
+ */
+export async function buildInvoiceJournalEntryInput(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: Invoice,
+  entityType: EntityType,
+  customerName?: string,
+  options?: InvoiceJournalEntryOptions
+): Promise<CreateJournalEntryInput | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
   if (!fiscalPeriodId) {
     log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
@@ -406,7 +428,7 @@ export async function createInvoiceJournalEntry(
   }
 
   if (options?.customLines && options.customLines.length > 0) {
-    return createJournalEntry(supabase, companyId, userId, {
+    return {
       fiscal_period_id: fiscalPeriodId,
       entry_date: invoice.invoice_date,
       description: buildInvoiceDescription(
@@ -418,7 +440,7 @@ export async function createInvoiceJournalEntry(
       source_type: 'invoice_created',
       source_id: invoice.id,
       lines: options.customLines,
-    })
+    }
   }
 
   const lines: CreateJournalEntryLineInput[] = []
@@ -523,7 +545,7 @@ export async function createInvoiceJournalEntry(
     lines,
   }
 
-  return createJournalEntry(supabase, companyId, userId, input)
+  return input
 }
 
 /**

@@ -458,6 +458,74 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/invoices/{id}/book`
+
+**Book a sent customer invoice that was issued without a verifikat (the deferred Bokför step).**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+For companies with defer_invoice_booking=true (Registrera men bokför inte): :send and :mark-sent issue the invoice without posting anything, and this step posts the revenue verifikat afterwards (Debit 1510 Kundfordringar / Credit revenue per VAT rate + utgående moms; ROT/RUT share on 1513; periodiserade lines on 29xx with their schedules). Dated on the invoice date. The invoice is claimed with a compare-and-set, so a concurrent book, payment or credit cancels this entry instead of double-posting. The delivered PDF, if archived at send, is linked to the verifikat. Idempotent. Dry-runnable: the dry run previews the exact lines and writes nothing.
+
+**Use when:** A customer invoice is sent or overdue, has no journal_entry_id, and the company books invoices in a separate step (defer_invoice_booking), typically after someone has checked the kontering.
+**Do not use for:** Drafts (issue them with :send or :mark-sent first), paid invoices (their payment already booked the sale in full), credit notes, quotes, proformas or delivery notes, or any invoice under kontantmetoden (booked at payment).
+
+**Pitfalls:**
+- An invoice that already has a journal_entry_id answers 400 INVOICE_BOOK_ALREADY_BOOKED.
+- Status other than sent or overdue answers 400 INVOICE_BOOK_INVALID_STATUS with details.currentStatus.
+- Under kontantmetoden answers 400 INVOICE_BOOK_CASH_METHOD: nothing books before payment.
+- A locked or closed period, or an invoice date on or before the company lock date (bookkeeping_locked_through), answers 400 PERIOD_LOCKED with details.reason, details.fiscal_period_id and details.invoice_date. Nothing is generated, so no voucher number is spent: unlock the period (only if the user asked for that correction) and retry.
+- No open fiscal year covering the invoice date answers 400 INVOICE_BOOK_NO_FISCAL_PERIOD: create the räkenskapsår first.
+- A posted verifikat is permanent: undo a wrong booking with storno (POST /journal-entries/{id}/reverse), never by editing.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    invoice: { id: string, invoice_number: string | null, status: string, invoice_date: string, due_date: string | null, currency: string, total: number, journal_entry_id: string | null },
+    journal_entry_id: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "invoice": {
+      "id": "7d1e…",
+      "invoice_number": "F-1042",
+      "status": "sent",
+      "invoice_date": "2026-09-10",
+      "due_date": "2026-10-10",
+      "currency": "SEK",
+      "total": 12500,
+      "journal_entry_id": "9a0b…"
+    },
+    "journal_entry_id": "9a0b…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/invoices/{id}/credit`
 
 **Issue a credit note (kreditfaktura) against an invoice.**
@@ -631,7 +699,7 @@ Example response `200`:
 **Transition a draft invoice to sent (without emailing).**
 `scope:invoices:write · risk:medium · idempotent · dry-run`
 
-Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful dashboard Peppol send: that flow issues the invoice itself. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent (the send response carried issuance.ok=false and the invoice is still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending lives in the dashboard invoice page behind a per-company access grant (requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT). Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
+Marks a draft invoice as sent: for invoices delivered outside Accounted (an external e-invoice provider, postal, manual email). Not needed after a successful dashboard Peppol send: that flow issues the invoice itself. If the dashboard reports that the invoice was sent via Peppol but could not be marked as sent (the send response carried issuance.ok=false and the invoice is still in draft), :mark-sent is the documented recovery and completes the issuance; a number already allocated is reused, never consumed twice. Peppol sending lives in the dashboard invoice page behind a per-company access grant (requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. Allocates the F-series invoice_number atomically (ML 17 kap 24§ p.2). When the company books at issue (faktureringsmetoden without defer_invoice_booking), also posts the invoice journal entry (Debit AR 1510 / Credit revenue + output VAT); under defer_invoice_booking the invoice is marked sent without a verifikat and is booked afterwards with POST /invoices/{id}/book. Emits invoice.sent. Idempotent and dry-runnable. The companion :send action (PR-B-2b-3) adds PDF rendering and email delivery on top of this same flow.
 
 **Use when:** You delivered the invoice through a channel other than Accounted's email or a successful dashboard Peppol send (an external e-invoice provider, postal, your own SMTP) and need to record it as sent so the F-series number is allocated and the journal entry is posted; or a dashboard Peppol send was accepted by the network but reported that the invoice could not be marked as sent.
 **Do not use for:** Sending the invoice via Accounted email: use :send (PR-B-2b-3) for that. Marking an already-sent invoice as paid: use :mark-paid (PR-B-2b-2).
@@ -801,7 +869,7 @@ Example response `200`:
 **Send a draft invoice to the customer by email.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
+The full send pipeline: preflight PDF render → allocate F-series number atomically → final PDF render → email via the email extension (Resend or SMTP; PDF attachment, copy to company) → flip status to sent → post journal entry (real invoice, unless kontantmetoden or defer_invoice_booking; a deferred invoice is booked afterwards with POST /invoices/{id}/book) → archive PDF as underlag → emit invoice.sent. Email failure is a hard 502 before state changes; post-email failures surface as warnings but the invoice IS marked sent.
 
 **Use when:** You want Accounted to deliver the invoice to the customer via email. Peppol e-invoices are sent from the invoice page in the dashboard (per-company access grant requested under Inställningar > Fakturering (Settings > Invoicing); aktiebolag senders, standard invoices only, Swedish org-number buyers whose org number is not a personnummer, SEK with taxable Swedish VAT at 6/12/25 % only, no ROT/RUT deductions); a v1 or MCP Peppol send action is not yet available. A successful dashboard Peppol send issues the invoice itself, so do not call :mark-sent after it; only if the dashboard reports that the invoice was sent via Peppol but could not be marked as sent does :mark-sent complete the issuance. For invoices delivered through another channel (an external e-invoice provider, postal, own SMTP) use :mark-sent instead.
 **Do not use for:** Re-sending an already-sent invoice (returns 409 INVOICE_UPDATE_NOT_DRAFT). Sending a delivery note (no F-series lifecycle). Sending a credit note (use the :credit endpoint to issue the kreditfaktura; subsequent re-send of the credit note via :mark-sent is the supported path).
@@ -882,6 +950,94 @@ Example response `200`:
       "billing@gnubok-user.test"
     ],
     "journal_entry_id": "7b3a…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/invoices/bulk-book`
+
+**Book many customer invoices in one call, each with its own outcome.**
+`scope:invoices:write · risk:high · idempotent · dry-run`
+
+The bulk Bokför of the invoice list. Per invoice id (at most 200, duplicates processed once): a sent or overdue invoice without a verifikat gets the same revenue verifikat as POST /invoices/{id}/book; a draft is issued and booked like :mark-sent (F-series number allocated, marked sent WITHOUT email, verifikat posted, PDF archived, invoice.sent emitted), but only when the company books at issue: under defer_invoice_booking a draft fails with INVOICE_BOOK_DEFERRED_DRAFT and is not touched. Partial success: items are booked one by one in order, a failed item never stops the others and never undoes the ones before it, and the answer is 200 with one result per unique id plus a summary. Only whole-batch preconditions fail the request (kontantmetoden, unreadable settings). Idempotent. Dry-runnable: the dry run answers per item what would happen, with the lines, and writes nothing.
+
+**Use when:** Several invoices are waiting to be booked (the unbooked list, or MCP-created drafts in a company that books at issue) and the user wants them booked together.
+**Do not use for:** Sending invoices to customers (no email is sent here: use :send), paid invoices, credit notes, or kontantmetoden companies.
+
+**Pitfalls:**
+- Check data.summary.failed and each data.results[].error_code: a 200 does not mean every invoice was booked.
+- Under kontantmetoden the whole request answers 400 INVOICE_BOOK_CASH_METHOD.
+- Per-item codes mirror POST /invoices/{id}/book (INVOICE_NOT_FOUND, INVOICE_BOOK_ALREADY_BOOKED, INVOICE_BOOK_INVALID_STATUS, INVOICE_BOOK_NOT_BOOKABLE, INVOICE_BOOK_DEFERRED_DRAFT, PERIOD_LOCKED, INVOICE_BOOK_NO_FISCAL_PERIOD, INVOICE_BOOK_CONFLICT) plus the issuance codes for drafts (INVOICE_SEND_PAYMENT_ACCOUNT_MISSING, INVOICE_SEND_VAT_NUMBER_MISSING, INVOICE_MARK_SENT_*).
+- A draft that is issued consumes its F-number even if a later step fails; a locked period is checked first, so a lock never costs a number.
+- A retried call with a new Idempotency-Key is safe: booked invoices answer INVOICE_BOOK_ALREADY_BOOKED per item.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ invoice_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "invoice_ids": [
+    "7d1e…",
+    "8e2f…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    results: { id: string, status: "booked" | "failed", journal_entry_id?: string | null, error_code?: string, error?: string }[],
+    summary: { total: number, booked: number, failed: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "results": [
+      {
+        "id": "7d1e…",
+        "status": "booked",
+        "journal_entry_id": "9a0b…"
+      },
+      {
+        "id": "8e2f…",
+        "status": "failed",
+        "error_code": "INVOICE_BOOK_INVALID_STATUS",
+        "error": "Endast skickade eller förfallna fakturor kan bokföras i efterhand."
+      }
+    ],
+    "summary": {
+      "total": 2,
+      "booked": 1,
+      "failed": 1
+    }
   },
   "meta": {
     "request_id": "req_…",

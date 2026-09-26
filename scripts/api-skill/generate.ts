@@ -93,10 +93,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'suppliers.md',
     title: 'Suppliers (AP)',
-    members: ['suppliers', 'supplier-invoices'],
+    members: ['suppliers', 'supplier-invoices', 'supplier-payment-batches', 'expense-claims'],
     blurb:
-      'Accounts payable: supplier register and received supplier invoices ' +
-      '(register -> approve -> mark-paid, or credit).',
+      'Accounts payable: supplier register, received supplier invoices ' +
+      '(register -> approve -> book if deferred -> pay via a supplier payment file ' +
+      'or mark-paid, or credit), and expense claims (utlägg) with their payouts.',
   },
   {
     file: 'documents.md',
