@@ -18,7 +18,7 @@ Rows the database triggers write on every insert, update and delete of bookkeepi
 **Do not use for:** The readable processing history for a räkenskapsår (GET /reports/behandlingshistorik).
 
 **Pitfalls:**
-- old_state / new_state are whole row snapshots and can hold personal data (a sole trader's org number is the owner's personnummer, supplier bank details): treat the response as confidential.
+- old_state / new_state are whole row snapshots and can hold personal data (a sole trader's org number is the owner's personnummer, supplier bank details): only an owner or admin of the company receives them (snapshots_included true). Other callers get old_state/new_state null and changed_fields, the column names that changed.
 - from_date / to_date compare against the created_at timestamp: to_date=2026-01-31 stops at 2026-01-31T00:00:00Z. Pass the next day to include all of the 31st.
 - The page is in data.entries with data.next_cursor; a cursor that no longer decodes starts from the first page.
 
@@ -37,8 +37,9 @@ Response `200`:
 ```ts
 {
   data: {
-    entries: { id: string, action: string, table_name: string | null, record_id: string | null, user_id: string | null, actor_type: string | null, actor_label: string | null, description: string | null, old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null, created_at: string }[],
-    next_cursor: string | null
+    entries: { id: string, action: string, table_name: string | null, record_id: string | null, user_id: string | null, actor_type: string | null, actor_label: string | null, description: string | null, old_state: Record<string, unknown> | null, new_state: Record<string, unknown> | null, changed_fields?: string[], created_at: string }[],
+    next_cursor: string | null,
+    snapshots_included: boolean
   },
   meta: {
     request_id: string,
