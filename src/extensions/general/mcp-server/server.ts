@@ -24344,9 +24344,15 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           )
         }
       }
-      if (tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch(() => false)) {
+      // A mark that cannot be read counts as set: when the server cannot tell
+      // whether an unattended run is active, commits over MCP wait (a person
+      // can still approve in Accounted), rather than slipping past the guard.
+      if (tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch((err) => {
+        log.warn('Could not read unattended marks; holding the write back', { error: err instanceof Error ? err.message : String(err) })
+        return true
+      })) {
         const blocked = toToolError(
-          codedError('FORBIDDEN', 'En schemalagd körning pågår och ingen är med, så den får bara läsa och lägga förslag. Godkänn förslagen i Accounted. (An unattended run is active on this connection: approvals and direct writes are refused for a while; staged proposals wait for a person in Accounted.)'),
+          codedError('FORBIDDEN', 'Godkännanden och direkta ändringar görs inte härifrån just nu, eftersom en schemalagd körning utan någon närvarande kan pågå. Förslagen väntar: godkänn dem i Accounted. (Approvals and direct writes are held on this connection while an unattended run may be active; staged proposals wait for a person in Accounted.)'),
           { toolName }
         )
         emitToolCallTelemetry({

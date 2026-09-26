@@ -9,8 +9,9 @@ import { isSelfHosted } from '@/lib/env/public-flags'
  * server enforces it.
  *
  * The mark goes on the run's Mcp-Session-Id when the client sends one, and
- * otherwise on the whole API key for two hours: fail closed, at the price
- * that approvals through that key wait for Accounted's own UI meanwhile. The
+ * otherwise on the whole API key for an hour: fail closed, at the price
+ * that approvals through that key wait for Accounted's own UI meanwhile. A
+ * mark that cannot be read counts as set (server.ts). The
  * session header is not trusted for authorization and is not used for it: a
  * mark only ever takes rights away.
  *
@@ -21,7 +22,7 @@ import { isSelfHosted } from '@/lib/env/public-flags'
  * refused instead (markUnattended throws, and the dispatcher refuses the run).
  */
 export const SESSION_TTL_SECONDS = 6 * 60 * 60
-export const KEY_TTL_SECONDS = 2 * 60 * 60
+export const KEY_TTL_SECONDS = 60 * 60
 const PREFIX = 'mcp:unattended:'
 const memory = new Map<string, number>()
 
