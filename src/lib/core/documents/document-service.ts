@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { previewPath } from '@/lib/documents/preview'
 import { after } from 'next/server'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { dbError } from '@/lib/errors/db-error'
@@ -1365,9 +1366,10 @@ export async function deleteDocument(
     // under the company-scoped SELECT policy. Authorization already happened
     // above: the company-filtered row fetch plus the row delete that just
     // succeeded (with block_document_deletion() as the DB-level backstop).
+    // The viewer's preview (lib/documents/preview.ts) goes with the file it was made from.
     await createServiceClientNoCookies()
       .storage.from(DOCUMENTS_BUCKET)
-      .remove(documentStoragePathCandidates(doc.storage_path, companyId))
+      .remove([...documentStoragePathCandidates(doc.storage_path, companyId), previewPath(companyId, doc.id)])
   }
 
   await eventBus.emit({

@@ -1555,7 +1555,7 @@ describe('deleteDocument', () => {
     const result = await deleteDocument(supabase as never, company, 'doc-1')
 
     expect(result.ok).toBe(true)
-    expect(serviceRemove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`])
+    expect(serviceRemove).toHaveBeenCalledWith([legacy, `documents/${company}/user-1/1_a.pdf`, `previews/${company}/doc-1-v1.jpg`])
     // The documents bucket is WORM (no DELETE policy on storage.objects): a
     // caller-bound remove() is silently blocked by RLS and reports success
     // without deleting, so it must never be used for the removal.

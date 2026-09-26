@@ -3,7 +3,6 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { isArkivBrainEnabled, isArkivEnabled } from '@/lib/arkiv/flag'
-import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
 import { documentDate, documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import type { Payload } from '@/lib/documents/extract/fields'
 import { searchDocumentPages, type PageHit } from '@/lib/documents/read/search'
@@ -12,7 +11,7 @@ import { NOT_STRUCTURED_MIME_FILTER } from '@/lib/documents/read/types'
 import { folderQuery, isFolderKey } from '@/lib/arkiv/folders'
 
 /**
- * GET /api/arkiv/documents?type=&q=&year=
+ * GET /api/arkiv/documents?q=&year=
  * GET /api/arkiv/documents?folder=&year=&offset=&limit=
  * The Arkiv table: every admitted document with its type, counterparty,
  * amount and what it is tied to. `type` is a doc_type or one of the groups
@@ -39,15 +38,6 @@ export interface ArkivDocumentRow {
   href: string
 }
 
-const AUTHORITY = ['registration.bolagsverket', 'filing.bolagsverket', 'decision.skatteverket']
-const CORPORATE = ['minutes.board', 'minutes.agm', 'share_subscription_list', 'annual_report']
-const NAMED = new Set(['receipt', 'supplier_invoice', 'bank_statement', ...AUTHORITY, ...CORPORATE])
-const GROUPS: Record<string, string[]> = {
-  agreement: DOC_TYPES.filter((t) => t.startsWith('agreement.')),
-  authority: AUTHORITY,
-  corporate: CORPORATE,
-  other: DOC_TYPES.filter((t) => !t.startsWith('agreement.') && !NAMED.has(t)),
-}
 /** Who the document is from when it names no counterparty: the authority that issued it. */
 const ISSUER: Record<string, string> = {
   'registration.bolagsverket': 'Bolagsverket',
@@ -57,7 +47,6 @@ const ISSUER: Record<string, string> = {
 }
 
 const querySchema = z.object({
-  type: z.string().max(64).optional(),
   q: z.string().trim().max(200).optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
   limit: z.coerce.number().int().min(1).max(500).default(200),
@@ -72,9 +61,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   if (!isArkivEnabled(ctx.companyId)) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   const parsed = validateQuery(request, querySchema)
   if (!parsed.success) return parsed.response
-  const { type, q, year, limit, folder, offset } = parsed.data
-  const types = type ? (GROUPS[type] ?? (isDocType(type) ? [type] : null)) : null
-  if (type && !types) return NextResponse.json({ error: 'Okänd typ.' }, { status: 400 })
+  const { q, year, limit, folder, offset } = parsed.data
   if (folder && !isFolderKey(folder)) return NextResponse.json({ error: 'Okänd mapp.' }, { status: 400 })
 
   // One folder, one page: the database orders and pages over the whole archive, and the rows keep that order.
@@ -126,7 +113,6 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
     .or(NOT_STRUCTURED_MIME_FILTER)
     .order('created_at', { ascending: false })
     .limit(pageOrder ? pageOrder.length : limit)
-  if (types) query = query.in('doc_type', types)
   if (searchIds) query = query.in('id', searchIds)
   if (pageOrder) query = query.in('id', pageOrder)
   const { data, error } = await query
