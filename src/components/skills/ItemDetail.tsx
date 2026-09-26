@@ -6,34 +6,39 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowUpRight, Check, ChevronUp, Plus, Repeat } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Check, ChevronDown, ChevronUp, Plus } from 'lucide-react'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { useBranding } from '@/lib/branding/brand-context'
 import { AGENTS, COMMUNITY_OPEN, OWN_AGENT_KNOWLEDGE } from '@/lib/agent-skills/agents'
 import { SHOWN_FLOWS } from './catalog-setup'
 import type { KnowledgeOption } from '@/lib/agent-skills/knowledge-choices'
 import { formatDateLong } from '@/lib/utils'
 import { ownSkillSteps } from '@/lib/agent-skills/own-skill-body'
-import { AI_CLIENTS, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
-import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
+import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
+import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
+import { useClaudeTarget } from './claude-target'
+import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
-import { RoutinePanel } from './RoutinePanel'
-import { parseRoutineQuery } from '@/lib/agent-skills/routine'
+import { RoutineOffer, RoutinePanel } from './RoutinePanel'
+import { parseRoutineQuery, parseRoutineSent } from '@/lib/agent-skills/routine'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
-import { DeleteOwn, Field, Row, ShareBox, SubView } from './AgentDetail'
+import { DeleteOwn, EditOwnButton, Field, Row, ShareBox, SubView } from './AgentDetail'
 import { FlowSymbol } from './FlowSymbol'
 import { CopyIcon } from './CopyIcon'
 import { ItemSymbol } from './ItemSymbol'
 import { StrataField } from './StrataField'
 import { catalogHref, itemHue, seedOf, type ItemKind } from './hues'
-import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
+import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
 import { analysisSegment, communityMeta, communitySegment, fetchConnections, kindOf, readAgents, readCatalog, readOptions, rulesSegment, simulatedClient, type CommunityMeta } from './data'
 import styles from './skills.module.css'
 
 // The Markdown parser loads with the first pack that is opened, not with the list.
 const Markdown = dynamic(() => import('@/components/agent/MarkdownMessage'))
+// Skriv själv, loaded when own knowledge or an analysis is edited.
+const CreateItem = dynamic(() => import('./CreateItem').then((m) => m.CreateItem))
 
 async function readBody(url: string): Promise<string> {
   const response = await fetch(url)
@@ -65,41 +70,55 @@ type Item = {
  */
 export function ItemDetail({ segment, backHref }: { segment: string; backHref: string }) {
   const { company } = useCompany()
-  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} segment={segment} backHref={backHref} /> : null
+  return company ? <Detail key={`${company.id}:${segment}`} companyId={company.id} companyName={company.name} segment={segment} backHref={backHref} /> : null
 }
 
-function Detail({ companyId, segment, backHref }: { companyId: string; segment: string; backHref: string }) {
+function Detail({ companyId, companyName, segment, backHref }: { companyId: string; companyName: string; segment: string; backHref: string }) {
   const t = useTranslations('skills_registry')
   const locale = useLocale()
   const { canWrite } = useCanWrite()
+  const { appName } = useBranding()
   const router = useRouter()
   const knowledgeName = useKnowledgeName()
   const knowledgeDesc = useKnowledgeDesc()
+  const analysisLabel = useAnalysisLabel()
   const isRules = segment.startsWith('kunskap.')
   const options = useSWR(['/api/agents/knowledge', companyId], ([url]) => readOptions(url))
   // Always read: a pack's page lists the company's own flows it can be given to.
   const catalog = useSWR(['/api/skills', companyId], ([url]) => readCatalog(url))
   const agents = useSWR(['/api/agents', companyId, 'claude'], ([url, , c]) => readAgents(`${url}?client=${c}`))
   // A routine chosen in Skriv själv arrives as ?rutin=… and opens its panel filled in.
-  const handedRoutine = parseRoutineQuery(new URLSearchParams(useSearchParams().toString()))
+  const handedParams = new URLSearchParams(useSearchParams().toString())
+  const handedRoutine = parseRoutineQuery(handedParams)
+  const handedSent = parseRoutineSent(handedParams)
   const [view, setView] = useState<'main' | 'give' | 'routine'>(handedRoutine ? 'routine' : 'main')
+  // ── the AI connection, read once and whenever the user comes back (as on a flow's page) ──
   const [connected, setConnected] = useState<AiClient[] | null>(null)
-  const [ran, setRan] = useState(false)
+  const [outcome, setOutcome] = useState<StartOutcome | null>(null)
+  const [editing, setEditing] = useState(false)
+  // A pack's own text is written for the AI (often in English): folded until asked for.
+  const [showBody, setShowBody] = useState(false)
   useEffect(() => {
     const simulated = simulatedClient()
     const controller = new AbortController()
-    void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) })
-    return () => controller.abort()
+    const check = () => { if (document.visibilityState !== 'hidden') void (simulated ? Promise.resolve([simulated]) : fetchConnections(controller.signal)).then((list) => { if (list) setConnected(list) }) }
+    check()
+    window.addEventListener('focus', check)
+    return () => { controller.abort(); window.removeEventListener('focus', check) }
   }, [])
   const client = pickConnectedAiClient(connected ?? []) ?? 'claude'
   const ai = AI_CLIENTS.find((c) => c.id === client)!
+  const disconnected = connected !== null && connected.length === 0
+  const [claudeTarget] = useClaudeTarget()
+  const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
 
   const pack: KnowledgeOption | undefined = options.data?.find((o) => rulesSegment(o.id) === segment)
   const shared = catalog.data?.find((s) => s.tier === 'community' && communitySegment(s.slug) === segment)
   const builtIn = segment.startsWith('analys.') ? catalog.data?.find((s) => s.source === 'accounted' && s.itemKind === 'analysis' && analysisSegment(s.slug) === segment) : undefined
   const mine = segment.startsWith('egen.') ? catalog.data?.find((s) => s.tier === 'own' && s.slug === `own/${segment.slice(5)}`) : undefined
-  const item: Item | null = builtIn ? {
-    kind: 'analysis', key: builtIn.slug, name: builtIn.name, desc: builtIn.summary, body: builtIn.summary,
+  const builtInLabel = builtIn ? analysisLabel(builtIn.slug, { name: builtIn.name, summary: builtIn.summary }) : null
+  const item: Item | null = builtIn && builtInLabel ? {
+    kind: 'analysis', key: builtIn.slug, name: builtInLabel.name, desc: builtInLabel.summary, body: builtIn.summary,
     atomId: null, version: builtIn.version ?? null, reviewedAt: null, level: null, community: null,
   } : mine ? {
     kind: mine.itemKind ?? 'rules', key: mine.slug, name: mine.name, desc: mine.summary, body: mine.summary,
@@ -161,6 +180,18 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
     )
   }
 
+  // Shared text is frozen for review: only a private own item can be edited (PATCH action 'edit').
+  const editable = !!mine?.installations[0] && (mine.shareStatus ?? 'private') === 'private'
+  if (editing && editable && body.data !== undefined) {
+    return (
+      <CreateItem backHref={backHref} edit={{
+        installationId: mine!.installations[0].installation_id, kind: item.kind, name: mine!.name, description: mine!.summary ?? '', body: body.data,
+        onCancel: () => setEditing(false),
+        onSaved: async () => { await Promise.all([catalog.mutate(), body.mutate()]); setEditing(false) },
+      }} />
+    )
+  }
+
   const hue = itemHue(item.kind, item.own ? item.name : item.key)
   // Back to where the item lives: its industry or company form, or the general list.
   const home = item.atomId && (item.atomId.startsWith('vertical/') || item.atomId.startsWith('modifier/')) ? item.atomId : null
@@ -168,15 +199,26 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
   // Own items live under Egna.
   const back = item.own ? `${listHref}${listHref.includes('?') ? '&' : '?'}vy=egna` : listHref
   const isFlow = item.kind === 'workflow' && !!item.community
+  // Accounted's knowledge packs lead with what they cover in plain words; the text the AI reads is one click away.
+  const isPack = !builtIn && !mine && !!pack && pack.tier !== 'community'
   // Flows and analyses run in the company's AI; knowledge is given to flows instead.
   // An AI-saved draft is not loadable until it is added, so it cannot run yet.
   const runnable = (isFlow || item.kind === 'analysis') && !mine?.draft
   const steps = isFlow && body.data ? ownSkillSteps(body.data) : []
-  function runShared(target: ClaudeTarget = 'web') {
-    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? target : 'web' })
-    // A shared item's text carries what its author wrote, so the prompt is copied rather than typed into the chat.
-    const prompt = t('skill_prompt', { name: item!.name, slug: item!.key, client })
-    void (client === 'claude' ? openInClaude(target, prompt, false) : copyPromptAndOpen(prompt, client, false)).then(() => setRan(true))
+  // Accounted's own analyses are fixed text, so they open filled in, as from the banner. An own or
+  // shared item carries what a person wrote, so on the web it is copied rather than put in a link.
+  const fixedText = !!builtIn
+  const prompt = pinCompany(t('skill_prompt', { name: item.name, slug: item.key, client }), t('prompt_company_pin', { company: companyName, companyId }))
+  function runShared(start: ClaudeTarget = 'web'): Promise<StartOutcome> {
+    trackInstructions('instructions_start_clicked', { item: item!.own ? 'own' : builtIn ? builtIn.slug : 'community', kind: item!.kind, client, surface: 'item', target: client === 'claude' ? start : 'web' })
+    setOutcome(null)
+    const starting = startInAi(client, start, prompt, fixedText)
+    void starting.then(setOutcome)
+    return starting
+  }
+  function connectClaude() {
+    trackInstructions('instructions_connect_clicked', { client: 'claude', surface: 'item' })
+    openAiConnector(aiConnectAction('claude', { origin: window.location.origin, appName }).open)
   }
   // Every flow the company can give knowledge to: Accounted's, then its own.
   const ownFlows = (catalog.data ?? []).filter((s) => s.tier === 'own' && (s.itemKind ?? 'workflow') === 'workflow' && !s.draft && s.shareStatus !== 'withdrawn' && s.installations[0])
@@ -200,6 +242,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
       <Link href={back} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={item.name}>
           <StrataField seed={seedOf(item.key)} ground={`hsl(${hue} 52% 88%)`} bar={`hsl(${hue} 40% 42%)`} strength={2.2} />
@@ -209,8 +252,16 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
             <small>{t(`kind_one_${item.kind}`)}{item.community ? ` · @${item.community.author}` : ''}</small>
           </div>
           <div className={styles.stageFoot}>
-            {runnable && client === 'claude' ? <ClaudeStart onStart={runShared} /> : runnable ? (
-              <Button size="lg" className="gap-2 pl-4" onClick={() => runShared()}>
+            {/* With no AI connected a start could never reach Accounted: connect first, as on a flow's page. */}
+            {runnable && disconnected ? (
+              <Button size="lg" className="gap-2 pl-4" onClick={connectClaude}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={AI_CLIENTS.find((c) => c.id === 'claude')!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
+                {t('connect_client', { client: 'Claude' })}
+                <ArrowUpRight className="h-4 w-4" aria-hidden />
+              </Button>
+            ) : runnable && client === 'claude' ? <ClaudeStart onStart={runShared} /> : runnable ? (
+              <Button size="lg" className="gap-2 pl-4" onClick={() => void runShared()}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={ai.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {t('run_agent', { client: ai.name })}
@@ -219,12 +270,13 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
             ) : item.atomId
               ? <Button size="lg" className="gap-2" disabled={!canWrite} onClick={() => setView('give')}><Plus className="h-4 w-4" aria-hidden />{t('give_to_flow')}</Button>
               : <span />}
-            {/* A routine is scheduled in Claude Desktop, so only for Claude. */}
-            {runnable && client === 'claude' && (
-              <Button size="lg" variant="outline" className="gap-2" onClick={() => setView('routine')}><Repeat className="h-4 w-4" aria-hidden />{t('routine_open')}</Button>
-            )}
-            {ran && <span className={styles.stageStatus} role="status">{t('copied_open', { client: ai.name })}</span>}
+            {/* A routine is scheduled in Claude; an analysis only reads, so a viewer may schedule one. */}
+            {runnable && <RoutineOffer client={client} disconnected={disconnected} readOnly={item.kind === 'analysis'} canWrite={canWrite} onOpen={() => setView('routine')} />}
+            {runnable && disconnected && <span className={styles.stageStatus}><span className={styles.chipDot} data-presence="idle" aria-hidden />{t('status_ai_missing')}</span>}
             {item.community && <Vote meta={item.community} slug={item.key} />}
+            {runnable && !disconnected && (
+              <StartNote route={handoffRoute(client, target, fixedText)} outcome={outcome} client={client} target={target} prompt={prompt.pinned} onWeb={() => void runShared('web')} />
+            )}
           </div>
         </section>
 
@@ -234,13 +286,13 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               <>
                 <div className={styles.apAvatar}><ItemSymbol kind={item.kind} hue={hue} seedKey={item.key} size={60} /></div>
                 <Field label={t('field_name')}>
-                  <div className={styles.fieldBox} data-ph-mask={item.community ? '' : undefined}>{item.name}</div>
+                  <p className={styles.fieldText} data-ph-mask={item.community || item.own ? '' : undefined}>{item.name}</p>
                 </Field>
                 {isFlow && (
                   <Field label={t('section_instructions')} note={t('source_community')} copy={<CopyIcon text={body.data} label={t('copy_instructions')} />}>
-                    <div className={styles.instrBox} data-ph-mask="">
-                      {steps.length > 0 ? <ol>{steps.map((step, i) => <li key={i}>{step}</li>)}</ol> : body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{t('loading_short')}</span>}
-                    </div>
+                    {steps.length > 0 ? <ol className={styles.stepsText} data-ph-mask="">{steps.map((step, i) => <li key={i}>{step}</li>)}</ol> : (
+                      <div className={styles.mdBody} data-ph-mask="">{body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{t('loading_short')}</span>}</div>
+                    )}
                   </Field>
                 )}
                 <div className={styles.rows}>
@@ -257,10 +309,20 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
                     </Row>
                   )}
                 </div>
-                {!isFlow && <Field label={t('field_contents')} note={t('contents_note')} copy={<CopyIcon text={body.data} label={t('copy_contents')} />}>
-                  <div className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
-                    {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
-                  </div>
+                {!isFlow && <Field label={t('field_contents')} note={isPack ? undefined : t(mine && !editable ? 'edit_frozen' : 'contents_note')}
+                  copy={<>{editable && <EditOwnButton disabled={!canWrite || body.data === undefined} onClick={() => setEditing(true)} />}<CopyIcon text={body.data} label={t('copy_contents')} /></>}>
+                  {isPack && <p className={styles.packAbout}>{item.desc}</p>}
+                  {isPack && (
+                    <button type="button" className={`${styles.catLink} ${styles.packToggle}`} aria-expanded={showBody} aria-controls="item-body" onClick={() => setShowBody(!showBody)}>
+                      {t(showBody ? 'hide_ai_text' : 'show_ai_text')}
+                      {showBody ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+                    </button>
+                  )}
+                  {(!isPack || showBody) && (
+                    <div id="item-body" className={styles.mdBody} data-ph-mask={item.community ? '' : undefined}>
+                      {body.data ? <Markdown text={body.data} /> : <span className={styles.muted}>{body.error ? t('body_failed_pack') : t('loading_short')}</span>}
+                    </div>
+                  )}
                 </Field>}
                 {mine?.draft && (
                   <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
@@ -274,7 +336,7 @@ function Detail({ companyId, segment, backHref }: { companyId: string; segment: 
               </>
             )}
             {view === 'routine' && (
-              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} initial={handedRoutine} onBack={() => setView('main')} />
+              <RoutinePanel run={t('skill_prompt', { name: item.name, slug: item.key, client: 'claude' })} name={item.name} item={item.own ? 'own' : builtIn ? builtIn.slug : 'community'} kind={item.kind} company={{ id: companyId, name: companyName }} initial={handedRoutine} sent={handedSent} onBack={() => setView('main')} />
             )}
             {view === 'give' && item.atomId && (
               <SubView title={t('give_to_flow')} onBack={() => setView('main')}>

@@ -19,14 +19,17 @@ import { CATEGORY_IDS, SHOWN_FLOWS } from './catalog-setup'
 import { AgentCard } from './AgentCard'
 import { CommunityFoot } from './KindViews'
 import { ConnectionMark, SourceMarks } from './ConnectionMark'
-import { copyPromptAndOpen, openInClaude, type ClaudeTarget } from './run'
+import { useCompany } from '@/contexts/CompanyContext'
+import { handoffRoute, pinCompany, startInAi, type ClaudeTarget, type StartOutcome } from './run'
 import { ClaudeStart } from './ClaudeStart'
+import { useClaudeTarget } from './claude-target'
+import { StartNote } from './StartNote'
 import { trackInstructions } from './track'
 import type { Presence } from './hues'
 import { AGENTS, COMMUNITY_OPEN, type AgentConnection } from '@/lib/agent-skills/agents'
 import { itemHue, seedOf, type ItemKind } from './hues'
 import { StrataField } from './StrataField'
-import { useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
+import { useAnalysisLabel, useKnowledgeDesc, useKnowledgeName } from './knowledge-labels'
 import { agentSegment, agentStatus, analysisSegment, communityMeta, communitySegment, kindOf, rulesSegment, type CommunityMeta, type SkillSummary } from './data'
 import styles from './skills.module.css'
 
@@ -85,7 +88,7 @@ interface Item {
  * categories (industries and company forms) with counts; a category or a
  * search shows the full list. Egna is what the company made or uses.
  */
-export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate }: {
+export function Catalog({ hrefBase, catalog, options, overview, usage, own, companyIndustry, client, aiReady, canWrite, onCreate, gate, pending }: {
   hrefBase: string
   catalog: SkillSummary[]
   options: KnowledgeOption[]
@@ -102,11 +105,18 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   onCreate: (kind: ItemKind) => void
   /** Shown in the featured slot while no AI is connected. */
   gate: ReactNode
+  /**
+   * A connection being made, with its address and steps. The overview shows
+   * it in the featured slot (as `gate`); every other view and list shows it
+   * on top, so a connect started from Egna or a search keeps the address.
+   */
+  pending?: ReactNode
 }) {
   const t = useTranslations('skills_registry')
   const clientName = AI_CLIENTS.find((c) => c.id === client)!.name
   const knowledgeName = useKnowledgeName()
   const knowledgeDesc = useKnowledgeDesc()
+  const analysisLabel = useAnalysisLabel()
   const router = useRouter()
   const pathname = usePathname()
   const params = useSearchParams()
@@ -133,7 +143,13 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   }
 
   // ── every item of every kind, one shape ──
-  const usedByFlows = (atomId: string) => overview?.agents.filter((a) => a.knowledge.some((k) => k.id === atomId)).length ?? 0
+  // What each flow the company sees carries: Accounted's shown flows, then its own (an unadjusted own flow carries the default).
+  const flowKnowledge: string[][] = overview ? [
+    ...overview.agents.filter((a) => (SHOWN_FLOWS as readonly string[]).includes(a.id)).map((a) => a.knowledge.map((k) => k.id)),
+    ...own.filter((s) => (s.itemKind ?? 'workflow') === 'workflow' && !s.draft)
+      .map((s) => (overview.own_knowledge[s.slug] ?? overview.own_default).map((k) => k.id)),
+  ] : []
+  const usedByFlows = (atomId: string) => flowKnowledge.filter((ids) => ids.includes(atomId)).length
   const shared: Item[] = catalog.filter((s) => COMMUNITY_OPEN && s.tier === 'community').map((s) => {
     const meta = communityMeta(s)
     return { key: s.slug, kind: kindOf(s), title: s.name, desc: s.summary, href: `${hrefBase}/${communitySegment(s.slug)}`, source: 'community', meta, categories: (meta?.industries ?? []).map((i) => `vertical/${i}`), popularity: meta?.used_by ?? meta?.votes ?? 0 }
@@ -156,22 +172,25 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
       ...(s.draft ? { status: { presence: 'busy' as const, text: t('draft_tag') } } : {}) }
   })
   // Accounted's own analyses: examples of what an analysis is, next to the community's.
-  const analyses: Item[] = catalog.filter((s) => s.source === 'accounted' && s.itemKind === 'analysis').map((s) => ({
-    key: s.slug, kind: 'analysis', title: s.name, desc: s.summary, href: `${hrefBase}/${analysisSegment(s.slug)}`,
-    source: 'accounted', meta: null, categories: [], popularity: usage?.[s.slug]?.count ?? 0,
-  }))
+  const analyses: Item[] = catalog.filter((s) => s.source === 'accounted' && s.itemKind === 'analysis').map((s) => {
+    const label = analysisLabel(s.slug, { name: s.name, summary: s.summary })
+    return {
+      key: s.slug, kind: 'analysis', title: label.name, desc: label.summary, href: `${hrefBase}/${analysisSegment(s.slug)}`,
+      source: 'accounted', meta: null, categories: [], popularity: usage?.[s.slug]?.count ?? 0,
+    }
+  })
   const all = [...flows, ...packs, ...analyses, ...shared]
   const ofKind = all.filter((i) => i.kind === kind)
 
-  // Egna: for flows, what the company made; for knowledge, what the company's flows carry.
-  const carried = new Set(overview?.agents.flatMap((a) => a.knowledge.map((k) => k.id)) ?? [])
+  // Egna: for flows, what the company made; for knowledge, what the company's flows carry (its own flows too).
+  const carried = new Set(flowKnowledge.flat())
   const mine = ownItems.filter((i) => i.kind === kind)
   const carriedPacks = kind === 'rules' ? packs.filter((p) => carried.has(p.key)) : []
 
-  // Every industry and company form. With community open, empty ones too (an empty category asks for the first contribution); until then only those with something in them.
+  // Every industry and company form with something in it, and the company's own industry even when empty, so it sees where it stands.
   const categories = CATEGORY_IDS
     .map((id) => ({ id: id as string, name: t(`category_names.${id.split('/')[1]}`), count: ofKind.filter((i) => i.categories.includes(id)).length }))
-    .filter((c) => COMMUNITY_OPEN || c.count > 0)
+    .filter((c) => c.count > 0 || c.id === companyIndustry)
     .sort((a, b) => Number(b.id === companyIndustry) - Number(a.id === companyIndustry) || b.count - a.count)
   const categoryName = categories.find((c) => c.id === category)?.name ?? (category ? knowledgeName(category, category) : null)
 
@@ -180,11 +199,13 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
   const listing = view === 'discover' && (showAll || !!category || !!query)
   const pool = view === 'own' ? mine : ofKind
   const listed = sorted(pool.filter((i) => (!category || i.categories.includes(category)) && (!query || `${i.title} ${i.desc}`.toLocaleLowerCase('sv').includes(query))))
-  const top = sorted(ofKind).slice(0, TOP)
 
   // The featured slot: Kvittojakten for flows, the company's own industry pack for knowledge, otherwise the most used.
   const featured = (kind === 'workflow' ? flows.find((f) => f.key === 'kvittojakten') : undefined)
-    ?? (kind === 'rules' && companyIndustry ? packs.find((p) => p.key === companyIndustry) : undefined) ?? top[0]
+    ?? (kind === 'rules' && companyIndustry ? packs.find((p) => p.key === companyIndustry) : undefined) ?? sorted(ofKind)[0]
+  // "Mest använda" leaves out what the banner already shows; while the connect gate stands in the slot, nothing is left out.
+  const rest = gate || !featured ? ofKind : ofKind.filter((i) => i.key !== featured.key)
+  const top = sorted(rest).slice(0, TOP)
 
   return (
     <div className={styles.catalog}>
@@ -246,6 +267,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
         </div>
       </div>
 
+      {(view === 'own' || listing) && pending}
       {view === 'own' && (
         <section className={styles.catSection}>
           <div className={styles.catHead}><h2>{t(`own_${kind}_title`)}</h2></div>
@@ -280,15 +302,18 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
         <>
           {gate ?? (featured && <Featured item={featured} industry={featured.categories.includes(companyIndustry ?? '')} client={client} aiReady={aiReady} overview={overview} />)}
 
-          <section className={styles.catSection}>
-            <div className={styles.catHead}>
-              <h2>{t(`most_used_${kind}`)}</h2>
-              {ofKind.length > TOP && <button type="button" className={styles.catLink} onClick={() => setShowAll(true)}>{t('show_all')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}
-            </div>
-            {top.length === 0 ? (COMMUNITY_OPEN
-              ? <div className={styles.placeEmpty}>{t(`community_empty_${kind}`)}</div>
-              : <div className={`${styles.placeEmpty} ${styles.shareInvite}`}><span>{t(`accounted_empty_${kind}`)}</span><CreateButtons client={client} canWrite={canWrite} onCreate={() => onCreate(kind)} onWrite={write} /></div>) : <ul className={styles.agrid}>{top.map((i) => <CatalogCard key={i.key} item={i} />)}</ul>}
-          </section>
+          {/* Nothing of the kind at all says so; when the banner already shows the only one, the section is simply left out. */}
+          {(top.length > 0 || ofKind.length === 0) && (
+            <section className={styles.catSection}>
+              <div className={styles.catHead}>
+                <h2>{t(`most_used_${kind}`)}</h2>
+                {rest.length > TOP && <button type="button" className={styles.catLink} onClick={() => setShowAll(true)}>{t('show_all')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}
+              </div>
+              {top.length === 0 ? (COMMUNITY_OPEN
+                ? <div className={styles.placeEmpty}>{t(`community_empty_${kind}`)}</div>
+                : <div className={`${styles.placeEmpty} ${styles.shareInvite}`}><span>{t(`accounted_empty_${kind}`)}</span><CreateButtons client={client} canWrite={canWrite} onCreate={() => onCreate(kind)} onWrite={write} /></div>) : <ul className={styles.agrid}>{top.map((i) => <CatalogCard key={i.key} item={i} />)}</ul>}
+            </section>
+          )}
 
           {categories.length > 0 && (
             <section className={styles.catSection}>
@@ -308,7 +333,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
                     <li key={c.id}>
                       <button type="button" className={styles.categoryCard} onClick={() => go({ kategori: c.id })}>
                         <span className={styles.categoryIcon}><Icon className="h-6 w-6" strokeWidth={1.5} aria-hidden /></span>
-                        <span className={styles.categoryName}>{c.name}{c.id === companyIndustry ? <small>{t('industry_yours')}</small> : COMMUNITY_OPEN && c.count === 0 && <small>{t('category_be_first')}</small>}</span>
+                        <span className={styles.categoryName}>{c.name}{c.id === companyIndustry && <small>{t('industry_yours')}</small>}</span>
                         <span className={styles.catCount}>{c.count}</span>
                       </button>
                     </li>
@@ -367,19 +392,27 @@ function CatalogCard({ item }: { item: Item }) {
 /** The featured slot at the top of Upptäck, as Claude's "From Anthropic" banner. A flow starts right here in the company's AI. */
 function Featured({ item, industry, client, aiReady, overview }: { item: Item; industry: boolean; client: AiClient; aiReady: boolean; overview: AgentsOverview | null | undefined }) {
   const t = useTranslations('skills_registry')
-  const [ran, setRan] = useState(false)
+  const { company } = useCompany()
+  const [claudeTarget] = useClaudeTarget()
+  const target: ClaudeTarget = client === 'claude' ? claudeTarget : 'web'
+  const [outcome, setOutcome] = useState<StartOutcome | null>(null)
   const hue = itemHue(item.kind, item.source === 'own' ? item.title : item.key, item.source === 'accounted' && item.kind === 'workflow' ? item.key as never : null)
   const ai = AI_CLIENTS.find((c) => c.id === client)!
   // Accounted's flows and analyses start from the banner; community items open their page first.
   const runnable = (item.kind === 'workflow' || item.kind === 'analysis') && item.source === 'accounted' && aiReady
   const states = overview?.agents.find((a) => a.id === item.key)?.connections ?? []
-  function run(target: ClaudeTarget = 'web') {
-    const id = item.key as RegistrySkillId
-    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? target : 'web' })
-    const prompt = item.kind === 'analysis'
-      ? t('skill_prompt', { name: item.title, slug: item.key, client })
-      : t('prompt', { say: t(`skills.${id}.say`), agent: id, client })
-    void (client === 'claude' ? openInClaude(target, prompt, true) : copyPromptAndOpen(prompt, client, true)).then(() => setRan(true))
+  const id = item.key as RegistrySkillId
+  // Accounted's own text: filled in on the web, with the company pinned only where no URL carries it.
+  const prompt = pinCompany(
+    item.kind === 'analysis' ? t('skill_prompt', { name: item.title, slug: item.key, client }) : t('prompt', { say: t(`skills.${id}.say`), agent: id, client }),
+    t('prompt_company_pin', { company: company?.name ?? '', companyId: company?.id ?? '' }),
+  )
+  function run(start: ClaudeTarget = 'web'): Promise<StartOutcome> {
+    trackInstructions('instructions_start_clicked', { item: id, kind: item.kind, client, surface: 'banner', target: client === 'claude' ? start : 'web' })
+    setOutcome(null)
+    const starting = startInAi(client, start, prompt, true)
+    void starting.then(setOutcome)
+    return starting
   }
   return (
     <section className={styles.featured} style={{ background: `hsl(${hue} 32% 90%)` }}>
@@ -393,18 +426,22 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
         <p>{item.lede ?? item.desc}</p>
         <div className={styles.featuredActions}>
           {runnable && (client === 'claude' ? <ClaudeStart size="sm" onStart={run} /> : (
-            <Button size="sm" className="gap-2 pl-3" onClick={() => run()}>
+            <Button size="sm" className="gap-2 pl-3" onClick={() => void run()}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={ai.logo} alt="" width={14} height={14} className={styles.btnLogo} />
               {t('run_agent', { client: ai.name })}
             </Button>
           ))}
+          {/* Knowledge does not start: it is read and given to flows on its own page, so say where to go. */}
+          {item.kind === 'rules' && (
+            <Button asChild size="sm" variant="outline" className="gap-1.5"><Link href={item.href}>{t('featured_open_rules')}<ArrowRight className="h-4 w-4" aria-hidden /></Link></Button>
+          )}
           {item.connections && item.connections.length > 0 && (
             <span className={styles.featuredUses}>
               {item.connections.map((c) => <ConnectionBadge key={c} kind={c} state={states.find((s) => s.kind === c)} clientName={ai.name} />)}
             </span>
           )}
-          {ran && <span className={styles.featuredNote} role="status">{t('prefilled_open', { client: ai.name })}</span>}
+          {runnable && <StartNote banner route={handoffRoute(client, target, true)} outcome={outcome} client={client} target={target} prompt={prompt.pinned} onWeb={() => void run('web')} />}
         </div>
       </div>
       <span className={styles.featuredArt}><ItemSymbol kind={item.kind} hue={hue} seedKey={item.key} size={120} open /></span>

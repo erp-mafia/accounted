@@ -1,4 +1,5 @@
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
+import { isAnyUnattended, markUnattended, unattendedScope, unattendedScopes } from './unattended'
 import { SIELegacyReviewRequiredError } from '@/lib/import/sie-legacy-recovery'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
@@ -4862,7 +4863,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_get_task',
     title: 'Get Accounting Task',
-    description: 'Start a handoff task: its instructions and the skills to load.',
+    description: 'Start a handoff task: goal, instructions and skills.',
     inputSchema: ACCOUNTING_TASK_INPUT_SCHEMA,
     outputSchema: {
       type: 'object',
@@ -4878,14 +4879,20 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase, actor) {
-      const task = await getAccountingTask(args, companyId, supabase)
-      // An agent run delivers its workflow and knowledge bodies here instead of
-      // load_skill: record them the same way so provenance and run counts hold.
+      // The key tells get_task which client it was minted for (a missing
+      // `client`) and lets an own item run in the company that owns it.
+      const task = await getAccountingTask(args, companyId, supabase, { userId, apiKeyId: actor?.type === 'api_key' ? actor.id : undefined })
+      // An agent run or an analysis delivers its bodies here instead of
+      // load_skill: record them the same way so provenance and run counts
+      // hold, in the company the task actually runs in.
       if (actor && 'workflow' in task) {
-        await emitSkillLoaded({ slug: task.workflow.slug, tier: 'workflow', bodyHash: skillBodyHash(task.workflow.body), version: task.workflow.version ?? undefined, actor, userId, companyId })
+        await emitSkillLoaded({ slug: task.workflow.slug, tier: 'workflow', bodyHash: skillBodyHash(task.workflow.body), version: task.workflow.version ?? undefined, actor, userId, companyId: task.company_id })
         for (const k of task.knowledge) {
-          await emitSkillLoaded({ slug: k.id, tier: 'horizontal', bodyHash: skillBodyHash(k.body), version: k.version ?? undefined, actor, userId, companyId })
+          await emitSkillLoaded({ slug: k.id, tier: 'horizontal', bodyHash: skillBodyHash(k.body), version: k.version ?? undefined, actor, userId, companyId: task.company_id })
         }
+      }
+      if (actor && 'analysis' in task) {
+        await emitSkillLoaded({ slug: task.analysis.slug, tier: task.analysis.tier, bodyHash: skillBodyHash(task.analysis.body), version: task.analysis.version ?? undefined, actor, userId, companyId: task.company_id })
       }
       return task
     },
@@ -4894,7 +4901,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_list_skills',
     title: 'List Domain Skills',
-    description: 'List applicable workflows and company skills. include_all reveals unselected/inapplicable skills. Load bodies with gnubok_load_skill.',
+    description: 'List applicable workflows and company skills. Load bodies with gnubok_load_skill.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -4924,16 +4931,16 @@ export const tools: McpTool[] = [
               summary: { type: 'string' },
               tags: { type: 'array', items: { type: 'string' } },
               tier: { type: 'string', enum: ['workflow', 'horizontal', 'vertical', 'modifier', 'community', 'own'] },
+              item_kind: { type: 'string', enum: ['workflow', 'rules', 'analysis'] },
             },
             required: ['slug', 'name', 'summary', 'tier'],
           },
         },
         count: { type: 'number' },
-        hidden_count: { type: 'number', description: 'Inapplicable skills hidden.' },
+        hidden_count: { type: 'number' },
         company_context: {
           type: 'object',
           additionalProperties: false,
-          description: 'Applicability filter inputs.',
           properties: {
             entity_type: { type: ['string', 'null'] },
             has_employees: { type: 'boolean' },
@@ -5003,6 +5010,9 @@ export const tools: McpTool[] = [
           summary: s.summary,
           tags: s.tags,
           tier: s.tier,
+          // Whether an own item (or an Accounted analysis) is a job to run, rules
+          // to follow or an analysis to build: the tier alone says only "own".
+          ...(s.itemKind ? { item_kind: s.itemKind } : {}),
         })),
         count: applicable.length,
         hidden_count: tagFiltered.length - applicable.length,
@@ -23312,7 +23322,7 @@ function emitToolCallTelemetry(payload: {
   success: boolean
   isError: boolean
   errorCode: string | null
-  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'bridge_refused' | null
+  errorKind: 'execution' | 'scope_denied' | 'capability_denied' | 'company_access_denied' | 'invalid_arguments' | 'unknown_tool' | 'test_key_write_blocked' | 'unattended_write_blocked' | 'bridge_refused' | null
   errorMessage: string | null
   /**
    * The specific English diagnostic, passed as `structured.error.message_en`.
@@ -24307,6 +24317,59 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }))
           )
         }
+      }
+
+      // A scheduled routine reads and stages, never commits (unattended.ts).
+      // get_task with unattended: true marks the run (its session, or without
+      // one its key); any later write that does not merely stage (an approval,
+      // a direct commit) is refused here, whatever the AI was told by what it
+      // read. A mark that cannot be written refuses the run instead of letting
+      // it start unguarded.
+      if (toolName === 'gnubok_get_task' && (toolArgs as Record<string, unknown>).unattended === true) {
+        const mark = unattendedScope(sessionId, actor?.id ?? null)
+        const marked = mark ? await markUnattended(mark.scope, mark.ttl).then(() => true, (err) => {
+          log.warn('Could not mark an unattended MCP run', { error: err instanceof Error ? err.message : String(err) })
+          return false
+        }) : false
+        if (!marked) {
+          const refused = toToolError(
+            codedError('INTERNAL_ERROR', 'Den schemalagda körningen kunde inte startas säkert just nu. Försök igen om en stund. (The unattended run could not be guarded, so it was not started.)'),
+            { toolName }
+          )
+          return NextResponse.json(
+            jsonRpc(id ?? null, decorate({
+              content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(refused, toolNamespace), null, 2) }],
+              isError: true,
+            }))
+          )
+        }
+      }
+      if (tool.annotations?.readOnlyHint === false && !isStagingTool(tool) && await isAnyUnattended(unattendedScopes(sessionId, actor?.id ?? null)).catch(() => false)) {
+        const blocked = toToolError(
+          codedError('FORBIDDEN', 'En schemalagd körning pågår och ingen är med, så den får bara läsa och lägga förslag. Godkänn förslagen i Accounted. (An unattended run is active on this connection: approvals and direct writes are refused for a while; staged proposals wait for a person in Accounted.)'),
+          { toolName }
+        )
+        emitToolCallTelemetry({
+          tool: toolName,
+          requiredScope: requiredScope ?? null,
+          actor,
+          latencyMs: 0,
+          success: false,
+          isError: true,
+          errorCode: blocked.error.code,
+          errorKind: 'unattended_write_blocked',
+          errorMessage: blocked.error.message_sv,
+          errorDetail: blocked.error.message_en,
+          requestId: id ?? null,
+          userId,
+          companyId: effectiveCompanyId,
+        })
+        return NextResponse.json(
+          jsonRpc(id ?? null, decorate({
+            content: [{ type: 'text', text: JSON.stringify(projectMcpPayload(blocked, toolNamespace), null, 2) }],
+            isError: true,
+          }))
+        )
       }
 
       // Detect if THIS call follows the previous call's `next` hint: must

@@ -99,6 +99,10 @@ describe('skills HTTP routes', () => {
   it('rejects missing sharing consent', async () => {
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author' }), params)).status).toBe(400)
   })
+  it('refuses to publish under a reserved handle such as @accounted', async () => {
+    expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'accounted', confirmed_no_customer_data: true }), params)).status).toBe(400)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
   it('submits only the scoped private row with consent evidence', async () => {
     enqueue({ data: { id } })
     expect((await PATCH(request('PATCH', { action: 'submit', author_handle: 'author', confirmed_no_customer_data: true }), params)).status).toBe(200)
@@ -137,6 +141,50 @@ describe('skills HTTP routes', () => {
   it('freezes submitted text', async () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status: 'submitted' }])
     expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+  })
+  it.each(['published', 'withdrawn'] as const)('freezes %s text too', async (share_status) => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, share_status }])
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+  it('edits a private item in place, so its id (and every routine using it) stays', async () => {
+    enqueue({ data: { id } })
+    const response = await PATCH(request('PATCH', { action: 'edit', name: ' Påminn ', description: 'Efter 14 dagar', body: '# Påminn\n\n1. Hämta fakturorna\n' }), params)
+    expect(response.status).toBe(200)
+    expect((await response.json()).data).toEqual({ id })
+    expect(findCall('company_skills', 'update')?.[0]).toEqual({ name: 'Påminn', description: 'Efter 14 dagar', body: '# Påminn\n\n1. Hämta fakturorna' })
+    expect(findCalls('company_skills', 'eq')).toEqual(expect.arrayContaining([['id', id], ['company_id', 'company-a'], ['share_status', 'private']]))
+  })
+  it('edits a firm-wide item under its team', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, company_id: null, team_id: 'team-1' } as never])
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(200)
+    expect(findCalls('company_skills', 'eq')).toContainEqual(['team_id', 'team-1'])
+    expect(findCalls('company_skills', 'eq')).not.toContainEqual(['company_id', 'company-a'])
+  })
+  it('lets a person edit an AI-saved draft before adding it', async () => {
+    vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, draft: true }])
+    enqueue({ data: { id } })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(200)
+    expect(findCall('company_skills', 'update')?.[0]).not.toHaveProperty('draft')
+  })
+  it.each([
+    { name: 'N', description: 'D', body: '<script />' },
+    { name: '', description: 'D', body: 'Changed' },
+    { name: 'N', description: '', body: 'Changed' },
+    { name: 'N', description: 'D', body: 'Changed', kind: 'rules' },
+  ])('rejects an edit that would not be saved: %j', async (edit) => {
+    expect((await PATCH(request('PATCH', { action: 'edit', ...edit }), params)).status).toBe(400)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
+  })
+  it('answers 409 when the row changed under the edit', async () => {
+    enqueue({ data: null })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(409)
+  })
+  it('blocks viewer edits', async () => {
+    vi.mocked(requireWritePermission).mockResolvedValue({ ok: false, response: NextResponse.json({}, { status: 403 }) })
+    expect((await PATCH(request('PATCH', { action: 'edit', name: 'N', description: 'D', body: 'Changed' }), params)).status).toBe(403)
+    expect(findCall('company_skills', 'update')).toBeUndefined()
   })
   it('adds an AI-saved draft so agents can load it', async () => {
     vi.mocked(loadCompanySkillRows).mockResolvedValue([{ ...privateSkill, draft: true }])

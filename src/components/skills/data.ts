@@ -129,6 +129,16 @@ export function rulesSegment(atomId: string): string {
 export function analysisSegment(slug: string): string {
   return `analys.${slug}`
 }
+/**
+ * Skriv själv's hand-over when knowledge chosen for a new flow did not all
+ * save: the flow's page opens on its knowledge (?kunskap=fel) and says so.
+ */
+export const KNOWLEDGE_FAILED_PARAM = 'kunskap'
+export const KNOWLEDGE_FAILED_VALUE = 'fel'
+export function withKnowledgeFailed(url: string): string {
+  return `${url}${url.includes('?') ? '&' : '?'}${KNOWLEDGE_FAILED_PARAM}=${KNOWLEDGE_FAILED_VALUE}`
+}
+
 /** Where a knowledge chip leads: an own knowledge item's page (egen.<id>), else the pack's. */
 export function knowledgeHref(base: string, id: string): string {
   return id.startsWith('own/') ? `${base}/egen.${id.slice(4)}` : `${base}/${rulesSegment(id)}`
