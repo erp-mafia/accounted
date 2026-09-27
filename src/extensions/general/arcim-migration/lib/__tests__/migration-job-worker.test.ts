@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
+import { ExecutionBudgetExceeded } from '@/lib/http/execution-budget'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
 vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
@@ -47,8 +48,10 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
       if (job.phase === 'completed') job.state = rows.some(r => r.state === 'needs_attention') ? 'needs_attention' : 'completed'
     }
     if (name === 'release_provider_migration_job') {
+      // As the RPC: a deferral (no code) resets the streak, a failure extends it.
+      job.failures = args.p_error_code ? job.failures + 1 : 0
       job.state = !args.p_error_code ? 'queued' : args.p_retry_seconds === -1 ? 'needs_attention' : 'retry_wait'
-      job.error_code = args.p_error_code as string | null
+      job.error_code = (args.p_error_code as string | null) ?? null
     }
     return { data: null, error: null }
   })
@@ -217,15 +220,52 @@ describe('bounded durable worker', () => {
     expect(db.job).toMatchObject({ state: 'queued', next_page: 1 })
     expect(db.rows).toHaveLength(0)
   })
-  it('names the step and the underlying error when a register page times out', async () => {
+  it('names the step and the error class when a register page times out', async () => {
     const db = database({ resources: ['customers', 'supplierInvoices'], resource_index: 2, next_page: 4 })
     mocks.page.mockRejectedValue(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }))
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_RETRY', next_page: 4 })
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_RETRY', next_page: 4, failures: 1 })
     expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
       code: 'MIGRATION_RETRY', needsAttention: false, phase: 'discover', resource: 'supplierInvoices', page: 4,
-      errorName: 'TimeoutError', errorMessage: 'The operation was aborted due to timeout',
+      errorName: 'TimeoutError', elapsedMs: expect.any(Number),
     }))
+  })
+  it('treats its own exhausted budget as a deferral even on a long failure streak', async () => {
+    const db = database({ failures: 4, next_page: 4 })
+    mocks.page.mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0, next_page: 4 })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'MIGRATION_DEADLINE', needsAttention: false, errorName: 'ExecutionBudgetExceeded',
+    }))
+  })
+  it('logs a database failure by its code and keeps the message out', async () => {
+    const db = database()
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: null, total: 1 })
+    const originalRpc = db.rpc.getMockImplementation()!
+    // A database rejection in the shape supabase-js hands back, outside the helper's happy-path union.
+    const rejection = { data: null, error: { code: '23505', message: 'duplicate key: customer Example AB, balance 12345.67' } }
+    db.rpc.mockImplementation(async (name, args) => name === 'save_provider_migration_page' ? rejection as never : originalRpc(name, args))
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_RETRY' })
+    const yielded = mocks.warn.mock.calls.find(([message]) => message === 'migration yielded')!
+    expect(yielded[1]).toMatchObject({ errorName: 'Error', dbCode: '23505', page: 1 })
+    expect(JSON.stringify(yielded[1])).not.toMatch(/Example AB|12345|duplicate/)
+  })
+  it('measures the failed step without the release that follows it', async () => {
+    vi.useFakeTimers()
+    const db = database()
+    mocks.page.mockRejectedValue(Object.assign(new Error('timeout'), { name: 'TimeoutError' }))
+    const originalRpc = db.rpc.getMockImplementation()!
+    db.rpc.mockImplementation(async (name, args) => {
+      if (name === 'release_provider_migration_job') await new Promise(resolve => setTimeout(resolve, 3000))
+      return originalRpc(name, args)
+    })
+    const run = runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    await vi.advanceTimersByTimeAsync(3000)
+    await run
+    expect(db.job.state).toBe('retry_wait')
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({ elapsedMs: 0 }))
   })
   it('bounds reads as well as provider operations', async () => {
     vi.useFakeTimers()

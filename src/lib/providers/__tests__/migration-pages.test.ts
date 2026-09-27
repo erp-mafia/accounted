@@ -17,7 +17,7 @@ describe('durable provider listing', () => {
     page.mockResolvedValue({ items: [{ Id: 'customer-1', Name: 'Example' }], page: 3, totalPages: 24, totalCount: 23001 })
     const result = await fetchMigrationPage('visma', 'token', undefined, 'customers', 3)
     expect(page).toHaveBeenCalledExactlyOnceWith('token', '/customers', { page: 3, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS })
-    expect(MIGRATION_LIST_TIMEOUT_MS).toBeGreaterThanOrEqual(60_000)
+    expect(MIGRATION_LIST_TIMEOUT_MS).toBe(60_000)
     expect(result).toMatchObject({ nextPage: 4, total: 23001, items: [{ id: 'customer-1' }] })
   })
   it.each(['fortnox', 'briox', 'bjornlunden'] as const)('honors %s final-page metadata without starting another page', async provider => {

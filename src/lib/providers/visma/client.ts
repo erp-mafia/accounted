@@ -6,9 +6,9 @@ import { isTimeoutError } from '@/lib/http/fetch-with-timeout';
 import { cleanProviderPayload } from '../provider-text';
 
 /**
- * Default per-call timeout, sized for single-record reads (an invoice, a
- * customer, a token). Callers reading whole register pages pass their own:
- * a 1000-row supplier invoice page routinely takes longer than this.
+ * Default per-attempt timeout for ordinary API reads (an invoice, a customer).
+ * Callers reading whole register pages pass their own: a 1000-row supplier
+ * invoice page took longer than this on every attempt for one register.
  */
 const FETCH_TIMEOUT_MS = 15_000;
 

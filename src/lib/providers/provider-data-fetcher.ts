@@ -107,8 +107,9 @@ export async function fetchInvoiceCompletionDetail(
 /**
  * A 1000-row register page is a report, not a record: the client's 15 s
  * single-record timeout cut every supplier invoice page of a 4805-invoice
- * register short. Three attempts at 60 s plus the retry waits (183 s) still
- * fit inside the 205 s the migration worker gives one page.
+ * register short. The limit applies per attempt; the migration worker's
+ * execution budget, shared by everything one invocation does, cancels the
+ * request, the rate-limit wait and any further attempt at its deadline.
  */
 export const MIGRATION_LIST_TIMEOUT_MS = 60_000
 
