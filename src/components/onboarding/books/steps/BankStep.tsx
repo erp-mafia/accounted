@@ -8,6 +8,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useAccounts, useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
+import { classifyInitialSyncError } from '@/lib/bank-sync/initial-sync-error'
 import type { CashAccount } from '@/types'
 import { allocateLedgers, ledgerClaims, ledgerName, ledgerOptions } from '@/lib/onboarding-books/ledger'
 import { LOOKBACK_SAFE_DAYS, resolveLookback, type LookbackMode } from '@/lib/onboarding-books/lookback'
@@ -337,7 +338,10 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       void loadFindings()
       const sum = json.initial_sync ?? { imported: 0, duplicates: 0, auto_matched: 0, requested_from: lookback.fromDate, returned_min_date: null, returned_max_date: null }
       setSummary(sum)
-      if (json.initial_sync_error) setAttn(json.initial_sync_error)
+      // The field is a status code or the raw message of the failure, never
+      // text for the screen: say what it means for the person instead.
+      const backfill = classifyInitialSyncError(json.initial_sync_error)
+      if (backfill) setAttn(t(`bank_backfill_${backfill}`))
 
       // Today's balance from the mirrored cash accounts, then the rows of the window.
       const [refreshedCashAccounts, txRes] = await Promise.all([

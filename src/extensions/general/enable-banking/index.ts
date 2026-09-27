@@ -34,6 +34,7 @@ import {
 } from '@/lib/bank-sync/persist-sync-result'
 import { isBankRoutingConflict, isBankRouteUnresolved } from '@/lib/bank-sync/ingest-route'
 import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
+import { INITIAL_SYNC_DEFERRED, INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { revokeUnusedSession } from './lib/session-revocation'
@@ -1621,7 +1622,7 @@ export const enableBankingExtension: Extension = {
             })
           }
           if (!initialSyncLeased) {
-            initialSyncError = 'initial_sync_deferred'
+            initialSyncError = INITIAL_SYNC_DEFERRED
             log.info('[enable-banking] Inline initial backfill skipped: sync lease not taken, cron will run it', {
               connectionId: connection.id,
               userId: user.id,
@@ -1702,7 +1703,7 @@ export const enableBankingExtension: Extension = {
 
             const TIMEOUT_MS = 60_000
             const timeoutPromise = new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => reject(new Error('initial_sync_timeout')), TIMEOUT_MS)
+              timeoutHandle = setTimeout(() => reject(new Error(INITIAL_SYNC_TIMEOUT)), TIMEOUT_MS)
             })
             const results = await Promise.race([syncPromise, timeoutPromise])
 
