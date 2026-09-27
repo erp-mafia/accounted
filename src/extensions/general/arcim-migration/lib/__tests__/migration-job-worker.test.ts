@@ -3,7 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ProviderMigrationJob } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload } from '@/lib/providers/migration-payload'
 import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/providers/bokio/mapper'
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn() }))
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: mocks.resolve }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate }))
@@ -215,6 +216,16 @@ describe('bounded durable worker', () => {
     await run
     expect(db.job).toMatchObject({ state: 'queued', next_page: 1 })
     expect(db.rows).toHaveLength(0)
+  })
+  it('names the step and the underlying error when a register page times out', async () => {
+    const db = database({ resources: ['customers', 'supplierInvoices'], resource_index: 2, next_page: 4 })
+    mocks.page.mockRejectedValue(Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }))
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_RETRY', next_page: 4 })
+    expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'MIGRATION_RETRY', needsAttention: false, phase: 'discover', resource: 'supplierInvoices', page: 4,
+      errorName: 'TimeoutError', errorMessage: 'The operation was aborted due to timeout',
+    }))
   })
   it('bounds reads as well as provider operations', async () => {
     vi.useFakeTimers()

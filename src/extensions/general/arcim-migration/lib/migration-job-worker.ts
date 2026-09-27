@@ -383,6 +383,7 @@ export async function runProviderMigrationWorker(options: {
     if (!data?.id) break
     let job = data as ProviderMigrationJob
     jobs++
+    let started = Date.now()
     try {
       if (!job.consent_id) throw new Error('PROVIDER_AUTH_EXPIRED')
       const connection = await withinMigrationDeadline(resolveConsent(job.company_id, job.consent_id), deadline - 5000)
@@ -391,7 +392,7 @@ export async function runProviderMigrationWorker(options: {
         throw new Error('MIGRATION_SOURCE_IDENTITY_CHANGED')
       }
       while (Date.now() < deadline - 10_000 && job.state === 'running') {
-        const started = Date.now()
+        started = Date.now()
         log.info('migration phase started', { jobId: job.id, phase: job.phase, resource: job.resources[job.resource_index - 1], page: job.next_page })
         if (job.phase === 'discover') {
           const resource = job.resources[job.resource_index - 1]
@@ -450,7 +451,12 @@ export async function runProviderMigrationWorker(options: {
         // lease expires and the next worker replays any uncertain commit.
         log.warn('migration release deferred to lease expiry', { jobId: job.id, code: failureCode(releaseError) })
       })
-      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention })
+      // The code alone hid a 15 s timeout behind MIGRATION_RETRY for hours:
+      // name the step and the underlying error so the next one reads itself.
+      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
+        resource: job.resources[job.resource_index - 1], page: job.next_page, elapsedMs: Date.now() - started,
+        errorName: error instanceof Error ? error.name : typeof error,
+        errorMessage: error instanceof Error ? error.message.slice(0, 160) : undefined })
       break
     }
     if (options.jobId) break

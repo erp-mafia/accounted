@@ -104,6 +104,14 @@ export async function fetchInvoiceCompletionDetail(
   return raw ? mapper(raw) as SalesInvoiceDto : null;
 }
 
+/**
+ * A 1000-row register page is a report, not a record: the client's 15 s
+ * single-record timeout cut every supplier invoice page of a 4805-invoice
+ * register short. Three attempts at 60 s plus the retry waits (183 s) still
+ * fit inside the 205 s the migration worker gives one page.
+ */
+export const MIGRATION_LIST_TIMEOUT_MS = 60_000
+
 /** One provider page, never a whole-register loop. The worker persists its cursor. */
 export async function fetchMigrationPage(
   provider: ProviderName, accessToken: string, providerCompanyId: string | undefined,
@@ -121,7 +129,7 @@ export async function fetchMigrationPage(
   }
   let result: { items: Record<string, unknown>[]; page: number; totalPages: number; totalCount: number };
   if (provider === 'visma') {
-    result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000 });
+    result = await vismaClient.getPage(accessToken, config.listEndpoint, { page, pageSize: 1000, timeoutMs: MIGRATION_LIST_TIMEOUT_MS });
   } else if (provider === 'fortnox') {
     result = await fortnoxClient.getPage(accessToken, config.listEndpoint, FORTNOX_RESOURCE_CONFIGS[kind]!.listKey, { page });
   } else if (provider === 'briox') {
