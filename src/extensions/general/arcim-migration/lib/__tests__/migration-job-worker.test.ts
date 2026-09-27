@@ -342,6 +342,9 @@ it('recognizes the consent resolver’s structured authorization errors', async 
   await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
   expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'PROVIDER_AUTH_EXPIRED' })
   expect(mocks.page).not.toHaveBeenCalled()
+  expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+    code: 'PROVIDER_AUTH_EXPIRED', needsAttention: true, errorName: 'object', httpStatus: 401,
+  }))
 })
 
 /**

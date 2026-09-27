@@ -373,11 +373,12 @@ export function failureCode(error: unknown): string {
  * code and HTTP status say which layer failed and how.
  */
 function failureDetails(error: unknown): { errorName: string; dbCode?: string; httpStatus?: number } {
-  if (!(error instanceof Error)) return { errorName: typeof error }
-  const { code, statusCode, status } = error as Error & { code?: unknown; statusCode?: unknown; status?: unknown }
+  // The consent resolver throws plain objects with a status, not Errors.
+  const { code, statusCode, status } = (typeof error === 'object' && error !== null ? error : {}) as
+    { code?: unknown; statusCode?: unknown; status?: unknown }
   const http = typeof statusCode === 'number' ? statusCode : typeof status === 'number' ? status : undefined
   return {
-    errorName: error.name,
+    errorName: error instanceof Error ? error.name : typeof error,
     ...(typeof code === 'string' && /^(?:[0-9A-Z]{5}|PGRST\d{3})$/.test(code) ? { dbCode: code } : {}),
     ...(http !== undefined && Number.isInteger(http) && http >= 100 && http <= 599 ? { httpStatus: http } : {}),
   }
