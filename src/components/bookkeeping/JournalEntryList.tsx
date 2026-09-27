@@ -301,8 +301,9 @@ export default function JournalEntryList({
   // Verifikat (committed) vs Utkast (drafts) view. Drafts are excluded from the
   // committed list server-side and surfaced here behind a count badge.
   const [listMode, setListMode] = useState<'committed' | 'drafts'>('committed')
-  // Collapse correction groups to the live correction (hide storno + reversed
-  // original). Toggled off via the filter dialog to reveal the full chain.
+  // Collapse correction groups to the live correction (hide the storno and
+  // reversed original a correction replaced; a pure storno stays visible).
+  // Toggled off via the filter dialog to reveal the full chain.
   const [collapseCorrections, setCollapseCorrections] = useState(true)
   const [draftCount, setDraftCount] = useState(0)
   // All-years emptiness, resolved only when the scoped list comes back empty:
@@ -1307,7 +1308,8 @@ export default function JournalEntryList({
               </div>
 
               {/* Reveal the storno + reversed-original rows the default view folds
-                  into the surviving correction (3 rows → 1). */}
+                  into the surviving correction (3 rows → 1). A storno that no
+                  correction replaced is always shown. */}
               <div className="flex items-center gap-2">
                 <Switch
                   id="show-correction-chain"
