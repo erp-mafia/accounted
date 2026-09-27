@@ -35,7 +35,7 @@ const anna = {
   net_salary: 20000,
   tax_withheld: 6000,
   tax_withheld_override: null,
-  employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567' },
+  employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567', specification_number: 1 },
 }
 
 function client() {
@@ -284,56 +284,44 @@ describe('buildSalaryPaymentFile', () => {
     expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 
-  // ── Employee accounts the chosen format cannot carry ──────────
-  // Invented numbers. `sara` is the support-ticket shape: a 5-digit Swedbank
-  // clearing with a 10-digit account needs 11 positions in the 10-wide
-  // Bankgirot LB account field ("Numeriskt fält för långt (11 > 10): 996...").
+  // ── Employee accounts: the support-ticket shapes ──────────────
+  // Invented numbers. `sara` and `sven` are the support-ticket shape (crm#174):
+  // a 5-digit Swedbank clearing with a 10-digit account, 11 account digits,
+  // which the old TK54 layout's 10-wide field refused.
   const sara = {
     ...anna,
     employee_id: 'emp-2',
-    employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678' },
+    employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678', specification_number: 2 },
   }
   const sven = {
     ...anna,
     employee_id: 'emp-3',
-    employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432' },
+    employee: { first_name: 'Sven', last_name: 'T', clearing_number: '81059', bank_account_number: '9698765432', specification_number: 3 },
   }
   // Accepted by the old 5-11 digit rule; names no payable account in any format.
   const legacy = {
     ...anna,
     employee_id: 'emp-4',
-    employee: { first_name: 'Lena', last_name: 'L', clearing_number: '5037', bank_account_number: '96123456789' },
+    employee: { first_name: 'Lena', last_name: 'L', clearing_number: '5037', bank_account_number: '96123456789', specification_number: 4 },
   }
 
-  it('refuses the LB file by NAME for every employee whose account does not fit, before generating', async () => {
+  it('carries a 5-digit Swedbank clearing with a 10-digit account in the LB file (crm#174)', async () => {
     const { supabase, enqueueMany, calls } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, sara, sven] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, sara, sven] }, { data: null }, { data: null }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'bg_lb' })
 
-    expect(result).toMatchObject({
-      ok: false,
-      code: 'EMPLOYEE_BANK_INVALID',
-      format: 'bg_lb',
-      details: {
-        employee_count: 2,
-        employees: [
-          { employee_id: 'emp-2', name: 'Sara S', problem: 'bg_lb_account_too_long' },
-          { employee_id: 'emp-3', name: 'Sven T', problem: 'bg_lb_account_too_long' },
-        ],
-      },
-    })
-    if (result.ok) return
-    const message = String(result.details.message)
-    expect(message).toBe(
-      'Sara S, Sven T: kontonumret ryms inte i Bankgirot LB-filen (femsiffrigt clearingnummer med tiosiffrigt kontonummer). Skapa betalfilen som ISO 20022 (pain.001) i stället.',
-    )
-    // Nothing in the failure carries a clearing or account number.
-    const serialized = JSON.stringify(result.details)
-    for (const secret of ['9612345678', '9698765432', '996', '8327', '8105']) {
-      expect(serialized).not.toContain(secret)
-    }
-    expect(calls.filter((c) => c.method === 'insert')).toHaveLength(0)
-    expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.employeeCount).toBe(3)
+    const lines = result.content.split('\r\n').filter((l) => l.length > 0)
+    expect(lines.map((l) => l.slice(0, 2))).toEqual(['11', '40', '14', '40', '14', '40', '14', '29'])
+    // Sara: TK40 with clearing 8327 and the 11 account digits in the 12-wide field.
+    expect(lines[3].slice(12, 28)).toBe('8327099612345678')
+    // The utbetalningsnummer is built on the specification number, so it is
+    // the same for the same employee on every run and distinct per employee.
+    const payeeNumbers = [lines[1], lines[3], lines[5]].map((l) => l.slice(6, 12))
+    expect(new Set(payeeNumbers).size).toBe(3)
+    expect(calls.filter((c) => c.method === 'insert')).toHaveLength(1)
   })
 
   it('pays the same employees with pain.001, which has no fixed-width account field', async () => {
@@ -380,7 +368,7 @@ describe('buildSalaryPaymentFile', () => {
 
   it('a dry run reports the same refusal, so a preview before payday is truthful', async () => {
     const { supabase, enqueueMany } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [sara] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [legacy] }])
     const result = await buildSalaryPaymentFile(supabase, {
       companyId: COMPANY_ID,
       runId: RUN_ID,

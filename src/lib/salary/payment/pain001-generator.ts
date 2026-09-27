@@ -143,8 +143,7 @@ export function generatePain001(
     const { clearing4, accountDigits } = payeeAccountParts(
       emp.name,
       emp.clearingNumber,
-      emp.bankAccountNumber,
-      'pain001'
+      emp.bankAccountNumber
     )
 
     lines.push('      <CdtTrfTxInf>')

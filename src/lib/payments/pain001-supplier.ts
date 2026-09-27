@@ -251,7 +251,6 @@ function pushCreditor(lines: string[], payment: SupplierPain001Payment): void {
         payment.payeeName,
         payee.clearing,
         payee.account,
-        'pain001',
       )
       memberId = clearing4
       accountId = accountDigits

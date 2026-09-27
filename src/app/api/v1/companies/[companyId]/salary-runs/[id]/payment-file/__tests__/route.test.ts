@@ -137,6 +137,7 @@ function employee(overrides: Partial<{
   first_name: string
   clearing_number: string | null
   bank_account_number: string | null
+  specification_number: number | null
 }> = {}) {
   return {
     employee_id: overrides.employee_id ?? EMPLOYEE_ID,
@@ -148,6 +149,7 @@ function employee(overrides: Partial<{
       last_name: 'Andersson',
       clearing_number: 'clearing_number' in overrides ? overrides.clearing_number : '6000',
       bank_account_number: 'bank_account_number' in overrides ? overrides.bank_account_number : '1234567',
+      specification_number: 'specification_number' in overrides ? overrides.specification_number : 1,
     },
   }
 }
@@ -354,13 +356,38 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
-  it('returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID naming the employee, never the account number', async () => {
-    // Invented number. A 5-digit clearing with a 10-digit account needs 11
-    // positions in the 10-wide Bankgirot LB account field.
+  it('carries a 5-digit Swedbank clearing with a 10-digit account in a real LB file (crm#174)', async () => {
+    // Invented numbers: the support-ticket shape, which the old TK54 layout
+    // refused with 422 bg_lb_account_too_long.
     const { supabase, calls } = makeRecordingSupabase(
       happyTables({
         salary_run_employees: {
           data: [employee({ clearing_number: '8327-9', bank_account_number: '9612345678' })],
+        },
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'bg_lb' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.format).toBe('bg_lb')
+    expect(body.data.employee_count).toBe(1)
+    // TK40: clearing 8327, then the 11 account digits (5th clearing digit +
+    // account) zero-filled to the 12-wide field.
+    expect(body.data.content).toContain('\r\n4000000000188327099612345678')
+    expect(stampCalls(calls)).toHaveLength(1)
+  })
+
+  it('returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID naming the employee, never the account number', async () => {
+    // Accepted by the old 5-11 digit entry rule; names no payable account.
+    const { supabase, calls } = makeRecordingSupabase(
+      happyTables({
+        salary_run_employees: {
+          data: [employee({ clearing_number: '5037', bank_account_number: '96123456789' })],
         },
       }),
     )
@@ -377,12 +404,11 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.error.details.format).toBe('bg_lb')
     expect(body.error.details.employee_count).toBe(1)
     expect(body.error.details.employees).toEqual([
-      { employee_id: EMPLOYEE_ID, name: 'Anna Andersson', problem: 'bg_lb_account_too_long' },
+      { employee_id: EMPLOYEE_ID, name: 'Anna Andersson', problem: 'account_format' },
     ])
     expect(body.error.details.message).toContain('Anna Andersson')
-    expect(body.error.details.message).toContain('pain.001')
-    expect(text).not.toContain('9612345678')
-    expect(text).not.toContain('996')
+    expect(body.error.details.message).toContain('Rätta bankuppgifterna')
+    expect(text).not.toContain('96123456789')
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
@@ -552,12 +578,16 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.total_amount).toBe(25000)
 
     const lb: string = body.data.content
-    // Öppningspost (TK 11) with the sender bankgiro, one TK 54 payment record
-    // carrying the employee's clearing + account, slutpost (TK 29), CRLF.
+    // Öppningspost (TK11) with the sender bankgiro, one TK40 kontonummerpost
+    // carrying the employee's clearing + account followed by its TK14 payment
+    // record, slutsummapost (TK29), CRLF.
     expect(lb.startsWith('11')).toBe(true)
     expect(lb).toContain('50501055')
-    // TK 54: 4-digit clearing followed by the account zero-padded to 10 digits.
-    expect(lb).toContain('\r\n5460000001234567')
+    // TK40: "0000", the utbetalningsnummer (specification number 1 + Luhn digit),
+    // the 4-digit clearing, then the account zero-filled to 12 digits.
+    expect(lb).toContain('\r\n4000000000186000000001234567')
+    // TK14: the same utbetalningsnummer, zero-filled to 10.
+    expect(lb).toContain('\r\n140000000018')
     expect(lb).toContain('\r\n29')
     expect(lb.endsWith('\r\n')).toBe(true)
 
