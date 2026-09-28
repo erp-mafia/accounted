@@ -61,8 +61,8 @@ import {
   buildLundifyActivationUrl,
   getBjornLundenActivationKey,
 } from '@/lib/providers/bjornlunden/activation'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { SIEJobValidationError } from '@/lib/import/sie-jobs'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { SIEJobDatabaseError, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import {
@@ -1498,6 +1498,14 @@ export const arcimMigrationExtension: Extension = {
           // wizard as "Importens resultat kunde inte bekräftas" with the
           // reason buried in details.reason.
           if (error instanceof SIEJobValidationError) return sieJobValidationResponse(error, moduleLog, ctx?.requestId)
+          // A job RPC that refused rolled back, so the outcome is known: nothing
+          // started. Answer with the code the manual upload route gives it (409
+          // SIE_IMPORT_PERIOD_ALREADY_IMPORTED for a year that already holds an
+          // import), not the 500 "could not be confirmed", which is for a call
+          // whose outcome really is unknown.
+          if (error instanceof SIEJobDatabaseError && error.code && getErrorEntry(error.code)) {
+            return errorResponse(error, moduleLog, { requestId: ctx?.requestId })
+          }
           log.error('arcim sie import failed', error as Error)
           return providerFailureResponse(error, 'SIE_IMPORT_UNEXPECTED')
         }

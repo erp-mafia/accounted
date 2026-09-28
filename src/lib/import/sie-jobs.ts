@@ -68,10 +68,31 @@ export function validateSIEReportingMappings(parsed: ParsedSIEFile, accountMap: 
   assertSIEReportingAccounts(targets)
 }
 
-function jobDatabaseError(error:{code?:string;message:string}):Error {
+/**
+ * A SIE job RPC answered with a SQLSTATE: the database ran the call and
+ * refused it, so its transaction rolled back and nothing started. `code` is
+ * the application code every door answers with; the raw SQLSTATE stays on
+ * `pgCode` for the logs.
+ */
+export class SIEJobDatabaseError extends Error {
+  constructor(message: string, readonly code: string | undefined, readonly pgCode: string | undefined) { super(message) }
+}
+
+// 55000 alone does not say which guard refused: start_sie_import_job raises it
+// for six reasons. A refusal whose raised sentence has its own registry entry
+// keeps that meaning instead of the generic CONFLICT.
+const JOB_REFUSALS: Record<string,string> = {
+  'Existing SIE import requires reviewed replacement or reconciliation':'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',
+  'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
+}
+
+export function jobDatabaseError(error:{code?:string;message:string}):SIEJobDatabaseError {
+  // 55P03 (lock not available) frees itself: the same request succeeds on a
+  // retry, which is what TRANSIENT_ERROR says. It is never an existing import.
   const codes:Record<string,string> = {P0002:'NOT_FOUND','42501':'DB_PERMISSION_DENIED','22P02':'VALIDATION_ERROR',
-    '22023':'VALIDATION_ERROR','23505':'CONFLICT','55000':'CONFLICT','55P03':'CONFLICT'}
-  return Object.assign(new Error(error.message),{code:codes[error.code ?? ''] ?? error.code})
+    '22023':'VALIDATION_ERROR','23505':'CONFLICT','55000':'CONFLICT','55P03':'TRANSIENT_ERROR'}
+  const refusal = error.code === '55000' && Object.hasOwn(JOB_REFUSALS,error.message) ? JOB_REFUSALS[error.message] : undefined
+  return new SIEJobDatabaseError(error.message,refusal ?? codes[error.code ?? ''] ?? error.code,error.code)
 }
 
 export function acceptsSIEJobs(): boolean { return process.env.SIE_IMPORT_JOBS === 'true' }

@@ -311,6 +311,19 @@ describe('POST /imports/sie/:id/undo and /resume', () => {
     expect((await res.json()).error.code).toBe('SIE_IMPORT_ACTION_CONFLICT')
   })
 
+  it('answers a lock that is not available (55P03) as a retryable transient error', async () => {
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: OWNER,
+        sie_imports: job(),
+        'rpc:request_sie_import_undo': { data: null, error: { code: '55P03', message: 'could not obtain lock on row in relation "fiscal_periods"' } },
+      }),
+    )
+    const res = await undo()
+    expect(res.status).toBe(503)
+    expect((await res.json()).error.code).toBe('TRANSIENT_ERROR')
+  })
+
   it('resume: a member may resume their own run, not another user\'s', async () => {
     mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER, sie_imports: job({ job_state: 'paused' }) }))
     expect((await resume()).status).toBe(403)

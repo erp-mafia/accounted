@@ -2993,6 +2993,20 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'En SIE-import för ett överlappande räkenskapsår finns redan.',
     message_en: 'An SIE import for an overlapping fiscal period already exists.',
   },
+  // start_sie_import_job's guard 'Existing SIE import requires reviewed
+  // replacement or reconciliation' (55000), mapped by jobDatabaseError. The
+  // guard also counts a posted ingående balans, so the sentence names both.
+  SIE_IMPORT_PERIOD_ALREADY_IMPORTED: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret har redan en import eller en bokförd ingående balans. Öppna importhistoriken och ångra den tidigare importen innan du importerar året igen.',
+    message_en: 'This fiscal year already has an import or a posted opening balance. Open import history and undo the earlier import before importing the year again.',
+    retryable: false,
+    remediation: {
+      description: 'Read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again.',
+      tool: 'gnubok_sie_import_status',
+      resource: '/import?mode=sie',
+    },
+  },
   SIE_IMPORT_UNMAPPED_ACCOUNTS: {
     httpStatus: 400,
     message_sv: 'Vissa konton saknar mappning. Gå tillbaka till kontomappningssteget och koppla alla konton.',

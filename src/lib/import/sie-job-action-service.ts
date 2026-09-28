@@ -96,6 +96,8 @@ export async function requestSIEImportAction(
     if (code === 'CONFLICT') {
       return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: (err as Error).message } }
     }
+    // A lock held by another writer (55P03): the same request succeeds on retry.
+    if (code === 'TRANSIENT_ERROR') return { ok: false, code }
     log.error('SIE job action failed', err as Error, { importId, action })
     return { ok: false, code: 'UNKNOWN_ERROR', error: err }
   }

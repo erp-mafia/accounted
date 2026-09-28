@@ -81,6 +81,16 @@ describe('durable SIE HTTP boundaries',()=>{
     const {runSIEWorker}=await import('@/lib/import/sie-job-worker')
     expect(runSIEWorker).not.toHaveBeenCalled()
   })
+  it('answers a year that already holds an import with the same 409 code as the migration wizard', async () => {
+    const { jobDatabaseError } = await import('@/lib/import/sie-jobs')
+    submit.mockRejectedValueOnce(jobDatabaseError({ code: '55000', message: 'Existing SIE import requires reviewed replacement or reconciliation' }))
+    const form = new FormData()
+    form.set('file', new File(['#SIETYP 4\n#RAR 0 20260101 20261231'], 'again.se'))
+    form.set('mappings', '[]')
+    const response = await routes.execute(new Request('https://example.test/api/import/sie/execute', { method: 'POST', body: form }))
+    expect(response.status).toBe(409)
+    expect((await response.json()).error.code).toBe('SIE_IMPORT_PERIOD_ALREADY_IMPORTED')
+  })
   it('accepts a custom account created during preview without requiring it to be remapped', async () => {
     queued.enqueue({ data: [{ account_number: '9999' }] })
     const created = await createAccounts(request({ accounts: [{ number: '9999', name: 'Custom account' }] }), staticParams)
