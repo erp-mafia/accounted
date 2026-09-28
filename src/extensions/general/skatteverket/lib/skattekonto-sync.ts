@@ -186,7 +186,7 @@ async function resolveOmfragad(
 // silently un-ignore a row via the conflict-update.
 type SyncRow = Omit<
   StoredSkattekontoTransaction,
-  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id' | 'is_ignored'
+  'id' | 'imported_at' | 'updated_at' | 'journal_entry_id' | 'file_import_id' | 'is_ignored' | 'bank_entered_at'
 >
 
 function bookedToRow(companyId: string, tx: SkatteverketBookedTransaction): SyncRow {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { generateBankgiroPaymentBgLb } from '../bg-lb-generator'
+import { generateBankgiroPaymentBgLb, generateBankgiroPaymentsBgLb } from '../bg-lb-generator'
 
 const company = {
   name: 'Acme AB',
@@ -140,5 +140,34 @@ describe('generateBankgiroPaymentBgLb', () => {
     )
     const closing = result.content.split('\r\n').filter((l) => l)[2]
     expect(closing.slice(20, 32)).toBe('000000010050')  // 100.50 SEK = 10050 öre
+  })
+
+  it('includes multiple payments with their individual dates', () => {
+    const result = generateBankgiroPaymentsBgLb(
+      company,
+      [
+        {
+          receiverBankgiro: '5050-1055',
+          ocr: '55601234566',
+          amount: 1000,
+          paymentDate: '2026-05-12',
+        },
+        {
+          receiverBankgiro: '5050-1055',
+          ocr: '55601234566',
+          amount: 2500.5,
+          paymentDate: '2026-06-12',
+        },
+      ],
+      { periodLabel: '2026-05_2026-06' },
+    )
+    const lines = result.content.split('\r\n').filter((line) => line)
+
+    expect(lines).toHaveLength(4)
+    expect(lines[1].slice(49, 55)).toBe('260512')
+    expect(lines[2].slice(49, 55)).toBe('260612')
+    expect(lines[3].slice(20, 32)).toBe('000000350050')
+    expect(result.recordCount).toBe(2)
+    expect(result.totalAmount).toBe(3500.5)
   })
 })

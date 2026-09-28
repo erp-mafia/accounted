@@ -2,11 +2,19 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
+import Image from 'next/image'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -20,11 +28,12 @@ import {
   HOVER_REVEAL_CLASS,
   CHECKBOX_REVEAL_CLASS,
 } from '@/components/ui/dry-table'
-import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
+import { SettingsSelect } from '@/components/settings/SettingsRows'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -52,7 +61,11 @@ import {
 } from '@/lib/notices/predicates'
 import {
   AlertCircle,
+  Check,
+  ChevronDown,
   Copy,
+  Download,
+  MoreHorizontal,
   RefreshCw,
 } from 'lucide-react'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -64,6 +77,12 @@ import type {
 } from '@/extensions/general/skatteverket/types'
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
+import { downloadFile } from '@/lib/browser/download-file'
+import { failureDescription } from '@/lib/browser/action-failure'
+import { roundOre } from '@/lib/money'
+
+type PaymentFormat = 'bg_lb' | 'pain001'
 
 const SkattekontoMatchDialog = dynamic(
   () =>
@@ -97,9 +116,15 @@ interface TransaktionerEnvelope {
 export default function SkattekontoPage() {
   const { toast } = useToast()
   const t = useTranslations('skattekonto')
+  const locale = useLocale() as ErrorLocale
   const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
+  const [paymentSelection, setPaymentSelection] = useState<StoredSkattekontoTransaction[] | null>(null)
+  const [paymentFormat, setPaymentFormat] = useState<PaymentFormat>('pain001')
+  const [downloadingPayment, setDownloadingPayment] = useState(false)
+  const [paymentDownloaded, setPaymentDownloaded] = useState(false)
+  const [bankEnteringIds, setBankEnteringIds] = useState<Set<string>>(new Set())
   const [saldo, setSaldo] = useState<SaldoEnvelope | null>(null)
   const [tx, setTx] = useState<TransaktionerEnvelope['data'] | null>(null)
   const [loading, setLoading] = useState(true)
@@ -535,7 +560,7 @@ export default function SkattekontoPage() {
     if (!due) return null
     const rows = upcoming.filter((r) => dueOf(r) === due)
     const amount = rows.reduce((sum, r) => sum + Number(r.belopp_skatteverket), 0)
-    return { due, count: rows.length, amount: Math.round(Math.abs(amount) * 100) / 100 }
+    return { due, count: rows.length, amount: Math.round(Math.abs(amount) * 100) / 100, rows }
   }, [tx])
 
   // Ignorable rows in rendered order (upcoming, overdue, then the unbooked
@@ -553,6 +578,20 @@ export default function SkattekontoPage() {
     const selectable = new Set(selectableIds)
     return new Set([...selectedIds].filter((id) => selectable.has(id)))
   }, [selectableIds, selectedIds])
+  const allSelectableSelected =
+    selectableIds.length > 0 && activeSelectedIds.size === selectableIds.length
+  const selectedRows = useMemo(() => {
+    const allRows = [...(tx?.upcoming ?? []), ...(tx?.overdue ?? []), ...(tx?.booked ?? [])]
+    return allRows.filter((row) => activeSelectedIds.has(row.id))
+  }, [activeSelectedIds, tx])
+  const selectionCanBePaid =
+    selectedRows.length > 0 &&
+    selectedRows.every(
+      (row) =>
+        row.status === 'upcoming' &&
+        Number(row.belopp_skatteverket) < 0 &&
+        !row.bank_entered_at,
+    )
   const range = useRangeSelect({ visibleIds: selectableIds, selectedIds, setSelectedIds })
   const toggleSelect = useCallback(
     (id: string, extend?: boolean) => range.toggle(id, extend),
@@ -564,6 +603,103 @@ export default function SkattekontoPage() {
     nextCharge && saldoNow !== null && saldoNow < nextCharge.amount
       ? Math.round((nextCharge.amount - saldoNow) * 100) / 100
       : null
+  const rowsForPayment = (paymentSelection ?? nextCharge?.rows ?? []).filter(
+    (row) =>
+      row.status === 'upcoming' &&
+      Number(row.belopp_skatteverket) < 0 &&
+      !row.bank_entered_at,
+  )
+  const paymentDue = rowsForPayment[0]
+    ? (rowsForPayment[0].forfallodatum ?? rowsForPayment[0].transaktionsdatum)
+    : null
+  const paymentGroups = [...rowsForPayment.reduce((groups, row) => {
+    const dueDate = row.forfallodatum ?? row.transaktionsdatum
+    groups.set(
+      dueDate,
+      roundOre((groups.get(dueDate) ?? 0) + Math.abs(Number(row.belopp_skatteverket))),
+    )
+    return groups
+  }, new Map<string, number>()).entries()].sort(([dateA], [dateB]) => dateA.localeCompare(dateB))
+  const paymentCharge = roundOre(paymentGroups.reduce((sum, [, amount]) => sum + amount, 0))
+  const paymentPeriod = paymentGroups.length > 1
+    ? `${paymentGroups[0][0]}_${paymentGroups[paymentGroups.length - 1][0]}`
+    : paymentDue
+
+  const downloadPayment = async () => {
+    if (downloadingPayment || rowsForPayment.length === 0) return
+    setDownloadingPayment(true)
+    try {
+      const ids = rowsForPayment.map((row) => row.id).join(',')
+      const filename = paymentFormat === 'pain001'
+        ? `pain001_skatt_${paymentPeriod}.xml`
+        : `bg_lb_skatt_${paymentPeriod}.txt`
+      const result = await downloadFile({
+        url: `/api/skatteverket/tax-payments/payment-file?transaction_ids=${encodeURIComponent(ids)}&format=${paymentFormat}`,
+        filename,
+        locale,
+      })
+      if (!result.ok) {
+        toast({
+          title: t('payment_download_failed'),
+          description: failureDescription(result, {
+            timeout: t('payment_download_timeout'),
+            network: t('payment_download_network'),
+          }),
+          variant: 'destructive',
+        })
+        return
+      }
+      setPaymentDownloaded(true)
+      toast({ title: t('payment_downloaded') })
+    } finally {
+      setDownloadingPayment(false)
+    }
+  }
+
+  const setRowsBankEntered = async (
+    rows: StoredSkattekontoTransaction[],
+    entered: boolean,
+  ): Promise<boolean> => {
+    const ids = rows.map((row) => row.id)
+    if (ids.length === 0 || ids.some((id) => bankEnteringIds.has(id))) return false
+    setBankEnteringIds((current) => new Set([...current, ...ids]))
+    try {
+      const response = await fetch('/api/skatteverket/tax-payments/bank-entered', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transaction_ids: ids, entered }),
+      })
+      const result = await response.json()
+      if (!response.ok) {
+        toast({
+          title: t('bank_entered_failed_title'),
+          description: getUserErrorMessage(result, { statusCode: response.status, locale }),
+          variant: 'destructive',
+        })
+        await reload()
+        return false
+      }
+      toast({
+        title: entered ? t('bank_entered_toast') : t('bank_entered_cleared_toast'),
+      })
+      await reload()
+      return true
+    } catch (error) {
+      toast({
+        title: t('bank_entered_failed_title'),
+        description: getUserErrorMessage(error, { locale }),
+        variant: 'destructive',
+      })
+      await reload()
+      return false
+    } finally {
+      setBankEnteringIds((current) => {
+        const next = new Set(current)
+        ids.forEach((id) => next.delete(id))
+        return next
+      })
+    }
+  }
 
   const helpNode = (
     <HelpPopover>
@@ -691,9 +827,11 @@ export default function SkattekontoPage() {
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               <div className="rounded-lg border border-border p-4">
                 <div className="flex items-center gap-2">
-                  <img
+                  <Image
                     src="/logos/skatteverket_color.svg"
                     alt=""
+                    width={16}
+                    height={16}
                     className="h-4 w-4 shrink-0 object-contain"
                   />
                   <p className="text-xs text-muted-foreground">Saldo hos Skatteverket</p>
@@ -764,7 +902,14 @@ export default function SkattekontoPage() {
                 bankgiro and OCR. */}
             {shortfall !== null && nextCharge ? (
               <AttnLine
-                action={{ label: t('attn_show_payment'), onClick: () => setShowPayment(true) }}
+                action={{
+                  label: t('attn_show_payment'),
+                  onClick: () => {
+                    setPaymentSelection(null)
+                    setPaymentDownloaded(false)
+                    setShowPayment(true)
+                  },
+                }}
               >
                 {t('attn_shortfall', {
                   date: formatDateLong(nextCharge.due),
@@ -795,38 +940,32 @@ export default function SkattekontoPage() {
       </section>
       )}
 
-      {/* Bulkbar (transactions-page pattern): hidden until at least one
-          ignorable row is selected via the hover checkboxes. */}
-      {activeSelectedIds.size > 0 && (
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b border-border px-1 py-2.5 text-[12.5px] animate-fade-in">
+      {/* Keep the bulk actions mounted whenever the table has selectable rows.
+          Selection only changes the controls' enabled state, never the page
+          geometry, so checking a row cannot push the table down. */}
+      {selectableIds.length > 0 && (
+        <div className="flex min-h-12 flex-wrap items-center gap-2 border-b border-border px-1 py-2 text-[12.5px]">
           <span className="whitespace-nowrap">
             {t('bulk_selected', { count: activeSelectedIds.size })}
           </span>
-          <Button size="sm" onClick={() => void ignoreSelected([...activeSelectedIds])}>
-            {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
-          </Button>
-          {activeSelectedIds.size < selectableIds.length && (
-            <button
-              type="button"
-              className={QUIET_LINK_CLASS}
-              onClick={() => {
-                setSelectedIds(new Set(selectableIds))
-                range.resetAnchor()
-              }}
-            >
-              {t('bulk_select_all', { count: selectableIds.length })}
-            </button>
-          )}
-          <button
-            type="button"
-            className={QUIET_LINK_CLASS}
+          <Button
+            size="sm"
+            disabled={!selectionCanBePaid}
             onClick={() => {
-              setSelectedIds(new Set())
-              range.resetAnchor()
+              setPaymentSelection(selectedRows)
+              setPaymentDownloaded(false)
+              setShowPayment(true)
             }}
           >
-            {t('bulk_clear')}
-          </button>
+            {t('bulk_payment_cta', { count: activeSelectedIds.size })}
+          </Button>
+          <Button
+            size="sm"
+            disabled={activeSelectedIds.size === 0}
+            onClick={() => void ignoreSelected([...activeSelectedIds])}
+          >
+            {t('bulk_ignore_cta', { count: activeSelectedIds.size })}
+          </Button>
         </div>
       )}
 
@@ -835,7 +974,15 @@ export default function SkattekontoPage() {
         tx={tx}
         showIgnored={showIgnored}
         selectedIds={activeSelectedIds}
+        selectableCount={selectableIds.length}
+        allSelectableSelected={allSelectableSelected}
+        onToggleSelectAll={() => {
+          setSelectedIds(allSelectableSelected ? new Set() : new Set(selectableIds))
+          range.resetAnchor()
+        }}
         onToggleSelect={toggleSelect}
+        bankEnteringIds={bankEnteringIds}
+        onSetBankEntered={(row, entered) => void setRowsBankEntered([row], entered)}
         onBokfor={bokfor}
         onMatch={openMatch}
         onIgnore={ignoreRow}
@@ -882,17 +1029,25 @@ export default function SkattekontoPage() {
         onMatched={() => void reload()}
       />
 
-      <Dialog open={showPayment} onOpenChange={setShowPayment}>
+      <Dialog
+        open={showPayment}
+        onOpenChange={(open) => {
+          setShowPayment(open)
+          if (!open) {
+            setPaymentSelection(null)
+            setPaymentDownloaded(false)
+          }
+        }}
+      >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="font-display text-lg tracking-tight">
               {t('payment_title')}
             </DialogTitle>
-            {nextCharge && (
+            {paymentDue && (
               <DialogDescription className="text-[13px] leading-relaxed">
                 {t('payment_description', {
-                  date: formatDateLong(nextCharge.due),
-                  charge: formatCurrency(nextCharge.amount),
+                  count: rowsForPayment.length,
                 })}
               </DialogDescription>
             )}
@@ -918,13 +1073,72 @@ export default function SkattekontoPage() {
                 )}
               </dd>
             </div>
-            {shortfall !== null && (
+            {paymentGroups.map(([dueDate, amount]) => (
+              <div key={dueDate} className="flex items-baseline justify-between gap-4">
+                <dt className="text-muted-foreground">{formatDateLong(dueDate)}</dt>
+                <dd className="tabular-nums">{formatCurrency(amount)}</dd>
+              </div>
+            ))}
+            {saldoNow !== null && (
               <div className="flex items-baseline justify-between gap-4">
-                <dt className="text-muted-foreground">{t('payment_shortfall_label')}</dt>
-                <dd className="font-medium tabular-nums">{formatCurrency(shortfall)}</dd>
+                <dt className="text-muted-foreground">{t('payment_balance_label')}</dt>
+                <dd className="tabular-nums">{formatCurrency(saldoNow)}</dd>
               </div>
             )}
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">{t('payment_total_label')}</dt>
+              <dd className="font-medium tabular-nums">{formatCurrency(paymentCharge)}</dd>
+            </div>
+            <div className="flex items-baseline justify-between gap-4">
+              <dt className="text-muted-foreground">{t('payment_format_label')}</dt>
+              <dd>
+                <SettingsSelect
+                  aria-label={t('payment_format_label')}
+                  value={paymentFormat}
+                  onChange={(event) => setPaymentFormat(event.target.value as PaymentFormat)}
+                  wrapperClassName="-my-1"
+                >
+                  <option value="pain001">ISO 20022 pain.001</option>
+                  <option value="bg_lb">Bankgirot LB</option>
+                </SettingsSelect>
+              </dd>
+            </div>
           </dl>
+          <p className="text-xs leading-5 text-muted-foreground">
+            {t('payment_bank_entered_hint')}
+          </p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => void downloadPayment()}
+              disabled={downloadingPayment || paymentCharge <= 0}
+              loading={downloadingPayment}
+            >
+              {!downloadingPayment && <Download className="mr-2 h-4 w-4" />}
+              {t('payment_download_cta')}
+            </Button>
+            <Button
+              loading={rowsForPayment.some((row) => bankEnteringIds.has(row.id))}
+              disabled={
+                !paymentDownloaded ||
+                rowsForPayment.length === 0 ||
+                rowsForPayment.some((row) => bankEnteringIds.has(row.id))
+              }
+              onClick={() => {
+                void (async () => {
+                  const marked = await setRowsBankEntered(rowsForPayment, true)
+                  if (!marked) return
+                  setSelectedIds(new Set())
+                  range.resetAnchor()
+                  setShowPayment(false)
+                  setPaymentSelection(null)
+                  setPaymentDownloaded(false)
+                })()
+              }}
+            >
+              {t('payment_mark_bank_entered_cta')}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
@@ -954,7 +1168,12 @@ function SkattekontoTable({
   tx,
   showIgnored,
   selectedIds,
+  selectableCount,
+  allSelectableSelected,
+  onToggleSelectAll,
   onToggleSelect,
+  bankEnteringIds,
+  onSetBankEntered,
   onBokfor,
   onMatch,
   onIgnore,
@@ -963,13 +1182,19 @@ function SkattekontoTable({
   tx: TransaktionerEnvelope['data'] | null
   showIgnored: boolean
   selectedIds: Set<string>
+  selectableCount: number
+  allSelectableSelected: boolean
+  onToggleSelectAll: () => void
   onToggleSelect: (id: string, extend?: boolean) => void
+  bankEnteringIds: Set<string>
+  onSetBankEntered: (row: StoredSkattekontoTransaction, entered: boolean) => void
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   onIgnore: (row: StoredSkattekontoTransaction) => void
   onUnignore: (row: StoredSkattekontoTransaction) => void
 }) {
   const t = useTranslations('skattekonto')
+  const hasSelection = selectedIds.size > 0
 
   const allSections: TableSection[] = [
     { key: 'upcoming', label: t('band_upcoming'), rows: tx?.upcoming ?? [] },
@@ -1006,18 +1231,26 @@ function SkattekontoTable({
   }
 
   return (
-    // Negative margin + matching padding: lets the hover-revealed selection
-    // checkbox hang into the page margins without being clipped by the
-    // overflow container (transactions-page pattern).
     <div
-      className="-mx-5 overflow-x-auto px-5 md:-mx-8 md:px-8"
+      className="overflow-x-auto"
       role="region"
       aria-label="Skattekontohändelser"
     >
       <table className="w-full border-collapse text-[13px]">
         <thead>
           <tr>
-            <th className={cn(TH_CLASS, 'w-0 !p-0')} aria-hidden="true"></th>
+            <th className={cn(TH_CLASS, 'w-[26px] !px-1')}>
+              <Checkbox
+                checked={allSelectableSelected ? true : hasSelection ? 'indeterminate' : false}
+                onCheckedChange={onToggleSelectAll}
+                aria-label={
+                  allSelectableSelected
+                    ? t('bulk_clear')
+                    : t('bulk_select_all', { count: selectableCount })
+                }
+                className="border-foreground"
+              />
+            </th>
             <th className={cn(TH_CLASS, 'w-[110px]')}>Datum</th>
             <th className={TH_CLASS}>Händelse</th>
             <th className={cn(TH_CLASS, 'text-right')}>Belopp</th>
@@ -1028,8 +1261,9 @@ function SkattekontoTable({
           {sections.map((section) => (
             <Fragment key={section.key}>
               <tr className="bg-muted/30">
+                <td className="w-[26px] !px-1" aria-hidden="true" />
                 <td
-                  colSpan={5}
+                  colSpan={4}
                   className="px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground"
                 >
                   {section.label}
@@ -1047,6 +1281,8 @@ function SkattekontoTable({
                   section={section.key}
                   isSelected={selectedIds.has(row.id)}
                   onToggleSelect={onToggleSelect}
+                  bankEntering={bankEnteringIds.has(row.id)}
+                  onSetBankEntered={onSetBankEntered}
                   onBokfor={onBokfor}
                   onMatch={onMatch}
                   onIgnore={onIgnore}
@@ -1067,6 +1303,8 @@ function SkattekontoRow({
   section,
   isSelected,
   onToggleSelect,
+  bankEntering,
+  onSetBankEntered,
   onBokfor,
   onMatch,
   onIgnore,
@@ -1077,6 +1315,8 @@ function SkattekontoRow({
   section: TableSection['key']
   isSelected: boolean
   onToggleSelect: (id: string, extend?: boolean) => void
+  bankEntering: boolean
+  onSetBankEntered: (row: StoredSkattekontoTransaction, entered: boolean) => void
   onBokfor: (id: string) => void
   onMatch: (row: StoredSkattekontoTransaction) => void
   onIgnore: (row: StoredSkattekontoTransaction) => void
@@ -1100,10 +1340,9 @@ function SkattekontoRow({
         isSelected && 'bg-secondary/40',
       )}
     >
-      {/* Hover-revealed selection checkbox (transactions-page pattern):
-          zero-width cell, the checkbox hangs in the left page margin so the
-          date column stays where it was. Selected rows keep it visible. */}
-      <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
+      {/* Selection is a real first table column. Keeping its width in the
+          header, bands and every row prevents the date column from moving. */}
+      <td className={cn(TD_CLASS, 'w-[26px] !px-1 py-[9px] select-none')}>
         {selectable && (
           <Checkbox
             checked={isSelected}
@@ -1113,7 +1352,7 @@ function SkattekontoRow({
             onCheckedChange={() => onToggleSelect(row.id, shiftHeld.current)}
             aria-label={t('select_row_aria', { text: row.transaktionstext })}
             className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
+              'border-foreground duration-150',
               isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
             )}
           />
@@ -1167,52 +1406,68 @@ function SkattekontoRow({
         {amount > 0 ? `+${formatCurrency(amount)}` : formatCurrency(amount)}
       </td>
       <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
-        {isIgnoredSection ? (
-          <span className={cn('inline-flex items-center gap-3', HOVER_REVEAL_CLASS)}>
-            <button
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
               type="button"
-              onClick={() => onUnignore(row)}
-              className={QUIET_LINK_CLASS}
+              variant="ghost"
+              size={row.bank_entered_at ? 'default' : 'icon'}
+              disabled={bankEntering}
+              loading={bankEntering}
+              className={cn(
+                'text-xs text-muted-foreground',
+                !row.bank_entered_at && HOVER_REVEAL_CLASS,
+              )}
+              aria-label={t(
+                row.bank_entered_at ? 'bank_entered_actions_aria' : 'row_actions_aria',
+                { text: row.transaktionstext },
+              )}
             >
-              {t('action_unignore')}
-            </button>
-          </span>
-        ) : isBooked ? (
-          <span className="inline-flex items-center justify-end gap-1">
-            <Link
-              href={`/bookkeeping/${row.journal_entry_id}`}
-              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS)}
-            >
-              {t('action_show_voucher')}
-            </Link>
-            <OpenInNewTab href={`/bookkeeping/${row.journal_entry_id}`} />
-          </span>
-        ) : (
-          <span className={cn('inline-flex items-center gap-3', HOVER_REVEAL_CLASS)}>
-            <button
-              type="button"
-              onClick={() => onIgnore(row)}
-              className={QUIET_LINK_CLASS}
-            >
-              {t('ignore_action')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onMatch(row)}
-              className={QUIET_LINK_CLASS}
-              title="Koppla till befintligt verifikat"
-            >
-              {t('action_match')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onBokfor(row.id)}
-              className={QUIET_LINK_CLASS}
-            >
-              {t('action_book')}
-            </button>
-          </span>
-        )}
+              {bankEntering ? null : row.bank_entered_at ? (
+                <>
+                  <Check className="h-4 w-4" />
+                  {t('bank_entered_label')}
+                  <ChevronDown className="h-3.5 w-3.5" />
+                </>
+              ) : (
+                <MoreHorizontal className="h-4 w-4" />
+              )}
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            {row.bank_entered_at && (
+              <>
+                <DropdownMenuItem onSelect={() => onSetBankEntered(row, false)}>
+                  {t('bank_entered_remove_action')}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {isIgnoredSection ? (
+              <DropdownMenuItem onSelect={() => onUnignore(row)}>
+                {t('action_unignore')}
+              </DropdownMenuItem>
+            ) : isBooked ? (
+              <DropdownMenuItem asChild>
+                <Link href={`/bookkeeping/${row.journal_entry_id}`}>
+                  {t('action_show_voucher')}
+                </Link>
+              </DropdownMenuItem>
+            ) : (
+              <>
+                <DropdownMenuItem onSelect={() => onIgnore(row)}>
+                  {t('ignore_action')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onMatch(row)}>
+                  {t('action_match')}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => onBokfor(row.id)}>
+                  {t('action_book')}
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenu>
       </td>
     </tr>
   )

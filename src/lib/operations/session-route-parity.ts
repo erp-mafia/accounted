@@ -413,6 +413,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/tax-assessment-notices/:id': gap('P3'),
   'POST /api/tax-deadlines/generate': gap('P3', 'regenerate tax deadlines'),
   'POST /api/skatteverket/tax-payments/:period/mark-paid': gap('P3', 'mark AGI period tax paid'),
+  'POST /api/skatteverket/tax-payments/bank-entered': gap('P3', 'mark tax account debits as entered at the bank'),
   'POST /api/deadlines': gap('P3', 'custom deadline'),
   'PUT /api/deadlines/:id': gap('P3'),
   'DELETE /api/deadlines/:id': gap('P3'),
@@ -671,4 +672,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * The exact number of 'gap' entries today. Covering a gap means lowering
  * this; adding one means raising it in the same diff, visibly.
  */
-export const GAP_CEILING = 136
+export const GAP_CEILING = 137
