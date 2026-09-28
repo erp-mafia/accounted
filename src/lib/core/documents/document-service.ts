@@ -984,6 +984,13 @@ export async function uploadDocument(
     upload_source?: DocumentUploadSource
     journal_entry_id?: string
     journal_entry_line_id?: string
+    /**
+     * Makes the row id deterministic for (company, key, content). Internal
+     * callers only: no public upload path accepts it. The provider underlag
+     * import recognises its own files by `upload_source: 'api'` together with
+     * this key equal to `journal_entry_id` (isArchivedForOwnJournalEntry), so
+     * no other caller may archive under that combination.
+     */
     idempotency_key?: string
     /**
      * Content dedupe for intake channels: before storing, look for a
