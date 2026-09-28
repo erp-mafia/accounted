@@ -4575,6 +4575,12 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'En lönekörning för perioden finns redan.',
     message_en: 'A salary run for that period already exists.',
   },
+  SALARY_RUN_UNDERLAG_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Bokföringsunderlaget skapas när lönekörningen är bokförd.',
+    message_en: 'The accounting document is available once the salary run is booked.',
+    retryable: false,
+  },
   SALARY_RUN_CORRECT_NOT_BOOKED: {
     httpStatus: 409,
     message_sv: 'Bara bokförda lönekörningar kan korrigeras (rättelsekörning).',

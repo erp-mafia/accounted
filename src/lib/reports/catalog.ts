@@ -302,7 +302,7 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     route: '/reconciliation',
   },
 
-  // --- Lön: library-only ---
+  // --- Lön (payroll) ---
   {
     // Semesterlöneskuld (BFNAR 2016:10): per-employee specification of
     // 2920/2940 as of the fiscal year's end, with the booked balances beside
@@ -317,6 +317,20 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     libraryOnly: true,
     searchTerms:
       'semesterskuld semesterlöneskuld semesterlön semesterdagar sparade dagar upplupna semesterlöner 2920 2940 vacation liability',
+  },
+  {
+    // Lönejournal: per-employee register of booked salary runs (brutto, skatt,
+    // netto, avgifter, semesterlöneskuld). Payroll follows the calendar year
+    // (inkomstår, AGI), not the räkenskapsår, so the view owns a year and
+    // month-range picker like the other calendar reports.
+    slug: 'lonejournal',
+    labelKey: 'name_lonejournal',
+    descKey: 'desc_lonejournal',
+    category: 'payroll',
+    params: 'calendar',
+    exports: ['xlsx'],
+    searchTerms:
+      'lönejournal lönelista lönesammanställning löneregister bokföringsunderlag lön löner bruttolön nettolön skatteavdrag arbetsgivaravgifter agi avstämning salary journal payroll',
   },
 
   // --- Export & arkiv: library-only ---

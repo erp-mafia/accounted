@@ -968,6 +968,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             preview={preview}
             onRecalculate={run.status === 'draft' && canWrite ? handleCalculate : undefined}
             recalculating={actionLoading === 'calculate'}
+            underlagHref={
+              preview.booked ? `/api/salary/runs/${id}/underlag/pdf` : undefined
+            }
           />
         )}
       </div>

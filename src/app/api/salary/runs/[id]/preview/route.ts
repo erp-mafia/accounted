@@ -10,6 +10,7 @@ import {
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
 import { roundOre } from '@/lib/money'
+import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
 
 ensureInitialized()
@@ -43,70 +44,20 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // label and the entry id carried as their own fields so the UI can link
     // to the verifikat instead of printing a dead label.
     if (run.status === 'booked' || run.status === 'corrected') {
-      const { data: posted, error: postedError } = await supabase
-        .from('journal_entries')
-        .select(
-          'id, description, voucher_series, voucher_number, lines:journal_entry_lines(account_number, line_description, debit_amount, credit_amount)',
-        )
-        .eq('company_id', companyId)
-        .eq('source_type', 'salary_payment')
-        .eq('source_id', id)
-
-      // A failed lookup must not masquerade as "booked run with no vouchers".
-      if (postedError) {
-        return NextResponse.json(
-          { error: 'Kunde inte läsa lönekörningens bokförda verifikat' },
-          { status: 500 },
-        )
-      }
-
-      const byId = new Map(
-        ((posted ?? []) as Array<{ id: string }>).map((e) => [e.id, e] as const),
-      )
-      const toEntry = (entryId: unknown) => {
-        const entry = entryId ? (byId.get(entryId as string) as
-          | {
-              description: string
-              voucher_series: string | null
-              voucher_number: number | null
-              lines: Array<{
-                account_number: string
-                line_description: string | null
-                debit_amount: number | null
-                credit_amount: number | null
-              }>
-            }
-          | undefined) : undefined
-        if (!entry) return null
-        const voucher =
-          entry.voucher_number != null
-            ? `${entry.voucher_series ?? ''}${entry.voucher_series ? '-' : ''}${entry.voucher_number}`
-            : null
-        return {
-          description: entry.description,
-          // The link target the salary run page turns the voucher label into.
-          // The label used to be concatenated into the description here, which
-          // named a verifikat the reader could not open.
-          journal_entry_id: entryId as string,
-          voucher,
-          lines: entry.lines.map((l) => ({
-            account_number: l.account_number,
-            line_description: l.line_description ?? '',
-            debit_amount: l.debit_amount,
-            credit_amount: l.credit_amount,
-          })),
+      let posted
+      try {
+        posted = await loadPostedSalaryRunEntries(supabase, companyId, run)
+      } catch (err) {
+        // A failed lookup must not masquerade as "booked run with no vouchers".
+        if (err instanceof PostedSalaryEntriesReadError) {
+          return NextResponse.json(
+            { error: 'Kunde inte läsa lönekörningens bokförda verifikat' },
+            { status: 500 },
+          )
         }
+        throw err
       }
-
-      return NextResponse.json({
-        data: {
-          booked: true,
-          salaryEntry: toEntry(run.salary_entry_id),
-          avgifterEntry: toEntry(run.avgifter_entry_id),
-          vacationEntry: toEntry(run.vacation_entry_id),
-          pensionEntry: toEntry(run.pension_entry_id),
-        },
-      })
+      return NextResponse.json({ data: { booked: true, ...posted } })
     }
 
     // Load employees with line items: the columns the booking reads
