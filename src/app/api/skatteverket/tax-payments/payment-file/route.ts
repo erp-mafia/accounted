@@ -160,6 +160,14 @@ export const GET = withRouteContext(
         )
       }
       const debtor = debtorResolution.debtor
+      if (!debtor.bankgiro) {
+        return errorResponse(
+          'DEBTOR_BANKGIRO_REQUIRED',
+          'Ett giltigt bankgironummer för företaget krävs för betalfil till Skatteverket.',
+          'A valid company Bankgiro number is required for a Skatteverket payment file.',
+          400,
+        )
+      }
       try {
         const xml = generateSupplierPain001(
           {

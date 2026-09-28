@@ -131,4 +131,22 @@ describe('GET /api/skatteverket/vat-payments/payment-file', () => {
       reference: { type: 'ocr', value: '1655954700217' },
     })
   })
+
+  it('rejects pain.001 when the company has no valid Bankgiro', async () => {
+    resolveBatchDebtorMock.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB', org_number: '5566778899', iban: 'SE3550000000054910000003',
+        bic: 'ESSESESS', bankgiro: null, city: 'Stockholm',
+      },
+    })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: null, fiscal_year_start_month: 1 } })
+
+    const response = await GET(request('&format=pain001'), createMockRouteParams({}))
+
+    expect(response.status).toBe(400)
+    expect(JSON.stringify(await response.json())).toContain('bankgironummer')
+    expect(generatePain001Mock).not.toHaveBeenCalled()
+  })
 })

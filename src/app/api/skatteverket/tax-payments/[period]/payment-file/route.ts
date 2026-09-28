@@ -158,6 +158,12 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       return NextResponse.json({ error: message }, { status: 400 })
     }
     const { debtor } = debtorResolution
+    if (!debtor.bankgiro) {
+      return NextResponse.json(
+        { error: 'Ett giltigt bankgironummer för företaget krävs för betalfil till Skatteverket.' },
+        { status: 400 },
+      )
+    }
 
     // Deterministic per due date, including when the same combined payment is
     // downloaded from the VAT report instead of the AGI view.
