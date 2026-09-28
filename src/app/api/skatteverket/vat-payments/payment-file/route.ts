@@ -122,6 +122,12 @@ export const GET = withRouteContext(
         return NextResponse.json({ error: message }, { status: 400 })
       }
       const debtor = debtorResolution.debtor
+      if (!debtor.bankgiro) {
+        return NextResponse.json(
+          { error: 'Ett giltigt bankgironummer för företaget krävs för betalfil till Skatteverket.' },
+          { status: 400 },
+        )
+      }
       try {
         const xml = generateSupplierPain001(
           {

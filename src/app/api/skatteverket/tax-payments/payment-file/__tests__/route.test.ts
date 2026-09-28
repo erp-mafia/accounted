@@ -134,6 +134,25 @@ describe('GET /api/skatteverket/tax-payments/payment-file', () => {
     })
   })
 
+  it('rejects a Bankgiro payment when the company has no valid Bankgiro', async () => {
+    resolveBatchDebtorMock.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB', org_number: '5566778899', iban: 'SE3550000000054910000003',
+        bic: 'ESSESESS', bankgiro: null, city: 'Stockholm',
+      },
+    })
+    enqueue({ data: [row(ID_1, -10_000), row(ID_2, -5_000)], error: null })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: null } })
+
+    const response = await GET(request(), createMockRouteParams({}))
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error.code).toBe('DEBTOR_BANKGIRO_REQUIRED')
+    expect(generatePain001Mock).not.toHaveBeenCalled()
+  })
+
   it('rejects selected credits', async () => {
     enqueue({ data: [row(ID_1, -10_000), row(ID_2, 2_000)], error: null })
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
