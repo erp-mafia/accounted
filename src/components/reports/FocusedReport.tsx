@@ -51,6 +51,10 @@ const SystemdokumentationView = dynamic(() =>
   import('./SystemdokumentationView').then((module) => ({ default: module.SystemdokumentationView })),
   { loading: ReportBodyLoading },
 )
+const SemesterskuldView = dynamic(() =>
+  import('./SemesterskuldView').then((module) => ({ default: module.SemesterskuldView })),
+  { loading: ReportBodyLoading },
+)
 
 /**
  * The focused single-report experience at /reports/[slug]. Carries one report:
@@ -236,6 +240,8 @@ function FocusedView({
       return <BokslutsbilagorView key={periodId} periodId={periodId} />
     case 'systemdokumentation':
       return <SystemdokumentationView key={periodId} periodId={periodId} />
+    case 'semesterskuld':
+      return <SemesterskuldView key={periodId} periodId={periodId} />
     default:
       return null
   }

@@ -3243,6 +3243,13 @@ export const BehandlingshistorikQuerySchema = z.object({
   format: z.enum(['json', 'csv', 'xlsx', 'pdf']).default('json'),
 })
 
+/** Semesterskuld: as of a fiscal period's end (period_id) or Dec 31 of `year`. */
+export const VacationLiabilityQuerySchema = z.object({
+  period_id: uuid.optional(),
+  year: z.coerce.number().int().min(2000).max(2100).optional(),
+  format: z.enum(['json', 'xlsx', 'pdf']).default('json'),
+})
+
 // ============================================================
 // Voucher gap schemas
 // ============================================================

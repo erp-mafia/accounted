@@ -57,7 +57,7 @@ export async function assessVacationLiability(
   }
 
   const [report, tb] = await Promise.all([
-    generateVacationLiability(supabase, companyId, closingYear),
+    generateVacationLiability(supabase, companyId, options.closingDate),
     // Reads 2920 (class 2), which no resultatavslut touches.
     generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
   ])

@@ -302,6 +302,23 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     route: '/reconciliation',
   },
 
+  // --- Lön: library-only ---
+  {
+    // Semesterlöneskuld (BFNAR 2016:10): per-employee specification of
+    // 2920/2940 as of the fiscal year's end, with the booked balances beside
+    // it. The whole year only: the liability is a balance, not a movement.
+    slug: 'semesterskuld',
+    labelKey: 'name_semesterskuld',
+    descKey: 'desc_semesterskuld',
+    category: 'payroll',
+    needsEmployees: true,
+    params: 'fiscal',
+    exports: ['pdf', 'xlsx'],
+    libraryOnly: true,
+    searchTerms:
+      'semesterskuld semesterlöneskuld semesterlön semesterdagar sparade dagar upplupna semesterlöner 2920 2940 vacation liability',
+  },
+
   // --- Export & arkiv: library-only ---
   {
     slug: 'sie-export',

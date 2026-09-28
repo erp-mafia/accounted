@@ -156,9 +156,8 @@ export async function loadSpecificationAmounts(
     )
   }
   if (wants('2920') || wants('2940')) {
-    const year = Number(snapshot.as_of.slice(0, 4))
     tasks.push(
-      generateVacationLiability(supabase, companyId, year)
+      generateVacationLiability(supabase, companyId, snapshot.as_of)
         .then((r) => {
           if (wants('2920')) out.set('2920', { amount: roundOre(-r.totals.accruedAmount), unconverted_fx_count: 0 })
           if (wants('2940')) out.set('2940', { amount: roundOre(-r.totals.accruedAvgifter), unconverted_fx_count: 0 })

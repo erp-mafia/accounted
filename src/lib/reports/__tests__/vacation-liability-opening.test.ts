@@ -34,8 +34,15 @@ beforeEach(() => {
   supabase = mock.supabase as unknown as SupabaseClient
 })
 
+/** Calendar vacation-year basis, no vacation year closed yet. */
+function enqueueSettingsAndClosures() {
+  mock.enqueue({ data: null }) // company_settings: basis defaults to calendar
+  mock.enqueue({ data: [] }) // vacation_year_closures
+}
+
 describe('generateVacationLiability with opening balances', () => {
   it('adds opening SEK terms and starts days from the imported balance', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] }) // employees page
     mock.enqueue({
       data: [
@@ -45,7 +52,7 @@ describe('generateVacationLiability with opening balances', () => {
           vacation_accrual_avgifter: 1319.64,
           avgifter_rate: 0.3142,
           vacation_days_taken: 3,
-          salary_run: { period_year: 2026, status: 'booked' },
+          salary_run: { payment_date: '2026-07-25', status: 'booked' },
         },
       ],
     }) // booked sre page
@@ -63,7 +70,7 @@ describe('generateVacationLiability with opening balances', () => {
       ],
     }) // opening balances
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
 
     expect(report.rows).toHaveLength(1)
     const row = report.rows[0]
@@ -79,6 +86,7 @@ describe('generateVacationLiability with opening balances', () => {
   })
 
   it('ignores opening rows for report years before the cutover year', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({ data: [] }) // no booked runs in 2025
     mock.enqueue({ data: [] }) // vacation ledger
@@ -95,13 +103,14 @@ describe('generateVacationLiability with opening balances', () => {
       ],
     })
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2025)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2025-12-31')
 
     expect(report.rows[0].accruedAmount).toBe(0)
     expect(report.rows[0].vacationDaysRemaining).toBe(25)
   })
 
   it('is a no-op for companies without opening rows', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({
       data: [
@@ -111,14 +120,14 @@ describe('generateVacationLiability with opening balances', () => {
           vacation_accrual_avgifter: 1319.64,
           avgifter_rate: 0.3142,
           vacation_days_taken: 0,
-          salary_run: { period_year: 2026, status: 'booked' },
+          salary_run: { payment_date: '2026-07-25', status: 'booked' },
         },
       ],
     })
     mock.enqueue({ data: [] }) // vacation ledger
     mock.enqueue({ data: [] }) // no opening rows
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
 
     expect(report.rows[0].accruedAmount).toBe(4200)
     expect(report.rows[0].vacationDaysRemaining).toBe(25)
@@ -126,6 +135,7 @@ describe('generateVacationLiability with opening balances', () => {
   })
 
   it('prefers the vacation ledger for DAYS when a row exists (v2)', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({
       data: [
@@ -137,7 +147,7 @@ describe('generateVacationLiability with opening balances', () => {
           // The sre says 3 taken, but the ledger (recomputed, incl. cutover
           // seed) is authoritative for days.
           vacation_days_taken: 3,
-          salary_run: { period_year: 2026, status: 'booked' },
+          salary_run: { payment_date: '2026-07-25', status: 'booked' },
         },
       ],
     })
@@ -165,7 +175,7 @@ describe('generateVacationLiability with opening balances', () => {
       ],
     })
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
     const row = report.rows[0]
 
     // Days come from the ledger, not entitled-minus-sre-taken.
@@ -180,6 +190,7 @@ describe('generateVacationLiability with opening balances', () => {
 
 describe('generateVacationLiability with categorized cutover balances', () => {
   it('shows the förskottsskuld as its own row and subtracts it from the net liability', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({
       data: [
@@ -189,7 +200,7 @@ describe('generateVacationLiability with categorized cutover balances', () => {
           vacation_accrual_avgifter: 1319.64,
           avgifter_rate: 0.3142,
           vacation_days_taken: 3,
-          salary_run: { period_year: 2026, status: 'booked' },
+          salary_run: { payment_date: '2026-07-25', status: 'booked' },
         },
       ],
     })
@@ -208,7 +219,7 @@ describe('generateVacationLiability with categorized cutover balances', () => {
       ],
     })
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
     const row = report.rows[0]
     expect(row.accruedAmount).toBe(46200)
     expect(row.accruedAvgifter).toBe(14516.04)
@@ -233,22 +244,25 @@ describe('generateVacationLiability with categorized cutover balances', () => {
       opening_semester_liability_avgifter: 0,
       opening_advance_vacation_debt: 4500,
     }
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({ data: [] })
     mock.enqueue({ data: [] })
     mock.enqueue({ data: [opening] })
-    const later = await generateVacationLiability(supabase, COMPANY_ID, 2027)
+    const later = await generateVacationLiability(supabase, COMPANY_ID, '2027-12-31')
     expect(later.rows[0].advanceVacationDebt).toBe(4500)
 
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({ data: [] })
     mock.enqueue({ data: [] })
     mock.enqueue({ data: [opening] })
-    const before = await generateVacationLiability(supabase, COMPANY_ID, 2025)
+    const before = await generateVacationLiability(supabase, COMPANY_ID, '2025-12-31')
     expect(before.rows[0].advanceVacationDebt).toBe(0)
   })
 
   it('counts sparade dagar net of saved-category consumption from the ledger', async () => {
+    enqueueSettingsAndClosures()
     mock.enqueue({ data: [EMPLOYEE] })
     mock.enqueue({ data: [] })
     mock.enqueue({
@@ -265,7 +279,7 @@ describe('generateVacationLiability with categorized cutover balances', () => {
     })
     mock.enqueue({ data: [] })
 
-    const report = await generateVacationLiability(supabase, COMPANY_ID, 2026)
+    const report = await generateVacationLiability(supabase, COMPANY_ID, '2026-12-31')
     expect(report.rows[0].vacationDaysSaved).toBe(4)
   })
 })

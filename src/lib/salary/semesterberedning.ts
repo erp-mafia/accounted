@@ -228,7 +228,8 @@ async function loadRoster(
   return { ok: true, data: (data ?? []) as unknown as EmployeeRosterRow[] }
 }
 
-async function bookedBalance(
+/** Booked 2920/2940 (credit-normal) as of a date, from the covering fiscal period. */
+export async function bookedVacationBalances(
   supabase: SupabaseClient,
   companyId: string,
   asOfDate: string,
@@ -434,7 +435,7 @@ export async function previewVacationYearClose(
     rows.map((r) => roundOre(r.computed_liability_sek * r.avgifter_rate)),
   )
 
-  const booked = await bookedBalance(supabase, companyId, yearEnd)
+  const booked = await bookedVacationBalances(supabase, companyId, yearEnd)
   if (!booked.ok) return booked
 
   const drift2920 = roundOre(computedLiability - booked.data.booked2920)
