@@ -22,6 +22,8 @@ export interface ApiKeyRow {
   company_ids?: string[] | null
   /** Allowlisted companies where the key may only read; null = none. */
   read_only_company_ids?: string[] | null
+  /** The caller's own key: only the owner may change its companies. */
+  is_own?: boolean
 }
 
 /**

@@ -286,7 +286,11 @@ export function McpConnectionsPanel({
                     <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground lg:block">
                       {permissionSummary}
                     </span>
-                    {hasCompanyPicker && (
+                    {/* Only the key's owner may change its companies (the
+                        route answers 403 for anyone else), and "2 of 5" is
+                        counted against the viewer's companies, so another
+                        user's key shows no company control. */}
+                    {hasCompanyPicker && key.is_own && (
                       <Button
                         variant="ghost"
                         size="sm"

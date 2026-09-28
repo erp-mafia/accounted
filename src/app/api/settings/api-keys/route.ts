@@ -39,7 +39,9 @@ const readOnlyCompanyIdsSchema = z.array(z.string().uuid()).max(200)
  * Each row also carries `company_ids` (null = unrestricted) and
  * `read_only_company_ids` (null = none), and the response adds
  * `meta.companies`, the caller's companies for the picker, so the panel
- * needs no second endpoint.
+ * needs no second endpoint. `is_own` marks the caller's own keys: only the
+ * owner may change a key's companies (PATCH), so only they get the editor.
+ * The owner's user id itself is not returned.
  */
 export const GET = withRouteContext(
   'api_key.list',
@@ -50,7 +52,7 @@ export const GET = withRouteContext(
     // active company too: they're simulation-only, so they never write real data.)
     const { data, error } = await supabase
       .from('api_keys')
-      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client')
+      .select('id, key_prefix, name, scopes, mode, rate_limit_rpm, unattended_commit_limit, last_used_at, revoked_at, created_at, client, user_id')
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
 
@@ -94,8 +96,9 @@ export const GET = withRouteContext(
     }
 
     return NextResponse.json({
-      data: keys.map((key) => ({
+      data: keys.map(({ user_id: ownerId, ...key }) => ({
         ...key,
+        is_own: ownerId === user.id,
         source: key.name === OAUTH_MCP_KEY_NAME ? ('signin' as const) : ('manual' as const),
         company_ids: allowlists.get(key.id) ?? null,
         read_only_company_ids: readOnlyLists.get(key.id) ?? null,

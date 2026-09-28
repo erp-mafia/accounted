@@ -122,7 +122,7 @@ describe('private skill discovery through the dispatcher', () => {
     const row = { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', name: 'Private workflow', description: 'Company-specific instructions', body: 'Private instructions.', share_status: 'private', atom_id: null, company_id: 'company-1', team_id: null }
     const db = makeSupabaseWithEmptyAtomRegistry([], {}, null, [row])
     vi.mocked(createServiceClientNoCookies).mockReturnValueOnce(db as never)
-    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null, allowedCompanyIds: null })
+    vi.mocked(validateApiKey).mockResolvedValueOnce({ userId: 'user-1', companyId: 'company-1', scopes: allowed ? ['agent:read'] : [], mode: 'live', unattendedCommitLimit: null, allowedCompanyIds: null, readOnlyCompanyIds: null })
     const result = await parseResult(await handleMcpRequest(mcpRequest('tools/call', { name: 'accounted_list_skills', arguments: {} })))
     expect(result.isError).not.toBe(true)
     const skills = JSON.parse(result.content[0].text).skills as { slug: string }[]

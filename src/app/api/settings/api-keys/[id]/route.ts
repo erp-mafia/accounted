@@ -70,7 +70,8 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 /**
  * PATCH /api/settings/api-keys/[id]: set the key's unattended commit limit
- * and/or its company allowlist and per-company access levels.
+ * and/or its company allowlist and per-company access levels. The company
+ * fields are the key owner's to change; anyone else gets 403 owner_required.
  *
  * Deliberately narrow: name and scopes are NOT editable here. Silently
  * widening a key's scopes after the fact would defeat the point of showing the
@@ -92,6 +93,38 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
     } = validation.data
 
     let data: { id: string; unattended_commit_limit?: number | null } | null = null
+
+    // Which companies a key reaches, and what it may do there, is its
+    // owner's choice alone. The key lookup below runs on the session client,
+    // whose api_keys policies let every member of the company see the key,
+    // and the replacement runs as the service role, so without this check any
+    // non-viewer member could rewrite a colleague's allowlist: turning a
+    // restricted key unrestricted widens it to the owner's other companies,
+    // and lifting a read-only level lets it write. Checked before any write,
+    // so a request that also sets the limit cannot half apply.
+    const editsCompanies = requestedCompanyIds !== undefined || requestedReadOnly !== undefined
+    if (editsCompanies) {
+      // The key must be this company's and live, same gate as the limit.
+      const { data: existing, error: lookupError } = await supabase
+        .from('api_keys')
+        .select('id, user_id')
+        .eq('id', id)
+        .eq('company_id', companyId)
+        .is('revoked_at', null)
+        .maybeSingle()
+      if (lookupError) {
+        return NextResponse.json({ error: getUserErrorMessage(lookupError) }, { status: 500 })
+      }
+      if (!existing) {
+        return NextResponse.json({ error: 'API-nyckeln hittades inte.' }, { status: 404 })
+      }
+      if ((existing as { user_id?: string | null }).user_id !== user.id) {
+        return errorResponseFromCode('FORBIDDEN', log, {
+          requestId,
+          details: { field: 'company_ids', reason: 'owner_required' },
+        })
+      }
+    }
 
     if (limit !== undefined) {
       // Revoked keys are deliberately excluded: raising a limit on a key that no
@@ -116,22 +149,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     let allowlist: string[] | null | undefined
     let readOnly: string[] | null | undefined
-    if (requestedCompanyIds !== undefined || requestedReadOnly !== undefined) {
-      // The key must be this company's and live, same gate as the limit.
-      const { data: existing, error: lookupError } = await supabase
-        .from('api_keys')
-        .select('id')
-        .eq('id', id)
-        .eq('company_id', companyId)
-        .is('revoked_at', null)
-        .maybeSingle()
-      if (lookupError) {
-        return NextResponse.json({ error: getUserErrorMessage(lookupError) }, { status: 500 })
-      }
-      if (!existing) {
-        return NextResponse.json({ error: 'API-nyckeln hittades inte.' }, { status: 404 })
-      }
-
+    if (editsCompanies) {
       let memberships
       try {
         memberships = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId: companyId })

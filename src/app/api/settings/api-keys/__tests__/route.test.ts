@@ -676,8 +676,8 @@ describe('GET /api/settings/api-keys', () => {
     setupFrom({
       listResult: {
         data: [
-          { id: 'ak-1', key_prefix: 'gnubok_sk_a', name: 'restricted', scopes: ['reports:read'], revoked_at: null, created_at: '2026-06-05T10:00:00Z' },
-          { id: 'ak-2', key_prefix: 'gnubok_sk_b', name: 'open', scopes: ['reports:read'], revoked_at: null, created_at: '2026-06-04T10:00:00Z' },
+          { id: 'ak-1', key_prefix: 'gnubok_sk_a', name: 'restricted', scopes: ['reports:read'], revoked_at: null, created_at: '2026-06-05T10:00:00Z', user_id: 'user-1' },
+          { id: 'ak-2', key_prefix: 'gnubok_sk_b', name: 'open', scopes: ['reports:read'], revoked_at: null, created_at: '2026-06-04T10:00:00Z', user_id: 'user-2' },
         ],
       },
     })
@@ -697,9 +697,11 @@ describe('GET /api/settings/api-keys', () => {
     }>(res)
     expect(status).toBe(200)
     expect(body.data).toEqual([
-      expect.objectContaining({ id: 'ak-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: [THIRD] }),
-      expect.objectContaining({ id: 'ak-2', company_ids: null, read_only_company_ids: null }),
+      expect.objectContaining({ id: 'ak-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: [THIRD], is_own: true }),
+      expect.objectContaining({ id: 'ak-2', company_ids: null, read_only_company_ids: null, is_own: false }),
     ])
+    // Whose key it is shows as is_own; the owner's user id is not returned.
+    expect(body.data.every((row) => !('user_id' in row))).toBe(true)
     expect(service.find('api_key_companies', 'select')).toEqual(['api_key_id, company_id, access'])
     expect(body.meta.companies).toEqual([
       { company_id: ACTIVE, name: 'Aktiva AB', is_active: true },
