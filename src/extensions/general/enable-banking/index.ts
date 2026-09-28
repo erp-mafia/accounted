@@ -37,7 +37,8 @@ import { SYNC_COOLDOWN_MS } from '@/lib/bank-sync/trigger-sync-contract'
 import { INITIAL_SYNC_DEFERRED, INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
-import { revokeUnusedSession } from './lib/session-revocation'
+import { retireBankConnection } from './lib/retire-connection'
+import { hasSelectableAccounts } from './lib/claimed-accounts'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -53,7 +54,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import type { StoredAccount } from './types'
 import { createServiceClient } from '@/lib/supabase/server'
-import { attachSharedBankSession, disconnectBankConnection, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
+import { attachSharedBankSession, readBankConfiguration, saveBankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { errorResponse } from '@/lib/errors/get-structured-error'
 
 // Per-user limits keep one tenant from spamming any single bank handler.
@@ -502,15 +503,60 @@ export const enableBankingExtension: Extension = {
             // deliberate escape hatch. Runs AFTER the sweep so a
             // never-activated zombie cannot block a legitimate fresh connect.
             if (forceNew !== true) {
-              const { data: establishedRow } = await supabase
-                .from('bank_connections')
-                .select('id, status, consent_expires')
-                .eq('company_id', companyId)
-                .eq('bank_name', resolvedAspspName)
-                .in('status', ['expired', 'error', 'pending_selection'])
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle()
+              type EstablishedRow = {
+                id: string
+                status: string
+                consent_expires?: string | null
+                accounts_data?: StoredAccount[] | null
+              }
+              const findEstablishedRow = async (): Promise<EstablishedRow | null> => {
+                const { data } = await supabase
+                  .from('bank_connections')
+                  .select('id, status, consent_expires, accounts_data')
+                  .eq('company_id', companyId)
+                  .eq('bank_name', resolvedAspspName)
+                  .in('status', ['expired', 'error', 'pending_selection'])
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle()
+                return data as EstablishedRow | null
+              }
+              let establishedRow = await findEstablishedRow()
+
+              // A connection waiting for account selection that leaves nothing
+              // to pick is not one to finish or renew: the consent reached only
+              // accounts another company already books (a login for the wrong
+              // company) or none at all. Resuming it reopened an empty picker
+              // from every surface, with no way to log in again. This login
+              // replaces it, removed the way "Ta bort anslutningen" removes it
+              // before the bank is asked for anything. Bounded so a removal
+              // that somehow did not take cannot spin.
+              for (
+                let removed = 0;
+                removed < 3 &&
+                establishedRow?.status === 'pending_selection' &&
+                !hasSelectableAccounts(establishedRow.accounts_data);
+                removed++
+              ) {
+                log.info('[enable-banking] Fresh connect replaces a connection with nothing to pick', {
+                  existing_id: establishedRow.id,
+                  bank: resolvedAspspName,
+                  account_count: establishedRow.accounts_data?.length ?? 0,
+                })
+                try {
+                  await retireBankConnection({
+                    supabase,
+                    companyId,
+                    userId: user.id,
+                    connectionId: establishedRow.id,
+                    log,
+                    emit: ctx?.emit,
+                  })
+                } catch (error) {
+                  return errorResponse(error, log)
+                }
+                establishedRow = await findEstablishedRow()
+              }
 
               // A 'pending_selection' row is not dead: the bank is already
               // authorized and only the account choice is missing (the user
@@ -524,9 +570,7 @@ export const enableBankingExtension: Extension = {
               // authorization_url" would navigate to undefined. A row whose
               // consent has already lapsed has nothing to resume and falls
               // through to the renewal answer.
-              const waitingRow = establishedRow as
-                | { id: string; status: string; consent_expires?: string | null }
-                | null
+              const waitingRow = establishedRow
               const consentStillValid =
                 !waitingRow?.consent_expires ||
                 new Date(waitingRow.consent_expires).getTime() > Date.now()
@@ -1867,47 +1911,17 @@ export const enableBankingExtension: Extension = {
         if (!parsed.success) return errorResponse(parsed.error, log)
         const { connection_id } = parsed.data
 
-        let connection: Awaited<ReturnType<typeof disconnectBankConnection>>
         try {
-          const snapshot = await readBankConfiguration(supabase, companyId, connection_id)
-          connection = await disconnectBankConnection(supabase, companyId, user.id, connection_id, snapshot.token)
+          await retireBankConnection({
+            supabase,
+            companyId,
+            userId: user.id,
+            connectionId: connection_id,
+            log,
+            emit: ctx?.emit,
+          })
         } catch (error) {
           return errorResponse(error, log)
-        }
-
-        // Both local writes have committed. The service-only claim checks all
-        // companies and prevents a new holder attaching before provider HTTP.
-        if (connection.session_id) {
-          try {
-            const { createServiceClient } = await import('@/lib/supabase/server')
-            await revokeUnusedSession(await createServiceClient(), connection.session_id)
-          } catch {
-            // Local disconnect remains committed if upstream cleanup fails.
-            // The claim records provider failure and fences later attachment.
-            log.warn('[enable-banking] Upstream consent cleanup was not confirmed', {
-              connectionId: connection_id, userId: user.id, companyId,
-            })
-          }
-        }
-
-        try {
-          const emit = ctx?.emit ?? (await import('@/lib/events/bus')).eventBus.emit.bind((await import('@/lib/events/bus')).eventBus)
-          await emit({
-            type: 'bank_connection.revoked',
-            payload: {
-              connectionId: connection.connection_id,
-              bankName: connection.bank_name,
-              userId: user.id,
-              companyId,
-            },
-          })
-        } catch (emitError) {
-          log.error('[enable-banking] Failed to emit revoke event', {
-            errorMessage: emitError instanceof Error ? emitError.message : String(emitError),
-            connectionId: connection.connection_id,
-            userId: user.id,
-            companyId,
-          })
         }
 
         return NextResponse.json({ success: true })

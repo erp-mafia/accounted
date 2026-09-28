@@ -36,6 +36,20 @@ export function partitionByClaim<T extends Pick<StoredAccount, 'claimed_by_compa
 }
 
 /**
+ * Whether a consent leaves this company anything to pick: one account in the
+ * picker's main list, checked or not. False when every account is booked by
+ * another company (a login made for the wrong company) or when the consent
+ * carries none. A connection waiting for account selection is only worth
+ * resuming while this holds; otherwise the next login must replace it.
+ */
+export function hasSelectableAccounts(
+  accounts: readonly Pick<StoredAccount, 'claimed_by_company_id' | 'enabled'>[] | null | undefined,
+): boolean {
+  if (!Array.isArray(accounts)) return false
+  return partitionByClaim(accounts).own.length > 0
+}
+
+/**
  * One Swedish line summarising the hidden accounts, e.g.
  * "2 konton synkas i Testbrand AB" or "3 konton synkas i andra bolag" when the
  * claimants differ (or a name is missing). "Same claimant" is decided on the

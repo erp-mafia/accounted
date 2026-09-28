@@ -53,6 +53,9 @@ interface AccountPickerDialogProps {
   // confirm.
   isInitialSelection: boolean
   onSaved: () => void
+  // Start a new login at the same bank. Offered only when a waiting
+  // connection leaves nothing to pick; the login replaces it.
+  onReauthorize?: () => void
 }
 
 interface ChartAccount {
@@ -82,6 +85,7 @@ export function AccountPickerDialog({
   accounts,
   isInitialSelection,
   onSaved,
+  onReauthorize,
 }: AccountPickerDialogProps) {
   const { toast } = useToast()
   // Memoise so the client has a stable reference across re-renders. Without this,
@@ -1004,13 +1008,21 @@ export function AccountPickerDialog({
               to another company (the text below says so and points at the
               disclosure), or the consent simply carries no accounts (a failed
               connect, or nothing ticked at the bank), where a claim would be
-              a false statement. */}
+              a false statement. Either way there is no choice to finish here,
+              only a new login, which replaces this waiting connection. */}
           {sortedAccounts.length === 0 && (
-            <p className="p-3 text-xs text-muted-foreground">
-              {claimedElsewhere.length > 0
-                ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag.'
-                : 'Bankkopplingen innehåller inga konton. Förnya anslutningen och välj konton hos banken.'}
-            </p>
+            <div className="space-y-2 p-3">
+              <p className="text-xs text-muted-foreground">
+                {claimedElsewhere.length > 0
+                  ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag. Logga in igen och välj det här bolaget hos banken.'
+                  : 'Bankkopplingen innehåller inga konton. Logga in igen och välj konton hos banken.'}
+              </p>
+              {isInitialSelection && onReauthorize && (
+                <Button type="button" variant="outline" size="sm" onClick={onReauthorize}>
+                  Logga in igen
+                </Button>
+              )}
+            </div>
           )}
         </div>
 

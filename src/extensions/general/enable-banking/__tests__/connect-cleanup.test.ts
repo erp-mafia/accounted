@@ -31,8 +31,13 @@ vi.mock('@/lib/branding/resolve', () => ({
   resolveBrandResultByHost: vi.fn(async () => ({ brand: null, lookupFailed: false })),
 }))
 
+// Removing a connection is the disconnect route's sequence, covered step by
+// step in disconnect-route.test.ts. Here only the decision to remove matters.
+vi.mock('../lib/retire-connection', () => ({ retireBankConnection: vi.fn() }))
+
 import { enableBankingExtension } from '../index'
 import { deleteSession } from '../lib/api-client'
+import { retireBankConnection } from '../lib/retire-connection'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import type { ExtensionContext } from '@/lib/extensions/types'
 
@@ -495,12 +500,14 @@ describe('POST /connect existing-connection guard', () => {
         chain = makeChain({ data: [] })
       } else {
         // Guard: the bank is already authorized; the user never saved the
-        // account picker. The consent is still valid.
+        // account picker. The consent is still valid and carries an account
+        // this company can pick.
         chain = makeChain({
           data: {
             id: 'waiting-1',
             status: 'pending_selection',
             consent_expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+            accounts_data: [{ uid: 'acc-1', currency: 'SEK', iban: 'SE1111', enabled: true }],
           },
         })
       }
@@ -531,6 +538,104 @@ describe('POST /connect existing-connection guard', () => {
     for (const chain of chains) {
       expect(chain._calls.some((c) => c.method === 'insert')).toBe(false)
     }
+    expect(retireBankConnection).not.toHaveBeenCalled()
+  })
+
+  // A consent that only reached accounts another company already books (a
+  // login for the wrong company) or none at all leaves nothing to pick.
+  // Resuming it reopened an empty picker from every surface, with no way to
+  // log in again: remove it the way "Ta bort anslutningen" does and start
+  // the new login.
+  const inThirtyDays = () => new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const yesterday = () => new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const claimedOnly = [
+    { uid: 'acc-1', currency: 'SEK', iban: 'SE2222', enabled: false, claimed_by_company_id: 'company-2' },
+  ]
+
+  it.each([
+    ['every account is booked by another company', claimedOnly, inThirtyDays],
+    ['the consent carries no accounts', [], inThirtyDays],
+    ['its consent has lapsed as well', claimedOnly, yesterday],
+  ])('removes a waiting connection with nothing to pick and starts a new login when %s', async (_label, accounts, consentExpires) => {
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      let chain: RecordedChain
+      if (call === 1) {
+        chain = makeChain({ data: null })
+      } else if (call === 2) {
+        chain = makeChain({ data: [] })
+      } else if (call === 3) {
+        chain = makeChain({
+          data: {
+            id: 'nothing-to-pick',
+            status: 'pending_selection',
+            consent_expires: consentExpires(),
+            accounts_data: accounts,
+          },
+        })
+      } else if (call === 4) {
+        // Guard asked again after the removal: nothing established remains.
+        chain = makeChain({ data: null })
+      } else {
+        chain = makeChain({ data: { id: 'new-conn' } })
+      }
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { connection_id: string; authorization_url: string }
+    expect(body.connection_id).toBe('new-conn')
+    expect(body.authorization_url).toBe('https://bank.example/auth')
+    expect(retireBankConnection).toHaveBeenCalledTimes(1)
+    expect(retireBankConnection).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: 'company-1', userId: 'user-1', connectionId: 'nothing-to-pick' }),
+    )
+    // Removed before the bank is asked for a new login.
+    expect(vi.mocked(retireBankConnection).mock.invocationCallOrder[0]).toBeLessThan(
+      mockStartAuthorization.mock.invocationCallOrder[0],
+    )
+    expect(chains[4]._calls.some((c) => c.method === 'insert')).toBe(true)
+  })
+
+  it('starts no new login when the connection with nothing to pick cannot be removed', async () => {
+    vi.mocked(retireBankConnection).mockRejectedValueOnce(
+      Object.assign(new Error('BANK_CONFIGURATION_CHANGED'), { code: 'PT409' }),
+    )
+    const chains: RecordedChain[] = []
+    let call = 0
+    const ctx = makeContext(() => {
+      call++
+      const chain =
+        call === 1
+          ? makeChain({ data: null })
+          : call === 2
+            ? makeChain({ data: [] })
+            : makeChain({
+                data: {
+                  id: 'nothing-to-pick',
+                  status: 'pending_selection',
+                  consent_expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                  accounts_data: [],
+                },
+              })
+      chains.push(chain)
+      return chain
+    })
+
+    const response = await connectRoute().handler(makeConnectRequest(), ctx)
+
+    // The refusal is answered like the disconnect route answers it, not as a
+    // generic 500.
+    expect(response.status).toBe(409)
+    expect(mockStartAuthorization).not.toHaveBeenCalled()
+    for (const chain of chains) {
+      expect(chain._calls.some((c) => c.method === 'insert')).toBe(false)
+    }
   })
 
   it('falls back to EXISTING_CONNECTION when the waiting row has outlived its consent', async () => {
@@ -544,6 +649,7 @@ describe('POST /connect existing-connection guard', () => {
           id: 'waiting-old',
           status: 'pending_selection',
           consent_expires: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
+          accounts_data: [{ uid: 'acc-1', currency: 'SEK', iban: 'SE1111', enabled: true }],
         },
       })
     })

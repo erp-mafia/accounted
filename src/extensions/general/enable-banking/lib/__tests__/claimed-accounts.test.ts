@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { describeClaimedElsewhere, partitionByClaim } from '../claimed-accounts'
+import { describeClaimedElsewhere, hasSelectableAccounts, partitionByClaim } from '../claimed-accounts'
 import type { StoredAccount } from '../../types'
 
 function account(over: Partial<StoredAccount> & { uid: string }): StoredAccount {
@@ -55,6 +55,30 @@ describe('partitionByClaim', () => {
     const { own, claimedElsewhere } = partitionByClaim(rows)
     expect(own.map((a) => a.uid)).toEqual(['1', '3'])
     expect(claimedElsewhere.map((a) => a.uid)).toEqual(['2', '4'])
+  })
+})
+
+describe('hasSelectableAccounts', () => {
+  const claimed = account({ uid: 'c', iban: 'SE3', enabled: false, claimed_by_company_id: 'company-b' })
+
+  it('is false when every account is already booked by another company', () => {
+    expect(hasSelectableAccounts([claimed])).toBe(false)
+  })
+
+  it('is false for a consent that carries no accounts at all', () => {
+    expect(hasSelectableAccounts([])).toBe(false)
+    expect(hasSelectableAccounts(null)).toBe(false)
+    expect(hasSelectableAccounts(undefined)).toBe(false)
+  })
+
+  it('is true as soon as one account is this company\'s to pick, checked or not', () => {
+    expect(hasSelectableAccounts([claimed, account({ uid: 'a', iban: 'SE1', enabled: false })])).toBe(true)
+    expect(hasSelectableAccounts([account({ uid: 'b', enabled: false, deselected_elsewhere: true })])).toBe(true)
+    expect(hasSelectableAccounts([account({ uid: 'd', enabled: false, mirror_card_account: true })])).toBe(true)
+  })
+
+  it('counts a flagged account that syncs here as selectable, the same way the picker lists it', () => {
+    expect(hasSelectableAccounts([account({ uid: 'e', enabled: true, claimed_by_company_id: 'company-b' })])).toBe(true)
   })
 })
 
