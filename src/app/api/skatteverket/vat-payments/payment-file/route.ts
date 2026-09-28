@@ -4,6 +4,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
 import { resolveBatchDebtor } from '@/lib/payments/batch-service'
+import { requiresBankgiroDebtorForBankgiroPayee } from '@/lib/payments/pain001-bank-policy'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { getBranding } from '@/lib/branding/service'
@@ -122,7 +123,7 @@ export const GET = withRouteContext(
         return NextResponse.json({ error: message }, { status: 400 })
       }
       const debtor = debtorResolution.debtor
-      if (!debtor.bankgiro) {
+      if (!debtor.bankgiro && requiresBankgiroDebtorForBankgiroPayee(debtor.bic)) {
         return NextResponse.json(
           { error: 'Ett giltigt bankgironummer för företaget krävs för betalfil till Skatteverket.' },
           { status: 400 },

@@ -132,7 +132,25 @@ describe('GET /api/skatteverket/vat-payments/payment-file', () => {
     })
   })
 
-  it('rejects pain.001 when the company has no valid Bankgiro', async () => {
+  it('rejects Swedbank pain.001 when the company has no valid Bankgiro', async () => {
+    resolveBatchDebtorMock.mockResolvedValue({
+      ok: true,
+      debtor: {
+        name: 'Test AB', org_number: '5566778899', iban: 'SE3550000000054910000003',
+        bic: 'SWEDSESS', bankgiro: null, city: 'Stockholm',
+      },
+    })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: null, fiscal_year_start_month: 1 } })
+
+    const response = await GET(request('&format=pain001'), createMockRouteParams({}))
+
+    expect(response.status).toBe(400)
+    expect(JSON.stringify(await response.json())).toContain('bankgironummer')
+    expect(generatePain001Mock).not.toHaveBeenCalled()
+  })
+
+  it('creates SEB pain.001 using the debtor IBAN when Bankgiro is missing', async () => {
     resolveBatchDebtorMock.mockResolvedValue({
       ok: true,
       debtor: {
@@ -145,8 +163,9 @@ describe('GET /api/skatteverket/vat-payments/payment-file', () => {
 
     const response = await GET(request('&format=pain001'), createMockRouteParams({}))
 
-    expect(response.status).toBe(400)
-    expect(JSON.stringify(await response.json())).toContain('bankgironummer')
-    expect(generatePain001Mock).not.toHaveBeenCalled()
+    expect(response.status).toBe(200)
+    expect(generatePain001Mock.mock.calls[0][0]).toMatchObject({
+      iban: 'SE3550000000054910000003', bankgiro: null,
+    })
   })
 })
