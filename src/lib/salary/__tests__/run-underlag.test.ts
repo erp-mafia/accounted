@@ -137,17 +137,21 @@ describe('buildSalaryRunUnderlag', () => {
     expect(findCall('chart_of_accounts', 'in')).toEqual(['account_number', ['7210', '2710', '1930', '7510', '2731']])
   })
 
-  it('marks a corrected run and a correction run', async () => {
-    enqueue({ data: { ...BOOKED_RUN, status: 'corrected', salary_entry_id: null, avgifter_entry_id: null } })
+  it('prints a corrected run with its original verifikat: the correction keeps the entry ids on the run', async () => {
+    // lib/salary/correct-run.ts only flips status to 'corrected' and storno-
+    // reverses the entries; the run's *_entry_id columns stay, so the
+    // underlag still names the vouchers it was booked with.
+    enqueue({ data: { ...BOOKED_RUN, status: 'corrected' } })
     enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
     enqueue({ data: [] })
+    enqueue({ data: POSTED })
     enqueue({ data: [] })
     const corrected = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
     expect(corrected.ok && corrected.data.corrected).toBe(true)
-    // No posted lines: no account-name lookup at all.
-    expect(findCall('chart_of_accounts', 'in')).toBeUndefined()
+    expect(corrected.ok && corrected.data.entries.map((e) => e.voucher)).toEqual(['L-8', 'L-9'])
+  })
 
-    reset()
+  it('marks a correction run, and skips the account-name lookup when nothing was posted', async () => {
     enqueue({ data: { ...BOOKED_RUN, is_correction: true, salary_entry_id: null, avgifter_entry_id: null } })
     enqueue({ data: { name: 'X AB', org_number: '556677-8899' } })
     enqueue({ data: [] })
@@ -155,6 +159,7 @@ describe('buildSalaryRunUnderlag', () => {
     const correction = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
     expect(correction.ok && correction.data.isCorrection).toBe(true)
     expect(correction.ok && correction.data.entries).toEqual([])
+    expect(findCall('chart_of_accounts', 'in')).toBeUndefined()
   })
 
   it('throws when the posted-voucher lookup fails, never prints an underlag without its verifikat', async () => {
