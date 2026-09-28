@@ -242,6 +242,9 @@ describe('mapSupplierInvoice: VAT', () => {
     const { items } = mapSupplierInvoice(
       supplierDto({
         currencyCode: 'EUR',
+        // Rows are held to their header, so the header is this line's own.
+        taxTotal: { taxAmount: { value: 19, currencyCode: 'EUR' } },
+        legalMonetaryTotal: { payableAmount: { value: 119, currencyCode: 'EUR' } },
         lines: [{
           id: '1',
           lineExtensionAmount: { value: 100, currencyCode: 'EUR' },

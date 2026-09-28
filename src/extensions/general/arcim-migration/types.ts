@@ -117,6 +117,12 @@ export interface InvoiceStepResult {
   fxUnresolved?: number
   vatUnresolved?: number
   /**
+   * Supplier invoices whose provider rows did not add up to the invoice, net
+   * or VAT off by more than 1 kr. They are imported without rows, because
+   * every booking path would debit the rows as they stand.
+   */
+  rowsMismatch?: number
+  /**
    * Credit notes imported without a credited_invoice_id: the provider named
    * no credited invoice, or the one it named is not among the company's
    * invoices. The amounts are reversed and the record is complete, but the

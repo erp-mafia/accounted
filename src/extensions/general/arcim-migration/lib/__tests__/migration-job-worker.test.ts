@@ -119,6 +119,25 @@ describe('bounded durable worker', () => {
     }))
     expect(db.job.state).toBe('needs_attention')
   })
+  it('refuses supplier rows the mapper found off their invoice, VAT established or not', async () => {
+    // A Visma or Fortnox invoice states no VAT, so the check above never ran
+    // for it and the voucher's own 2440 row went in among the items. The
+    // mapper now holds every supplier row set to its invoice and says so.
+    const db = database({ phase: 'import', resources: ['supplierInvoices'] })
+    const dto = mapBokioToSupplierInvoice({ id: 'invoice', supplierRef: { id: 'supplier', name: 'Supplier' }, totalAmount: 125,
+      lineItems: [{ description: 'Test', quantity: 1, unitPrice: 100 }] })
+    vi.mocked(mapSupplierInvoice).mockReturnValueOnce({
+      invoice: { subtotal: 125, vat_amount: 0, total_sek: 125 },
+      items: [], rowsMismatch: true,
+      fxUnresolved: null, vatUnresolved: true, creditNoteUnlinked: false, creditedInvoiceRef: null,
+    })
+    db.rows.push({ id: dto.id, source_id: dto.id, resource: 'supplierInvoices', state: 'pending', ...sealMigrationPayload(dto) })
+    mocks.hydrate.mockResolvedValueOnce({ invoices: [dto], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rpc).toHaveBeenCalledWith('commit_provider_migration_records', expect.objectContaining({
+      p_records: [{ id: dto.id, error: 'MIGRATION_ROWS_MISMATCH' }],
+    }))
+  })
   it('keeps same-named Bokio customers and suppliers separate through their source references', () => {
     for (const id of ['party-a', 'party-b']) {
       expect(invoicePartySourceId('bokio', 'salesInvoices', mapBokioToSalesInvoice({
