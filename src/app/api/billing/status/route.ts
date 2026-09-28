@@ -5,6 +5,7 @@ import { requireCompanyId } from '@/lib/company/context'
 import { isStripeConfigured } from '@/lib/stripe/client'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { getTeamAgreement, type TeamAgreement } from '@/lib/entitlements/team-agreement'
+import type { CapabilityKey } from '@/lib/entitlements/keys'
 import {
   getCompanyEntitlements,
   type EntitlementCoverage,
@@ -27,6 +28,11 @@ import {
  * team-scoped manual grant) additionally gets `teamAgreement: { teamName }`,
  * which the settings surface renders as "Ingår i <byråns namn>s avtal"
  * instead of the upgrade pitch. Additive field: absent for everyone else.
+ *
+ * `capabilities` (held and enabled) and `disabledCapabilities` (held but
+ * turned off in company_capability_config) let a covered company's plan card
+ * show which included features actually work, instead of listing every one
+ * as included while a gate still says no.
  */
 export async function GET() {
   const { user, supabase, error } = await requireAuth()
@@ -50,6 +56,8 @@ export async function GET() {
   let trialEndsAt: string | null = null
   let entitlementState: EntitlementState = 'none'
   let coverage: EntitlementCoverage | null = null
+  let capabilities: CapabilityKey[] = []
+  let disabledCapabilities: CapabilityKey[] = []
   let teamAgreement: TeamAgreement | null = null
   // The paying company's interval, so the plan card shows the price it pays.
   let subscriptionPlan: 'monthly' | 'yearly' | null = null
@@ -57,6 +65,8 @@ export async function GET() {
     const entitlements = await getCompanyEntitlements(supabase, companyId)
     entitlementState = entitlements.entitlementState
     coverage = entitlements.coverage
+    capabilities = entitlements.capabilities
+    disabledCapabilities = entitlements.disabledCapabilities
     // Paying = a real subscription. Includes 'trialing': checkout defers the
     // first charge to the product-trial end, so a Stripe-trialing subscription
     // means the card is already committed and the user should see the manage
@@ -91,6 +101,8 @@ export async function GET() {
     isDemo,
     entitlementState,
     coverage,
+    capabilities,
+    disabledCapabilities,
     ...(teamAgreement ? { teamAgreement } : {}),
     ...(subscriptionPlan ? { subscriptionPlan } : {}),
   })

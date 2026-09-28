@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { Check, Minus } from 'lucide-react'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +26,29 @@ import { useBranding } from '@/lib/branding/brand-context'
 // zettle_sync as one "payments and webshop" item). Keep in step with
 // PAID_CAPABILITIES when a key is added.
 const UNLOCK_KEYS = ['unlock_ai', 'unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
+
+// The capability keys behind each unlock item, so a covered company's card
+// can mark an item it pays for but cannot use.
+const UNLOCK_CAPABILITIES: Record<(typeof UNLOCK_KEYS)[number], readonly string[]> = {
+  unlock_ai: ['ai'],
+  unlock_bank: ['bank_sync'],
+  unlock_skv: ['skatteverket'],
+  unlock_email: ['email_send'],
+  unlock_payments_webshop: ['stripe_payments', 'woocommerce_sync', 'shopify_sync', 'zettle_sync'],
+}
+
+type UnlockState = 'active' | 'disabled' | 'missing'
+
+function unlockState(
+  key: (typeof UNLOCK_KEYS)[number],
+  held: ReadonlySet<string>,
+  disabled: ReadonlySet<string>,
+): UnlockState {
+  const keys = UNLOCK_CAPABILITIES[key]
+  if (keys.some((k) => disabled.has(k))) return 'disabled'
+  if (!keys.some((k) => held.has(k))) return 'missing'
+  return 'active'
+}
 
 // What stays without a subscription (the free plan card). Retention is the
 // last item and carries its own gloss.
@@ -59,6 +82,10 @@ interface BillingView {
    * this state has paid, so the sell view is never rendered for them.
    */
   agreement: { until: string | null } | null
+  /** Paid capability keys the company holds and has enabled. */
+  capabilities: string[]
+  /** Paid capability keys the company holds but has turned off. */
+  disabledCapabilities: string[]
 }
 
 /** Mirrors GET /api/billing/invoices. */
@@ -95,12 +122,16 @@ export function BillingSettingsContent() {
   )
 }
 
-function CheckItem({ label, gloss }: { label: string; gloss?: string }) {
+function CheckItem({ label, gloss, unavailable = false }: { label: string; gloss?: string; unavailable?: boolean }) {
+  const Icon = unavailable ? Minus : Check
   return (
     <li className="flex items-start gap-2 text-[13px]">
-      <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+      <Icon
+        aria-hidden="true"
+        className={cn('mt-1 h-3.5 w-3.5 shrink-0', unavailable ? 'text-muted-foreground' : 'text-foreground')}
+      />
       <span>
-        <span>{label}</span>
+        <span className={cn(unavailable && 'text-muted-foreground')}>{label}</span>
         {gloss && <span className="block text-xs text-muted-foreground">{gloss}</span>}
       </span>
     </li>
@@ -153,7 +184,7 @@ function BillingCoreContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_billing')
-  const { appName } = useBranding()
+  const { appName, supportEmail } = useBranding()
   const errorLocale = useLocale() as ErrorLocale
   const { formatDateLong } = useFormat()
   // null = the billing state is not known: still loading, or the read failed
@@ -202,6 +233,8 @@ function BillingCoreContent() {
           teamAgreement?: unknown
           coverage?: unknown
           subscriptionPlan?: unknown
+          capabilities?: unknown
+          disabledCapabilities?: unknown
         }
         if (!active) return
         if (typeof d?.isPaying !== 'boolean' || typeof d?.configured !== 'boolean') {
@@ -233,6 +266,8 @@ function BillingCoreContent() {
         if (d.subscriptionPlan === 'monthly' || d.subscriptionPlan === 'yearly') {
           setPlan(d.subscriptionPlan)
         }
+        const stringList = (v: unknown): string[] =>
+          Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
         setView({
           isPaying: d.isPaying,
           configured: d.configured,
@@ -243,6 +278,8 @@ function BillingCoreContent() {
           isDemo: d.isDemo === true,
           teamAgreement,
           agreement,
+          capabilities: stringList(d.capabilities),
+          disabledCapabilities: stringList(d.disabledCapabilities),
         })
       } catch {
         if (active) {
@@ -297,6 +334,17 @@ function BillingCoreContent() {
     !view.isDemo &&
     (view.isPaying || view.paidJustNow || view.teamAgreement !== null || view.agreement !== null)
   const selling = !view.isDemo && !covered
+  // A covered company pays for every unlock item, so each one it cannot use is
+  // a fault to surface, not a feature to sell. Skipped right after checkout:
+  // the webhook that writes the grants can lag the redirect by a few seconds.
+  const markUnavailable = covered && !(view.paidJustNow && !view.isPaying)
+  const heldSet = new Set(view.capabilities)
+  const disabledSet = new Set(view.disabledCapabilities)
+  const unlockStates = UNLOCK_KEYS.map((key) => ({
+    key,
+    state: markUnavailable ? unlockState(key, heldSet, disabledSet) : ('active' as UnlockState),
+  }))
+  const anyUnavailable = unlockStates.some((u) => u.state !== 'active')
   const { trialEndsAt, daysLeft, chargeDeferred } = view
   const price = PLAN_PRICES[plan]
   const priceNote =
@@ -406,8 +454,19 @@ function BillingCoreContent() {
           items={
             <>
               <CheckItem label={t('includes_free')} />
-              {UNLOCK_KEYS.map((key) => (
-                <CheckItem key={key} label={t(key)} gloss={t(`${key}_gloss`)} />
+              {unlockStates.map(({ key, state }) => (
+                <CheckItem
+                  key={key}
+                  label={t(key)}
+                  gloss={
+                    state === 'disabled'
+                      ? t('unlock_disabled')
+                      : state === 'missing'
+                        ? t('unlock_missing')
+                        : t(`${key}_gloss`)
+                  }
+                  unavailable={state !== 'active'}
+                />
               ))}
             </>
           }
@@ -437,6 +496,9 @@ function BillingCoreContent() {
       {/* An expired trial is consequential: one attn-tone sentence. The
           running countdown lives in the subscription card's footer. */}
       {selling && daysLeft === 0 && <AttnLine className="mt-3">{t('trial_ended')}</AttnLine>}
+      {anyUnavailable && (
+        <AttnLine className="mt-3">{t('unlock_unavailable_attn', { email: supportEmail })}</AttnLine>
+      )}
 
       <SegmentedControl<BillingTab>
         className="mt-6"

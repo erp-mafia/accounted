@@ -346,3 +346,63 @@ describe('GET /api/billing/status subscription interval', () => {
     expect('subscriptionPlan' in (body as object)).toBe(false)
   })
 })
+
+// A paying company can still be unable to use an included feature: a key
+// turned off in company_capability_config, or stripe grants that never
+// landed. The plan card needs both lists to say so instead of claiming
+// every feature is included.
+describe('GET /api/billing/status capability availability', () => {
+  const STRIPE_GRANTS = ['ai', 'bank_sync', 'skatteverket'].map((capability_key) => ({
+    capability_key,
+    expires_at: '2099-01-01T00:00:00Z',
+    source: 'stripe',
+    team_id: null,
+  }))
+
+  it('reports a disabled key apart from the held ones for a paying company', async () => {
+    authAs({
+      company_subscriptions: { data: { status: 'active' } },
+      capability_grants: { data: STRIPE_GRANTS },
+      company_capability_config: { data: [{ capability_key: 'ai', enabled: false }] },
+    })
+
+    const { status, body } = await parseJsonResponse<
+      StatusBody & { capabilities: string[]; disabledCapabilities: string[] }
+    >(await GET())
+
+    expect(status).toBe(200)
+    expect(body.isPaying).toBe(true)
+    expect(body.capabilities).toEqual(['bank_sync', 'skatteverket'])
+    expect(body.disabledCapabilities).toEqual(['ai'])
+  })
+
+  it('reports no capabilities for a subscription whose grants never landed', async () => {
+    authAs({
+      company_subscriptions: { data: { status: 'active' } },
+      capability_grants: { data: null },
+    })
+
+    const { body } = await parseJsonResponse<
+      StatusBody & { capabilities: string[]; disabledCapabilities: string[] }
+    >(await GET())
+
+    expect(body.isPaying).toBe(true)
+    expect(body.capabilities).toEqual([])
+    expect(body.disabledCapabilities).toEqual([])
+  })
+
+  it('does not report a disable on a key the company does not hold', async () => {
+    authAs({
+      company_subscriptions: { data: { status: 'active' } },
+      capability_grants: { data: STRIPE_GRANTS },
+      company_capability_config: { data: [{ capability_key: 'email_send', enabled: false }] },
+    })
+
+    const { body } = await parseJsonResponse<
+      StatusBody & { capabilities: string[]; disabledCapabilities: string[] }
+    >(await GET())
+
+    expect(body.capabilities).toEqual(['ai', 'bank_sync', 'skatteverket'])
+    expect(body.disabledCapabilities).toEqual([])
+  })
+})
