@@ -2887,13 +2887,15 @@ export default function ArcimMigrationWorkspace({
       return
     }
     // Closing the login window before it answers is an outcome of its own.
-    // The popup posts its result before it closes, and the message listener
-    // stops this watch first, so a finished login never counts as closed.
+    // The popup posts its result and then closes, but the message can reach
+    // this window after the close is observed. Here the close only records
+    // telemetry, so the watch waits 3 s instead of the default 0.5 s: a late
+    // success or error stops it first and is recorded as what it was.
     clearOAuthPopupWatch()
     stopOAuthPopupWatchRef.current = watchArcimOAuthPopup(popup, () => {
       stopOAuthPopupWatchRef.current = null
       finishConnectAttempt('window_closed')
-    })
+    }, 500, 3000)
   }, [selectedProvider, startConnectAttempt, clearOAuthPopupWatch, finishConnectAttempt])
 
   const clearDocumentReconnectFailureCleanup = useCallback(() => {
@@ -3245,21 +3247,29 @@ export default function ArcimMigrationWorkspace({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Deep-linked provider preselect (onboarding branch question). Only when
-  // this mount is not an OAuth return (that flow owns the wizard state), and
-  // only for providers whose SIE comes via API: visma/bokio must first see
-  // the provider list with its "SIE krävs först" gate, which depends on
-  // async connection status.
+  // Deep-linked provider preselect (onboarding branch question, and the
+  // unfinished-connect retry). Only when this mount is not an OAuth return
+  // (that flow owns the wizard state). Visma and Bokio need a completed SIE
+  // import first, so for them the preselect waits for the connection status
+  // and leaves the provider list with its "SIE krävs först" gate in place
+  // when that import is missing.
   const preselectedRef = useRef(false)
   useEffect(() => {
     if (preselectedRef.current || !initialProvider) return
     if (new URL(window.location.href).searchParams.get('migration')) return
     const provider = ARCIM_PROVIDERS.find((p) => p.id === initialProvider)
-    if (!provider || COMING_SOON_PROVIDERS.has(provider.id) || !provider.sieViaApi) return
+    if (!provider || COMING_SOON_PROVIDERS.has(provider.id)) return
+    if (!provider.sieViaApi) {
+      if (isLoadingStatus) return
+      if (!connectionStatus?.hasCompletedSieImport) {
+        preselectedRef.current = true
+        return
+      }
+    }
     preselectedRef.current = true
     void handleSelectProvider(provider.id)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialProvider])
+  }, [initialProvider, isLoadingStatus, connectionStatus])
 
   // Listen for postMessage from OAuth popup
   useEffect(() => {
