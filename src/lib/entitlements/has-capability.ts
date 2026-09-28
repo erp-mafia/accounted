@@ -360,6 +360,13 @@ export interface EntitlementCoverage {
 export interface CompanyEntitlements {
   capabilities: CapabilityKey[]
   /**
+   * Keys the company is entitled to but that company_capability_config turns
+   * off. Held apart from `capabilities` so a covered company's billing page
+   * can say "avstängd" instead of listing the feature as included while
+   * every gate for it answers no.
+   */
+  disabledCapabilities: CapabilityKey[]
+  /**
    * Expiry of the company's trial, present only while the trial is the SOLE
    * source of paid access: null once any non-trial grant (stripe/comp/team)
    * is active, and null after the trial has lapsed. Drives the trial
@@ -451,6 +458,21 @@ async function readGrants(
   return { data: (fallback.data as GrantRow[] | null) ?? null, error: fallback.error }
 }
 
+/**
+ * Remove explicitly-disabled keys from `entitled` (the enablement axis) and
+ * return the ones that were entitled before removal, in PAID_CAPABILITIES
+ * order. A disable on a key the company does not hold is not reported: there
+ * is nothing it switched off.
+ */
+function subtractDisabled(entitled: Set<string>, configs: unknown[] | null): CapabilityKey[] {
+  const disabled = new Set<string>()
+  for (const c of configs ?? []) {
+    const key = (c as { capability_key: string }).capability_key
+    if (entitled.delete(key)) disabled.add(key)
+  }
+  return PAID_CAPABILITIES.filter((k) => disabled.has(k))
+}
+
 export interface GetCompanyEntitlementsOptions {
   /**
    * The company's team_id when the caller already has it (the dashboard
@@ -477,6 +499,7 @@ export async function getCompanyEntitlements(
   if (isPaywallBypassed()) {
     return {
       capabilities: [...PAID_CAPABILITIES],
+      disabledCapabilities: [],
       trialEndsAt: null,
       entitlementState: 'paid',
       trialExpiredAt: null,
@@ -488,6 +511,7 @@ export async function getCompanyEntitlements(
   if (!isUuid(companyId)) {
     return {
       capabilities: [],
+      disabledCapabilities: [],
       trialEndsAt: null,
       entitlementState: 'none',
       trialExpiredAt: null,
@@ -591,11 +615,10 @@ export async function getCompanyEntitlements(
     // No trial on a self-host: 'paid' while a connector grant is active,
     // 'none' otherwise (never the hosted trial copy). Explicit disables still
     // apply.
-    for (const c of configs ?? []) {
-      entitled.delete((c as { capability_key: string }).capability_key)
-    }
+    const disabledCapabilities = subtractDisabled(entitled, configs)
     return {
       capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)),
+      disabledCapabilities,
       trialEndsAt: null,
       entitlementState: hasActiveConnectorGrant ? 'paid' : 'none',
       trialExpiredAt: null,
@@ -644,19 +667,26 @@ export async function getCompanyEntitlements(
   }
 
   if (entitled.size === 0) {
-    return { capabilities: [], trialEndsAt: null, entitlementState, trialExpiredAt, multiUser, coverage }
+    return {
+      capabilities: [],
+      disabledCapabilities: [],
+      trialEndsAt: null,
+      entitlementState,
+      trialExpiredAt,
+      multiUser,
+      coverage,
+    }
   }
 
   // Subtract any explicitly-disabled (enablement axis). multi_user is exempt
   // from the config axis by design (see lib/entitlements/multi-user-state.ts),
   // but it is also never written to company_capability_config, so the plain
   // subtraction stays correct for the capabilities list.
-  for (const c of configs ?? []) {
-    entitled.delete((c as { capability_key: string }).capability_key)
-  }
+  const disabledCapabilities = subtractDisabled(entitled, configs)
 
   return {
     capabilities: PAID_CAPABILITIES.filter((k) => entitled.has(k)),
+    disabledCapabilities,
     trialEndsAt,
     entitlementState,
     trialExpiredAt,
