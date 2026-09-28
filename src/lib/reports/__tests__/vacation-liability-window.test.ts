@@ -175,6 +175,13 @@ describe('generateVacationLiability SEK window', () => {
     expect(report.rows[0].accruedAmount).toBe(14200)
   })
 
+  it('refuses a malformed as-of date before reading anything', async () => {
+    for (const bad of ['2026', '2026-13-45', '', 'undefined']) {
+      await expect(generateVacationLiability(supabase, COMPANY_ID, bad)).rejects.toThrow(/Invalid as-of date/)
+    }
+    expect(mock.calls).toHaveLength(0)
+  })
+
   it('surfaces a failed closure read instead of reporting without the anchor', async () => {
     mock.enqueue({ data: null })
     mock.enqueue({ data: null, error: { message: 'boom' } })

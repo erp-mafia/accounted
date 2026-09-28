@@ -87,6 +87,12 @@ export async function generateVacationLiability(
 ): Promise<VacationLiabilityReport> {
   const r = (x: number) => Math.round(x * 100) / 100
 
+  // Every window below compares ISO strings: a malformed date would compare
+  // wrongly and silently misstate the liability, so refuse it up front.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(asOfDate) || Number.isNaN(Date.parse(`${asOfDate}T00:00:00Z`))) {
+    throw new Error(`Invalid as-of date: ${asOfDate}`)
+  }
+
   const basis = await getVacationYearBasis(supabase, companyId)
   const vacationYearStart = getVacationYearStart(asOfDate, basis)
 
