@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Download, Loader2 } from 'lucide-react'
+import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -119,12 +119,8 @@ export function VatTaxPaymentCard({
         </DefRow>
       </div>
       <div className="mt-3 flex justify-end">
-        <Button onClick={handleDownload} disabled={downloading}>
-          {downloading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="mr-2 h-4 w-4" />
-          )}
+        <Button onClick={handleDownload} loading={downloading}>
+          {!downloading && <Download className="mr-2 h-4 w-4" />}
           {t('tax_download_button')}
         </Button>
       </div>
