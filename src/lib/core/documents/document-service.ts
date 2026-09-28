@@ -905,6 +905,22 @@ async function deterministicDocumentId(
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
+/**
+ * True when uploadDocument archived this row with `idempotency_key` set to the
+ * row's own journal_entry_id, which makes its id the deterministic id of
+ * (company, verifikat, content). Verifikat-scoped importers archive this way:
+ * the provider underlag import (upload_source 'api') and the underlag wizard
+ * ('file_upload'). A re-run uses it to recognise its own earlier files. Rows
+ * archived without that key have a random id and never match.
+ */
+export async function isArchivedForOwnJournalEntry(
+  companyId: string,
+  row: { id: string; journal_entry_id: string | null; sha256_hash: string },
+): Promise<boolean> {
+  if (!row.journal_entry_id) return false
+  return row.id === (await deterministicDocumentId(companyId, row.journal_entry_id, row.sha256_hash))
+}
+
 type DocumentUploadedEvent = Extract<CoreEvent, { type: 'document.uploaded' }>
 
 /**

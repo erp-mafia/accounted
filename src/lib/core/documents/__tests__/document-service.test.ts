@@ -96,6 +96,7 @@ import {
   validateDocumentFile,
   declaredDocumentType,
   MAX_DOCUMENT_SIZE,
+  isArchivedForOwnJournalEntry,
 } from '../document-service'
 
 // A minimal valid PDF byte sequence (header + EOF): passes magic-byte check.
@@ -844,6 +845,16 @@ describe('uploadDocument', () => {
     })
     expect(otherVoucher.id).not.toBe(documents[0].id)
     expect(rows.size).toBe(2)
+
+    // A re-run of a verifikat-scoped import recognises exactly the rows it
+    // archived itself: same company, same verifikat, same content.
+    const archived = rows.get(documents[0].id)!
+    expect(await isArchivedForOwnJournalEntry('company-1', archived)).toBe(true)
+    expect(await isArchivedForOwnJournalEntry('company-1', rows.get(otherVoucher.id)!)).toBe(true)
+    expect(await isArchivedForOwnJournalEntry('company-2', archived)).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, journal_entry_id: 'je-2' })).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, id: crypto.randomUUID() })).toBe(false)
+    expect(await isArchivedForOwnJournalEntry('company-1', { ...archived, journal_entry_id: null })).toBe(false)
   })
 
   it('does not treat a non-unique insert error as an idempotent winner', async () => {
