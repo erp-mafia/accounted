@@ -318,6 +318,7 @@ export async function buildArsredovisningData(
         investerings: cashFlow.investerings,
         finansierings: cashFlow.finansierings,
         total_cash_flow: cashFlow.total_cash_flow,
+        unclassified_accounts: cashFlow.unclassified_accounts,
         reconciliation: cashFlow.reconciliation,
       }
     } else {

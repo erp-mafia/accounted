@@ -889,13 +889,13 @@ Example response `200`:
 **Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår.**
 `scope:reports:read · risk:low · idempotent`
 
-Derives the cash flow statement from the trial balance: löpande verksamhet (result after financial items, avskrivningar, changes in receivables, inventory and short-term liabilities, tax paid), investeringsverksamhet and finansieringsverksamhet, with a reconciliation of the calculated change against the actual change in cash (1xxx liquid funds). Read-only.
+Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). Read-only.
 
 **Use when:** Preparing the årsredovisning for a K3 company (or a larger K2 one that includes it), or analysing where the year's cash went.
 **Do not use for:** Liquidity forecasts or bank balances (GET /reports/trial-balance for 19xx).
 
 **Pitfalls:**
-- reconciliation.is_reconciled false means an account the analysis cannot classify moved; it does not by itself mean the books are wrong.
+- lopande.ovriga_poster is the change on accounts outside every BAS range the analysis classifies, named in unclassified_accounts. reconciliation.is_reconciled false means the period's postings do not balance.
 - A year whose income tax cannot be separated from other taxes answers 422 CASH_FLOW_TAX_ALLOCATION_REQUIRED.
 
 | Parameter | In | Type | Required | Notes |
@@ -914,6 +914,7 @@ Response `200`:
     investerings: Record<string, number>,
     finansierings: Record<string, number>,
     total_cash_flow: number,
+    unclassified_accounts: string[],
     reconciliation: Record<string, number | boolean>
   },
   meta: {
@@ -945,6 +946,7 @@ Example response `200`:
       "total": -50000
     },
     "total_cash_flow": 117000,
+    "unclassified_accounts": [],
     "reconciliation": {
       "is_reconciled": true,
       "mismatch_amount": 0

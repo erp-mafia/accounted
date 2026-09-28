@@ -1,3 +1,5 @@
+import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+
 /**
  * Structured data for a K2 årsredovisning. Generated server-side from
  * income statement + balance sheet + asset register + salary data; passed
@@ -198,45 +200,9 @@ export interface ArsredovisningData {
 }
 
 /**
- * Light summary of kassaflödesanalys carried in ArsredovisningData. We
- * embed a flat shape rather than the full KassaflodesanalysReport so that
- * the data builder can produce it without forcing all callers / tests to
- * also mock the kassaflöde generator. The K3 PDF renderer reads only these
- * fields; if you need the full structured report use generateKassaflodesanalys
- * directly.
+ * Kassaflödesanalys carried in ArsredovisningData: the generator's report
+ * without fiscal_period_id, which ArsredovisningData.fiscal_period already
+ * holds. Derived from KassaflodesanalysReport so the two cannot drift: the K3
+ * PDF renders every line the generator produces.
  */
-export interface KassaflodesAnalysisSummary {
-  period_start: string
-  period_end: string
-  lopande: {
-    resultat_efter_finansiella_poster: number
-    avskrivningar: number
-    ovriga_ej_kassaflodesposter: number
-    delta_kortfristiga_fordringar: number
-    delta_varulager: number
-    delta_kortfristiga_skulder: number
-    skatt_betald: number
-    total: number
-  }
-  investerings: {
-    forvarv_anlaggningar: number
-    avyttring_anlaggningar: number
-    total: number
-  }
-  finansierings: {
-    delta_lan: number
-    utdelningar: number
-    nyemission: number
-    erhallna_aktieagartillskott: number
-    total: number
-  }
-  total_cash_flow: number
-  reconciliation: {
-    opening_cash_1xxx: number
-    closing_cash_1xxx: number
-    delta_actual: number
-    delta_calculated: number
-    mismatch_amount: number
-    is_reconciled: boolean
-  }
-}
+export type KassaflodesAnalysisSummary = Omit<KassaflodesanalysReport, 'fiscal_period_id'>

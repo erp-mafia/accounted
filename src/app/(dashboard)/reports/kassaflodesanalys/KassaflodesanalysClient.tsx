@@ -260,6 +260,20 @@ export function KassaflodesanalysClient() {
                 amount={report.lopande.delta_kortfristiga_skulder}
               />
               <CashRow label="Betald inkomstskatt" amount={report.lopande.skatt_betald} />
+              {report.lopande.koncernbidrag !== 0 && (
+                <CashRow
+                  label={t('cash_flow_group_contributions')}
+                  amount={report.lopande.koncernbidrag}
+                />
+              )}
+              {report.lopande.ovriga_poster !== 0 && (
+                <CashRow
+                  label={t('cash_flow_other_items', {
+                    accounts: report.unclassified_accounts.join(', '),
+                  })}
+                  amount={report.lopande.ovriga_poster}
+                />
+              )}
               <SubtotalRow
                 label="Summa kassaflöde löpande verksamhet"
                 amount={report.lopande.total}
@@ -286,6 +300,12 @@ export function KassaflodesanalysClient() {
                 label="Avyttring av anläggningstillgångar"
                 amount={report.investerings.avyttring_anlaggningar}
               />
+              {report.investerings.kortfristiga_placeringar !== 0 && (
+                <CashRow
+                  label={t('cash_flow_short_term_investments')}
+                  amount={report.investerings.kortfristiga_placeringar}
+                />
+              )}
               <SubtotalRow
                 label="Summa kassaflöde investeringsverksamhet"
                 amount={report.investerings.total}
@@ -305,7 +325,7 @@ export function KassaflodesanalysClient() {
             </CardHeader>
             <CardContent className="space-y-1">
               <CashRow
-                label="Förändring av lån (långfristiga skulder)"
+                label="Förändring av lån"
                 amount={report.finansierings.delta_lan}
               />
               <CashRow label="Utdelningar" amount={report.finansierings.utdelningar} />

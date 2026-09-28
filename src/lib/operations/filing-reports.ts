@@ -368,11 +368,11 @@ export const reportsKassaflodesanalys = defineOperation({
   docs: {
     summary: 'Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår.',
     description:
-      'Derives the cash flow statement from the trial balance: löpande verksamhet (result after financial items, avskrivningar, changes in receivables, inventory and short-term liabilities, tax paid), investeringsverksamhet and finansieringsverksamhet, with a reconciliation of the calculated change against the actual change in cash (1xxx liquid funds). Read-only.',
+      'Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). Read-only.',
     useWhen: 'Preparing the årsredovisning for a K3 company (or a larger K2 one that includes it), or analysing where the year\'s cash went.',
     doNotUseFor: 'Liquidity forecasts or bank balances (GET /reports/trial-balance for 19xx).',
     pitfalls: [
-      'reconciliation.is_reconciled false means an account the analysis cannot classify moved; it does not by itself mean the books are wrong.',
+      'lopande.ovriga_poster is the change on accounts outside every BAS range the analysis classifies, named in unclassified_accounts. reconciliation.is_reconciled false means the period\'s postings do not balance.',
       'A year whose income tax cannot be separated from other taxes answers 422 CASH_FLOW_TAX_ALLOCATION_REQUIRED.',
     ],
     example: {
@@ -386,6 +386,7 @@ export const reportsKassaflodesanalys = defineOperation({
           investerings: { total: -45000 },
           finansierings: { total: -50000 },
           total_cash_flow: 117000,
+          unclassified_accounts: [],
           reconciliation: { is_reconciled: true, mismatch_amount: 0 },
         },
         meta: META,
@@ -402,6 +403,7 @@ export const reportsKassaflodesanalys = defineOperation({
       investerings: z.record(z.string(), z.number()),
       finansierings: z.record(z.string(), z.number()),
       total_cash_flow: z.number(),
+      unclassified_accounts: z.array(z.string()),
       reconciliation: z.record(z.string(), z.union([z.number(), z.boolean()])),
     })
     .loose(),

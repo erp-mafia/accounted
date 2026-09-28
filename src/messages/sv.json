@@ -7896,6 +7896,9 @@
   "reports": {
     "title": "Rapporter",
     "cash_flow_tax_allocation_required": "Kassaflödesanalysen kan inte beräkna betald inkomstskatt säkert från periodens skattebokningar. Inkomstskatt behöver skiljas från övriga skatter i rapportunderlaget. Bokföringen behöver inte ändras.",
+    "cash_flow_group_contributions": "Koncernbidrag",
+    "cash_flow_other_items": "Övriga poster (konto {accounts})",
+    "cash_flow_short_term_investments": "Förändring av kortfristiga placeringar",
     "vat_filing_section": "Inlämnad?",
     "vat_filing_filed_on": "Inlämnad {date}",
     "vat_filing_source_skatteverket": "Bekräftad av Skatteverket via kopplingen.",
