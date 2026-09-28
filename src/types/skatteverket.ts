@@ -24,6 +24,8 @@ export interface StoredSkattekontoTransaction {
   belopp_kronofogden: number | null
   status: 'booked' | 'upcoming'
   journal_entry_id: string | null
+  /** Display-only mark that the payment instruction was entered at the bank. */
+  bank_entered_at?: string | null
   /** User's explicit "hide from the work list, never going to book it".
    *  Mirrors transactions.is_ignored; an ignored row never has a
    *  journal_entry_id (DB CHECK, migration 20260819200000). */

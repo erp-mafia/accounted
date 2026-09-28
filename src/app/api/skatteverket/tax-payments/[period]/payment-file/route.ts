@@ -8,14 +8,18 @@ import { resolveBatchDebtor } from '@/lib/payments/batch-service'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { getBranding } from '@/lib/branding/service'
-import { roundOre } from '@/lib/money'
+import { parseEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
+import {
+  agiTaxPaymentDate,
+  resolveCombinedTaxPayment,
+  type CombinedTaxPaymentSettings,
+} from '@/lib/skatteverket/combined-tax-payment'
 
 ensureInitialized()
 
 /**
- * Generate the payment file for paying skatt + arbetsgivaravgifter for a
- * given AGI period to Skatteverket's Bankgiro 5050-1055 with the company's
- * Skattekontot OCR.
+ * Generate one Skattekonto payment for an AGI due date. The payment includes
+ * both unpaid AGI and positive VAT when the declarations share that date.
  *
  * Period format: "YYYY-MM" (e.g. "2026-04").
  * `?format=bg_lb` (default) yields a Bankgirot LB-fil; `?format=pain001`
@@ -66,35 +70,50 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     )
   }
 
-  // Declarations generated since the whole-krona change store the declared
-  // amounts (what Skatteverket computes from the underlag and draws): pay
-  // exactly those. Legacy öre-bearing rows predate that storage; their
-  // salary bookings credited 2731 with the öre, so keep paying öre-exact as
-  // before: the öre lands as a small skattekonto överskott (the pre-existing
-  // equilibrium) instead of stranding on 2731 with no counterpart.
-  const declaredWholeKronor =
-    Number.isInteger(agi.total_tax) && Number.isInteger(agi.total_avgifter)
-  const totalAmount = declaredWholeKronor
-    ? agi.total_tax + agi.total_avgifter
-    : roundOre(agi.total_tax + agi.total_avgifter)
-  if (totalAmount <= 0) {
-    return NextResponse.json(
-      { error: `Inget belopp att betala för perioden ${period}.` },
-      { status: 400 }
-    )
-  }
-
-  const { data: company } = await supabase
-    .from('companies')
-    .select('name, org_number, entity_type')
-    .eq('id', companyId)
-    .single()
+  const [{ data: company }, { data: settings }] = await Promise.all([
+    supabase
+      .from('companies')
+      .select('name, org_number, entity_type')
+      .eq('id', companyId)
+      .single(),
+    supabase
+      .from('company_settings')
+      .select('bankgiro, moms_period, fiscal_year_start_month, vat_has_eu_trade, vat_filing_method, vat_taxable_base_over_40m, vat_registered')
+      .eq('company_id', companyId)
+      .single(),
+  ])
 
   if (!company || !company.org_number) {
     return NextResponse.json(
       { error: 'Organisationsnummer saknas för företaget.' },
       { status: 400 }
     )
+  }
+  if (!settings) {
+    return NextResponse.json({ error: 'Skatteinställningar saknas för företaget.' }, { status: 400 })
+  }
+
+  const entityType = parseEntityType(company.entity_type)
+  const taxSettings = settings as CombinedTaxPaymentSettings & { bankgiro: string | null }
+  const paymentDate = agiTaxPaymentDate(periodYear, periodMonth, taxSettings)
+  let combined
+  try {
+    combined = await resolveCombinedTaxPayment(
+      supabase,
+      companyId,
+      entityType,
+      taxSettings,
+      paymentDate,
+    )
+  } catch (err) {
+    return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
+  }
+  if (new URL(request.url).searchParams.get('preview') === 'true') {
+    return NextResponse.json({ data: combined })
+  }
+  const totalAmount = combined.totalAmount
+  if (totalAmount <= 0) {
+    return NextResponse.json({ error: `Inget moms- eller AGI-belopp att betala för perioden ${period}.` }, { status: 400 })
   }
 
   // The reference is the company's twelve-digit identity plus a Luhn check
@@ -114,15 +133,11 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       supabase,
       companyId,
       company.org_number,
-      company.entity_type === 'enskild_firma' ? 'enskild_firma' : 'aktiebolag',
+      usesPersonnummerAsOrgNumber(entityType) ? 'enskild_firma' : 'aktiebolag',
     )
   } catch (err) {
     return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
   }
-
-  // Payment date = AGI deadline, which is the 12th of the following month
-  // (17th in Jan/Aug for ≤40 MSEK turnover, but we play safe with 12th here).
-  const paymentDate = computeTaxPaymentDate(periodYear, periodMonth)
 
   let fileContent: Buffer
   let filename: string
@@ -144,11 +159,10 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     }
     const { debtor } = debtorResolution
 
-    // Deterministic per period, like the salary pain.001 MsgId: re-downloads
-    // reuse the id, so bank-side duplicate detection (keyed on MsgId) still
-    // catches the same period being uploaded twice.
+    // Deterministic per due date, including when the same combined payment is
+    // downloaded from the VAT report instead of the AGI view.
     const orgDigits = company.org_number.replace(/\D/g, '')
-    const messageId = `${getBranding().appName.toUpperCase()}-SKATT-${orgDigits}-${period}`
+    const messageId = `${getBranding().appName.toUpperCase()}-SKATT-${orgDigits}-${paymentDate}`
 
     let xml: string
     try {
@@ -179,16 +193,10 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
     }
 
     fileContent = Buffer.from(xml, 'utf-8')
-    filename = `pain001_skatt_${period}.xml`
+    filename = `pain001_skatt_${paymentDate}.xml`
     contentType = 'application/xml; charset=utf-8'
   } else {
-    const { data: settings } = await supabase
-      .from('company_settings')
-      .select('bankgiro')
-      .eq('company_id', companyId)
-      .single()
-
-    if (!settings?.bankgiro) {
+    if (!settings.bankgiro) {
       return NextResponse.json(
         // Same wording as the salary LB route: the settings overview shows a
         // registry bankgiro that this route does not read.
@@ -214,7 +222,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
           amount: totalAmount,
           receiverName: 'Skatteverket',
         },
-        { paymentDate, periodLabel: period }
+        { paymentDate, periodLabel: paymentDate }
       )
     } catch (err) {
       return NextResponse.json({ error: getErrorMessage(err) }, { status: 400 })
@@ -245,15 +253,3 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
   },
   { requireWrite: true },
 )
-
-/**
- * Tax payment deadline = the 12th of the month *following* the AGI period.
- * (Skatteverket also accepts the 17th in Jan/Aug for turnover ≤40 MSEK, but
- * the conservative date is the 12th: money must be on the Skattekonto by
- * then to avoid kostnadsränta.)
- */
-function computeTaxPaymentDate(periodYear: number, periodMonth: number): string {
-  const deadlineMonth = periodMonth === 12 ? 1 : periodMonth + 1
-  const deadlineYear = periodMonth === 12 ? periodYear + 1 : periodYear
-  return `${deadlineYear}-${String(deadlineMonth).padStart(2, '0')}-12`
-}
