@@ -119,9 +119,9 @@ export function generateSupplierPain001(
   const totalAmount = sumRendered(payments)
 
   // One PmtInf per distinct (execution date, debtor account form): a BGNR
-  // creditor must debit the company bankgiro (Swedbank rule 219), everything
-  // else debits the IBAN, and ReqdExctnDt is PmtInf-level. Original order is
-  // preserved within a group so the file reads like the batch it came from.
+  // creditor uses the company bankgiro when available (required by Swedbank
+  // rule 219); otherwise it debits the IBAN. ReqdExctnDt is PmtInf-level.
+  // Original order is preserved within a group so the file reads like the batch.
   const byGroup = new Map<string, SupplierPain001Payment[]>()
   for (const payment of payments) {
     const bgnrDebit = debtorBankgiro !== '' && payment.payee.type === 'bankgiro'
