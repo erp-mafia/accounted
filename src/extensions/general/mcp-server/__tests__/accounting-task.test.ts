@@ -250,7 +250,7 @@ describe('get_task: an own item runs in the company that owns it', () => {
     vi.mocked(loadAgentBundle).mockImplementation(async (_s, companyId) => companyId === 'company-b'
       ? bundle({ agent: { id: `own/${OWN}`, name: 'Fredagskoll' }, workflow: { slug: `own/${OWN}`, version: null, body: '# Steg' }, company_knowledge: { ...bundle().company_knowledge, name: 'Bolag B AB' } })
       : null)
-    vi.mocked(resolveMcpCompanyContext).mockResolvedValue({ companyId: 'company-b', role: 'member', isDefault: false })
+    vi.mocked(resolveMcpCompanyContext).mockResolvedValue({ companyId: 'company-b', companyName: 'Bolag B AB', role: 'member', isDefault: false })
     const supabase = db({ company_skills: { company_id: 'company-b' } })
     const task = await getAccountingTask({ kind: `agent:own/${OWN}` }, 'company-a', supabase as never, { userId: 'user-1' })
     expect(resolveMcpCompanyContext).toHaveBeenCalledWith({ supabase, userId: 'user-1', defaultCompanyId: 'company-a', requestedCompanyId: 'company-b' })
@@ -264,7 +264,7 @@ describe('get_task: an own item runs in the company that owns it', () => {
     vi.mocked(loadCatalogSkill).mockImplementation(async (_s, companyId) => companyId === 'company-b'
       ? { slug: `own/${OWN}`, name: 'Kassalikviditet', summary: '', tags: ['own'], tier: 'own', source: 'own', itemKind: 'analysis', body: '# K' }
       : null)
-    vi.mocked(resolveMcpCompanyContext).mockResolvedValue({ companyId: 'company-b', role: 'viewer', isDefault: false })
+    vi.mocked(resolveMcpCompanyContext).mockResolvedValue({ companyId: 'company-b', companyName: 'Bolag B AB', role: 'viewer', isDefault: false })
     const task = await getAccountingTask({ kind: `skill:own/${OWN}` }, 'company-a', db({ company_skills: { company_id: 'company-b' }, companies: { name: 'Bolag B AB' } }) as never, { userId: 'user-1' })
     expect(task).toMatchObject({ company_id: 'company-b', goal: 'Build Kassalikviditet for Bolag B AB now; ask only if data is missing.' })
   })
@@ -274,6 +274,26 @@ describe('get_task: an own item runs in the company that owns it', () => {
     vi.mocked(resolveMcpCompanyContext).mockRejectedValue(codedError('NOT_FOUND', 'Company not found'))
     const run = getAccountingTask({ kind: `agent:own/${OWN}` }, 'company-a', db({ company_skills: { company_id: 'company-z' } }) as never, { userId: 'user-1' })
     await expect(run).rejects.toMatchObject({ code: 'NOT_FOUND', message: expect.stringContaining('pass that company\'s company_id') })
+    expect(loadAgentBundle).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes the connection\'s company reach, so a restricted or pinned key stays in its companies', async () => {
+    vi.mocked(loadAgentBundle).mockResolvedValue(null)
+    // The real resolver answers NOT_FOUND for a company outside the allowlist.
+    vi.mocked(resolveMcpCompanyContext).mockRejectedValue(codedError('NOT_FOUND', 'Company not reachable with this key'))
+    const supabase = db({ company_skills: { company_id: 'company-b' } })
+    const run = getAccountingTask({ kind: `agent:own/${OWN}` }, 'company-a', supabase as never, {
+      userId: 'user-1',
+      allowedCompanyIds: ['company-a'],
+    })
+    await expect(run).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    expect(resolveMcpCompanyContext).toHaveBeenCalledWith({
+      supabase,
+      userId: 'user-1',
+      defaultCompanyId: 'company-a',
+      requestedCompanyId: 'company-b',
+      allowedCompanyIds: ['company-a'],
+    })
     expect(loadAgentBundle).toHaveBeenCalledTimes(1)
   })
 

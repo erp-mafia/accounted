@@ -1314,6 +1314,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   company_agent_knowledge: 'which knowledge packs each AI agent carries for the company; configuration, not räkenskapsinformation',
   community_feedback: 'upvotes on shared community agent instructions; not räkenskapsinformation',
   api_keys: 'secrets',
+  api_key_companies: 'per-key company allowlist (API access control), not räkenskapsinformation',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bolagsverket_avtal_acceptances: 'service agreement acceptance state',
   bolagsverket_subscriptions: 'integration subscription state',

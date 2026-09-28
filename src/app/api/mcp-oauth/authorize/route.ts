@@ -5,6 +5,11 @@ import type { SupabaseClient, User } from '@supabase/supabase-js'
 import { createAuthCode } from '@/lib/auth/oauth-codes'
 import { shouldEnforceMfa } from '@/lib/auth/mfa'
 import { getActiveCompanyId } from '@/lib/company/context'
+import {
+  listUserCompaniesForPicker,
+  resolveCompanySelection,
+  type PickerCompany,
+} from '@/lib/company/company-picker'
 import { getBranding } from '@/lib/branding/service'
 import {
   capScopesForRole,
@@ -271,6 +276,26 @@ export async function GET(request: Request) {
     role = lookup.role
   }
 
+  // Every non-archived company the user belongs to, active first. With two
+  // or more the page renders a company picker (all pre-checked, so one-click
+  // consent stays one click); with one the page is unchanged. A failed listing
+  // is a hard stop: rendering the single-company page would mint an
+  // unrestricted key without showing the user what it reaches.
+  let pickerCompanies: PickerCompany[] = []
+  if (companyId) {
+    try {
+      pickerCompanies = await listUserCompaniesForPicker(supabase, user.id, {
+        activeCompanyId: companyId,
+      })
+    } catch {
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Could not resolve your companies' },
+        { status: 500 }
+      )
+    }
+  }
+  const showCompanyPicker = pickerCompanies.length >= 2
+
   const appNameLower = escapeHtml(getBranding().appName.toLowerCase())
 
   // Client identity and the host the browser will be sent to after consent.
@@ -287,11 +312,22 @@ export async function GET(request: Request) {
         <span class="fact-value fact-host">${escapeHtml(redirectHost)}</span>
       </div>`
 
-  const accountRowHtml = companyName
-    ? `<span class="fact-label">Företag</span>
-        <span class="fact-value">${escapeHtml(companyName)}</span>`
-    : `<span class="fact-label">Konto</span>
-        <span class="fact-value">${escapeHtml(user.email ?? '')}</span>`
+  // With the picker on the page the company block below replaces this row:
+  // two "Företag" labels for the same choice would read as a contradiction.
+  const accountRowHtml = showCompanyPicker
+    ? ''
+    : companyName
+      ? `<div class="fact">
+        <span class="fact-label">Företag</span>
+        <span class="fact-value">${escapeHtml(companyName)}</span>
+      </div>`
+      : `<div class="fact">
+        <span class="fact-label">Konto</span>
+        <span class="fact-value">${escapeHtml(user.email ?? '')}</span>
+      </div>`
+  const companyPickerHtml = showCompanyPicker
+    ? renderCompanyPicker(pickerCompanies, companyId)
+    : ''
   const noCompanyNoteHtml = companyId
     ? ''
     : `<p class="note">Du har inget företag i ${appNameLower} ännu. Du kan ansluta ändå: skapa företaget i appen så använder anslutningen det automatiskt, utan att du behöver ansluta på nytt.</p>`
@@ -721,6 +757,30 @@ export async function GET(request: Request) {
       border-color: var(--primary);
     }
     .allow:hover { background: var(--primary-hover); border-color: var(--primary-hover); }
+    .allow:disabled {
+      background: var(--fg-faint);
+      border-color: var(--fg-faint);
+      cursor: not-allowed;
+    }
+    .companies {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0 0.875rem 0.5rem;
+      margin-bottom: 1rem;
+      background: var(--surface);
+    }
+    .companies .scopes-header { margin-bottom: 0.375rem; }
+    .companies-help {
+      font-size: 0.75rem;
+      color: var(--fg-muted);
+      line-height: 1.5;
+      padding: 0.25rem 0 0.375rem;
+    }
+    .company-tag {
+      font-size: 0.6875rem;
+      color: var(--fg-faint);
+      margin-left: 0.375rem;
+    }
     .deny {
       background: var(--surface);
       color: var(--fg);
@@ -752,9 +812,7 @@ export async function GET(request: Request) {
 
     <div class="facts">
       ${clientRowsHtml}
-      <div class="fact">
-        ${accountRowHtml}
-      </div>
+      ${accountRowHtml}
     </div>
     ${noCompanyNoteHtml}
     ${roleNoteHtml}
@@ -762,6 +820,7 @@ export async function GET(request: Request) {
     <form method="POST" action="${escapeHtml(url.pathname + url.search)}" id="consent-form">
       <input type="hidden" name="scope_binding" value="${escapeHtml(scopeBindingValue)}">
       <input type="hidden" name="scope_binding_sig" value="${escapeHtml(scopeBindingSignature)}">
+      ${companyPickerHtml}
 
       <details class="scopes-details">
         <summary>
@@ -791,7 +850,7 @@ export async function GET(request: Request) {
 
       <div class="actions">
         <button type="submit" name="consent" value="deny" class="deny">Neka</button>
-        <button type="submit" name="consent" value="allow" class="allow">Tillåt åtkomst</button>
+        <button type="submit" name="consent" value="allow" class="allow" id="allow-button">Tillåt åtkomst</button>
       </div>
     </form>
 
@@ -814,6 +873,19 @@ export async function GET(request: Request) {
       document.getElementById('select-none').addEventListener('click', function() {
         setAll(function() { return false; });
       });
+      // Company picker (multi-company users only): the server refuses an
+      // empty selection, so keep the Allow button in step with the boxes.
+      var companyBoxes = form.querySelectorAll('input[name="companies"]');
+      var allowButton = document.getElementById('allow-button');
+      if (companyBoxes.length && allowButton) {
+        var syncAllow = function() {
+          var any = false;
+          companyBoxes.forEach(function(b) { if (b.checked) any = true; });
+          allowButton.disabled = !any;
+        };
+        companyBoxes.forEach(function(b) { b.addEventListener('change', syncAllow); });
+        syncAllow();
+      }
     })();
   </script>
 </body>
@@ -905,7 +977,48 @@ export async function POST(request: Request) {
   // uncapped and the token endpoint mints the key unbound. The role caps the
   // grant below and is re-checked at /token against the same company, which
   // travels in the code payload.
-  const companyId = await getActiveCompanyId(supabase, user.id)
+  const activeCompanyId = await getActiveCompanyId(supabase, user.id)
+
+  // Company allowlist (multi-company users). The form's `companies` values
+  // are never trusted: they are intersected with the live memberships, and
+  // the picker order (active first) decides the default. Keeping every
+  // company ticked means an unrestricted key (companyIds null) that follows
+  // future memberships; a strict subset travels in the code payload. The
+  // default company must sit inside the selection, so an unticked active
+  // company hands the default to the first ticked one, and the role cap
+  // below is computed against that default.
+  let companyId = activeCompanyId
+  let companyIds: string[] | null = null
+  if (activeCompanyId) {
+    let memberships: PickerCompany[]
+    try {
+      memberships = await listUserCompaniesForPicker(supabase, user.id, { activeCompanyId })
+    } catch {
+      return errorRedirect(
+        request,
+        redirectUri,
+        state,
+        'server_error',
+        'Could not resolve your companies'
+      )
+    }
+    if (memberships.length >= 2) {
+      const selection = resolveCompanySelection(
+        formData.getAll('companies'),
+        memberships,
+        activeCompanyId,
+      )
+      if (!selection) {
+        return NextResponse.json(
+          { error: 'invalid_request', error_description: 'Select at least one company' },
+          { status: 400 }
+        )
+      }
+      companyId = selection.defaultCompanyId
+      companyIds = selection.companyIds
+    }
+  }
+
   let role: string | null = null
   if (companyId) {
     const lookup = await lookupCompanyRole(supabase, user.id, companyId)
@@ -999,6 +1112,7 @@ export async function POST(request: Request) {
     redirectUri,
     scopes: grantedScopes,
     companyId,
+    companyIds,
   })
 
   // Redirect to callback with the code
@@ -1055,6 +1169,40 @@ function renderScopeCheckboxes(
   }
 
   return groups.join('')
+}
+
+/**
+ * Company picker for a user with two or more companies. Every row starts
+ * checked (one-click consent stays one click); the active company is first
+ * and tagged. Rows reuse the scope-row styling but carry a different input
+ * name, so the scope shortcut buttons never touch them. The POST handler
+ * intersects the submission with the live memberships, so the ids here are
+ * a display convenience, never a trust boundary.
+ */
+function renderCompanyPicker(companies: PickerCompany[], activeCompanyId: string | null): string {
+  const rows = companies
+    .map((company, index) => {
+      const id = `company-${index}`
+      const activeTag =
+        company.company_id === activeCompanyId ? `<span class="company-tag">(aktivt)</span>` : ''
+      return `
+    <div class="scope-row">
+      <input type="checkbox" id="${id}" name="companies" value="${escapeHtml(company.company_id)}" checked>
+      <label for="${id}">
+        <span class="scope-name-row">
+          <span class="scope-name">${escapeHtml(company.name)}</span>${activeTag}
+        </span>
+      </label>
+    </div>`
+    })
+    .join('')
+  return `
+      <div class="companies">
+        <div class="scopes-header">
+          <span class="scopes-title">Företag</span>
+        </div>${rows}
+        <p class="companies-help">Anslutningen når de företag du bockar i. Lämnar du alla ibockade följer den även företag du blir medlem i senare.</p>
+      </div>`
 }
 
 function scopeRow(scope: ApiKeyScope, checked: boolean, kind: 'read' | 'write'): string {

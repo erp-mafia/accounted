@@ -3211,7 +3211,18 @@
     "steps_other_2": "Klistra in adressen nedan",
     "steps_other_2_note": "klienten sköter inloggningen via OAuth",
     "steps_other_3": "Saknar klienten OAuth?",
-    "steps_other_3_note": "skapa en API-nyckel under Utvecklare och skicka den som Authorization: Bearer"
+    "steps_other_3_note": "skapa en API-nyckel under Utvecklare och skicka den som Authorization: Bearer",
+    "companies_section_title": "Företag",
+    "companies_help": "Nyckeln når de företag du bockar i. Lämnar du alla ibockade följer den även företag du blir medlem i senare.",
+    "companies_all": "Alla företag",
+    "companies_some": "{selected} av {total} företag",
+    "companies_edit": "Ändra företag för {name}",
+    "active_company_tag": "(aktivt)",
+    "companies_dialog_title": "Företag för nyckeln",
+    "companies_dialog_description": "Välj vilka företag \"{name}\" ska nå. Företaget nyckeln är skapad i kan inte bockas ur.",
+    "save": "Spara",
+    "toast_companies_saved": "Företag uppdaterade",
+    "toast_companies_failed": "Kunde inte uppdatera företag"
   },
   "settings_oauth_clients": {
     "title": "OAuth-klienter",

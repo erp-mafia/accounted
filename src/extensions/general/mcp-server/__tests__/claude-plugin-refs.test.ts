@@ -37,11 +37,13 @@ const pluginSkills = [...readPluginSkills(), ...readPluginCommands()]
 const serverSource = readFileSync(join(__dirname, '..', 'server.ts'), 'utf8')
 
 describe('claude-plugin wrapper references', () => {
-  it('ships the seven v1 skills and the setup command', () => {
+  it('ships the eight skills and the setup and use commands', () => {
     expect(pluginSkills.map((s) => s.file).sort()).toEqual([
       'bookkeep/SKILL.md',
       'check/SKILL.md',
+      'clients/SKILL.md',
       'commands/setup.md',
+      'commands/use.md',
       'month-close/SKILL.md',
       'payroll/SKILL.md',
       'start/SKILL.md',

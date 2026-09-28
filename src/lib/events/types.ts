@@ -255,6 +255,12 @@ export type CoreEvent =
   | { type: 'mcp.tool_called'; payload: {
       tool: string                                  // e.g. 'gnubok_create_invoice'
       requiredScope: string | null                  // from TOOL_SCOPE_MAP, null if unscoped
+      // How the call picked its company: the key default (no company_id),
+      // an explicit company_id, the row of a named pending operation, a
+      // scope resolved by a cross-company tool (one row per inner call), or
+      // none for company-independent tools. Optional so older emitters and
+      // stored rows stay valid.
+      companySelection?: 'default' | 'explicit' | 'operation' | 'scope' | 'none'
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null                        // api_key id, oauth client, etc.
       actorLabel: string | null                     // human-readable actor label

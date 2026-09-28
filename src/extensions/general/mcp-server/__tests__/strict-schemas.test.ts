@@ -28,6 +28,11 @@ describe('MCP tool inputSchema strictness', () => {
     const allowedNonTenantWrites = new Set([
       'gnubok_audit_package',
       'gnubok_feedback',
+      // Stages INNER write tools per company: the tenant write scope that the
+      // role guard classifies is the inner tool's, checked per company inside
+      // the tool (assertMcpCompanyWriteAccess with the inner scope). The outer
+      // scope only gates the scope resolution.
+      'gnubok_stage_across_companies',
     ])
     // A different category from the two above, which genuinely write nothing
     // tenant-scoped. gnubok_stage_tool is never executed under its own name:

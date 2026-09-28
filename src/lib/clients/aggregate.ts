@@ -34,6 +34,13 @@ export interface ClientOverviewRow {
   nextDeadline: ClientDeadline | null
   /** Latest posted verifikat date; null = nothing booked yet. */
   lastBookedDate: string | null
+  /**
+   * Open deadlines sorted by due date (at most DEADLINES_PER_COMPANY_CAP).
+   * Only present when the fetch layer was asked for them (portfolio reads
+   * filter on a deadline KIND, which nextDeadline alone cannot answer); the
+   * byrå cockpit payload does not carry them.
+   */
+  deadlines?: ClientDeadline[]
 }
 
 /** Count rows per company_id from a flat grouped-query result. */
@@ -83,12 +90,45 @@ export function pickNextDeadlines(rows: DeadlineRowInput[]): Map<string, ClientD
   }
   const result = new Map<string, ClientDeadline>()
   for (const [companyId, { row }] of next) {
-    result.set(companyId, {
-      title: row.title,
-      dueDate: row.due_date,
-      taxDeadlineType: row.tax_deadline_type,
-      urgency: deadlineUrgency(row),
-    })
+    result.set(companyId, toClientDeadline(row))
+  }
+  return result
+}
+
+function toClientDeadline(row: DeadlineRowInput): ClientDeadline {
+  return {
+    title: row.title,
+    dueDate: row.due_date,
+    taxDeadlineType: row.tax_deadline_type,
+    urgency: deadlineUrgency(row),
+  }
+}
+
+/** Open deadlines kept per company on a portfolio row (earliest first). */
+export const DEADLINES_PER_COMPANY_CAP = 10
+
+/**
+ * Group a flat list of open deadlines per company, earliest due date first
+ * (title breaks ties so the order is stable), capped per company. Input does
+ * not need to be pre-sorted. Feeds the portfolio deadline-kind filter, which
+ * needs more than the single earliest deadline pickNextDeadlines returns.
+ */
+export function groupDeadlinesByCompany(
+  rows: DeadlineRowInput[],
+  cap: number = DEADLINES_PER_COMPANY_CAP,
+): Map<string, ClientDeadline[]> {
+  const grouped = new Map<string, DeadlineRowInput[]>()
+  for (const row of rows) {
+    const list = grouped.get(row.company_id)
+    if (list) list.push(row)
+    else grouped.set(row.company_id, [row])
+  }
+  const result = new Map<string, ClientDeadline[]>()
+  for (const [companyId, list] of grouped) {
+    const sorted = [...list].sort(
+      (a, b) => a.due_date.localeCompare(b.due_date) || a.title.localeCompare(b.title, 'sv'),
+    )
+    result.set(companyId, sorted.slice(0, cap).map(toClientDeadline))
   }
   return result
 }

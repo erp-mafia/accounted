@@ -20,16 +20,22 @@ export function ApiSettingsContent() {
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
   const t = useTranslations('settings_api_keys')
-  const { keys, isLoading, refetch, revoke } = useApiKeys()
+  const { keys, companies, isLoading, refetch, revoke } = useApiKeys()
   const [showOAuthClients, setShowOAuthClients] = useState(false)
 
   return (
     <div>
       <SettingsSectionHeader title={tNav('api')} intro={tIntro('api')} />
-      <McpConnectionsPanel keys={keys} isLoading={isLoading} onRevoke={revoke} />
+      <McpConnectionsPanel
+        keys={keys}
+        companies={companies}
+        isLoading={isLoading}
+        onRevoke={revoke}
+        onKeysChanged={refetch}
+      />
 
       <SettingsGroup label={t('developer_title')}>
-        <ApiKeysPanel keyCount={keys.length} onCreated={refetch} />
+        <ApiKeysPanel keyCount={keys.length} companies={companies} onCreated={refetch} />
         <button
           type="button"
           aria-expanded={showOAuthClients}

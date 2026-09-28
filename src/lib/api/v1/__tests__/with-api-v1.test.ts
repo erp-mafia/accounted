@@ -308,6 +308,87 @@ describe('withApiV1: company membership', () => {
     expect(body.data.companyId).toBe('company-1')
   })
 
+  it('returns 404 (same shape as a non-member) for a member company outside the key allowlist', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: ['company-1'],
+    })
+    // The user IS a member of company-2; the key was not issued for it.
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-2', role: 'owner' }))
+
+    const handlerBody = vi.fn(async (_req: Request, ctx: { requestId: string }) =>
+      ok({ ok: true }, { requestId: ctx.requestId }),
+    )
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      handlerBody,
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-2', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-2'),
+    )
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error.code).toBe('NOT_FOUND')
+    expect(body.error.details).toEqual({ companyId: 'company-2' })
+    expect(handlerBody).not.toHaveBeenCalled()
+    expect(getMultiUserStateMock).not.toHaveBeenCalled()
+  })
+
+  it('passes an allowlisted company through and exposes the allowlist on the context', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: ['COMPANY-1'],
+    })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: 'company-1', role: 'owner' }))
+
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'companies.get',
+      async (_req, ctx) => ok({ allowed: ctx.allowedCompanyIds }, { requestId: ctx.requestId }),
+      { requireScope: 'companies:read' },
+    )
+
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies/company-1', {
+        headers: { Authorization: 'Bearer gnubok_sk_x' },
+      }),
+      companyParams('company-1'),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.allowed).toEqual(['COMPANY-1'])
+  })
+
+  it('exposes allowedCompanyIds null on the context for an unrestricted key', async () => {
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: 'company-1',
+      scopes: ['companies:read'],
+      mode: 'live',
+      allowedCompanyIds: null,
+    })
+    const handler = withApiV1('companies.list', async (_req, ctx) =>
+      ok({ allowed: ctx.allowedCompanyIds }, { requestId: ctx.requestId }),
+    )
+    const res = await handler(
+      makeRequest('https://x.test/api/v1/companies', { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      staticRouteContext(),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.allowed).toBeNull()
+  })
+
   it('refuses a NON-OWNER membership in a frozen company with 403 (multi-user seat gate)', async () => {
     mockValidate.mockResolvedValue({
       userId: 'user-1',

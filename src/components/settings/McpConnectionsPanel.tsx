@@ -2,7 +2,7 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useSyncExternalStore } from 'react'
-import { ArrowUpRight, KeyRound, Loader2, Terminal } from 'lucide-react'
+import { ArrowUpRight, Building2, KeyRound, Loader2, Terminal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -15,6 +15,8 @@ import {
   type ConnectTarget,
 } from '@/components/settings/ConnectClientDialog'
 import type { ApiKeyRow } from '@/components/settings/useApiKeys'
+import type { PickerCompany } from '@/components/settings/CompanyPickerList'
+import { KeyCompaniesDialog } from '@/components/settings/KeyCompaniesDialog'
 import { AI_CLIENTS } from '@/lib/onboarding/ai-clients'
 import { claudeConnectorLink } from '@/lib/onboarding/checklist'
 import { getBranding } from '@/lib/branding/service'
@@ -98,18 +100,28 @@ function ClientMark({ kind, size = 'md' }: { kind: ConnectionKind | ConnectTarge
  */
 export function McpConnectionsPanel({
   keys,
+  companies = [],
   isLoading,
   onRevoke,
+  onKeysChanged,
 }: {
   keys: ApiKeyRow[]
+  /** The caller's companies (useApiKeys): with two or more, each row shows and edits its company reach. */
+  companies?: PickerCompany[]
   isLoading: boolean
   onRevoke: (id: string, toastTitle: string) => Promise<void>
+  /** Re-read the keys after a row's companies were edited. */
+  onKeysChanged?: () => void
 }) {
   const t = useTranslations('settings_api_keys')
   const locale = useLocale()
   const targetName = useConnectTargetName()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [target, setTarget] = useState<ConnectTarget | null>(null)
+  const [editingCompanies, setEditingCompanies] = useState<ApiKeyRow | null>(null)
+  // Only meaningful for a multi-company user: "Alla företag" on a
+  // single-company account would be noise.
+  const hasCompanyPicker = companies.length >= 2
 
   // This panel is server-rendered before it hydrates, and window.location has
   // no server equivalent. Reading the origin at render time therefore yields a
@@ -274,6 +286,20 @@ export function McpConnectionsPanel({
                     <span className="hidden w-28 shrink-0 truncate text-xs text-muted-foreground lg:block">
                       {permissionSummary}
                     </span>
+                    {hasCompanyPicker && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="hidden shrink-0 text-xs font-normal text-muted-foreground md:inline-flex"
+                        onClick={() => setEditingCompanies(key)}
+                        aria-label={t('companies_edit', { name: rowName(key) })}
+                      >
+                        <Building2 className="mr-1.5 h-3.5 w-3.5" />
+                        {key.company_ids && key.company_ids.length > 0
+                          ? t('companies_some', { selected: key.company_ids.length, total: companies.length })
+                          : t('companies_all')}
+                      </Button>
+                    )}
                     <span className="w-28 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
                       {key.last_used_at ? formatDateLong(key.last_used_at, locale) : t('never_used')}
                     </span>
@@ -303,6 +329,16 @@ export function McpConnectionsPanel({
       )}
 
       <ConnectClientDialog target={target} origin={origin} onClose={() => setTarget(null)} />
+      {editingCompanies && (
+        <KeyCompaniesDialog
+          key={editingCompanies.id}
+          keyRow={editingCompanies}
+          name={rowName(editingCompanies)}
+          companies={companies}
+          onClose={() => setEditingCompanies(null)}
+          onSaved={() => onKeysChanged?.()}
+        />
+      )}
       <DestructiveConfirmDialog {...dialogProps} />
     </>
   )

@@ -13,7 +13,9 @@
  *      the token when one is supplied.
  *   4. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
- *      supported transparently: the URL is the source of truth. A `viewer`
+ *      supported transparently: the URL is the source of truth. A key with a
+ *      company allowlist (api_key_companies) is additionally refused outside
+ *      it, with the same NOT_FOUND a non-member company gets. A `viewer`
  *      (read-only) membership is refused for every write: mutating method
  *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY).
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
@@ -103,6 +105,14 @@ export interface ApiV1Context {
   apiKeyName: string | undefined
   /** Scopes granted to the calling key. */
   scopes: ApiKeyScope[]
+  /**
+   * The key's company allowlist (api_key_companies): null when the key
+   * reaches every company its user belongs to, else the only company ids it
+   * may reach. The wrapper already refuses a URL companyId outside it; the
+   * company-less routes (`/companies`, `/portfolio/*`) must filter their
+   * own membership listings by it.
+   */
+  allowedCompanyIds: string[] | null
   /**
    * Largest amount in SEK this key may commit with no human approving it, or
    * null for no ceiling (the default, and what every key predating the column
@@ -318,6 +328,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
           apiKeyId: undefined,
           apiKeyName: undefined,
           scopes: [],
+          allowedCompanyIds: null,
           unattendedCommitLimit: null,
           mode: 'live',
           supabase: createAnonClient(),
@@ -334,6 +345,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               apiKeyId: auth.apiKeyId,
               apiKeyName: auth.apiKeyName,
               scopes: auth.scopes,
+              allowedCompanyIds: auth.allowedCompanyIds,
               unattendedCommitLimit: auth.unattendedCommitLimit,
               mode: auth.mode,
               supabase: createServiceClientNoCookies(),
@@ -419,6 +431,22 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         if (!membership) {
           userLog.warn('user is not a member of company in URL', { companyId, ...forensic })
           // 404 (not 403) so we don't leak company existence to unauthorized callers.
+          return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
+            requestId,
+            details: { companyId },
+          })
+        }
+
+        // Per-key company allowlist (api_key_companies): a member company the
+        // key was not issued for is answered exactly like a non-member one, so
+        // the allowlist reveals nothing membership would not. Checked after
+        // the membership row so the two denials share one shape, and before
+        // the role and seat gates so a refused company costs no extra read.
+        if (
+          auth.allowedCompanyIds &&
+          !auth.allowedCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase())
+        ) {
+          userLog.warn('company in URL is outside the key allowlist', { companyId, ...forensic })
           return await v1ErrorResponseFromCode('NOT_FOUND', userLog, {
             requestId,
             details: { companyId },
@@ -566,6 +594,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         apiKeyId: auth.apiKeyId,
         apiKeyName: auth.apiKeyName,
         scopes: auth.scopes,
+        allowedCompanyIds: auth.allowedCompanyIds,
         unattendedCommitLimit: auth.unattendedCommitLimit,
         mode: auth.mode,
         supabase,

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
+import type { PickerCompany } from '@/components/settings/CompanyPickerList'
 
 /** One row of GET /api/settings/api-keys (the key value is never returned). */
 export interface ApiKeyRow {
@@ -17,16 +18,21 @@ export interface ApiKeyRow {
   created_at: string
   client?: string | null
   source?: 'signin' | 'manual'
+  /** Per-key company allowlist; null = every company the owner belongs to. */
+  company_ids?: string[] | null
 }
 
 /**
  * The active company's live API keys, shared by the connections list and the
  * developer section so a key created or revoked in one shows in the other.
+ * `companies` is the caller's company list for the company pickers (the
+ * route's `meta.companies`); a picker only appears when it holds two or more.
  */
 export function useApiKeys() {
   const t = useTranslations('settings_api_keys')
   const { toast } = useToast()
   const [keys, setKeys] = useState<ApiKeyRow[]>([])
+  const [companies, setCompanies] = useState<PickerCompany[]>([])
   const [isLoading, setIsLoading] = useState(true)
 
   const refetch = useCallback(async () => {
@@ -36,6 +42,7 @@ export function useApiKeys() {
       if (json.data) {
         setKeys(json.data.filter((k: ApiKeyRow) => !k.revoked_at))
       }
+      setCompanies(Array.isArray(json.meta?.companies) ? json.meta.companies : [])
     } catch {
       toast({ title: t('toast_fetch_failed'), variant: 'destructive' })
     } finally {
@@ -69,5 +76,5 @@ export function useApiKeys() {
     [toast, t],
   )
 
-  return { keys, isLoading, refetch, revoke }
+  return { keys, companies, isLoading, refetch, revoke }
 }

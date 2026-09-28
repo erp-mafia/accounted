@@ -121,6 +121,13 @@ export interface TaskCaller {
   userId?: string
   /** The API key the call came in on; its stored `client` is the default for `client`. */
   apiKeyId?: string
+  /**
+   * The companies this connection may reach: the pin alone on a pinned
+   * connection, else the key's company allowlist, null or absent for every
+   * membership (effectiveCompanyRestriction). An own item owned by a company
+   * outside it is not run there.
+   */
+  allowedCompanyIds?: string[] | null
 }
 
 interface TaskBase {
@@ -148,7 +155,7 @@ export async function getAccountingTask(args: Record<string, unknown>, companyId
   if (kind.startsWith('skill:')) {
     const slug = kind.slice(6)
     requestedSkill = await loadCatalogSkill(supabase, runIn, slug)
-    const owner = requestedSkill ? null : await ownItemCompany(supabase, slug, companyId, caller.userId)
+    const owner = requestedSkill ? null : await ownItemCompany(supabase, slug, companyId, caller.userId, caller.allowedCompanyIds)
     if (owner) {
       runIn = owner
       requestedSkill = await loadCatalogSkill(supabase, runIn, slug)
@@ -217,7 +224,7 @@ async function getAgentTask(id: string, scope: TaskScope, companyId: string, sup
   let runIn = companyId
   let bundle = await loadAgentBundle(supabase, runIn, id, client)
   if (!bundle) {
-    const owner = await ownItemCompany(supabase, id, companyId, caller.userId)
+    const owner = await ownItemCompany(supabase, id, companyId, caller.userId, caller.allowedCompanyIds)
     if (owner) {
       runIn = owner
       bundle = await loadAgentBundle(supabase, runIn, id, client)
@@ -289,15 +296,31 @@ const OWN_ITEM = /^own\/([0-9a-f-]{36})$/
  * else: not an own item, unknown, shared across a byrå team (the company is
  * then the caller's choice), or a company the user is not a member of.
  */
-async function ownItemCompany(supabase: SupabaseClient, id: string, companyId: string, userId: string | undefined): Promise<string | null> {
+async function ownItemCompany(
+  supabase: SupabaseClient,
+  id: string,
+  companyId: string,
+  userId: string | undefined,
+  allowedCompanyIds?: string[] | null,
+): Promise<string | null> {
   const match = OWN_ITEM.exec(id)
   if (!match || !userId) return null
   const { data, error } = await supabase.from('company_skills').select('company_id').eq('id', match[1]).maybeSingle()
   const owner = (data?.company_id as string | null | undefined) ?? null
   if (error || !owner || owner === companyId) return null
   try {
-    // The same membership, archive and seat checks as an explicit company_id.
-    return (await resolveMcpCompanyContext({ supabase, userId, defaultCompanyId: companyId, requestedCompanyId: owner })).companyId
+    // The same membership, allowlist, archive and seat checks as an explicit
+    // company_id: a restricted or pinned connection never reaches the owner
+    // company through an own item.
+    return (
+      await resolveMcpCompanyContext({
+        supabase,
+        userId,
+        defaultCompanyId: companyId,
+        requestedCompanyId: owner,
+        allowedCompanyIds,
+      })
+    ).companyId
   } catch (err) {
     // A paused seat is worth saying; "not a member" stays a plain not-found.
     if ((err as { code?: string }).code === 'FORBIDDEN') throw err
