@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, createMockRouteParams, createQueuedMockSupabase } from '@/tests/helpers'
 
@@ -50,6 +50,8 @@ const row = (id: string, amount: number, due = '2026-10-12') => ({
 
 describe('GET /api/skatteverket/tax-payments/payment-file', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-09-23T12:00:00Z'))
     vi.clearAllMocks()
     reset()
     requireAuthMock.mockResolvedValue({
@@ -70,6 +72,10 @@ describe('GET /api/skatteverket/tax-payments/payment-file', () => {
         city: 'Stockholm',
       },
     })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('returns 401 when not authenticated', async () => {
