@@ -165,8 +165,27 @@ export type ArcimDocumentImportPhase =
   | 'import-error'
   | 'reconnecting'
 
+/**
+ * Providers whose underlag the server imports: Fortnox archive files and
+ * Bokio uploads. This is the one place the UI decides whether to offer the
+ * import. Mirrors the provider check in
+ * extensions/general/arcim-migration/lib/import-documents.ts: core code must
+ * not import from @/extensions/ (CI enforces it), so keep the two in sync.
+ */
+const ARCIM_UNDERLAG_PROVIDERS = ['fortnox', 'bokio'] as const
+
+export type ArcimUnderlagProvider = (typeof ARCIM_UNDERLAG_PROVIDERS)[number]
+
+export function supportsArcimUnderlagImport(
+  provider: string | null | undefined,
+): provider is ArcimUnderlagProvider {
+  return (ARCIM_UNDERLAG_PROVIDERS as readonly string[]).includes(provider ?? '')
+}
+
 export interface ArcimDocumentImportState {
   phase: ArcimDocumentImportPhase
+  /** The provider this panel runs for: named in the copy, target of a retry. */
+  provider: ArcimUnderlagProvider | null
   found: number
   result: ArcimDocumentImportResult | null
   problem: ArcimDocumentImportProblem | null
@@ -174,6 +193,7 @@ export interface ArcimDocumentImportState {
 
 export const INITIAL_ARCIM_DOCUMENT_IMPORT_STATE: ArcimDocumentImportState = {
   phase: 'hidden',
+  provider: null,
   found: 0,
   result: null,
   problem: null,
@@ -202,9 +222,9 @@ export type ArcimDocumentImportAction =
 export function resolveArcimDocumentFollowUpProvider(
   previewProvider: string | null | undefined,
   selectedProvider: string | null | undefined,
-): 'fortnox' | null {
+): ArcimUnderlagProvider | null {
   const provider = previewProvider ?? selectedProvider
-  return provider === 'fortnox' ? provider : null
+  return supportsArcimUnderlagImport(provider) ? provider : null
 }
 
 /**
@@ -220,17 +240,18 @@ export function arcimDocumentImportReducer(
     case 'reset':
       return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
     case 'discovery-started':
-      if (action.provider !== 'fortnox' || !action.migrationSucceeded) {
+      if (!supportsArcimUnderlagImport(action.provider) || !action.migrationSucceeded) {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
       }
-      return { phase: 'discovering', found: 0, result: null, problem: null }
+      return { phase: 'discovering', provider: action.provider, found: 0, result: null, problem: null }
     case 'discovery-succeeded':
-      if (action.result.provider !== 'fortnox') {
+      if (!supportsArcimUnderlagImport(action.result.provider)) {
         return INITIAL_ARCIM_DOCUMENT_IMPORT_STATE
       }
       if (action.result.scanned <= 0) {
         return {
           phase: 'empty',
+          provider: action.result.provider,
           found: 0,
           result: action.result,
           problem: null,
@@ -238,6 +259,7 @@ export function arcimDocumentImportReducer(
       }
       return {
         phase: 'offered',
+        provider: action.result.provider,
         found: action.result.scanned,
         result: action.result,
         problem: null,
@@ -245,6 +267,7 @@ export function arcimDocumentImportReducer(
     case 'discovery-failed':
       return {
         phase: 'discovery-error',
+        provider: state.provider,
         found: 0,
         result: null,
         problem: action.problem,
@@ -260,6 +283,7 @@ export function arcimDocumentImportReducer(
     case 'import-succeeded':
       return {
         phase: 'complete',
+        provider: state.provider,
         found: state.found || action.result.total || action.result.scanned,
         result: action.result,
         problem: null,

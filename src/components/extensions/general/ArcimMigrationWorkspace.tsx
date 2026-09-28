@@ -49,6 +49,7 @@ import {
   runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
+  supportsArcimUnderlagImport,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
@@ -573,8 +574,8 @@ function ProviderStep({
 }: {
   onSelect: (provider: ArcimProvider) => void
   onResync: (provider: ArcimProvider, consentId: string) => void
-  /** Run the underlag import on its own against an active Fortnox consent. */
-  onFetchDocuments: (consentId: string) => void
+  /** Run the underlag import on its own against an active consent whose provider serves underlag. */
+  onFetchDocuments: (consentId: string, provider: ArcimProvider) => void
   onDisconnect: (consentId: string) => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
@@ -692,11 +693,11 @@ function ProviderStep({
                         of the run that just finished; closing or reloading
                         lost it. From here it runs on its own, with the same
                         consent, without repeating the migration. */}
-                    {consent.provider === 'fortnox' && (
+                    {supportsArcimUnderlagImport(consent.provider) && (
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => onFetchDocuments(consent.id)}
+                        onClick={() => onFetchDocuments(consent.id, consent.provider)}
                       >
                         <Paperclip className="mr-1.5 h-3.5 w-3.5" />
                         {t('ext_arcim_documents_fetch_action')}
@@ -1830,9 +1831,12 @@ function DocumentImportFollowUp({
 
   if (state.phase === 'hidden' || state.phase === 'dismissed') return null
 
+  const provider = ARCIM_PROVIDERS.find(p => p.id === state.provider)?.name ?? state.provider ?? ''
   const title = (
     <SectionKicker>
-      {standalone ? t('ext_arcim_documents_title_standalone') : t('ext_arcim_documents_title')}
+      {standalone
+        ? t('ext_arcim_documents_title_standalone', { provider })
+        : t('ext_arcim_documents_title', { provider })}
     </SectionKicker>
   )
 
@@ -1843,7 +1847,7 @@ function DocumentImportFollowUp({
   ) {
     const label =
       state.phase === 'discovering'
-        ? t('ext_arcim_documents_discovering')
+        ? t('ext_arcim_documents_discovering', { provider })
         : state.phase === 'importing'
           ? t('ext_arcim_documents_importing')
           : t('ext_arcim_documents_reconnecting')
@@ -1878,12 +1882,12 @@ function DocumentImportFollowUp({
         {title}
         <p className="text-sm text-muted-foreground">
           {standalone
-            ? t('ext_arcim_documents_prompt_standalone', { count: state.found })
-            : t('ext_arcim_documents_prompt', { count: state.found })}
+            ? t('ext_arcim_documents_prompt_standalone', { count: state.found, provider })
+            : t('ext_arcim_documents_prompt', { count: state.found, provider })}
         </p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
-            {t('ext_arcim_documents_import_action')}
+            {t('ext_arcim_documents_import_action', { provider })}
           </Button>
           <Button variant="ghost" onClick={onDismiss}>
             {t('ext_arcim_documents_not_now')}
@@ -1897,7 +1901,7 @@ function DocumentImportFollowUp({
     return (
       <section className="space-y-3" aria-live="polite">
         {title}
-        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty')}</p>
+        <p className="text-sm text-muted-foreground">{t('ext_arcim_documents_empty', { provider })}</p>
         <Button variant="outline" onClick={onDiscover}>
           <RotateCcw className="mr-2 h-4 w-4" />
           {t('ext_arcim_documents_retry_discovery')}
@@ -1992,8 +1996,8 @@ function DocumentImportFollowUp({
           ? t('ext_arcim_documents_scope_error')
           : discoveryFailed
             ? standalone
-              ? t('ext_arcim_documents_discovery_error_standalone')
-              : t('ext_arcim_documents_discovery_error')
+              ? t('ext_arcim_documents_discovery_error_standalone', { provider })
+              : t('ext_arcim_documents_discovery_error', { provider })
             : standalone
               ? t('ext_arcim_documents_import_error_standalone')
               : t('ext_arcim_documents_import_error')}
@@ -2114,6 +2118,8 @@ function ResultStep({
   if (documentsOnly) {
     // Nothing was migrated in this run, so no verdict, stats or next steps:
     // the underlag flow is the whole page.
+    const documentProvider =
+      ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
     return (
       <div className="stagger-enter space-y-8">
         <div>
@@ -2121,10 +2127,10 @@ function ResultStep({
             {t('ext_arcim_documents_standalone_kicker')}
           </p>
           <h2 className="mt-2 font-display text-2xl leading-8 tracking-tight text-balance">
-            {t('ext_arcim_documents_title_standalone')}
+            {t('ext_arcim_documents_title_standalone', { provider: documentProvider })}
           </h2>
           <p className="mt-3 text-[13px] text-muted-foreground">
-            {t('ext_arcim_documents_standalone_lede')}
+            {t('ext_arcim_documents_standalone_lede', { provider: documentProvider })}
           </p>
         </div>
         <DocumentImportFollowUp
@@ -3019,7 +3025,7 @@ export default function ArcimMigrationWorkspace({
       provider,
       migrationSucceeded,
     })
-    if (provider !== 'fortnox' || !migrationSucceeded) return
+    if (!supportsArcimUnderlagImport(provider) || !migrationSucceeded) return
 
     try {
       const result = await requestArcimDocumentImport(currentConsentId, true)
@@ -3050,11 +3056,12 @@ export default function ArcimMigrationWorkspace({
     }
   }, [])
 
-  // Run the underlag import on its own against an active Fortnox consent.
-  // Same discovery, import and scope-reconnect path as the tail of a
-  // migration; only the surrounding page differs (no migration verdict).
-  const handleFetchDocuments = useCallback(async (existingConsentId: string) => {
-    setSelectedProvider('fortnox')
+  // Run the underlag import on its own against an active consent (Fortnox or
+  // Bokio). Same discovery, import and, for Fortnox, scope-reconnect path as
+  // the tail of a migration; only the surrounding page differs (no migration
+  // verdict).
+  const handleFetchDocuments = useCallback(async (existingConsentId: string, provider: ArcimProvider) => {
+    setSelectedProvider(provider)
     setConsentId(existingConsentId)
     setError(null)
     setMigrationResults(null)
@@ -3065,7 +3072,7 @@ export default function ArcimMigrationWorkspace({
     documentReconnectActionRef.current = null
     setDocumentsOnly(true)
     setStep('result')
-    await runDocumentDiscovery(existingConsentId, 'fortnox', true)
+    await runDocumentDiscovery(existingConsentId, provider, true)
   }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
 
   const handleDocumentReconnect = useCallback(() => {
@@ -3821,7 +3828,7 @@ export default function ArcimMigrationWorkspace({
             setStep('options')
           }}
           onDiscoverDocuments={() => {
-            if (consentId) void runDocumentDiscovery(consentId, 'fortnox', true)
+            if (consentId) void runDocumentDiscovery(consentId, documentImportState.provider, true)
           }}
           onImportDocuments={() => {
             if (consentId) void runDocumentImport(consentId)
