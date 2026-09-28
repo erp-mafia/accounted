@@ -144,6 +144,26 @@ describe('mapSupplierInvoice: the voucher legs of a provider supplier invoice', 
     expect(mapped.invoice).toMatchObject({ total: 1250, remaining_amount: 1250 })
   })
 
+  it('says so when the payable was the only row, rather than passing as an invoice without rows', () => {
+    const mapped = map(fortnox([[2440, -1250]]))
+
+    expect(mapped.items).toEqual([])
+    expect(mapped.rowsMismatch).toBe(true)
+  })
+
+  it('keeps a reverse-charge pair when the provider states 0 kr of VAT, which carries neither leg', () => {
+    const mapped = map(visma([[5420, 1840, 0], [2645, 460, 0], [2614, 0, 460], [2440, 0, 1840]], { TotalVatAmount: 0 }))
+
+    expect(mapped.rowsMismatch).toBe(false)
+    expect(rowsOf(mapped.items)).toEqual([['5420', 1840, 0, 0], ['2645', 460, 0, 0], ['2614', -460, 0, 0]])
+    expect(sides(cashPayment(mapped))).toEqual([
+      ['5420', 1840, 0],
+      ['2645', 460, 0],
+      ['2614', 0, 460],
+      ['1930', 0, 1840],
+    ])
+  })
+
   it('holds rows to the invoice even when no VAT was established, where the job worker never looked', () => {
     // A true invoice line priced net, beside a header that states no VAT:
     // 1 000 kr of rows for a 1 250 kr payable.

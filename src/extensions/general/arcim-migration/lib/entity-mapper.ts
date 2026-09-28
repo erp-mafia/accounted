@@ -1093,20 +1093,23 @@ function isVatAccount(accountNumber: string | undefined): boolean {
  * bank.
  *
  *   - The payable leg (244x) always goes.
- *   - The VAT leg (26xx) goes when the provider also states the VAT somewhere
- *     else (a header total, VAT on every line, or a net), because the items
- *     then carry it and the engine posts 2641 from them. When the rows are
- *     the only record of the VAT, as they are for both providers today, they
- *     stay: an item on 2641 with no VAT of its own is booked as it stands, so
- *     the voucher repeats the source's kontering, reverse-charge and SLP
- *     pairs included. An agent-written invoice that puts its VAT on a line of
- *     its own has the same shape.
+ *   - The VAT leg (26xx) goes when the provider also states a VAT amount
+ *     somewhere else (a header total, VAT on every line, or a net), because
+ *     the items then carry it and the engine posts 2641 from them. A stated
+ *     0 carries none of the rows: a reverse-charge pair (2645 against 2614)
+ *     is the buyer's own VAT, not the supplier's, so it stays. When the rows
+ *     are the only record of the VAT, as they are for both providers today,
+ *     they stay too: an item on 2641 with no VAT of its own is booked as it
+ *     stands, so the voucher repeats the source's kontering, reverse-charge
+ *     and SLP pairs included. An agent-written invoice that puts its VAT on a
+ *     line of its own has the same shape.
  *
  * Rows without an account (Bokio's invoice lines) are never touched.
  */
 function supplierInvoiceRows(dto: SupplierInvoiceDto): SupplierInvoiceDto {
   const withoutPayable = dto.lines.filter((line) => !isPayableAccount(line.accountNumber))
-  const vatStatedElsewhere = !resolveInvoiceVat({ ...dto, lines: withoutPayable }).unresolved
+  const statedVat = resolveInvoiceVat({ ...dto, lines: withoutPayable })
+  const vatStatedElsewhere = !statedVat.unresolved && statedVat.vatAmount !== 0
   const lines = vatStatedElsewhere
     ? withoutPayable.filter((line) => !isVatAccount(line.accountNumber))
     : withoutPayable
@@ -1248,13 +1251,18 @@ export function mapSupplierInvoice(
     notes: isCreditNote ? creditNoteNote(dto.note, dto.creditedInvoiceRef) : (dto.note || null),
   }
 
-  const mappedItems = dto.supplierEvidence && !dto.supplierEvidence.itemsComplete
+  const rowsWithheld = Boolean(dto.supplierEvidence && !dto.supplierEvidence.itemsComplete)
+  const mappedItems = rowsWithheld
     ? []
     : amounts.lines.map((line, idx) => mapSupplierInvoiceLine(line, idx, vat.rate))
   // Rows that contradict their own invoice are worse than no rows: every
   // booking path debits them as they stand and closes the entry on 2440 or
-  // the bank with whatever they sum to.
-  const rowsMismatch = mappedItems.length > 0 && rowsContradictHeader(mappedItems, subtotal, vatAmount)
+  // the bank with whatever they sum to. A row set that the filter above
+  // emptied (a payable leg with nothing beside it) describes its invoice no
+  // better, and is reported the same way rather than passing as row-less.
+  const rowsFilteredAway = !rowsWithheld && dto.lines.length > 0 && amounts.lines.length === 0 && total !== 0
+  const rowsMismatch = rowsFilteredAway
+    || (mappedItems.length > 0 && rowsContradictHeader(mappedItems, subtotal, vatAmount))
   const items = rowsMismatch ? [] : mappedItems
 
   return {
