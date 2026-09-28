@@ -10,6 +10,7 @@ vi.mock('@/lib/reports/vat-declaration', () => ({
 import {
   agiTaxPaymentDate,
   resolveCombinedTaxPayment,
+  vatTaxPaymentDate,
   type CombinedTaxPaymentSettings,
 } from '../combined-tax-payment'
 
@@ -23,7 +24,7 @@ const settings: CombinedTaxPaymentSettings = {
 }
 
 describe('combined Skattekonto payment', () => {
-  const { supabase, enqueue, reset } = createQueuedMockSupabase()
+  const { supabase, enqueue, findCalls, reset } = createQueuedMockSupabase()
   const client = supabase as unknown as SupabaseClient
 
   beforeEach(() => {
@@ -88,5 +89,24 @@ describe('combined Skattekonto payment', () => {
 
     expect(payment.agi).toBeNull()
     expect(payment.totalAmount).toBe(42_000)
+  })
+
+  it.each([
+    [2024, 3, '2024-02-29'],
+    [2025, 3, '2025-02-28'],
+    [2024, 5, '2024-04-30'],
+  ])('uses the last day of the fiscal end month for yearly VAT in %i', async (year, startMonth, periodEnd) => {
+    const yearlySettings = { ...settings, moms_period: 'yearly' as const, fiscal_year_start_month: startMonth }
+    const paymentDate = vatTaxPaymentDate(
+      { periodType: 'yearly', year, period: 1 },
+      'aktiebolag',
+      yearlySettings,
+    )
+    expect(paymentDate).not.toBeNull()
+
+    await resolveCombinedTaxPayment(client, 'company-1', 'aktiebolag', yearlySettings, paymentDate!)
+
+    expect(findCalls('fiscal_periods', 'gte')).toContainEqual(['period_end', `${periodEnd.slice(0, 8)}01`])
+    expect(findCalls('fiscal_periods', 'lte')).toContainEqual(['period_end', periodEnd])
   })
 })
