@@ -97,11 +97,12 @@ export function TaxPaymentPanel({
   // The page passes the AGI declaration's stored totals when the AGI exists
   // (whole kronor for declarations generated since the whole-krona change:
   // exactly what the payment file pays and Skatteverket draws), falling back
-  // to run totals. Display what will actually be paid: no reformatting here,
-  // so legacy öre declarations still show the öre-exact amount their
-  // payment file pays.
+  // to run totals. A positive preview shows what will actually be paid,
+  // including the öre-exact amount for legacy declarations. A zero preview
+  // does not erase the stored AGI amount or hide its payment status.
   const vatAmount = preview?.vat?.amount ?? 0
-  const totalAmount = preview?.totalAmount ?? roundOre(totalTax + totalAvgifter)
+  const agiTotal = roundOre(totalTax + totalAvgifter)
+  const totalAmount = preview && preview.totalAmount > 0 ? preview.totalAmount : agiTotal
 
   const handleDownload = useCallback(async () => {
     // Both buttons are disabled while either is in flight; this guard closes the
@@ -167,7 +168,7 @@ export function TaxPaymentPanel({
     }
   }, [period, toast, onChange, t, locale, downloading, marking])
 
-  if (totalAmount <= 0) return null
+  if (agiTotal <= 0) return null
 
   const FORMAT_LABEL: Record<PaymentFormat, string> = {
     bg_lb: t('format_bg_lb'),
