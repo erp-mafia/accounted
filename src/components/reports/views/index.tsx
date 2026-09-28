@@ -60,6 +60,7 @@ import type {
 } from '@/lib/reports/vat-settlement'
 import { VatAlreadyBookedBanner } from '@/components/reports/VatAlreadyBookedBanner'
 import { useVatSettlementProposal } from '@/components/reports/use-vat-settlement-proposal'
+import { VatTaxPaymentCard } from '@/components/reports/VatTaxPaymentCard'
 
 // Recharts is ~180KB: defer the chart components so report tables (the
 // regulated content) render without waiting for the charting bundle.
@@ -2507,6 +2508,11 @@ export function VatDeclarationView({ pageTitle }: { pageTitle?: string } = {}) {
                   onChanged={() => setFilingsRefreshKey((k) => k + 1)}
                 />
               )}
+              <VatTaxPaymentCard
+                queryString={vatQueryString()}
+                rutor={data.rutor}
+                defaultFormat={settings?.preferred_payment_format === 'bg_lb' ? 'bg_lb' : 'pain001'}
+              />
             </section>
           )}
         </div>

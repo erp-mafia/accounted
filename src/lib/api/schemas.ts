@@ -1823,6 +1823,12 @@ export const SupplierInvoiceBankEnteredSchema = z.object({
   entered: z.boolean(),
 })
 
+/** Display-only "I banken" mark for one or more upcoming Skattekonto debits. */
+export const SkattekontoBankEnteredSchema = z.object({
+  transaction_ids: z.array(uuid).min(1).max(100),
+  entered: z.boolean(),
+})
+
 export const UpdateSupplierInvoiceSchema = z.object({
   supplier_invoice_number: z.string().min(1).optional(),
   invoice_date: isoDate.optional(),
@@ -5028,4 +5034,3 @@ export const PartyAliasActionSchema = z
     name: z.string().trim().min(1).max(200).optional(),
   })
   .refine((v) => v.action !== 'rename' || !!v.name, { message: 'name is required for rename', path: ['name'] })
-

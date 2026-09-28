@@ -53,6 +53,12 @@ vi.mock('@/lib/bankgiro/luhn', () => ({
   validateBankgiroNumber: vi.fn().mockReturnValue(true),
 }))
 
+const resolveCombinedTaxPaymentMock = vi.fn()
+vi.mock('@/lib/skatteverket/combined-tax-payment', () => ({
+  agiTaxPaymentDate: vi.fn().mockReturnValue('2026-05-12'),
+  resolveCombinedTaxPayment: (...args: unknown[]) => resolveCombinedTaxPaymentMock(...args),
+}))
+
 import { GET } from '../route'
 
 describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
@@ -75,6 +81,12 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
         bankgiro: '1234567',
         city: 'Stockholm',
       },
+    })
+    resolveCombinedTaxPaymentMock.mockResolvedValue({
+      paymentDate: '2026-05-12',
+      agi: { id: 'agi-1', period: '2026-04', tax: 1000, avgifter: 500, amount: 1500 },
+      vat: null,
+      totalAmount: 1500,
     })
   })
 
@@ -124,6 +136,9 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
   })
 
   it('pays the declared whole-krona totals as-is for new-era declarations', async () => {
+    resolveCombinedTaxPaymentMock.mockResolvedValue({
+      paymentDate: '2026-05-12', agi: { amount: 28341 }, vat: null, totalAmount: 28341,
+    })
     // Declarations generated since the whole-krona change store the declared
     // integers (what Skatteverket computes from the underlag and draws), and
     // the matching salary booking credited 2731 with the same number: the
@@ -143,6 +158,9 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
   })
 
   it('keeps paying öre-exact for legacy öre-bearing declarations', async () => {
+    resolveCombinedTaxPaymentMock.mockResolvedValue({
+      paymentDate: '2026-05-12', agi: { amount: 28341.84 }, vat: null, totalAmount: 28341.84,
+    })
     // Legacy rows predate the whole-krona storage: their salary bookings
     // credited 2731 with the öre, so the payment keeps clearing 2731 in full
     // (the öre parks as a small skattekonto överskott, the pre-existing
@@ -164,6 +182,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
   it('generates a pain.001 file when format=pain001', async () => {
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
     enqueue({ data: null, error: null }) // update tax_payment_file_generated_at
 
     const response = await GET(
@@ -175,7 +194,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
 
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/xml; charset=utf-8')
-    expect(response.headers.get('Content-Disposition')).toContain('pain001_skatt_2026-04.xml')
+    expect(response.headers.get('Content-Disposition')).toContain('pain001_skatt_2026-05-12.xml')
     expect(mockGenerateBgLb).not.toHaveBeenCalled()
     expect(mockGeneratePain001).toHaveBeenCalledTimes(1)
     const [debtor, payments] = mockGeneratePain001.mock.calls[0]
@@ -193,6 +212,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     mockResolveBatchDebtor.mockResolvedValue({ ok: false, missing: 'iban' })
     enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
     enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+    enqueue({ data: { bankgiro: '123-4567' } }) // company_settings
 
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
