@@ -13,6 +13,7 @@ import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
 import { formatDateISO } from '@/lib/calendar/utils'
+import { lookupBicByBankName, lookupBicByClearing } from '@/lib/salary/payment/bank-account'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
 
@@ -28,6 +29,8 @@ type SelectedRow = {
 
 const errorResponse = (code: string, message: string, messageEn: string, status: number) =>
   NextResponse.json({ error: { code, message, message_en: messageEn } }, { status })
+
+const SWEDBANK_ISO_ONLY_FROM = '2026-09-01'
 
 /**
  * Generate one payment file from selected upcoming Skattekonto debits.
@@ -67,7 +70,7 @@ export const GET = withRouteContext(
           .single(),
         supabase
           .from('company_settings')
-          .select('bankgiro')
+          .select('bankgiro, bic, clearing_number, bank_name')
           .eq('company_id', companyId)
           .single(),
       ])
@@ -214,6 +217,19 @@ export const GET = withRouteContext(
           'BANKGIRO_INVALID',
           'Företagets bankgironummer är ogiltigt.',
           'The company bankgiro number is invalid.',
+          400,
+        )
+      }
+      const payingBankBic =
+        settings.bic?.trim().toUpperCase() ||
+        lookupBicByClearing(settings.clearing_number) ||
+        lookupBicByBankName(settings.bank_name)
+      if (payingBankBic?.startsWith('SWEDSESS') &&
+          payments.some((payment) => payment.paymentDate >= SWEDBANK_ISO_ONLY_FROM)) {
+        return errorResponse(
+          'LB_FORMAT_UNSUPPORTED',
+          'Swedbank tar inte emot LB-filer för betalningar från 1 september 2026. Välj ISO 20022 pain.001.',
+          'Swedbank does not accept LB files for payments from 1 September 2026. Choose ISO 20022 pain.001.',
           400,
         )
       }

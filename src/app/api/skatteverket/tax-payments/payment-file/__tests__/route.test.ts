@@ -34,8 +34,8 @@ import { GET } from '../route'
 
 const ID_1 = '11111111-1111-4111-8111-111111111111'
 const ID_2 = '22222222-2222-4222-8222-222222222222'
-const request = (ids = `${ID_1},${ID_2}`) => createMockRequest(
-  `/api/skatteverket/tax-payments/payment-file?transaction_ids=${ids}&format=pain001`,
+const request = (ids = `${ID_1},${ID_2}`, format = 'pain001') => createMockRequest(
+  `/api/skatteverket/tax-payments/payment-file?transaction_ids=${ids}&format=${format}`,
 )
 
 const row = (id: string, amount: number, due = '2026-10-12') => ({
@@ -151,6 +151,46 @@ describe('GET /api/skatteverket/tax-payments/payment-file', () => {
     expect(response.status).toBe(400)
     expect((await response.json()).error.code).toBe('DEBTOR_BANKGIRO_REQUIRED')
     expect(generatePain001Mock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['BIC', { bic: 'SWEDSESS' }],
+    ['clearing number', { clearing_number: '8327-9' }],
+    ['bank name', { bank_name: 'Swedbank' }],
+  ])('directs Swedbank customers identified by %s to pain.001 after the cutoff', async (_source, bank) => {
+    enqueue({ data: [row(ID_1, -10_000)], error: null })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: '991-2346', ...bank } })
+
+    const response = await GET(request(ID_1, 'bg_lb'), createMockRouteParams({}))
+
+    expect(response.status).toBe(400)
+    const body = await response.json()
+    expect(body.error.code).toBe('LB_FORMAT_UNSUPPORTED')
+    expect(body.error.message).toContain('pain.001')
+  })
+
+  it('keeps LB available for another bank', async () => {
+    enqueue({ data: [row(ID_1, -10_000)], error: null })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: '991-2346', bic: 'ELLFSESS' } })
+
+    const response = await GET(request(ID_1, 'bg_lb'), createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Disposition')).toContain('bg_lb_skatt_2026-10-12.txt')
+  })
+
+  it('keeps Swedbank LB available for payment dates before the cutoff', async () => {
+    vi.setSystemTime(new Date('2026-08-20T12:00:00Z'))
+    enqueue({ data: [row(ID_1, -10_000, '2026-08-28')], error: null })
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } })
+    enqueue({ data: { bankgiro: '991-2346', bic: 'SWEDSESS' } })
+
+    const response = await GET(request(ID_1, 'bg_lb'), createMockRouteParams({}))
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Disposition')).toContain('bg_lb_skatt_2026-08-28.txt')
   })
 
   it('rejects selected credits', async () => {
