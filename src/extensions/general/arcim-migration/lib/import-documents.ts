@@ -81,6 +81,7 @@ import {
   resolveDatedRef,
 } from '@/lib/documents/voucher-ref-resolver'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('extensions/arcim-migration/import-documents')
@@ -308,10 +309,8 @@ export async function importProviderDocuments(
 
   // Unsupported providers are a no-op rather than an error
   // so a mixed-provider caller can invoke this unconditionally. The migration
-  // UI offers the import for the same two providers
-  // (supportsArcimUnderlagImport in
-  // components/extensions/general/arcim-document-import-flow.ts): keep in sync.
-  if (provider !== 'bokio' && provider !== 'fortnox') {
+  // UI offers the import from the same definition.
+  if (!supportsUnderlagImport(provider)) {
     log.info('document import skipped: provider not supported', { provider })
     return result
   }

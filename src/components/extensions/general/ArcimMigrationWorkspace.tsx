@@ -37,6 +37,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
+import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -49,7 +50,6 @@ import {
   runArcimDocumentImportToCompletion,
   resolveArcimDocumentFollowUpProvider,
   serializeArcimDocumentResumeMarker,
-  supportsArcimUnderlagImport,
   watchArcimOAuthPopup,
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
@@ -693,7 +693,7 @@ function ProviderStep({
                         of the run that just finished; closing or reloading
                         lost it. From here it runs on its own, with the same
                         consent, without repeating the migration. */}
-                    {supportsArcimUnderlagImport(consent.provider) && (
+                    {supportsUnderlagImport(consent.provider) && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -3025,7 +3025,7 @@ export default function ArcimMigrationWorkspace({
       provider,
       migrationSucceeded,
     })
-    if (!supportsArcimUnderlagImport(provider) || !migrationSucceeded) return
+    if (!supportsUnderlagImport(provider) || !migrationSucceeded) return
 
     try {
       const result = await requestArcimDocumentImport(currentConsentId, true)

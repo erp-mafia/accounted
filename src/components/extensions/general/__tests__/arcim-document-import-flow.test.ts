@@ -14,7 +14,6 @@ import {
   resolveArcimDocumentFollowUpProvider,
   runArcimDocumentImportToCompletion,
   serializeArcimDocumentResumeMarker,
-  supportsArcimUnderlagImport,
   watchArcimOAuthPopup,
   type ArcimDocumentImportResult,
 } from '../arcim-document-import-flow'
@@ -83,14 +82,6 @@ describe('document follow-up state', () => {
         migrationSucceeded: true,
       }),
     ).toEqual(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE)
-  })
-
-  it('names exactly the providers the server imports underlag from', () => {
-    expect(supportsArcimUnderlagImport('fortnox')).toBe(true)
-    expect(supportsArcimUnderlagImport('bokio')).toBe(true)
-    for (const provider of ['visma', 'briox', 'bjornlunden', 'wint', '', null, undefined]) {
-      expect(supportsArcimUnderlagImport(provider)).toBe(false)
-    }
   })
 
   it('keeps the document step visible when Fortnox has no attachments', () => {
