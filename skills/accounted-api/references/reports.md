@@ -1534,7 +1534,8 @@ Returns per-employee semesterlöneskuld balances as of year-end based on their v
 **Do not use for:** Real-time accrual posting (handled per salary run). Vacation request management (not in scope for v1).
 
 **Pitfalls:**
-- `year` is required.
+- `year` is required. The report is as of December 31 of that year.
+- Amounts specify what is booked on 2920/2940: the latest closed vacation year's computed liability plus every accrual booked after its year end (before any close: the cutover opening liability plus every accrual booked so far). Day columns describe the vacation year containing December 31 under the company's vacation-year basis.
 - Employees with vacation_rule = none or semesterersattning are excluded: they have no semesterlöneskuld liability.
 - advanceVacationDebt (per row and in totals) is the förskottsskuld loaded as a cutover opening balance (SemL 29 a §): a receivable on the employee. totalLiability stays the booked 2920 + 2940 liability and is what bokslut and reconciliation use; netLiability subtracts the förskottsskuld for information only.
 
