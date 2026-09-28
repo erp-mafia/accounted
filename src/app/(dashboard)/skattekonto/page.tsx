@@ -606,7 +606,10 @@ export default function SkattekontoPage() {
       ? Math.round((nextCharge.amount - saldoNow) * 100) / 100
       : null
   const rowsForPayment = (paymentSelection ?? nextCharge?.rows ?? []).filter(
-    (row) => Number(row.belopp_skatteverket) < 0 && !row.bank_entered_at,
+    (row) =>
+      row.status === 'upcoming' &&
+      Number(row.belopp_skatteverket) < 0 &&
+      !row.bank_entered_at,
   )
   const paymentDue = rowsForPayment[0]
     ? (rowsForPayment[0].forfallodatum ?? rowsForPayment[0].transaktionsdatum)
