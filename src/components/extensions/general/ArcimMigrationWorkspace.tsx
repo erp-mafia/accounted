@@ -53,6 +53,11 @@ import {
   type ArcimDocumentImportProblem,
   type ArcimDocumentImportState,
 } from './arcim-document-import-flow'
+import {
+  trackMigrationConnectClicked,
+  trackMigrationConnectFinished,
+  type MigrationConnectOutcome,
+} from './arcim-connect-track'
 
 type ArcimProvider = 'fortnox' | 'visma' | 'briox' | 'bokio' | 'bjornlunden' | 'wint'
 
@@ -149,6 +154,29 @@ function clearDocumentOAuthResume(): void {
     window.sessionStorage.removeItem(ARCIM_DOCUMENT_OAUTH_RESUME_KEY)
   } catch {
     // Nothing else is required when browser storage is unavailable.
+  }
+}
+
+// A connect click whose popup was blocked continues as a full-page redirect
+// and leaves this page: the provider rides along in session storage so the
+// return can report how the attempt ended (migration_connect_finished).
+const ARCIM_CONNECT_ATTEMPT_KEY = 'arcim-connect-attempt'
+
+function storeConnectAttempt(provider: ArcimProvider): void {
+  try {
+    window.sessionStorage.setItem(ARCIM_CONNECT_ATTEMPT_KEY, provider)
+  } catch {
+    // Telemetry is best-effort when browser storage is unavailable.
+  }
+}
+
+function takeConnectAttempt(): ArcimProvider | null {
+  try {
+    const stored = window.sessionStorage.getItem(ARCIM_CONNECT_ATTEMPT_KEY)
+    window.sessionStorage.removeItem(ARCIM_CONNECT_ATTEMPT_KEY)
+    return ARCIM_PROVIDERS.find(p => p.id === stored)?.id ?? null
+  } catch {
+    return null
   }
 }
 
@@ -508,6 +536,12 @@ interface ConnectionStatus {
    */
   hasCompletedSieImport?: boolean
   latestCompletedSieImport?: SieImportSummary | null
+  /**
+   * The latest connect that never got a token (older than 30 minutes, not
+   * followed by a completed SIE import or an accepted connection). Optional
+   * only for a server that predates the field.
+   */
+  unfinishedConnect?: { provider: ArcimProvider; startedAt: string } | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -552,6 +586,14 @@ function ProviderStep({
   const sieViaApi = (id: ArcimProvider) => ARCIM_PROVIDERS.find(p => p.id === id)?.sieViaApi === true
   const allSieViaApi = activeConsents.length > 0 && activeConsents.every(c => sieViaApi(c.provider))
   const showSieRequiredBanner = !isLoadingStatus && !hasSieImport && !allSieViaApi
+  // A returning customer whose last connect stalled gets it back here. The
+  // retry follows the same gate as the provider list below: Visma and Bokio
+  // stay behind "SIE krävs först", so only the upload is offered for them.
+  const unfinished = connectionStatus?.unfinishedConnect ?? null
+  const unfinishedInfo = unfinished ? ARCIM_PROVIDERS.find(p => p.id === unfinished.provider) : undefined
+  const unfinishedCanRetry = !!unfinishedInfo
+    && !COMING_SOON_PROVIDERS.has(unfinishedInfo.id)
+    && (hasSieImport || unfinishedInfo.sieViaApi)
 
   return (
     <div className="stagger-enter space-y-8">
@@ -569,6 +611,33 @@ function ProviderStep({
           bokföringsdatan (kontoplan, verifikationer och balanser) via SIE-fil först. Gäller inte
           Fortnox, Briox, Björn Lundén och WINT, där hämtas bokföringen direkt via API:et.
         </AttnLine>
+      )}
+
+      {/* Unfinished connect: one hairline row in the shape of the active
+          connections below, with the two ways forward. */}
+      {!isLoadingStatus && unfinished && unfinishedInfo && (
+        <div className="flex flex-wrap items-center gap-3 border-y border-border py-3 sm:flex-nowrap sm:gap-4">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={PROVIDER_LOGOS[unfinishedInfo.id]}
+            alt=""
+            className="h-8 w-8 shrink-0 rounded-sm object-contain"
+          />
+          <p className="min-w-0 flex-1 text-sm font-medium">
+            {t('ext_arcim_unfinished_connect', { provider: unfinishedInfo.name })}
+          </p>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {unfinishedCanRetry && (
+              <Button size="sm" onClick={() => onSelect(unfinishedInfo.id)}>
+                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                {t('ext_arcim_unfinished_connect_retry')}
+              </Button>
+            )}
+            <Button size="sm" variant="outline" asChild>
+              <Link href="/import?mode=sie">{t('ext_arcim_unfinished_connect_sie')}</Link>
+            </Button>
+          </div>
+        </div>
       )}
 
       {/* Existing connections: quiet hairline rows, no cards. Being connected
@@ -743,6 +812,7 @@ function ConnectStep({
   authUrl,
   activationUrl,
   consentId,
+  onOpenProviderWindow,
   onTokenSubmit,
   onBack,
 }: {
@@ -754,11 +824,22 @@ function ConnectStep({
   /** Björn Lundén only: Lundify's activation redirect, when BL issued us a key. */
   activationUrl: string | null
   consentId: string | null
+  /** Opens the provider login (or Lundify activation) popup: the parent owns
+   *  it so the click and its outcome can be counted. */
+  onOpenProviderWindow: (url: string) => void
   onTokenSubmit: (apiToken: string, companyId: string) => void
   onBack: () => void
 }) {
   const t = useTranslations('extensions')
   const providerName = ARCIM_PROVIDERS.find(p => p.id === provider)?.name ?? provider
+  // What the provider requires before its login can succeed, shown before the
+  // click instead of only after a failure. Wording follows the error registry
+  // (PROVIDER_LICENSE_MISSING, PROVIDER_API_MODULE_INACTIVE).
+  const requirement = provider === 'fortnox'
+    ? t('ext_arcim_requirement_fortnox')
+    : provider === 'visma'
+      ? t('ext_arcim_requirement_visma')
+      : null
   const [apiToken, setApiToken] = useState('')
   const [companyId, setCompanyId] = useState('')
   // With the Lundify redirect on offer, the User-Key field is the fallback for
@@ -770,24 +851,6 @@ function ConnectStep({
   const hasLundifyActivation = isClientCredentials && !!activationUrl
   const manualKeyVisible = !hasLundifyActivation || showManualKey
 
-  const openProviderWindow = (url: string) => {
-    const w = 600
-    const h = 700
-    const left = window.screenX + (window.outerWidth - w) / 2
-    const top = window.screenY + (window.outerHeight - h) / 2
-    const popup = window.open(url, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
-    if (!popup) {
-      // Popup blocked: with the return value discarded, a blocked
-      // popup looked exactly like a successful one (nothing opens,
-      // nothing is said, the user clicks again). Fall back to the
-      // full-page flow instead. The callback already supports it:
-      // with no window.opener it redirects to
-      // /import?migration=connected&consentId=..., which
-      // handleOAuthReturn consumes and resumes the wizard at the
-      // preview step. Same treatment as SkatteverketConnectPanel.
-      window.location.href = url
-    }
-  }
   // WINT has no API keys: the "token" is the user's WINT login (e-post +
   // lösenord), exchanged server-side for ett tokenpar; lösenordet sparas aldrig.
   const isWintLogin = provider === 'wint'
@@ -845,28 +908,21 @@ function ConnectStep({
       {isLoading && <SpinnerLine>Förbereder anslutning...</SpinnerLine>}
 
       {error && (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
-            <p className="text-sm text-muted-foreground">{error}</p>
-            {provider === 'fortnox' && (
-              <p className="text-sm text-muted-foreground">
-                Obs: Fortnox kräver ett aktivt integrationstillägg (tillkostnadsbelagd tilläggstjänst) för att kunna använda integrationer. Kontrollera att detta är aktiverat i ditt Fortnox-konto.
-              </p>
-            )}
-          </div>
-          <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
+        <div className="space-y-1">
+          <p className="text-sm font-medium text-destructive">Anslutning misslyckades</p>
+          <p className="text-sm text-muted-foreground">{error}</p>
         </div>
       )}
 
       {/* OAuth flow */}
       {authType === 'oauth' && authUrl && !isLoading && (
         <div className="space-y-4">
+          {requirement && <p className="text-sm">{requirement}</p>}
           <p className="text-sm text-muted-foreground">
             Klicka nedan för att logga in i {providerName}.
             Fönstret stängs automatiskt när du är klar.
           </p>
-          <Button onClick={() => openProviderWindow(authUrl)}>
+          <Button onClick={() => onOpenProviderWindow(authUrl)}>
             Logga in i {providerName}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -878,7 +934,7 @@ function ConnectStep({
           providers, so the same listener resumes the wizard. */}
       {authType === 'token' && consentId && !isLoading && hasLundifyActivation && activationUrl && (
         <div className="space-y-4">
-          <Button onClick={() => openProviderWindow(activationUrl)}>
+          <Button onClick={() => onOpenProviderWindow(activationUrl)}>
             {t('ext_arcim_bl_activate_button')}
             <ExternalLink className="ml-2 h-4 w-4" />
           </Button>
@@ -969,6 +1025,10 @@ function ConnectStep({
           </div>
         </div>
       )}
+
+      {/* The manual route is offered up front, not only after a failure:
+          most customers whose connect stalled never saw it. */}
+      <SieFallbackLine message="Du kan också importera din bokföringsdata manuellt via en SIE-fil." />
 
       <div className="flex border-t border-border pt-6">
         <Button variant="outline" onClick={onBack}>
@@ -2789,6 +2849,53 @@ export default function ArcimMigrationWorkspace({
     stopOAuthPopupWatchRef.current = null
   }, [])
 
+  // The connect click being measured (migration_connect_clicked). The first
+  // outcome clears it, so one click reports at most one
+  // migration_connect_finished.
+  const connectAttemptRef = useRef<ArcimProvider | null>(null)
+  const startConnectAttempt = useCallback((provider: ArcimProvider) => {
+    connectAttemptRef.current = provider
+    trackMigrationConnectClicked(provider)
+  }, [])
+  const finishConnectAttempt = useCallback((outcome: MigrationConnectOutcome) => {
+    const provider = connectAttemptRef.current
+    if (!provider) return
+    connectAttemptRef.current = null
+    trackMigrationConnectFinished(provider, outcome)
+  }, [])
+
+  // First connect: the provider login, or Lundify's activation for Björn
+  // Lundén. Both answer through the same popup and postMessage listener.
+  const handleOpenProviderWindow = useCallback((url: string) => {
+    if (selectedProvider) startConnectAttempt(selectedProvider)
+    const w = 600
+    const h = 700
+    const left = window.screenX + (window.outerWidth - w) / 2
+    const top = window.screenY + (window.outerHeight - h) / 2
+    const popup = window.open(url, 'arcim-oauth', `width=${w},height=${h},left=${left},top=${top}`)
+    if (!popup) {
+      // Popup blocked: with the return value discarded, a blocked
+      // popup looked exactly like a successful one (nothing opens,
+      // nothing is said, the user clicks again). Fall back to the
+      // full-page flow instead. The callback already supports it:
+      // with no window.opener it redirects to
+      // /import?migration=connected&consentId=..., which
+      // handleOAuthReturn consumes and resumes the wizard at the
+      // preview step. Same treatment as SkatteverketConnectPanel.
+      if (selectedProvider) storeConnectAttempt(selectedProvider)
+      window.location.href = url
+      return
+    }
+    // Closing the login window before it answers is an outcome of its own.
+    // The popup posts its result before it closes, and the message listener
+    // stops this watch first, so a finished login never counts as closed.
+    clearOAuthPopupWatch()
+    stopOAuthPopupWatchRef.current = watchArcimOAuthPopup(popup, () => {
+      stopOAuthPopupWatchRef.current = null
+      finishConnectAttempt('window_closed')
+    })
+  }, [selectedProvider, startConnectAttempt, clearOAuthPopupWatch, finishConnectAttempt])
+
   const clearDocumentReconnectFailureCleanup = useCallback(() => {
     if (documentReconnectFailureCleanupRef.current) {
       window.clearTimeout(documentReconnectFailureCleanupRef.current)
@@ -3025,6 +3132,7 @@ export default function ArcimMigrationWorkspace({
   const handleTokenSubmit = useCallback(async (apiToken: string, companyId: string) => {
     if (!consentId || !selectedProvider) return
 
+    startConnectAttempt(selectedProvider)
     setIsLoading(true)
     setError(null)
 
@@ -3046,13 +3154,15 @@ export default function ArcimMigrationWorkspace({
       }
 
       // Token stored: consent is now accepted, proceed to preview
+      finishConnectAttempt('success')
       await loadPreview(consentId)
     } catch (err) {
+      finishConnectAttempt('provider_error')
       setError(displayError(err, 'Kunde inte ansluta'))
     } finally {
       setIsLoading(false)
     }
-  }, [consentId, selectedProvider, loadPreview])
+  }, [consentId, selectedProvider, loadPreview, startConnectAttempt, finishConnectAttempt])
 
   // Handle OAuth callback via URL params
   const handleOAuthReturn = useCallback(async () => {
@@ -3082,15 +3192,19 @@ export default function ArcimMigrationWorkspace({
           await runDocumentImport(callbackConsentId)
         }
       } else {
+        const attempt = takeConnectAttempt()
+        if (attempt) trackMigrationConnectFinished(attempt, 'success')
         await loadPreview(callbackConsentId)
       }
     } else if (migrationStatus === 'error') {
       const callbackProvider = url.searchParams.get('provider') as ArcimProvider | null
       const reason = url.searchParams.get('reason') || 'OAuth-anslutningen misslyckades. Försök igen.'
+      const cancelled = url.searchParams.get('cancelled') === '1'
       url.searchParams.delete('migration')
       url.searchParams.delete('provider')
       url.searchParams.delete('reason')
       url.searchParams.delete('consentId')
+      url.searchParams.delete('cancelled')
       window.history.replaceState({}, '', url.pathname)
       clearDocumentOAuthResume()
       if (documentResume && callbackConsentId) {
@@ -3106,6 +3220,8 @@ export default function ArcimMigrationWorkspace({
         )
         return
       }
+      const attempt = takeConnectAttempt()
+      if (attempt) trackMigrationConnectFinished(attempt, cancelled ? 'cancelled' : 'provider_error')
       setError(reason)
       toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       if (callbackProvider) {
@@ -3166,6 +3282,7 @@ export default function ArcimMigrationWorkspace({
           }
           return
         }
+        finishConnectAttempt('success')
         loadPreview(event.data.consentId)
       } else if (event.data?.type === 'arcim-oauth-error') {
         clearOAuthPopupWatch()
@@ -3189,6 +3306,9 @@ export default function ArcimMigrationWorkspace({
           )
           return
         }
+        // access_denied at the provider arrives flagged `cancelled` by the
+        // callback: the customer chose to stop, the provider did not fail.
+        finishConnectAttempt(event.data.cancelled === true ? 'cancelled' : 'provider_error')
         setError(reason)
         toast({ title: 'Anslutning misslyckades', description: reason, variant: 'destructive' })
       }
@@ -3199,6 +3319,7 @@ export default function ArcimMigrationWorkspace({
     clearOAuthPopupWatch,
     clearDocumentReconnectFailureCleanup,
     documentImportState.problem,
+    finishConnectAttempt,
     loadPreview,
     runDocumentDiscovery,
     runDocumentImport,
@@ -3609,6 +3730,7 @@ export default function ArcimMigrationWorkspace({
           authUrl={authUrl}
           activationUrl={activationUrl}
           consentId={consentId}
+          onOpenProviderWindow={handleOpenProviderWindow}
           onTokenSubmit={handleTokenSubmit}
           onBack={() => {
             setStep('provider')

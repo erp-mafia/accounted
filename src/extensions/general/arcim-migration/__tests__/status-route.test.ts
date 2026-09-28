@@ -40,8 +40,14 @@ vi.mock('../lib/relink-registration-vouchers', () => ({
   relinkRegistrationVouchers: vi.fn(),
 }))
 
+vi.mock('@/lib/supabase/server', () => ({
+  createClient: vi.fn(),
+  createServiceClient: vi.fn(),
+}))
+
 import { arcimMigrationExtension } from '../index'
 import { listConsents } from '../lib/provider-client'
+import { createServiceClient } from '@/lib/supabase/server'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
   (r) => r.method === 'GET' && r.path === '/status',
@@ -50,7 +56,12 @@ type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Respon
 const handler = route.handler as RouteHandler
 
 type Row = Record<string, unknown>
-type StatusBody = { sieImports: Row[]; hasCompletedSieImport: boolean; latestCompletedSieImport: Row | null }
+type StatusBody = {
+  sieImports: Row[]
+  hasCompletedSieImport: boolean
+  latestCompletedSieImport: Row | null
+  unfinishedConnect: { provider: string; startedAt: string } | null
+}
 type RecordedQuery = { table: string; filters: [string, unknown][]; limit?: number; single: boolean }
 
 /**
@@ -116,10 +127,50 @@ function sieRow(id: string, status: string, createdAt: string): Row {
   }
 }
 
+/**
+ * In-memory service client for the unfinished-connect lookup: each table is
+ * a row list, and eq / gt / order / limit filter it the way PostgREST would,
+ * so the assertions hold for the predicate rather than for a scripted answer.
+ */
+function buildService(tables: Record<string, Row[]>) {
+  const from = vi.fn((table: string) => {
+    let rows = [...(tables[table] ?? [])]
+    let limit: number | undefined
+    const result = () => (limit === undefined ? rows : rows.slice(0, limit))
+    const chain: Record<string, unknown> = {}
+    chain.select = vi.fn(() => chain)
+    chain.eq = vi.fn((column: string, value: unknown) => {
+      rows = rows.filter((r) => r[column] === value)
+      return chain
+    })
+    chain.gt = vi.fn((column: string, value: string) => {
+      rows = rows.filter((r) => String(r[column]) > value)
+      return chain
+    })
+    chain.order = vi.fn((column: string, opts?: { ascending?: boolean }) => {
+      const dir = opts?.ascending === false ? -1 : 1
+      rows.sort((a, b) => (String(a[column]) < String(b[column]) ? -dir : dir))
+      return chain
+    })
+    chain.limit = vi.fn((n: number) => {
+      limit = n
+      return chain
+    })
+    chain.maybeSingle = vi.fn(() => Promise.resolve({ data: result()[0] ?? null, error: null }))
+    chain.then = (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: result(), error: null }).then(onFulfilled, onRejected)
+    return chain
+  })
+  return { from }
+}
+
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString()
+
 describe('GET /status: completed SIE import', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(listConsents as Mock).mockResolvedValue([])
+    ;(createServiceClient as Mock).mockReturnValue(buildService({}))
   })
 
   it('reports a completed import that ten newer failed rows pushed out of the history window', async () => {
@@ -164,5 +215,104 @@ describe('GET /status: completed SIE import', () => {
     const res = await handler(statusRequest(), buildCtx(supabase))
 
     expect(res.status).toBe(401)
+  })
+})
+
+/**
+ * GET /status `unfinishedConnect`: the company's latest connect that never got
+ * a token, so the wizard can offer "Försök igen" or a SIE upload to a
+ * returning customer. The consent row is the record of the attempt; no table
+ * of its own.
+ */
+describe('GET /status: unfinished connect', () => {
+  const attempt = (overrides: Row = {}): Row => ({
+    id: 'consent-attempt',
+    company_id: 'company-1',
+    provider: 'fortnox',
+    status: 0,
+    created_at: minutesAgo(120),
+    ...overrides,
+  })
+
+  async function statusWith(tables: Record<string, Row[]>, user?: { id: string } | null) {
+    const service = buildService(tables)
+    ;(createServiceClient as Mock).mockReturnValue(service)
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null, user })
+    const res = await handler(statusRequest(), buildCtx(supabase))
+    return { res, service }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(listConsents as Mock).mockResolvedValue([])
+  })
+
+  it('returns 401 without a user and never looks up consents', async () => {
+    const { res, service } = await statusWith({ provider_consents: [attempt()] }, null)
+
+    expect(res.status).toBe(401)
+    expect(service.from).not.toHaveBeenCalled()
+  })
+
+  it('reports a token-less attempt older than 30 minutes', async () => {
+    const own = attempt()
+    const { res } = await statusWith({
+      provider_consents: [
+        own,
+        // Another company's newer attempt must never surface here.
+        attempt({ id: 'foreign', company_id: 'company-2', provider: 'visma', created_at: minutesAgo(40) }),
+      ],
+      // A completed import BEFORE the attempt does not mean the customer moved on.
+      sie_imports: [{ id: 'sie-old', company_id: 'company-1', status: 'completed', created_at: minutesAgo(600) }],
+    })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toEqual({ provider: 'fortnox', startedAt: own.created_at })
+  })
+
+  it('answers null when the attempt has a token row', async () => {
+    const { res } = await statusWith({
+      provider_consents: [attempt()],
+      provider_consent_tokens: [{ consent_id: 'consent-attempt' }],
+    })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toBeNull()
+  })
+
+  it('answers null when a completed SIE import was created after the attempt', async () => {
+    const { res } = await statusWith({
+      provider_consents: [attempt()],
+      sie_imports: [{ id: 'sie-new', company_id: 'company-1', status: 'completed', created_at: minutesAgo(60) }],
+    })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toBeNull()
+  })
+
+  it('answers null for an attempt younger than 30 minutes', async () => {
+    const { res, service } = await statusWith({ provider_consents: [attempt({ created_at: minutesAgo(10) })] })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toBeNull()
+    // Still in progress: no need to look for a token.
+    expect(service.from).not.toHaveBeenCalledWith('provider_consent_tokens')
+  })
+
+  it('answers null when the same provider is already connected', async () => {
+    const { res } = await statusWith({
+      provider_consents: [
+        attempt(),
+        attempt({ id: 'accepted', status: 1, created_at: minutesAgo(600) }),
+      ],
+    })
+    const { body } = await parseJsonResponse<StatusBody>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.unfinishedConnect).toBeNull()
   })
 })

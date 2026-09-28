@@ -74,6 +74,7 @@ import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-mess
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
+import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 
 const moduleLog = createLogger('extensions/arcim-migration')
 
@@ -110,6 +111,15 @@ const SESSION_MISSING_MESSAGE =
   'Ingen inloggad session hittades i det här fönstret. Logga in och starta om anslutningen.'
 
 /**
+ * access_denied: the customer pressed cancel in the provider's consent screen.
+ * The callback flags it (`cancelled`) so the wizard can count a cancel apart
+ * from a provider error. Matched on this sentence because the white-label
+ * handoff carries only the translated text across the hop.
+ */
+const OAUTH_CANCELLED_MESSAGE =
+  'Du avbröt anslutningen i leverantörens inloggning. Försök igen om du vill koppla kontot.'
+
+/**
  * Map known OAuth error codes from providers (Fortnox, Visma) to actionable
  * Swedish guidance. Falls back to the raw provider message so we never hide
  * unknown errors from the user.
@@ -122,7 +132,7 @@ function translateOAuthError(error: string, description: string | null): string 
   }
 
   if (error === 'access_denied') {
-    return 'Du avbröt anslutningen i leverantörens inloggning. Försök igen om du vill koppla kontot.'
+    return OAUTH_CANCELLED_MESSAGE
   }
 
   if (error === 'invalid_scope') {
@@ -364,15 +374,21 @@ export const arcimMigrationExtension: Extension = {
             .limit(1)
             .maybeSingle()
 
-          // Get entity counts (to show what's already been imported)
+          // Get entity counts (to show what's already been imported), and the
+          // latest connect that never got a token so the wizard can offer to
+          // resume it (service client: provider_consent_tokens has no user
+          // policy).
+          const { createServiceClient } = await import('@/lib/supabase/server')
           const [
             { count: customerCount },
             { count: supplierCount },
             { count: invoiceCount },
+            unfinishedConnect,
           ] = await Promise.all([
             supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('suppliers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
+            findUnfinishedConnect(createServiceClient(), companyId),
           ])
 
           return NextResponse.json({
@@ -386,6 +402,7 @@ export const arcimMigrationExtension: Extension = {
             sieImports: sieImports ?? [],
             hasCompletedSieImport: latestCompletedSieImport != null,
             latestCompletedSieImport: latestCompletedSieImport ?? null,
+            unfinishedConnect,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,
@@ -729,10 +746,12 @@ export const arcimMigrationExtension: Extension = {
           JSON.stringify(value ?? '').replace(/</g, '\\u003c')
 
         const respondWithError = (reason: string, consentId?: string) => {
+          const cancelled = reason === OAUTH_CANCELLED_MESSAGE
           const fallbackUrl = new URL(`${responseOrigin}/import`)
           fallbackUrl.searchParams.set('migration', 'error')
           fallbackUrl.searchParams.set('reason', reason)
           if (consentId) fallbackUrl.searchParams.set('consentId', consentId)
+          if (cancelled) fallbackUrl.searchParams.set('cancelled', '1')
 
           const escapedReason = reason
             .replace(/&/g, '&amp;')
@@ -753,7 +772,7 @@ export const arcimMigrationExtension: Extension = {
           // reason.
           const html = `<!DOCTYPE html><html><body><script>
             if (window.opener) {
-              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)} }, ${jsLiteral(responseOrigin)});
+              window.opener.postMessage({ type: 'arcim-oauth-error', reason: ${jsLiteral(reason)}, cancelled: ${cancelled} }, ${jsLiteral(responseOrigin)});
             } else {
               window.location.replace(${jsLiteral(fallbackUrl.toString())});
             }

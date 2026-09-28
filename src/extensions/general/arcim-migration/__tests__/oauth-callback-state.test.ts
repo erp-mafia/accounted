@@ -201,6 +201,8 @@ describe('white-label OAuth callback handoff', () => {
     const html = await second.text()
     expect(requireFlowInitiator).toHaveBeenCalledOnce()
     expect(html).toContain('Du avbröt anslutningen')
+    // The cancel survives the handoff, so the wizard counts it apart from a provider error.
+    expect(html).toContain('cancelled: true')
     expect(html).toContain(`}, "${BRAND_ORIGIN}")`)
     expect(html).toContain(`${BRAND_ORIGIN}/import?migration=error`)
     expect(html).not.toContain('window.close')
@@ -470,6 +472,8 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
     expect(target.pathname).toBe('/import')
     expect(target.searchParams.get('migration')).toBe('error')
     expect(target.searchParams.get('reason')).toContain(GENERIC_REJECTION)
+    // A rejected state is a failure, not the customer cancelling.
+    expect(target.searchParams.get('cancelled')).toBeNull()
   })
 
   it('includes the consent id when a full-page provider error can be resumed', async () => {
@@ -490,6 +494,8 @@ describe('GET /callback: full-page fallback when there is no opener', () => {
 
     expect(target.searchParams.get('migration')).toBe('error')
     expect(target.searchParams.get('consentId')).toBe('consent-1')
+    // access_denied is the customer cancelling at the provider.
+    expect(target.searchParams.get('cancelled')).toBe('1')
     expect(exchangeAuthToken).not.toHaveBeenCalled()
   })
 })
