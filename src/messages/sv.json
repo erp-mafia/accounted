@@ -3213,7 +3213,7 @@
     "steps_other_3": "Saknar klienten OAuth?",
     "steps_other_3_note": "skapa en API-nyckel under Utvecklare och skicka den som Authorization: Bearer",
     "companies_section_title": "Företag",
-    "companies_help": "Nyckeln når de företag du bockar i. Lämnar du alla ibockade följer den även företag du blir medlem i senare.",
+    "companies_help": "Nyckeln når de företag du bockar i. Bara läsa stoppar alla ändringar i det företaget. Lämnar du alla ibockade med Läsa och skriva följer den även företag du blir medlem i senare.",
     "companies_all": "Alla företag",
     "companies_some": "{selected} av {total} företag",
     "companies_edit": "Ändra företag för {name}",
@@ -3222,7 +3222,11 @@
     "companies_dialog_description": "Välj vilka företag \"{name}\" ska nå. Företaget nyckeln är skapad i kan inte bockas ur.",
     "save": "Spara",
     "toast_companies_saved": "Företag uppdaterade",
-    "toast_companies_failed": "Kunde inte uppdatera företag"
+    "toast_companies_failed": "Kunde inte uppdatera företag",
+    "access_write": "Läsa och skriva",
+    "access_read": "Bara läsa",
+    "access_label": "Åtkomst i {name}",
+    "companies_read_only": "{count} bara läsa"
   },
   "settings_oauth_clients": {
     "title": "OAuth-klienter",

@@ -578,6 +578,91 @@ describe('POST /api/settings/api-keys', () => {
   })
 })
 
+describe('POST /api/settings/api-keys: read_only_company_ids', () => {
+  beforeEach(() => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+  })
+
+  function create(body: Record<string, unknown>) {
+    return POST(
+      createMockRequest('/api/settings/api-keys', {
+        method: 'POST',
+        body: { name: 'k', scopes: ['reports:read', 'invoices:write'], ...body },
+      }),
+      noParams,
+    )
+  }
+
+  it('passes the read-only companies to the same RPC call as the key and its allowlist', async () => {
+    setupCreate({ keyId: 'ak-7' })
+    const res = await create({ company_ids: [ACTIVE, OTHER], read_only_company_ids: [OTHER] })
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+    expect(status).toBe(200)
+    expect(body.data.company_ids).toEqual([ACTIVE, OTHER])
+    expect(body.data.read_only_company_ids).toEqual([OTHER])
+    const payload = createArgs()
+    expect(payload.p_company_ids).toEqual([ACTIVE, OTHER])
+    expect(payload.p_read_only_company_ids).toEqual([OTHER])
+    expect(serviceSupabase.rpc).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats omitted company_ids as every company and keeps the key restricted for a read-only one', async () => {
+    setupCreate({ keyId: 'ak-8' })
+    const res = await create({ read_only_company_ids: [THIRD] })
+    expect(res.status).toBe(200)
+    const payload = createArgs()
+    expect(payload.p_company_ids).toEqual([ACTIVE, OTHER, THIRD])
+    expect(payload.p_read_only_company_ids).toEqual([THIRD])
+  })
+
+  it('stays unrestricted with no read-only company (null or empty list)', async () => {
+    for (const readOnly of [null, []]) {
+      vi.clearAllMocks()
+      mockSupabase.auth.getUser.mockResolvedValue({ data: { user: mockUser } })
+      requireWritePermissionMock.mockResolvedValue({ ok: true })
+      getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+      listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+      setupCreate({ keyId: 'ak-9' })
+      const res = await create({ read_only_company_ids: readOnly })
+      expect(res.status).toBe(200)
+      const payload = createArgs()
+      expect(payload.p_company_ids).toBeNull()
+      expect(payload.p_read_only_company_ids).toBeNull()
+    }
+  })
+
+  it('returns 400 for a read-only company outside the selection and mints nothing', async () => {
+    setupCreate()
+    const res = await create({ company_ids: [ACTIVE], read_only_company_ids: [OTHER] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.reason).toBe('not_selected')
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns 403 for a read-only company the caller is not a member of', async () => {
+    setupCreate()
+    const res = await create({ read_only_company_ids: [FOREIGN] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { company_ids: string[] } } }>(res)
+    expect(status).toBe(403)
+    expect(body.error.details.company_ids).toEqual([FOREIGN])
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a malformed read-only list', async () => {
+    setupCreate()
+    for (const readOnly of [['nope'], 'x']) {
+      const res = await create({ read_only_company_ids: readOnly })
+      const { status, body } = await parseJsonResponse<{ error: { details: { field: string } } }>(res)
+      expect(status).toBe(400)
+      expect(body.error.details.field).toBe('read_only_company_ids')
+    }
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+})
+
 describe('GET /api/settings/api-keys', () => {
   it('returns 401 when not authenticated', async () => {
     mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
@@ -599,8 +684,8 @@ describe('GET /api/settings/api-keys', () => {
     const service = setupServiceFrom({
       api_key_companies: {
         data: [
-          { api_key_id: 'ak-1', company_id: ACTIVE },
-          { api_key_id: 'ak-1', company_id: THIRD },
+          { api_key_id: 'ak-1', company_id: ACTIVE, access: 'write' },
+          { api_key_id: 'ak-1', company_id: THIRD, access: 'read' },
         ],
       },
     })
@@ -612,9 +697,10 @@ describe('GET /api/settings/api-keys', () => {
     }>(res)
     expect(status).toBe(200)
     expect(body.data).toEqual([
-      expect.objectContaining({ id: 'ak-1', company_ids: [ACTIVE, THIRD] }),
-      expect.objectContaining({ id: 'ak-2', company_ids: null }),
+      expect.objectContaining({ id: 'ak-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: [THIRD] }),
+      expect.objectContaining({ id: 'ak-2', company_ids: null, read_only_company_ids: null }),
     ])
+    expect(service.find('api_key_companies', 'select')).toEqual(['api_key_id, company_id, access'])
     expect(body.meta.companies).toEqual([
       { company_id: ACTIVE, name: 'Aktiva AB', is_active: true },
       { company_id: OTHER, name: 'Andra AB', is_active: false },

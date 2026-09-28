@@ -121,7 +121,7 @@ Ask about all of them at once: \`accounted_client_overview\` returns one row per
 
 In Claude Code, pin a folder to one company with \`/accounted:use <name or organisationsnummer>\`: it writes \`.accounted.json\` there, and every flow started from that folder targets that company. One folder per client is the byrå pattern; \`/accounted:clients\` shows the whole portfolio from anywhere.
 
-A key can also be limited to some of your companies when you create it or connect, and a limited key never reaches the others, however the call is phrased. To lock one connection to a single company, add \`?company=<company id>\` to the endpoint URL (or set \`ACCOUNTED_COMPANY\` for the bridge): the company switch disappears entirely, every call runs for that company, and a call naming another \`company_id\` is refused.
+A key can also be limited to some of your companies when you create it or connect, and a limited key never reaches the others, however the call is phrased. For each company you also choose Read and write or Read only: in a read-only company the agent can read everything but change nothing, whatever permissions the key has. To lock one connection to a single company, add \`?company=<company id>\` to the endpoint URL (or set \`ACCOUNTED_COMPANY\` for the bridge): the company switch disappears entirely, every call runs for that company, and a call naming another \`company_id\` is refused.
 
 ## Try these prompts
 

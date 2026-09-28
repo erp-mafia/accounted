@@ -20,6 +20,8 @@ export interface ApiKeyRow {
   source?: 'signin' | 'manual'
   /** Per-key company allowlist; null = every company the owner belongs to. */
   company_ids?: string[] | null
+  /** Allowlisted companies where the key may only read; null = none. */
+  read_only_company_ids?: string[] | null
 }
 
 /**

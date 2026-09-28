@@ -272,6 +272,7 @@ import {
   companyEchoFromContext,
   companyEchoPayload,
   effectiveCompanyRestriction,
+  isCompanyReadOnly,
   extractRequestedCompany,
   getReachableCompanyCount,
   isCompanyDependentTool,
@@ -611,6 +612,13 @@ export interface ActorContext {
    * it. Only meaningful for `type: 'api_key'`.
    */
   allowedCompanyIds?: string[] | null
+  /**
+   * Companies in the allowlist where this key may only read
+   * (validateApiKey().readOnlyCompanyIds): null when there are none. An
+   * authorization input: every write gate (assertMcpCompanyWriteAccess)
+   * refuses write-scoped tools there. Only meaningful for `type: 'api_key'`.
+   */
+  readOnlyCompanyIds?: string[] | null
   /**
    * The company this connection is pinned to (`?company=<uuid>` on the MCP
    * URL), or null. Also the key default for the request. Tools that
@@ -4613,11 +4621,14 @@ export const tools: McpTool[] = [
               org_number: { type: ['string', 'null'] },
               entity_type: { type: ['string', 'null'] },
               role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer'] },
+              // read: this connection may only read here (read-only access
+              // chosen at consent, or a viewer role); write tools are refused.
+              access: { type: 'string', enum: ['read', 'write'] },
               is_default: { type: 'boolean' },
               team_id: { type: ['string', 'null'] },
               last_used_at: { type: ['string', 'null'] },
             },
-            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'is_default', 'team_id', 'last_used_at'],
+            required: ['company_id', 'name', 'org_number', 'entity_type', 'role', 'access', 'is_default', 'team_id', 'last_used_at'],
           },
         },
         count: { type: 'number' },
@@ -4738,6 +4749,12 @@ export const tools: McpTool[] = [
         org_number: company.org_number,
         entity_type: company.entity_type,
         role: membership.role,
+        // The effective write right: read when the connection was given
+        // read-only access to this company or the user is a viewer there.
+        access:
+          membership.role === 'viewer' || isCompanyReadOnly(actor?.readOnlyCompanyIds, company.id)
+            ? ('read' as const)
+            : ('write' as const),
         is_default: company.id === defaultCompanyId,
         team_id: teamIds.get(company.id) ?? null,
         last_used_at: lastUsed.get(company.id) ?? null,
@@ -5165,6 +5182,7 @@ export const tools: McpTool[] = [
           defaultCompanyId: null,
           requestedCompanyId: company.companyId,
           allowedCompanyIds: actor?.allowedCompanyIds,
+          readOnlyCompanyIds: actor?.readOnlyCompanyIds,
         })
         assertMcpCompanyWriteAccess(context, innerScope)
         const override = perCompany[company.companyId]
@@ -23331,6 +23349,7 @@ export const tools: McpTool[] = [
               defaultCompanyId: null,
               requestedCompanyId: member.company_id,
               allowedCompanyIds: actor?.allowedCompanyIds,
+              readOnlyCompanyIds: actor?.readOnlyCompanyIds,
             })
             assertMcpCompanyWriteAccess(context, 'pending_operations:approve')
             row.company_name = context.companyName
@@ -24799,6 +24818,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   let keyMode: ApiKeyMode = 'live'
   let unattendedCommitLimit: number | null = null
   let allowedCompanyIds: string[] | null = null
+  let readOnlyCompanyIds: string[] | null = null
   // `?company=<uuid>` on the URL: the connection is pinned to that company
   // (validated against membership and the allowlist below, per request).
   let pinnedCompanyId: string | null = null
@@ -24827,6 +24847,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       mode: keyMode,
       unattendedCommitLimit,
       allowedCompanyIds,
+      readOnlyCompanyIds,
     } = authResult)
   } else {
     // Anonymous traffic has no key to rate-limit on: per truncated IP instead.
@@ -24923,6 +24944,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         sessionId,
         client,
         allowedCompanyIds,
+        readOnlyCompanyIds,
         pinnedCompanyId,
       }
 
@@ -25464,6 +25486,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             defaultCompanyId: companyId,
             requestedCompanyId,
             allowedCompanyIds,
+            readOnlyCompanyIds,
           })
           assertMcpCompanyWriteAccess(companyContext, requiredScope)
           effectiveCompanyId = companyContext.companyId

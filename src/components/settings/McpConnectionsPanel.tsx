@@ -295,9 +295,16 @@ export function McpConnectionsPanel({
                         aria-label={t('companies_edit', { name: rowName(key) })}
                       >
                         <Building2 className="mr-1.5 h-3.5 w-3.5" />
-                        {key.company_ids && key.company_ids.length > 0
-                          ? t('companies_some', { selected: key.company_ids.length, total: companies.length })
-                          : t('companies_all')}
+                        {[
+                          key.company_ids && key.company_ids.length > 0
+                            ? t('companies_some', { selected: key.company_ids.length, total: companies.length })
+                            : t('companies_all'),
+                          key.read_only_company_ids && key.read_only_company_ids.length > 0
+                            ? t('companies_read_only', { count: key.read_only_company_ids.length })
+                            : null,
+                        ]
+                          .filter((part): part is string => part !== null)
+                          .join(' · ')}
                       </Button>
                     )}
                     <span className="w-28 shrink-0 text-right text-xs tabular-nums text-muted-foreground">

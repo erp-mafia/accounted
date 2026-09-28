@@ -23,6 +23,10 @@ import { listUserCompaniesForPicker, resolveCompanySelection } from '@/lib/compa
 // company.
 const companyIdsSchema = z.array(z.string().uuid()).min(1).max(200)
 
+// Read-only companies on create: each must also be in the selection (every
+// company when company_ids is omitted). An empty list means none.
+const readOnlyCompanyIdsSchema = z.array(z.string().uuid()).max(200)
+
 /**
  * GET /api/settings/api-keys: list the company's API keys (key value never
  * returned).
@@ -32,8 +36,9 @@ const companyIdsSchema = z.array(z.string().uuid()).min(1).max(200)
  * 'manual' for one created here. `client` names the built-in client behind a
  * sign-in (null for older rows, registered clients and manual keys). The
  * reserved OAuth key name is the marker, the same one the Hem checklist reads.
- * Each row also carries `company_ids` (null = unrestricted), and the response
- * adds `meta.companies`, the caller's companies for the picker, so the panel
+ * Each row also carries `company_ids` (null = unrestricted) and
+ * `read_only_company_ids` (null = none), and the response adds
+ * `meta.companies`, the caller's companies for the picker, so the panel
  * needs no second endpoint.
  */
 export const GET = withRouteContext(
@@ -58,10 +63,11 @@ export const GET = withRouteContext(
     // zero rows and every key would look unrestricted.
     const keys = data ?? []
     const allowlists = new Map<string, string[]>()
+    const readOnlyLists = new Map<string, string[]>()
     if (keys.length > 0) {
       const { data: rows, error: allowlistError } = await createServiceClient()
         .from('api_key_companies')
-        .select('api_key_id, company_id')
+        .select('api_key_id, company_id, access')
         .in('api_key_id', keys.map((key) => key.id))
       if (allowlistError) {
         log.error('api_key_companies list failed', allowlistError)
@@ -71,6 +77,11 @@ export const GET = withRouteContext(
         const list = allowlists.get(row.api_key_id) ?? []
         list.push(row.company_id)
         allowlists.set(row.api_key_id, list)
+        if (row.access === 'read') {
+          const readOnlyList = readOnlyLists.get(row.api_key_id) ?? []
+          readOnlyList.push(row.company_id)
+          readOnlyLists.set(row.api_key_id, readOnlyList)
+        }
       }
     }
 
@@ -87,6 +98,7 @@ export const GET = withRouteContext(
         ...key,
         source: key.name === OAUTH_MCP_KEY_NAME ? ('signin' as const) : ('manual' as const),
         company_ids: allowlists.get(key.id) ?? null,
+        read_only_company_ids: readOnlyLists.get(key.id) ?? null,
       })),
       meta: {
         companies: companies.map((company) => ({
@@ -115,6 +127,7 @@ export const POST = withRouteContext(
     let acknowledgeSod = false
     let mode: ApiKeyMode = 'live'
     let requestedCompanyIds: string[] | undefined
+    let requestedReadOnly: string[] | undefined
     try {
       const body = await request.json()
       if (body.name && typeof body.name === 'string') {
@@ -140,6 +153,16 @@ export const POST = withRouteContext(
           })
         }
         requestedCompanyIds = companyIds.data
+      }
+      if (body.read_only_company_ids !== undefined && body.read_only_company_ids !== null) {
+        const readOnlyIds = readOnlyCompanyIdsSchema.safeParse(body.read_only_company_ids)
+        if (!readOnlyIds.success) {
+          return errorResponseFromCode('VALIDATION_ERROR', log, {
+            requestId,
+            details: { field: 'read_only_company_ids', reason: 'invalid', received: body.read_only_company_ids },
+          })
+        }
+        requestedReadOnly = readOnlyIds.data
       }
     } catch {
       // Empty body: use defaults.
@@ -173,21 +196,40 @@ export const POST = withRouteContext(
     // written only for a strict subset. The key's default company is the
     // active one when it is in the set, otherwise the first selected in
     // picker order.
+    //
+    // Read-only companies (read_only_company_ids) must sit inside the
+    // selection, which is every company when company_ids is omitted; any of
+    // them makes the key restricted, since the level lives on its allowlist
+    // row.
     let keyCompanyId = companyId
     let allowlist: string[] | null = null
-    if (requestedCompanyIds && requestedCompanyIds.length > 0) {
+    let readOnly: string[] | null = null
+    const hasReadOnly = requestedReadOnly !== undefined && requestedReadOnly.length > 0
+    if ((requestedCompanyIds && requestedCompanyIds.length > 0) || hasReadOnly) {
       const memberIds = new Set(memberships.map((company) => company.company_id))
-      const foreign = requestedCompanyIds.filter((id) => !memberIds.has(id))
+      const selectionIds = requestedCompanyIds ?? memberships.map((company) => company.company_id)
+      const foreign = Array.from(
+        new Set([...selectionIds, ...(requestedReadOnly ?? [])].filter((id) => !memberIds.has(id))),
+      )
       if (foreign.length > 0) {
         return errorResponseFromCode('FORBIDDEN', log, {
           requestId,
           details: { field: 'company_ids', reason: 'not_a_member', company_ids: foreign },
         })
       }
-      const selection = resolveCompanySelection(requestedCompanyIds, memberships, companyId)
+      const selectionSet = new Set(selectionIds)
+      const notSelected = (requestedReadOnly ?? []).filter((id) => !selectionSet.has(id))
+      if (notSelected.length > 0) {
+        return errorResponseFromCode('VALIDATION_ERROR', log, {
+          requestId,
+          details: { field: 'read_only_company_ids', reason: 'not_selected', company_ids: notSelected },
+        })
+      }
+      const selection = resolveCompanySelection(selectionIds, memberships, companyId, requestedReadOnly ?? [])
       if (selection) {
         keyCompanyId = selection.defaultCompanyId
         allowlist = selection.companyIds
+        readOnly = selection.readOnlyCompanyIds
       }
     }
 
@@ -238,8 +280,9 @@ export const POST = withRouteContext(
 
     const { key, hash, prefix } = generateApiKey(mode)
 
-    // The key row and its allowlist rows (strict subset only) are written by
-    // one SECURITY DEFINER RPC in one transaction (migration 20260928112722).
+    // The key row and its allowlist rows with their access levels (restricted
+    // keys only) are written by one SECURITY DEFINER RPC in one transaction
+    // (migrations 20260928112722 and 20260928112724).
     // A key with no rows reaches every company, so a key insert that lands
     // without its allowlist would reach more than the caller selected, and a
     // compensating revoke is a second request that can itself fail. The RPC
@@ -262,6 +305,7 @@ export const POST = withRouteContext(
         p_sod_acknowledged_by: sodAcknowledgedAt ? user.id : null,
         p_unattended_commit_limit: null,
         p_company_ids: allowlist,
+        p_read_only_company_ids: readOnly,
       },
     )
 
@@ -306,6 +350,7 @@ export const POST = withRouteContext(
       data: {
         ...data,
         company_ids: allowlist,
+        read_only_company_ids: readOnly,
         key, // only time the full key is returned
       },
     })

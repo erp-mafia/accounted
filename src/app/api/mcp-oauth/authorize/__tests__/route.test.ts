@@ -927,9 +927,10 @@ describe('company picker on consent (per-key company allowlist)', () => {
     state: 'xyz',
   }
 
-  function consentWithCompanies(companies: string[]): FormData {
+  /** One `company_access=<id>:<level>` field per entry, as the picker posts them. */
+  function consentWithAccess(entries: Array<[string, 'write' | 'read' | 'none']>): FormData {
     const form = consentForm('mcp', ['reports:read'])
-    for (const id of companies) form.append('companies', id)
+    for (const [id, level] of entries) form.append('company_access', `${id}:${level}`)
     return form
   }
 
@@ -944,20 +945,30 @@ describe('company picker on consent (per-key company allowlist)', () => {
 
   // One-shot overrides: vi.clearAllMocks() keeps the last implementation, so
   // a persistent mockResolvedValue here would leak into later describes.
-  it('GET renders every company pre-checked, active first and tagged, for a two-company user', async () => {
-    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+  it('GET renders an access choice per company, preset to read and write, active first and tagged', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce([
+      ...twoCompanies,
+      { company_id: THIRD, name: 'Läsbolaget AB', role: 'viewer' },
+    ])
     const response = await GET(new Request(buildAuthorizeUrl(params)))
     expect(response.status).toBe(200)
     const html = await response.text()
 
-    const active = html.match(new RegExp(`<input[^>]*name="companies"[^>]*value="${ACTIVE}"[^>]*>`))?.[0]
-    const other = html.match(new RegExp(`<input[^>]*name="companies"[^>]*value="${OTHER}"[^>]*>`))?.[0]
-    expect(active).toContain('checked')
-    expect(other).toContain('checked')
-    // Active company listed first and marked.
+    for (const id of [ACTIVE, OTHER, THIRD]) {
+      const select = html.match(
+        new RegExp(`<select[^>]*name="company_access"[^>]*data-company="${id}"[^>]*>[\\s\\S]*?</select>`),
+      )?.[0]
+      expect(select).toBeDefined()
+      expect(select).toContain(`<option value="${id}:write" selected>Läsa och skriva</option>`)
+      expect(select).toContain(`<option value="${id}:read">Bara läsa</option>`)
+      expect(select).toContain(`<option value="${id}:none">Ingen åtkomst</option>`)
+    }
+    // Active company listed first and marked; a viewer company is marked too.
     expect(html.indexOf(ACTIVE)).toBeLessThan(html.indexOf(OTHER))
     expect(html).toContain('(aktivt)')
-    expect(html).toContain('Lämnar du alla ibockade följer den även företag du blir medlem i senare.')
+    expect(html).toContain('(du är läsare)')
+    expect(html).toContain('Alla: bara läsa')
+    expect(html).toContain('Lämnar du alla på Läsa och skriva följer anslutningen även företag du blir medlem i senare.')
     // Names are escaped like everything else on the page.
     expect(html).toContain('Andra &amp; Co')
     expect(html).not.toContain('Andra & Co')
@@ -973,8 +984,8 @@ describe('company picker on consent (per-key company allowlist)', () => {
     const response = await GET(new Request(buildAuthorizeUrl(params)))
     expect(response.status).toBe(200)
     const html = await response.text()
-    // No checkbox rows (the inline script's selector string is always present).
-    expect(html).not.toMatch(/<input[^>]*name="companies"/)
+    // No access selects (the inline script's selector string is always present).
+    expect(html).not.toMatch(/<select[^>]*name="company_access"/)
     expect(html).not.toContain('(aktivt)')
     // The plain company fact row is still there.
     expect(html).toContain('Aktiva AB')
@@ -987,70 +998,99 @@ describe('company picker on consent (per-key company allowlist)', () => {
     expect((await response.json()).error).toBe('server_error')
   })
 
-  it('POST with every company ticked carries companyIds null (unrestricted)', async () => {
+  it('POST with every company at read and write carries companyIds null (unrestricted)', async () => {
     mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
     const response = await POST(
       new Request(buildAuthorizeUrl(params), {
         method: 'POST',
-        body: consentWithCompanies([OTHER, ACTIVE]),
+        body: consentWithAccess([[OTHER, 'write'], [ACTIVE, 'write']]),
       }),
     )
     expect(response.status).toBe(303)
     const payload = lastMintedPayload()
     expect(payload.companyIds).toBeNull()
+    expect(payload.readOnlyCompanyIds).toBeNull()
     expect(payload.companyId).toBe(ACTIVE)
   })
 
-  it('POST with a strict subset carries companyIds and swaps the default when the active company is unticked', async () => {
+  it('POST with a read-only company keeps every company as a list and carries the read-only one', async () => {
     mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
     const response = await POST(
       new Request(buildAuthorizeUrl(params), {
         method: 'POST',
-        body: consentWithCompanies([THIRD, OTHER]),
+        body: consentWithAccess([[ACTIVE, 'write'], [OTHER, 'read'], [THIRD, 'write']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE, OTHER, THIRD])
+    expect(payload.readOnlyCompanyIds).toEqual([OTHER])
+    expect(payload.companyId).toBe(ACTIVE)
+  })
+
+  it('POST lets the most restrictive choice win when a company is posted twice', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'write'], [OTHER, 'write'], [OTHER, 'read']]),
+      }),
+    )
+    expect(response.status).toBe(303)
+    const payload = lastMintedPayload()
+    expect(payload.companyIds).toEqual([ACTIVE, OTHER])
+    expect(payload.readOnlyCompanyIds).toEqual([OTHER])
+  })
+
+  it('POST with a strict subset carries companyIds and swaps the default when the active company is left out', async () => {
+    mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
+    const response = await POST(
+      new Request(buildAuthorizeUrl(params), {
+        method: 'POST',
+        body: consentWithAccess([[ACTIVE, 'none'], [THIRD, 'write'], [OTHER, 'write']]),
       }),
     )
     expect(response.status).toBe(303)
     expect(new URL(response.headers.get('location')!).searchParams.get('code')).toBe('test-auth-code')
     const payload = lastMintedPayload()
-    // Picker order, not submission order; the default is the first ticked.
+    // Picker order, not submission order; the default is the first selected.
     expect(payload.companyIds).toEqual([OTHER, THIRD])
+    expect(payload.readOnlyCompanyIds).toBeNull()
     expect(payload.companyId).toBe(OTHER)
   })
 
-  it('POST keeps the active company as default when it is inside the subset', async () => {
+  it('POST keeps the active company as default when it is inside the subset, read-only or not', async () => {
     mocks.listUserCompaniesForPicker.mockResolvedValueOnce(threeCompanies)
     const response = await POST(
       new Request(buildAuthorizeUrl(params), {
         method: 'POST',
-        body: consentWithCompanies([THIRD, ACTIVE]),
+        body: consentWithAccess([[THIRD, 'write'], [ACTIVE, 'read'], [OTHER, 'none']]),
       }),
     )
     expect(response.status).toBe(303)
     const payload = lastMintedPayload()
     expect(payload.companyIds).toEqual([ACTIVE, THIRD])
+    expect(payload.readOnlyCompanyIds).toEqual([ACTIVE])
     expect(payload.companyId).toBe(ACTIVE)
   })
 
   it('POST ignores an id outside the memberships instead of trusting the form', async () => {
     mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
-    const response = await POST(
-      new Request(buildAuthorizeUrl(params), {
-        method: 'POST',
-        body: consentWithCompanies([FOREIGN, 'not-a-uuid', ACTIVE]),
-      }),
-    )
+    const form = consentWithAccess([[FOREIGN, 'write'], [ACTIVE, 'write'], [OTHER, 'none']])
+    form.append('company_access', 'not-a-uuid:write')
+    const response = await POST(new Request(buildAuthorizeUrl(params), { method: 'POST', body: form }))
     expect(response.status).toBe(303)
     const payload = lastMintedPayload()
     expect(payload.companyIds).toEqual([ACTIVE])
     expect(payload.companyId).toBe(ACTIVE)
   })
 
-  it('POST with nothing ticked answers 400 invalid_request and mints no code', async () => {
+  it('POST with no company chosen answers 400 invalid_request and mints no code', async () => {
     mocks.listUserCompaniesForPicker.mockResolvedValueOnce(twoCompanies)
     const response = await POST(
       new Request(buildAuthorizeUrl(params), {
         method: 'POST',
-        body: consentWithCompanies([FOREIGN]),
+        body: consentWithAccess([[ACTIVE, 'none'], [OTHER, 'none'], [FOREIGN, 'write']]),
       }),
     )
     expect(response.status).toBe(400)
@@ -1058,16 +1098,17 @@ describe('company picker on consent (per-key company allowlist)', () => {
     expect(mocks.createAuthCode).not.toHaveBeenCalled()
   })
 
-  it('POST for a one-company user ignores the companies field and stays unrestricted', async () => {
+  it('POST for a one-company user ignores the access field and stays unrestricted', async () => {
     const response = await POST(
       new Request(buildAuthorizeUrl(params), {
         method: 'POST',
-        body: consentWithCompanies([FOREIGN]),
+        body: consentWithAccess([[ACTIVE, 'read']]),
       }),
     )
     expect(response.status).toBe(303)
     const payload = lastMintedPayload()
     expect(payload.companyIds).toBeNull()
+    expect(payload.readOnlyCompanyIds).toBeNull()
     expect(payload.companyId).toBe(ACTIVE)
   })
 })

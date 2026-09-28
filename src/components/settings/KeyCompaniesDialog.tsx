@@ -16,17 +16,21 @@ import { useToast } from '@/components/ui/use-toast'
 import {
   CompanyPickerList,
   orderedSelection,
+  readOnlySelection,
+  setAccessInSet,
   toggleInSet,
   type PickerCompany,
 } from '@/components/settings/CompanyPickerList'
 import type { ApiKeyRow } from '@/components/settings/useApiKeys'
 
 /**
- * Per-key company allowlist editor, opened from a connection row. Mount it
- * with `key={keyRow.id}` so the selection initialises from the row each time
- * it opens. Saving PATCHes `company_ids`: every company selected is sent as
- * null (unrestricted, follows future memberships), a strict subset as the
- * list. The company the key is listed under stays selected: the route
+ * Per-key company allowlist and access editor, opened from a connection row.
+ * Mount it with `key={keyRow.id}` so the selection initialises from the row
+ * each time it opens. Saving PATCHes both fields explicitly, so the server
+ * sets exactly what the dialog shows: every company selected at read and
+ * write is sent as `company_ids: null` (unrestricted, follows future
+ * memberships); otherwise the list, with `read_only_company_ids` (empty when
+ * none). The company the key is listed under stays selected: the route
  * refuses an allowlist without it.
  */
 export function KeyCompaniesDialog({
@@ -54,6 +58,7 @@ export function KeyCompaniesDialog({
     if (activeCompanyId) current.add(activeCompanyId)
     return current
   })
+  const [readOnly, setReadOnly] = useState<Set<string>>(() => new Set(keyRow.read_only_company_ids ?? []))
   const [isSaving, setIsSaving] = useState(false)
 
   async function handleSave() {
@@ -63,7 +68,11 @@ export function KeyCompaniesDialog({
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          company_ids: selected.size >= companies.length ? null : orderedSelection(companies, selected),
+          company_ids:
+            selected.size >= companies.length && readOnlySelection(companies, selected, readOnly).length === 0
+              ? null
+              : orderedSelection(companies, selected),
+          read_only_company_ids: readOnlySelection(companies, selected, readOnly),
         }),
       })
       const json = await res.json()
@@ -107,8 +116,10 @@ export function KeyCompaniesDialog({
           <CompanyPickerList
             companies={companies}
             selected={selected}
+            readOnly={readOnly}
             lockedId={activeCompanyId}
             onToggle={toggleInSet(setSelected)}
+            onAccessChange={setAccessInSet(setReadOnly)}
           />
           <p className="text-xs text-muted-foreground">{t('companies_help')}</p>
         </div>

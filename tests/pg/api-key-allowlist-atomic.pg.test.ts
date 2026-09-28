@@ -23,9 +23,11 @@ import { getPool } from '@/tests/pg/setup'
  * and service-role only, so this is a function test, not an RLS-policy test.
  */
 
+// Both gained a trailing read-only company list in 20260928112724 (DEFAULT
+// NULL, so the calls below that omit it behave as they did).
 const CREATE_SIGNATURE =
-  'public.create_api_key_with_allowlist(uuid, uuid, text, text, text, text[], text, text, text, timestamptz, uuid, numeric, uuid[])'
-const REPLACE_SIGNATURE = 'public.replace_api_key_allowlist(uuid, uuid[])'
+  'public.create_api_key_with_allowlist(uuid, uuid, text, text, text, text[], text, text, text, timestamptz, uuid, numeric, uuid[], uuid[])'
+const REPLACE_SIGNATURE = 'public.replace_api_key_allowlist(uuid, uuid[], uuid[])'
 
 function freshHash(): string {
   // key_hash is unique: a fresh random hash per key keeps reruns independent.

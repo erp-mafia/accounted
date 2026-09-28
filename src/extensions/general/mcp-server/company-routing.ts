@@ -33,6 +33,17 @@ export function isCompanyAllowed(allowlist: CompanyAllowlist, companyId: string)
 }
 
 /**
+ * Is the key read-only in this company (validateApiKey().readOnlyCompanyIds,
+ * api_key_companies.access = 'read')? null or undefined means no company is
+ * read-only. Same case-insensitive comparison as the allowlist.
+ */
+export function isCompanyReadOnly(readOnlyCompanyIds: CompanyAllowlist, companyId: string): boolean {
+  if (!readOnlyCompanyIds) return false
+  const wanted = companyId.toLowerCase()
+  return readOnlyCompanyIds.some((id) => id.toLowerCase() === wanted)
+}
+
+/**
  * The company set a tool may enumerate for this actor: the pin alone when
  * the connection is pinned, else the key allowlist, else null (every
  * membership). For gnubok_list_companies and the all_companies listing,
@@ -240,6 +251,13 @@ export interface McpCompanyContext {
   companyName: string
   role: CompanyRole
   isDefault: boolean
+  /**
+   * What the key may do in this company: 'read' when the connection was
+   * given read-only access here (api_key_companies.access), else 'write'
+   * (its scopes apply as granted). Independent of `role`: the write gate
+   * refuses when either says read.
+   */
+  keyAccess: 'read' | 'write'
 }
 
 /** What every company-scoped tool result announces first (qualified id, as everywhere on this surface). */
@@ -430,6 +448,12 @@ export async function resolveMcpCompanyContext(args: {
    * reveals more than membership would.
    */
   allowedCompanyIds?: CompanyAllowlist
+  /**
+   * The key's read-only companies (validateApiKey().readOnlyCompanyIds).
+   * Decides `keyAccess` on the returned context; a read-only company is
+   * still reached, only its writes are refused (assertMcpCompanyWriteAccess).
+   */
+  readOnlyCompanyIds?: CompanyAllowlist
 }): Promise<McpCompanyContext> {
   const companyId = args.requestedCompanyId ?? args.defaultCompanyId
   if (!companyId) {
@@ -483,6 +507,7 @@ export async function resolveMcpCompanyContext(args: {
     companyName,
     role: membership.role,
     isDefault: companyId === args.defaultCompanyId,
+    keyAccess: isCompanyReadOnly(args.readOnlyCompanyIds, companyId) ? 'read' : 'write',
   }
 }
 
@@ -600,25 +625,36 @@ function assertIdList(values: unknown[], field: string): string[] {
 }
 
 /**
- * Read-only role gate for the MCP tools/call path.
+ * Read-only gate for the MCP tools/call path: the user's role and the
+ * connection's access level in the company.
  *
  * Called by the dispatcher (server.ts, tools/call) right after
  * `resolveMcpCompanyContext` for every company-scoped call, including calls
- * routed through the gnubok_call_tool bridge, and before execute(). The MCP
- * surface runs as the service role, so RLS never sees the viewer: this is
- * the only place the role is enforced for API-key callers. Read tools pass
- * unchanged; a viewer's key with write scopes is still refused, because the
- * key's scopes bound what the key MAY do and the role bounds what the user
- * may do, and the effective permission is the intersection.
+ * routed through the gnubok_call_tool bridge, and before execute(); also per
+ * company by the cross-company staging and batch approval. The MCP surface
+ * runs as the service role, so RLS never sees the viewer: this is the only
+ * place the role is enforced for API-key callers. Read tools pass unchanged;
+ * a write-scoped tool is refused when the user is a viewer OR the connection
+ * was given read-only access to this company, because the effective
+ * permission is the intersection of the key's scopes, the company's access
+ * level and the user's role. The role is checked first so a viewer keeps
+ * the message that names the actual fix (the role, not the connection).
  */
 export function assertMcpCompanyWriteAccess(
   context: McpCompanyContext,
   scope: ApiKeyScope | undefined
 ): void {
-  if (context.role === 'viewer' && isTenantWriteScope(scope)) {
+  if (!isTenantWriteScope(scope)) return
+  if (context.role === 'viewer') {
     throw codedError(
       'FORBIDDEN',
       `This company membership is read-only (viewer): tools that require the "${scope}" scope change company data and are refused. Use read tools only, or ask a company owner or admin to change the role.`
+    )
+  }
+  if (context.keyAccess === 'read') {
+    throw codedError(
+      'FORBIDDEN',
+      `This connection has read-only access to ${context.companyName}: tools that require the "${scope}" scope change company data and are refused there. Use read tools only, or give the connection write access to this company under Settings > API & MCP.`
     )
   }
 }

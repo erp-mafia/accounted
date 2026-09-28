@@ -44,6 +44,12 @@ export interface AuthCodePayload {
    * `companyId` is always one of these.
    */
   companyIds?: string[] | null
+  /**
+   * Companies chosen as read-only on the consent page: the key may only read
+   * there (api_key_companies.access = 'read'). Always a non-empty subset of
+   * `companyIds` when present; null or undefined means none.
+   */
+  readOnlyCompanyIds?: string[] | null
   exp: number
 }
 

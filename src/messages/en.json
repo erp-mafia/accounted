@@ -3213,7 +3213,7 @@
     "steps_other_3": "No OAuth in your client?",
     "steps_other_3_note": "create an API key under Developers and send it as Authorization: Bearer",
     "companies_section_title": "Companies",
-    "companies_help": "The key reaches the companies you tick. Leave all ticked and it also follows companies you join later.",
+    "companies_help": "The key reaches the companies you tick. Read only blocks every change in that company. Leave all ticked with Read and write and it also follows companies you join later.",
     "companies_all": "All companies",
     "companies_some": "{selected} of {total, plural, =1 {# company} other {# companies}}",
     "companies_edit": "Change companies for {name}",
@@ -3222,7 +3222,11 @@
     "companies_dialog_description": "Choose which companies \"{name}\" reaches. The company the key was created in cannot be unticked.",
     "save": "Save",
     "toast_companies_saved": "Companies updated",
-    "toast_companies_failed": "Could not update companies"
+    "toast_companies_failed": "Could not update companies",
+    "access_write": "Read and write",
+    "access_read": "Read only",
+    "access_label": "Access in {name}",
+    "companies_read_only": "{count} read only"
   },
   "settings_oauth_clients": {
     "title": "OAuth clients",

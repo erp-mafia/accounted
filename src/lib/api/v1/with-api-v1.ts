@@ -17,7 +17,9 @@
  *      company allowlist (api_key_companies) is additionally refused outside
  *      it, with the same NOT_FOUND a non-member company gets. A `viewer`
  *      (read-only) membership is refused for every write: mutating method
- *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY).
+ *      or non-`:read` scope (FORBIDDEN, details.code ROLE_READ_ONLY). So is
+ *      a company the key has read-only access to (FORBIDDEN, details.code
+ *      CONNECTION_READ_ONLY).
  *   5. Resolves the dry-run flag (`?dry_run=true` query OR `X-Dry-Run` header).
  *   6. Resolves `Idempotency-Key` (header) and replays cached responses. The
  *      dry-run flag is part of the cache identity and dry-run responses are
@@ -489,6 +491,35 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
               required_scope: requiredScope,
               message:
                 'This company membership is read-only (viewer): write requests are refused. Ask a company owner or admin to change the role.',
+            },
+          })
+        }
+
+        // Read-only connection gate: the key reaches this company but was
+        // given read-only access to it (api_key_companies.access = 'read',
+        // migration 20260928112724). Same write test as the role gate above,
+        // and after it, so a viewer keeps the answer that names the role.
+        if (
+          auth.readOnlyCompanyIds &&
+          auth.readOnlyCompanyIds.some((id) => id.toLowerCase() === companyId.toLowerCase()) &&
+          (!SAFE_METHODS.has(request.method) || scopeKind(requiredScope) === 'write')
+        ) {
+          userLog.warn('read-only company access refused write request', {
+            companyId,
+            method: request.method,
+            requiredScope,
+            ...forensic,
+          })
+          return await v1ErrorResponseFromCode('FORBIDDEN', userLog, {
+            requestId,
+            status: 403,
+            reason: 'connection_read_only',
+            details: {
+              code: 'CONNECTION_READ_ONLY',
+              companyId,
+              required_scope: requiredScope,
+              message:
+                'This API key has read-only access to this company: write requests are refused. Give the key write access to the company under Settings > API & MCP.',
             },
           })
         }

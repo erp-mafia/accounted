@@ -582,6 +582,80 @@ describe('POST /api/mcp-oauth/token', () => {
     })
   })
 
+  describe('read-only companies (per-company access level)', () => {
+    const A = '11111111-1111-4111-8111-111111111111'
+    const B = '22222222-2222-4222-8222-222222222222'
+    const C = '33333333-3333-4333-8333-333333333333'
+
+    beforeEach(() => {
+      vi.mocked(verifyPkce).mockReturnValue(true)
+    })
+
+    function codeWith(companyIds: unknown, readOnlyCompanyIds: unknown) {
+      vi.mocked(decryptAuthCode).mockReturnValue({
+        userId: 'user-1',
+        codeChallenge: 'challenge',
+        redirectUri: 'https://claude.ai/api/cb',
+        scopes: ['reports:read', 'invoices:write'],
+        companyId: A,
+        companyIds: companyIds as string[] | null,
+        readOnlyCompanyIds: readOnlyCompanyIds as string[] | null,
+        exp: Date.now() + 60_000,
+      })
+    }
+
+    it('passes the read-only companies to the same RPC call as the key and its allowlist', async () => {
+      codeWith([A, B], [B])
+      const { supabase, enqueueMany } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(200)
+      expect(supabase.rpc).toHaveBeenCalledTimes(1)
+      const created = createKeyArgs(supabase)
+      expect(created.p_company_ids).toEqual([A, B])
+      expect(created.p_read_only_company_ids).toEqual([B])
+    })
+
+    it('passes null when the code carries no read-only company (absent or null)', async () => {
+      for (const readOnly of [undefined, null]) {
+        codeWith([A, B], readOnly)
+        const { supabase, enqueueMany } = createQueuedMockSupabase()
+        mocks.supabaseFactory.mockReturnValue(supabase)
+        enqueueMany(exchangeResults({ role: 'owner' }))
+
+        const res = await POST(formRequest(codeExchange))
+        expect(res.status).toBe(200)
+        expect(createKeyArgs(supabase).p_read_only_company_ids).toBeNull()
+      }
+    })
+
+    it.each([
+      ['an empty list', [A, B], []],
+      ['a non-array value', [A, B], B],
+      // Unlike the allowlist, dropping a bad entry here would WIDEN the key
+      // (a company meant read-only would get write), so one bad entry
+      // refuses the whole code.
+      ['one entry that is not a uuid', [A, B], ['nope', B]],
+      ['a company outside the allowlist', [A, B], [C]],
+      ['an unrestricted key', null, [A]],
+    ])('fails closed with invalid_grant and mints no key for a read-only list with %s', async (_label, companyIds, readOnly) => {
+      codeWith(companyIds, readOnly)
+      const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueueMany(exchangeResults({ role: 'owner' }))
+
+      const res = await POST(formRequest(codeExchange))
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.access_token).toBeUndefined()
+      expect(supabase.rpc).not.toHaveBeenCalled()
+      expect(findCall('oauth_used_codes', 'insert')).toBeUndefined()
+    })
+  })
+
   describe('refresh_token grant', () => {
     it('rotates both tokens and returns a fresh access_token', async () => {
       const { token: refreshToken } = generateRefreshToken()

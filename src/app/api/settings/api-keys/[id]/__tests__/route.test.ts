@@ -116,6 +116,11 @@ function setupServiceFrom(results: Record<string, { data?: unknown; error?: unkn
   return { calls, find, findAll }
 }
 
+/** Service-role calls other than the read of the current rows: must stay empty. */
+function writesAroundRpc(calls: Array<{ table: string; method: string }>) {
+  return calls.filter((call) => !(call.table === 'api_key_companies' && (call.method === 'select' || call.method === 'eq')))
+}
+
 function patch(body: unknown) {
   return createMockRequest('/api/settings/api-keys/key-1', { method: 'PATCH', body })
 }
@@ -258,7 +263,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ company_ids: [THIRD, ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { id: string; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
-      expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, THIRD] })
+      expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, THIRD], read_only_company_ids: null })
 
       // The key lookup is tenant-scoped like the limit update.
       expect(filters).toContainEqual(['company_id', ACTIVE])
@@ -269,8 +274,15 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       // RPC, never as separate upsert and prune requests that could leave
       // the key at the union of the old and new sets.
       expect(serviceSupabase.rpc).toHaveBeenCalledTimes(1)
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: [ACTIVE, THIRD] })
-      expect(service.calls).toEqual([])
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, THIRD],
+        p_read_only_company_ids: [],
+      })
+      // read_only_company_ids was omitted, so the current rows were read to
+      // keep their levels; nothing is ever written around the RPC.
+      expect(service.find('select')).toEqual(['company_id, access'])
+      expect(writesAroundRpc(service.calls)).toEqual([])
     })
 
     it('clears every row for null (unrestricted)', async () => {
@@ -281,8 +293,8 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data.company_ids).toBeNull()
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null })
-      expect(service.calls).toEqual([])
+      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null, p_read_only_company_ids: [] })
+      expect(writesAroundRpc(service.calls)).toEqual([])
     })
 
     it('treats the full membership set like null: no rows kept', async () => {
@@ -292,7 +304,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const { status, body } = await parseJsonResponse<{ data: { company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
       expect(body.data.company_ids).toBeNull()
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null })
+      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: null, p_read_only_company_ids: [] })
     })
 
     it('answers 500 when the RPC fails (the old set is untouched by construction)', async () => {
@@ -305,7 +317,7 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       expect(body.error.code).toBe('INTERNAL_ERROR')
       expect(body.data).toBeUndefined()
       // No fallback writes around the RPC: nothing to compensate.
-      expect(service.calls).toEqual([])
+      expect(writesAroundRpc(service.calls)).toEqual([])
     })
 
     it('updates both fields in one call', async () => {
@@ -313,9 +325,145 @@ describe('PATCH /api/settings/api-keys/[id]', () => {
       const res = await PATCH(patch({ unattended_commit_limit: 900, company_ids: [ACTIVE] }), params)
       const { status, body } = await parseJsonResponse<{ data: { id: string; unattended_commit_limit: number; company_ids: string[] | null } }>(res)
       expect(status).toBe(200)
-      expect(body.data).toEqual({ id: 'key-1', unattended_commit_limit: 900, company_ids: [ACTIVE] })
+      expect(body.data).toEqual({
+        id: 'key-1',
+        unattended_commit_limit: 900,
+        company_ids: [ACTIVE],
+        read_only_company_ids: null,
+      })
       expect(updateSpy).toHaveBeenCalledWith({ unattended_commit_limit: 900 })
-      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: [ACTIVE] })
+      expect(replaceArgs()).toEqual({ p_api_key_id: 'key-1', p_company_ids: [ACTIVE], p_read_only_company_ids: [] })
+    })
+  })
+
+  describe('read_only_company_ids (per-company access level)', () => {
+    beforeEach(() => {
+      getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+      listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+      serviceSupabase.rpc.mockResolvedValue({ data: 2, error: null })
+    })
+
+    it('sets the levels exactly when both fields are sent, without reading the current rows', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      const service = setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: [OTHER, ACTIVE], read_only_company_ids: [OTHER] }), params)
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+      expect(status).toBe(200)
+      expect(body.data).toEqual({ id: 'key-1', company_ids: [ACTIVE, OTHER], read_only_company_ids: [OTHER] })
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, OTHER],
+        p_read_only_company_ids: [OTHER],
+      })
+      expect(service.calls).toEqual([])
+    })
+
+    it('keeps every company as a list when one is read-only, even when all are selected', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: null, read_only_company_ids: [THIRD] }), params)
+      const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+      expect(status).toBe(200)
+      expect(body.data.company_ids).toEqual([ACTIVE, OTHER, THIRD])
+      expect(replaceArgs()).toMatchObject({ p_company_ids: [ACTIVE, OTHER, THIRD], p_read_only_company_ids: [THIRD] })
+    })
+
+    it('keeps the current read-only companies that stay selected when the field is omitted', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom({
+        api_key_companies: {
+          data: [
+            { company_id: ACTIVE, access: 'write' },
+            { company_id: OTHER, access: 'read' },
+            { company_id: THIRD, access: 'read' },
+          ],
+        },
+      })
+      const res = await PATCH(patch({ company_ids: [ACTIVE, OTHER] }), params)
+      expect(res.status).toBe(200)
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, OTHER],
+        p_read_only_company_ids: [OTHER],
+      })
+    })
+
+    it('never lifts a read-only level by widening to every company (company_ids null)', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom({
+        api_key_companies: {
+          data: [
+            { company_id: ACTIVE, access: 'write' },
+            { company_id: OTHER, access: 'read' },
+          ],
+        },
+      })
+      const res = await PATCH(patch({ company_ids: null }), params)
+      expect(res.status).toBe(200)
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, OTHER, THIRD],
+        p_read_only_company_ids: [OTHER],
+      })
+    })
+
+    it('changes only the levels when company_ids is omitted', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom({
+        api_key_companies: {
+          data: [
+            { company_id: ACTIVE, access: 'write' },
+            { company_id: OTHER, access: 'read' },
+          ],
+        },
+      })
+      const res = await PATCH(patch({ read_only_company_ids: [] }), params)
+      expect(res.status).toBe(200)
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, OTHER],
+        p_read_only_company_ids: [],
+      })
+    })
+
+    it('makes an unrestricted key read-only in one company by listing every company', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom() // no rows: unrestricted today
+      const res = await PATCH(patch({ read_only_company_ids: [OTHER] }), params)
+      expect(res.status).toBe(200)
+      expect(replaceArgs()).toEqual({
+        p_api_key_id: 'key-1',
+        p_company_ids: [ACTIVE, OTHER, THIRD],
+        p_read_only_company_ids: [OTHER],
+      })
+    })
+
+    it('returns 400 for a read-only company that is not selected', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      setupServiceFrom()
+      const res = await PATCH(patch({ company_ids: [ACTIVE], read_only_company_ids: [OTHER] }), params)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { reason: string } } }>(res)
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('VALIDATION_ERROR')
+      expect(body.error.details.reason).toBe('not_selected')
+      expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 for a read-only company the caller is not a member of, before any service read', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      const res = await PATCH(patch({ read_only_company_ids: [FOREIGN] }), params)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { field: string } } }>(res)
+      expect(status).toBe(403)
+      expect(body.error.details.field).toBe('read_only_company_ids')
+      expect(serviceSupabase.from).not.toHaveBeenCalled()
+      expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+    })
+
+    it('returns 400 for a non-uuid read-only id', async () => {
+      setupFrom({ data: { id: 'key-1' } })
+      const res = await PATCH(patch({ read_only_company_ids: ['nope'] }), params)
+      expect(res.status).toBe(400)
+      expect(serviceSupabase.rpc).not.toHaveBeenCalled()
     })
   })
 })

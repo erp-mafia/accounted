@@ -446,6 +446,39 @@ describe('gnubok_approve_pending_operation with batch_id', () => {
     expect(result.results[2]).toMatchObject({ operation_id: 'op-3', status: 'skipped', reason: 'high_risk_requires_individual_approval' })
   })
 
+  it('refuses the members in a company the key may only read and commits the rest', async () => {
+    const members = [
+      { id: 'op-1', company_id: DEFAULT_COMPANY_ID, operation_type: 'ignore_transaction', risk_level: 'low', status: 'pending', batch_id: BATCH_ID },
+      { id: 'op-2', company_id: OTHER_COMPANY_ID, operation_type: 'ignore_transaction', risk_level: 'low', status: 'pending', batch_id: BATCH_ID },
+    ]
+    const { supabase } = supabaseDouble(members)
+    mocks.commit.mockResolvedValue({ status: 'committed', data: { ok: true } })
+
+    const result = (await approveTool.execute(
+      { batch_id: BATCH_ID },
+      DEFAULT_COMPANY_ID,
+      'user-1',
+      supabase as never,
+      {
+        type: 'api_key',
+        id: 'key-1',
+        unattendedCommitLimit: null,
+        allowedCompanyIds: [DEFAULT_COMPANY_ID, OTHER_COMPANY_ID],
+        readOnlyCompanyIds: [OTHER_COMPANY_ID],
+      }
+    )) as { committed: number; failed: number; results: Array<Record<string, unknown>> }
+
+    expect(result.committed).toBe(1)
+    expect(result.failed).toBe(1)
+    expect(mocks.commit).toHaveBeenCalledTimes(1)
+    expect(mocks.commit).toHaveBeenCalledWith(supabase, 'user-1', DEFAULT_COMPANY_ID, members[0], expect.anything())
+    expect(result.results[1]).toMatchObject({
+      operation_id: 'op-2',
+      status: 'failed',
+      error: expect.stringMatching(/read-only access/),
+    })
+  })
+
   it('requires exactly one of operation_id and batch_id', async () => {
     const { supabase } = supabaseDouble()
     await expect(approveTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never)).rejects.toThrow(/operation_id or batch_id/)

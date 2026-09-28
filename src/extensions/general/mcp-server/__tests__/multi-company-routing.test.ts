@@ -139,6 +139,7 @@ describe('resolveMcpCompanyContext display name', () => {
       companyName: 'Display AB',
       role: 'admin',
       isDefault: false,
+      keyAccess: 'write',
     })
     expect(companyEchoFromContext(context)).toEqual({ company_id: OTHER_COMPANY_ID, name: 'Display AB', is_default: false })
   })

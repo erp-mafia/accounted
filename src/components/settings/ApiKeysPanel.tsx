@@ -21,6 +21,8 @@ import { CopyBlock } from '@/components/settings/CopyBlock'
 import {
   CompanyPickerList,
   orderedSelection,
+  readOnlySelection,
+  setAccessInSet,
   toggleInSet,
   type PickerCompany,
 } from '@/components/settings/CompanyPickerList'
@@ -128,14 +130,17 @@ export function ApiKeysPanel({
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
 
-  // Company allowlist. The picker only appears for a user with two or more
-  // companies; every company starts ticked, and `company_ids` is sent only
-  // for a strict subset (keeping all ticked = unrestricted, follows future
-  // memberships).
+  // Company allowlist and per-company access. The picker only appears for a
+  // user with two or more companies; every company starts ticked at read and
+  // write, and `company_ids` is sent only for a strict subset or when a
+  // company is read-only (keeping all ticked at read and write =
+  // unrestricted, follows future memberships).
   const [newKeyCompanies, setNewKeyCompanies] = useState<Set<string>>(new Set())
+  const [newKeyReadOnly, setNewKeyReadOnly] = useState<Set<string>>(new Set())
   const hasCompanyPicker = companies.length >= 2
   function openCreateDialog() {
     setNewKeyCompanies(new Set(companies.map((company) => company.company_id)))
+    setNewKeyReadOnly(new Set())
     setShowCreateDialog(true)
   }
 
@@ -190,8 +195,15 @@ export function ApiKeysPanel({
           scopes: Array.from(newKeyScopes),
           mode: newKeyMode,
           ...(hasSodConflict ? { acknowledge_sod: true } : {}),
-          ...(hasCompanyPicker && newKeyCompanies.size < companies.length
-            ? { company_ids: orderedSelection(companies, newKeyCompanies) }
+          // A strict subset, or any read-only company, makes the key
+          // restricted: the access level lives on its allowlist rows.
+          ...(hasCompanyPicker &&
+          (newKeyCompanies.size < companies.length ||
+            readOnlySelection(companies, newKeyCompanies, newKeyReadOnly).length > 0)
+            ? {
+                company_ids: orderedSelection(companies, newKeyCompanies),
+                read_only_company_ids: readOnlySelection(companies, newKeyCompanies, newKeyReadOnly),
+              }
             : {}),
         }),
       })
@@ -301,8 +313,10 @@ export function ApiKeysPanel({
                 <CompanyPickerList
                   companies={companies}
                   selected={newKeyCompanies}
+                  readOnly={newKeyReadOnly}
                   lockedId={null}
                   onToggle={toggleInSet(setNewKeyCompanies)}
+                  onAccessChange={setAccessInSet(setNewKeyReadOnly)}
                 />
                 <p className="text-xs text-muted-foreground">{t('companies_help')}</p>
               </div>

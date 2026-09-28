@@ -110,6 +110,7 @@ describe('gnubok_list_companies', () => {
           org_number: '559000-0001',
           entity_type: 'AB',
           role: 'owner',
+          access: 'write',
           is_default: true,
           team_id: null,
           last_used_at: null,
@@ -120,6 +121,8 @@ describe('gnubok_list_companies', () => {
           org_number: null,
           entity_type: 'EF',
           role: 'viewer',
+          // A viewer can only read, whatever the connection allows.
+          access: 'read',
           is_default: false,
           team_id: null,
           last_used_at: null,
@@ -131,6 +134,36 @@ describe('gnubok_list_companies', () => {
       team: null,
       scope_hint: expect.stringContaining('scope { companies: "all" }'),
     })
+  })
+
+  it('reports access read for a company the connection may only read', async () => {
+    const company = (id: string, name: string) => ({
+      company_id: id,
+      role: 'owner',
+      joined_at: '2026-01-01',
+      companies: { id, name, org_number: null, entity_type: 'AB', archived_at: null, created_at: '2026-01-01' },
+    })
+    vi.mocked(getUserCompanies).mockResolvedValue([
+      company(DEFAULT_COMPANY_ID, 'Default AB'),
+      company(OTHER_COMPANY_ID, 'Other AB'),
+    ] as never)
+    const rangeMock = vi.fn().mockResolvedValue({ data: [], error: null })
+    const supabase = {
+      from: vi.fn(() => ({
+        select: vi.fn(() => ({ in: vi.fn(() => ({ order: vi.fn(() => ({ range: rangeMock })) })) })),
+      })),
+    }
+
+    const result = (await listCompaniesTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never, {
+      type: 'api_key',
+      allowedCompanyIds: [DEFAULT_COMPANY_ID, OTHER_COMPANY_ID],
+      readOnlyCompanyIds: [OTHER_COMPANY_ID],
+    })) as { companies: Array<{ company_id: string; role: string; access: string }> }
+
+    expect(result.companies.map((c) => [c.company_id, c.role, c.access])).toEqual([
+      [DEFAULT_COMPANY_ID, 'owner', 'write'],
+      [OTHER_COMPANY_ID, 'owner', 'read'],
+    ])
   })
 
   it('narrows by name substring or org number digits and keeps total_count', async () => {

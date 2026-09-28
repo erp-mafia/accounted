@@ -85,17 +85,33 @@ export async function listUserCompaniesForPicker(
 
 export interface CompanySelection {
   /**
-   * null when the user kept every company: the key stays unrestricted and
-   * follows future memberships (no api_key_companies rows are written).
-   * Otherwise the strict subset, in picker order.
+   * null when the user kept every company at full access: the key stays
+   * unrestricted and follows future memberships (no api_key_companies rows
+   * are written). Otherwise the selected companies, in picker order. A
+   * selection with any read-only company is always a list: the level lives
+   * on the allowlist row, so an unrestricted key cannot carry one.
    */
   companyIds: string[] | null
+  /**
+   * Selected companies where the key may only read (api_key_companies.access
+   * = 'read'), in picker order; null when there are none. Always a subset of
+   * `companyIds`, and never set while `companyIds` is null.
+   */
+  readOnlyCompanyIds: string[] | null
   /**
    * The company the key is bound to by default: the active company when it
    * is part of the selection, otherwise the first selected company in picker
    * order. Always inside `companyIds` when that is non-null.
    */
   defaultCompanyId: string
+}
+
+function uuidSet(values: unknown[]): Set<string> {
+  const ids = new Set<string>()
+  for (const value of values) {
+    if (isUuid(value)) ids.add(value.toLowerCase())
+  }
+  return ids
 }
 
 /**
@@ -108,26 +124,75 @@ export interface CompanySelection {
  *
  * `activeCompanyId` is the company the caller was working in; it becomes the
  * default when selected. Pass null when there is none.
+ *
+ * `submittedReadOnly` names the selected companies the key may only read in.
+ * Ids that are not also in `submitted` are ignored here: callers that must
+ * refuse such input check it before calling.
  */
 export function resolveCompanySelection(
   submitted: unknown[],
   memberships: PickerCompany[],
   activeCompanyId: string | null,
+  submittedReadOnly: unknown[] = [],
 ): CompanySelection | null {
-  const ticked = new Set<string>()
-  for (const value of submitted) {
-    if (isUuid(value)) ticked.add(value.toLowerCase())
-  }
+  const ticked = uuidSet(submitted)
   const selected = memberships.filter((company) => ticked.has(company.company_id.toLowerCase()))
   if (selected.length === 0) return null
 
-  const unrestricted = selected.length === memberships.length
+  const readOnlyTicked = uuidSet(submittedReadOnly)
+  const readOnlyIds = selected
+    .filter((company) => readOnlyTicked.has(company.company_id.toLowerCase()))
+    .map((company) => company.company_id)
+  const unrestricted = selected.length === memberships.length && readOnlyIds.length === 0
   const selectedIds = selected.map((company) => company.company_id)
   const defaultCompanyId =
     activeCompanyId && selectedIds.includes(activeCompanyId) ? activeCompanyId : selectedIds[0]
 
   return {
     companyIds: unrestricted ? null : selectedIds,
+    readOnlyCompanyIds: readOnlyIds.length > 0 ? readOnlyIds : null,
     defaultCompanyId,
   }
+}
+
+/** What a connection may do in one company, as the consent page offers it. */
+export type CompanyAccessChoice = 'write' | 'read' | 'none'
+
+const ACCESS_RANK: Record<CompanyAccessChoice, number> = { none: 0, read: 1, write: 2 }
+
+/**
+ * Parse the consent page's per-company access fields. Each value is
+ * `<company id>:<write|read|none>`; anything else is dropped. When a company
+ * appears more than once (only a tampered form does that) the most
+ * restrictive choice wins, so a duplicate can never widen a grant. The
+ * result feeds resolveCompanySelection: `companyIds` holds every company
+ * chosen as read or write, `readOnlyCompanyIds` the ones chosen as read.
+ * Membership is not checked here; resolveCompanySelection does that.
+ */
+export function parseCompanyAccessChoices(values: unknown[]): {
+  companyIds: string[]
+  readOnlyCompanyIds: string[]
+} {
+  const choices = new Map<string, CompanyAccessChoice>()
+  for (const value of values) {
+    if (typeof value !== 'string') continue
+    const separator = value.lastIndexOf(':')
+    if (separator <= 0) continue
+    const companyId = value.slice(0, separator).toLowerCase()
+    const choice = value.slice(separator + 1)
+    if (!isUuid(companyId)) continue
+    if (choice !== 'write' && choice !== 'read' && choice !== 'none') continue
+    const previous = choices.get(companyId)
+    if (previous === undefined || ACCESS_RANK[choice] < ACCESS_RANK[previous]) {
+      choices.set(companyId, choice)
+    }
+  }
+  const companyIds: string[] = []
+  const readOnlyCompanyIds: string[] = []
+  for (const [companyId, choice] of choices) {
+    if (choice === 'none') continue
+    companyIds.push(companyId)
+    if (choice === 'read') readOnlyCompanyIds.push(companyId)
+  }
+  return { companyIds, readOnlyCompanyIds }
 }

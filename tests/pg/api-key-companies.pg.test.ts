@@ -82,6 +82,8 @@ describe('api_key_companies (migration 20260928112721): shape', () => {
       { column_name: 'api_key_id', data_type: 'uuid', is_nullable: 'NO' },
       { column_name: 'company_id', data_type: 'uuid', is_nullable: 'NO' },
       { column_name: 'created_at', data_type: 'timestamp with time zone', is_nullable: 'NO' },
+      // Added by 20260928112724 (per-company access level, default 'write').
+      { column_name: 'access', data_type: 'text', is_nullable: 'NO' },
     ])
 
     const pk = await getPool().query<{ columns: string[] }>(

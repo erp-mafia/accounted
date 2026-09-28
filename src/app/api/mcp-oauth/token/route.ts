@@ -121,6 +121,18 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     )
   }
   const allowlist = parsedAllowlist.allowlist
+  // The consent's read-only companies travel next to the allowlist and fail
+  // closed the same way: present but empty, unreadable, or naming a company
+  // outside the allowlist refuses the exchange before any key exists, so a
+  // broken list can never mint a key that writes where the user chose read.
+  const parsedReadOnly = parseReadOnlyCompanies(payload.readOnlyCompanyIds, allowlist)
+  if (!parsedReadOnly.ok) {
+    return NextResponse.json(
+      { error: 'invalid_grant', error_description: 'Authorization code carried an invalid read-only company list' },
+      { status: 400 }
+    )
+  }
+  const readOnlyCompanyIds = parsedReadOnly.readOnly
 
   const codeHash = hashAuthCode(code)
   const supabase = createServiceClientNoCookies()
@@ -247,6 +259,7 @@ async function handleAuthorizationCodeGrant(params: URLSearchParams) {
     p_sod_acknowledged_by: sodAcknowledgedAt ? payload.userId : null,
     p_unattended_commit_limit: null,
     p_company_ids: allowlist,
+    p_read_only_company_ids: readOnlyCompanyIds,
   })
 
   if (createError) {
@@ -302,6 +315,24 @@ function parseCompanyAllowlist(
   if (!Array.isArray(raw)) return { ok: false }
   const ids = Array.from(new Set(raw.filter(isUuid)))
   return ids.length > 0 ? { ok: true, allowlist: ids } : { ok: false }
+}
+
+/**
+ * The code's read-only companies: absent or null means none. A present
+ * value must be a non-empty list of ids that all sit inside a non-null
+ * allowlist (/authorize only ever writes that shape; create_api_key_with_
+ * allowlist re-checks it as the backstop).
+ */
+function parseReadOnlyCompanies(
+  raw: unknown,
+  allowlist: string[] | null,
+): { ok: true; readOnly: string[] | null } | { ok: false } {
+  if (raw === undefined || raw === null) return { ok: true, readOnly: null }
+  if (!Array.isArray(raw) || allowlist === null) return { ok: false }
+  const ids = Array.from(new Set(raw.filter(isUuid)))
+  if (ids.length === 0 || ids.length !== raw.length) return { ok: false }
+  const allowed = new Set(allowlist.map((id) => id.toLowerCase()))
+  return ids.every((id) => allowed.has(id.toLowerCase())) ? { ok: true, readOnly: ids } : { ok: false }
 }
 
 async function handleRefreshTokenGrant(params: URLSearchParams) {

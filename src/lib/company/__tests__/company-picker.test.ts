@@ -8,7 +8,11 @@ vi.mock('@/lib/company/context', () => ({
   getUserCompanies: (...args: unknown[]) => mocks.getUserCompanies(...args),
 }))
 
-import { listUserCompaniesForPicker, resolveCompanySelection } from '../company-picker'
+import {
+  listUserCompaniesForPicker,
+  parseCompanyAccessChoices,
+  resolveCompanySelection,
+} from '../company-picker'
 
 const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'
@@ -73,6 +77,7 @@ describe('resolveCompanySelection', () => {
   it('keeping every company selected is unrestricted (null), defaulting to the active company', () => {
     expect(resolveCompanySelection([C, A, B], memberships, B)).toEqual({
       companyIds: null,
+      readOnlyCompanyIds: null,
       defaultCompanyId: B,
     })
   })
@@ -80,6 +85,7 @@ describe('resolveCompanySelection', () => {
   it('a strict subset is carried in picker order and keeps the active company as default when ticked', () => {
     expect(resolveCompanySelection([C, A], memberships, A)).toEqual({
       companyIds: [A, C],
+      readOnlyCompanyIds: null,
       defaultCompanyId: A,
     })
   })
@@ -87,6 +93,7 @@ describe('resolveCompanySelection', () => {
   it('hands the default to the first ticked company when the active one is unticked', () => {
     expect(resolveCompanySelection([C, B], memberships, A)).toEqual({
       companyIds: [B, C],
+      readOnlyCompanyIds: null,
       defaultCompanyId: B,
     })
   })
@@ -98,11 +105,61 @@ describe('resolveCompanySelection', () => {
         memberships,
         A,
       ),
-    ).toEqual({ companyIds: [A], defaultCompanyId: A })
+    ).toEqual({ companyIds: [A], readOnlyCompanyIds: null, defaultCompanyId: A })
   })
 
   it('returns null when nothing valid was ticked', () => {
     expect(resolveCompanySelection([], memberships, A)).toBeNull()
     expect(resolveCompanySelection(['99999999-9999-4999-8999-999999999999'], memberships, A)).toBeNull()
+  })
+
+  it('keeps every company as a list when one is read-only: the level needs a row', () => {
+    expect(resolveCompanySelection([A, B, C], memberships, A, [C])).toEqual({
+      companyIds: [A, B, C],
+      readOnlyCompanyIds: [C],
+      defaultCompanyId: A,
+    })
+  })
+
+  it('orders read-only companies by the picker and ignores ones that are not selected', () => {
+    expect(resolveCompanySelection([C, A], memberships, A, [C, B, A, 'not-a-uuid'])).toEqual({
+      companyIds: [A, C],
+      readOnlyCompanyIds: [A, C],
+      defaultCompanyId: A,
+    })
+  })
+})
+
+describe('parseCompanyAccessChoices', () => {
+  it('splits the consent values into selected and read-only companies', () => {
+    expect(parseCompanyAccessChoices([`${A}:write`, `${B}:read`, `${C}:none`])).toEqual({
+      companyIds: [A, B],
+      readOnlyCompanyIds: [B],
+    })
+  })
+
+  it('drops malformed values and unknown levels', () => {
+    expect(
+      parseCompanyAccessChoices([`${A}:admin`, 'not-a-uuid:write', `${B}`, 42, null, `:read`, `${C}:read`]),
+    ).toEqual({ companyIds: [C], readOnlyCompanyIds: [C] })
+  })
+
+  it('lets the most restrictive choice win when a company appears twice', () => {
+    expect(parseCompanyAccessChoices([`${A}:write`, `${A}:read`])).toEqual({
+      companyIds: [A],
+      readOnlyCompanyIds: [A],
+    })
+    expect(parseCompanyAccessChoices([`${B}:read`, `${B}:none`, `${B}:write`])).toEqual({
+      companyIds: [],
+      readOnlyCompanyIds: [],
+    })
+  })
+
+  it('treats an upper-case id as the same company', () => {
+    const upper = 'AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA'
+    expect(parseCompanyAccessChoices([`${upper}:write`, `${upper.toLowerCase()}:read`])).toEqual({
+      companyIds: [upper.toLowerCase()],
+      readOnlyCompanyIds: [upper.toLowerCase()],
+    })
   })
 })
