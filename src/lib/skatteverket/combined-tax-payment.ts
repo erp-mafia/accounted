@@ -152,12 +152,13 @@ async function findVatSourceForPaymentDate(
       const startMonth = settings.fiscal_year_start_month ?? 1
       const endMonth = startMonth === 1 ? 12 : startMonth - 1
       const month = String(endMonth).padStart(2, '0')
+      const lastDay = String(new Date(Date.UTC(year, endMonth, 0)).getUTCDate()).padStart(2, '0')
       const { data } = await supabase
         .from('fiscal_periods')
         .select('id')
         .eq('company_id', companyId)
         .gte('period_end', `${year}-${month}-01`)
-        .lte('period_end', `${year}-${month}-31`)
+        .lte('period_end', `${year}-${month}-${lastDay}`)
         .maybeSingle()
       if (data?.id) return { ...source, fiscalPeriodId: data.id }
     }
