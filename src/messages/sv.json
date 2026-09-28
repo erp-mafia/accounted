@@ -2256,6 +2256,11 @@
     "tax_tables_heading": "Skattetabeller",
     "tax_tables_help": "Skattetabeller och kommunala skattesatser hämtas automatiskt från Skatteverkets öppna data vid varje lönekörning. Ingen manuell uppdatering krävs. Om Skatteverkets API är otillgängligt används en inbäddad reservkopia tills tjänsten är uppe igen.",
     "vacation_heading": "Semester",
+    "vacation_year_label": "Semesterår",
+    "vacation_year_help": "Gäller alla anställda. Semesteråret kan bara ändras innan den första lönekörningen bokförs. Kontakta supporten om ni behöver byta.",
+    "vacation_year_calendar": "Kalenderår (januari till december)",
+    "vacation_year_statutory_apr_mar": "April till mars (semesterlagens huvudregel)",
+    "vacation_year_current": "Nuvarande: {start} till {end}",
     "vacation_rule_label": "Standard semesterregel",
     "info_payroll_scope": "Lönemodulen hanterar löner till dina anställda: skatteavdrag, arbetsgivaravgifter, semesterlöneskuld och arbetsgivardeklaration (AGI). Driver du enskild firma tar du som ägare ut pengar via eget uttag (konto 2013), inte lön.",
     "info_current_year": "<strong>Aktuellt år:</strong> 2026 (Arbetsgivaravgifter 31,42 %, prisbasbelopp 59 200 SEK)"

@@ -564,6 +564,7 @@ export function makeCompanySettings(
     salary_default_bank: null,
     salary_net_rounding: false,
     salary_deviation_period: 'same_month',
+    salary_vacation_year_basis: 'calendar',
     logo_url: null,
     onboarding_step: 6,
     onboarding_complete: true,

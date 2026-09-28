@@ -2256,6 +2256,11 @@
     "tax_tables_heading": "Skattetabeller",
     "tax_tables_help": "Tax tables and municipal tax rates are fetched automatically from Skatteverket's open data on every payroll run. No manual update is needed. If Skatteverket's API is unavailable, an embedded fallback copy is used until the service is back.",
     "vacation_heading": "Vacation",
+    "vacation_year_label": "Vacation year",
+    "vacation_year_help": "Applies to all employees. The vacation year can only be changed before the first payroll run is booked. Contact support if you need to switch.",
+    "vacation_year_calendar": "Calendar year (January to December)",
+    "vacation_year_statutory_apr_mar": "April to March (the Annual Leave Act default)",
+    "vacation_year_current": "Current: {start} to {end}",
     "vacation_rule_label": "Default vacation rule",
     "info_payroll_scope": "The payroll module handles salaries for your employees: tax deductions, employer contributions, vacation pay liability and the employer declaration (AGI). If you run a sole proprietorship (enskild firma), you as the owner take money out via owner's drawings (account 2013), not salary.",
     "info_current_year": "<strong>Current year:</strong> 2026 (Arbetsgivaravgifter 31.42%, prisbasbelopp 59,200 SEK)"
