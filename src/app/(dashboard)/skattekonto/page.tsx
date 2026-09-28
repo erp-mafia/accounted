@@ -28,13 +28,12 @@ import {
   HOVER_REVEAL_CLASS,
   CHECKBOX_REVEAL_CLASS,
 } from '@/components/ui/dry-table'
-import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
@@ -66,7 +65,6 @@ import {
   ChevronDown,
   Copy,
   Download,
-  Loader2,
   MoreHorizontal,
   RefreshCw,
 } from 'lucide-react'
@@ -1114,15 +1112,13 @@ export default function SkattekontoPage() {
               variant="outline"
               onClick={() => void downloadPayment()}
               disabled={downloadingPayment || paymentCharge <= 0}
+              loading={downloadingPayment}
             >
-              {downloadingPayment ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Download className="mr-2 h-4 w-4" />
-              )}
+              {!downloadingPayment && <Download className="mr-2 h-4 w-4" />}
               {t('payment_download_cta')}
             </Button>
             <Button
+              loading={rowsForPayment.some((row) => bankEnteringIds.has(row.id))}
               disabled={
                 !paymentDownloaded ||
                 rowsForPayment.length === 0 ||
@@ -1140,9 +1136,6 @@ export default function SkattekontoPage() {
                 })()
               }}
             >
-              {rowsForPayment.some((row) => bankEnteringIds.has(row.id)) && (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              )}
               {t('payment_mark_bank_entered_cta')}
             </Button>
           </DialogFooter>
@@ -1420,6 +1413,7 @@ function SkattekontoRow({
               variant="ghost"
               size={row.bank_entered_at ? 'default' : 'icon'}
               disabled={bankEntering}
+              loading={bankEntering}
               className={cn(
                 'text-xs text-muted-foreground',
                 !row.bank_entered_at && HOVER_REVEAL_CLASS,
@@ -1429,9 +1423,7 @@ function SkattekontoRow({
                 { text: row.transaktionstext },
               )}
             >
-              {bankEntering ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : row.bank_entered_at ? (
+              {bankEntering ? null : row.bank_entered_at ? (
                 <>
                   <Check className="h-4 w-4" />
                   {t('bank_entered_label')}
