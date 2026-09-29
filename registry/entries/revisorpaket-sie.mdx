@@ -1,6 +1,6 @@
 ---
-title: "Revisorpaket — SIE4 + audit-logg på schema"
-description: "n8n- och Make-workflow som exporterar SIE4 plus audit-logg till revisorn varje månadsslut. Cron, signerad e-post, kvitto i Slack. Read-only, ingen huvudboksmutation."
+title: "Revisorpaket: SIE4 och behandlingshistorik på schema"
+description: "Recept för ett read-only revisorpaket: SIE4-filen, behandlingshistoriken och balans- och resultaträkning som PDF hämtas från accounteds REST-API på schema och skickas med din egen e-posttjänst. Vill du ha allt i en zip med underlagen tar en agent fram det via MCP med gnubok_audit_package."
 slug: "revisorpaket-sie"
 kind: "workflow"
 author: "gnubok"
@@ -8,113 +8,94 @@ status: "live"
 lang: "sv"
 personas: ["byra", "finance"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-07-18"
-downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/workflows-v1/revisorpaket-sie.zip"
-repoUrl: "https://github.com/erp-mafia/accounted/tree/main/workflows/revisorpaket-sie"
+updatedAt: "2026-09-27"
+externalUrl: "https://www.accounted.se/docs/api/reference/reports"
 gnubokTools:
-  - "gnubok_export_sie"
+  - "gnubok_list_fiscal_periods"
   - "gnubok_audit_package"
-  - "gnubok_query_journal"
-  - "gnubok_get_trial_balance"
 oauthScopes:
   - "reports:read"
 requiresWriteScope: false
 sieCompatible: true
-version: "1.0.0"
 ogImageEyebrow: "Workflow"
+related:
+  - "swedish-sie-import-export"
 faq:
   - q: "Vad innehåller paketet revisorn får?"
-    a: "Det som `gnubok_audit_package` paketerar: SIE-4-fil för perioden, balans- och resultaträkning som PDF, huvudboken per konto, audit-logg som CSV (vem rörde vad när, scope, before/after), kvitto-arkiv och voucher-gap-rapport per BFNAR 2013:2. Allt zippat med 1-timmes signed URL från Supabase Storage."
-  - q: "Varför audit-logg och inte bara SIE?"
-    a: "Bokföringslagen kräver att åtgärder ska kunna rekonstrueras. SIE4 visar slutresultatet, inte vägen dit. Audit-loggen visar vägen: vilka rättelseposter som skedde när, av vem, med vilken scope. Revisorn behöver båda för en ren granskning."
-  - q: "Kan jag köra workflowet utan n8n?"
-    a: "Ja. Make-blueprinten är likvärdig. Båda anropar samma accounted-MCP-verktyg via HTTP. Du kan också köra dem som ett standalone-script om du föredrar det. Kolla repot."
-  - q: "Hur signeras e-posten?"
-    a: "Workflowet använder DKIM via Resend (eller din egen SMTP). Om revisorn vill ha S/MIME finns ett tillägg i repot. Det kräver ett signing-cert från till exempel Buypass."
-  - q: "Vad händer om en period inte är låst?"
-    a: "Workflowet stoppar och skickar en larm-Slack istället. Det är medvetet: du vill inte skicka en SIE-fil för en period som fortfarande ändras under granskningen."
+    a: "Med REST-receptet: SIE4-filen för räkenskapsåret hittills, behandlingshistoriken som JSON och balans- och resultaträkning som PDF. Med `gnubok_audit_package` via MCP blir det en zip för hela räkenskapsåret: SIE4-fil, saldobalans, resultaträkning, balansräkning och huvudbok som JSON och CSV, grundbok och momsdeklaration som JSON, bokslutsbilagor som PDF, underlagen, behandlingshistorik och systemdokumentation. Länken gäller en timme."
+  - q: "Varför behandlingshistorik och inte bara SIE?"
+    a: "Bokföringslagen (5 kap. 11 §) kräver systemdokumentation och behandlingshistorik: det ska gå att följa hur varje bokföringspost har behandlats. SIE4 visar verifikationerna. Behandlingshistoriken visar vem som bokförde, rättade eller ändrade vad och när, även när det gjordes via API-nyckel eller MCP-anslutning."
+  - q: "Behöver jag n8n eller Make?"
+    a: "Nej. Receptet är några GET-anrop med en API-nyckel och ett mejl. Det går lika bra i n8n, Make, en schemalagd GitHub Action eller ett eget skript."
+  - q: "Hur skickas paketet säkert?"
+    a: "Receptet skickar med din egen e-posttjänst, så signering och kryptering styrs där. SIE-filen innehåller hela bokföringen för året. Accepterar revisorn det är en delad mapp med åtkomstkontroll ett bättre val än en bilaga."
+  - q: "Vad händer om räkenskapsåret inte är låst?"
+    a: "Under året är det normalt: filen visar läget den dagen, och SHA-256-summan i mejlet visar vilken version revisorn fick. Vill du bara skicka låsta år, läs `locked_at` och `is_closed` från `GET /fiscal-periods` och stoppa flödet när de saknas."
 ---
 
-## Workflowet
+## Vad det här är
 
-På schemat (default: första vardagen varje månad kl 08:00):
+Ett recept som du sätter upp själv. Posten pekade tidigare på n8n- och
+Make-mallar som aldrig publicerades. Stegen nedan går mot accounteds
+REST-API som det ser ut i dag och kräver bara `reports:read`. Inget skrivs
+till huvudboken.
 
-1. Hämtar föregående periods audit-paket via `gnubok_audit_package(period: "2026-04")`. Returnerar signed URL till en zip i Supabase Storage.
-2. Laddar ner zippen via HTTP node.
-3. Hämtar balans- och resultaträkning via `gnubok_get_trial_balance` om du vill ha en separat PDF utöver det som ligger i zippen.
-4. Räknar SHA256 på SIE-filen och skapar ett kvitto.
-5. Skickar paketet till revisorns e-postadress, plus en bekräftelse i din Slack.
+## Stegen
 
-Om en period inte är låst stoppas hela kedjan och du får en Slack-larm
-istället.
+Kör på schema, till exempel första vardagen i månaden kl 08:00:
 
-Workflowet är read-only på huvudboken. `gnubok_audit_package` skriver
-visserligen en zip-fil till Storage, men det är en sidoeffekt av att
-producera rapporten. Ingen huvudboksmutation, inget `pending_operation`
-att godkänna.
+1. `GET /api/v1/companies/{companyId}/fiscal-periods`: ta `id` för räkenskapsåret. SIE-exporten omfattar alltid hela räkenskapsåret hittills och går inte att begränsa till en månad.
+2. `GET …/reports/sie-export?period_id=…`: SIE4-filen som text (UTF-8) med kontoplan, ingående och utgående balanser, resultat och alla verifikationer. Lägg till `encoding=cp437` om revisorns program kräver det.
+3. `GET …/reports/behandlingshistorik?period_id=…&from_date=…&to_date=…`: behandlingshistoriken som JSON. Datumen måste ligga inom räkenskapsåret, till exempel förra månaden.
+4. `GET …/reports/balance-sheet/pdf?period_id=…&to_date=…` och `GET …/reports/income-statement/pdf?period_id=…&from_date=…&to_date=…`: rapporterna som PDF.
+5. Räkna SHA-256 på SIE-filen och skicka filerna med din egen e-posttjänst, med summan i mejltexten.
 
-## Importera i n8n
+Samma sak som skript:
 
 ```bash
-# Ladda ner zip från registry, packa upp
-n8n import:workflow --input=revisorpaket-sie.json
+BASE="https://app.accounted.se/api/v1/companies/$COMPANY_ID"
+AUTH="Authorization: Bearer $ACCOUNTED_API_KEY"   # gnubok_sk_live_...
+
+curl -s -H "$AUTH" "$BASE/fiscal-periods"
+curl -s -H "$AUTH" -o bokforing.se \
+  "$BASE/reports/sie-export?period_id=$PERIOD_ID"
+curl -s -H "$AUTH" -o behandlingshistorik.json \
+  "$BASE/reports/behandlingshistorik?period_id=$PERIOD_ID&from_date=2026-08-01&to_date=2026-08-31"
+curl -s -H "$AUTH" -o balansrakning.pdf \
+  "$BASE/reports/balance-sheet/pdf?period_id=$PERIOD_ID&to_date=2026-08-31"
+curl -s -H "$AUTH" -o resultatrakning.pdf \
+  "$BASE/reports/income-statement/pdf?period_id=$PERIOD_ID&from_date=2026-01-01&to_date=2026-08-31"
+shasum -a 256 bokforing.se
 ```
 
-Eller via UI:
+Skapa API-nyckeln i app.accounted.se under Inställningar → API-nycklar och
+ge den bara `reports:read`. Behandlingshistoriken som PDF, CSV eller Excel
+laddar du ner i appen; API:t ger den som JSON.
+
+## Allt i en zip: gnubok_audit_package
+
+Vill du hellre ha ett komplett arkiv, be en agent med accounteds MCP-server
+ta fram revisorspaketet för räkenskapsåret. `gnubok_audit_package` tar
+`fiscal_period_id` och bygger en zip med:
 
 ```
-n8n → Workflows → Import → välj revisorpaket-sie.json
+bokforing.se                  # SIE4
+rapporter/                    # saldobalans, resultat- och balansräkning, huvudbok (JSON + CSV),
+                              # grundbok, momsdeklaration (JSON), bokslutsbilagor (PDF)
+dokument/                     # underlagen till verifikationerna
+bilagor/                      # bilagor till kontoavstämningar
+revision/                     # behandlingshistorik och systemdokumentation
+LÄSMIG.txt
 ```
 
-Du behöver konfigurera tre credentials:
-
-* **accounted MCP-anslutning** med scope `reports:read`. För n8n som inte ännu stödjer MCP-OAuth direkt, använd stdio-fallback (API-nyckel via `npx gnubok-mcp` eller direkt REST mot accounted-API).
-* **SMTP eller Resend API-nyckel**.
-* **Slack webhook** (valfritt).
-
-## Importera i Make
-
-Make-blueprinten ligger som `revisorpaket-sie.blueprint.json` i ZIP-paketet.
-
-```
-Make → My Blueprints → Import → välj filen
-```
-
-Samma tre credentials behövs.
-
-## Konfigurera schema
-
-n8n-cron-noden är konfigurerad till `0 8 1-7 * 1` (första måndagen
-varje månad kl 08:00). Justera om du föredrar månadens första vardag
-oavsett veckodag.
-
-## Innehållet i paketet
-
-```
-gnubok-2026-04.zip
-├── 2026-04.sie               # SIE4-fil
-├── audit-log.csv             # Vem rörde vad när
-├── huvudbok.pdf              # Alla rader per konto
-├── balans-och-resultat.pdf
-├── voucher-gaps.csv          # BFNAR 2013:2 gap-rapport
-├── kvitton/                  # Bilagor till verifikat
-└── README.txt
-```
-
-`audit-log.csv` är delen byråer brukar reagera positivt på.
-Den ser ut så här:
-
-| ts | actor | scope | verifikation | before | after |
-|---|---|---|---|---|---|
-| 2026-04-03 09:12:44 | jakob@... | (UI) | V2026-401 | — | created |
-| 2026-04-04 14:22:01 | claude-mcp-abc | transactions:write | V2026-411 | uncategorized | konto 5410 |
-
-Tabellen är hur Skatteverket vill ha det när online-revisionen
-öppnar 1 april 2026. Ingen revisor i Sverige har sett formatet förr.
-Skicka det till din egen revisor först.
+Svaret är en signerad länk som gäller en timme. Med underlag får arkivet
+vara högst 80 MB; blir det större, kör igen med `include_documents: false`.
+Verktyget sparar zip-filen i accounteds lagring men ändrar inget i
+huvudboken och skapar ingen väntande operation att godkänna.
 
 ## Begränsningar
 
-* Workflowet postar inte filerna till någon publik plats. Du måste konfigurera mottagar-adressen.
-* Det räknar inte ut moms eller bokslut åt dig. För det, se [Månadsbokslut på en fika](/community/registry/manadsbokslut-pa-en-fika).
-* Det följer inte upp om revisorn faktiskt öppnar paketet. Lägg gärna till en Litmus- eller Mailtrack-pixel om du vill det, men kolla GDPR först.
+* Bara bokförda verifikationer kommer med. Obokförda banktransaktioner och utkast syns inte.
+* Ett räkenskapsår per anrop. Vid årsskiftet: skicka både det nya och det gamla året tills det gamla är stängt.
+* Receptet räknar inte ut moms eller bokslut åt dig. För det, se [Månadsbokslut på en fika](/community/registry/manadsbokslut-pa-en-fika).
+* Det följer inte upp om revisorn öppnar paketet.

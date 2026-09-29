@@ -1,6 +1,6 @@
 ---
-title: "Arbetsgivardeklaration på individnivå — AGI som SKILL"
-description: "SKILL.md som tar en godkänd löneberäkning och genererar AGI-fil enligt Skatteverkets schema via gnubok_generate_agi. Producerar XML klar för manuell uppladdning i Skatteverkets e-tjänst."
+title: "Lön och AGI med /accounted:payroll"
+description: "Löneflödet i accounteds officiella plugin för Claude Code. Går igenom månadens lönekörning, låter accounted räkna skatteavdrag och arbetsgivaravgifter, stagar bokföringen för ditt godkännande och tar fram underlaget till arbetsgivardeklarationen (AGI) med deadline ur produktens data. Med Skatteverket kopplat kan AGI:n lämnas in; den är inlämnad först när du signerat med BankID."
 slug: "skatteverket-arbetsgivardeklaration"
 kind: "skill"
 author: "gnubok"
@@ -8,113 +8,114 @@ status: "live"
 lang: "sv"
 personas: ["byra", "finance", "founder"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-07-18"
-downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/skatteverket-arbetsgivardeklaration.zip"
-repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/skatteverket-arbetsgivardeklaration"
+updatedAt: "2026-09-27"
+installCommand: "/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/packages/claude-plugin/skills/payroll"
 gnubokTools:
+  - "gnubok_get_agent_briefing"
+  - "gnubok_load_skill"
   - "gnubok_list_employees"
   - "gnubok_create_salary_run"
+  - "gnubok_set_run_salary"
+  - "gnubok_register_absence"
   - "gnubok_calculate_salary_run"
   - "gnubok_get_salary_run"
-  - "gnubok_get_salary_journal"
+  - "gnubok_book_salary_run"
   - "gnubok_generate_agi"
+  - "gnubok_agi_submit"
+  - "gnubok_agi_status"
+  - "gnubok_approve_pending_operation"
 oauthScopes:
+  - "agent:read"
   - "payroll:read"
   - "payroll:write"
+  - "compliance:read"
+  - "skatteverket:write"
+  - "pending_operations:read"
+  - "pending_operations:approve"
 requiresWriteScope: true
-version: "1.0.0"
+version: "1.2.3"
 ogImageEyebrow: "Skill"
 faq:
-  - q: "Vilket AGI-format genererar skillen?"
-    a: "`gnubok_generate_agi` returnerar en download-länk till AGI-XML enligt Skatteverkets schema, sparat under `/api/salary/runs/{id}/agi/xml`. Filen följer formatet för arbetsgivardeklaration på individnivå."
-  - q: "Hanterar skillen förmåner och traktamenten?"
-    a: "Skillen orkestrerar `gnubok_get_salary_journal` och `gnubok_generate_agi` på en lönerunde. Lönerundans posttyper (bil, kost, bostad, traktamente, pension) hanteras av accounted-backend, inte av skillen själv. Du verifierar i appen att rätt typ är satt per lönepost innan AGI-genereringen körs."
-  - q: "Vad krävs för att lämna in?"
-    a: "Skillen producerar bara XML-filen. Själva uppladdningen sker manuellt i Skatteverkets e-tjänst med BankID eller SUS-certifikat. Skatteverket har ingen officiell MCP-bro idag, och accounteds egen Skatteverket-integration är en intern REST-tjänst (inte MCP-exponerad)."
-  - q: "Kostar det något extra att köra över byråns klienter?"
-    a: "Skillen kör mot ett företag i taget via en accounted-MCP-anslutning. För en byrå med flera klienter krävs en anslutning per klient. Multi-tenant via `companies:read` är på roadmap men inte i MCP än."
-  - q: "Vad händer om Skatteverket avvisar filen?"
-    a: "Du laddar upp den manuellt och får ett felmeddelande från Skatteverket. Vanligaste avslagen: ofullständiga personnummer, negativa belopp på fält som kräver positiva, validering mot förra periodens uppgifter. Skillen försöker inte rätta automatiskt. Du rättar i accounted och genererar AGI på nytt."
+  - q: "Vilket format har AGI-underlaget?"
+    a: "`gnubok_generate_agi` stagar genereringen av AGI-XML för en lönekörning. Efter ditt godkännande finns filen på körningen i accounted. Körningen ska vara bokförd först, så att AGI:n stämmer med bokföringen."
+  - q: "Hanterar skillen förmåner, sjukfrånvaro och bonus?"
+    a: "Förmåner registreras per anställd i accounted, och beräkningen lägger till en skattepliktig rad för varje aktiv förmån. Sjukdom, VAB och föräldraledighet registreras med `gnubok_register_absence`, och produkten räknar karensavdrag och sjuklön. Bonus, övertid och andra extra rader läggs in i lönekörningen i appen. Skillen frågar efter det som data inte visar."
+  - q: "Kan AGI:n lämnas in härifrån?"
+    a: "Ja, om Skatteverket är kopplat till bolaget och inlämning ingår i bolagets abonnemang. `gnubok_agi_submit` stagar inlämningen; när du godkänt skickas underlaget och du får en länk för BankID-signering. AGI:n är inlämnad först när du signerat. Annars laddar du ner filen från lönekörningen och lämnar in den i Skatteverkets e-tjänst."
+  - q: "Vad händer om något är fel i en bokförd lönekörning?"
+    a: "Ett bokfört löneverifikat ändras aldrig. Rättelsen är en rättelsekörning som startas från körningen i appen: den stornerar originalet och skapar en ny utkastkörning med samma rader. Sedan räknas, bokförs och lämnas AGI:n för perioden in på nytt."
+  - q: "Hur fungerar det för en byrå med flera klienter?"
+    a: "En anslutning når alla bolag där din användare är medlem. Agenten listar dem med `gnubok_list_companies` och anger `company_id` på varje anrop, godkännanden inräknade. Skillen kör lönen för ett bolag och en månad i taget."
 ---
 
-## Stegen
+## Vad det är
 
-Skillen tar en månads godkänd löneberäkning och producerar AGI-XML
-i Skatteverkets format. Stegen är idempotenta:
+`/accounted:payroll` är ett av sju arbetsflöden i accounteds officiella
+plugin för Claude Code. Det kör månadens lönecykel: kontrollerar
+lönekörningen, stagar bokföringen och tar fram arbetsgivardeklarationen
+(AGI). Produkten räknar, de laddade genomgångarna förklarar, och skillen
+räknar aldrig skatt själv.
 
-1. `gnubok_get_salary_run(period: "2026-04")`. Drar lönerundans status.
-2. Validerar att rundan är godkänd och journalförd. Annars stoppar och säger varför.
-3. `gnubok_get_salary_journal(salary_run_id: ...)`. Hämtar alla löneposter per anställd.
-4. Visar sammanfattning per anställd: brutto, skatteavdrag, förmåner, traktamenten.
-5. `gnubok_generate_agi(salary_run_id: ...)`. Returnerar download-URL till AGI-XML.
-6. Returnerar filsökväg plus en kort kontrollista innan manuell upload.
+## Så går flödet
 
-Den producerade filen laddas upp i Skatteverkets e-tjänst:
-[skatteverket.se/etjanster/arbetsgivardeklaration](https://skatteverket.se/etjanster/arbetsgivardeklaration).
-Skatteverket har ingen officiell MCP-yta för AGI-inlämning. accounteds
-egen Skatteverket-extension är aktiv som intern REST-tjänst men
-exponerar inte tools över MCP idag.
+1. `gnubok_get_agent_briefing`. Har bolaget inga anställda stannar flödet.
+   En ägare till en enskild firma tar eget uttag och kan inte få lön; det
+   förklaras i stället.
+2. `gnubok_load_skill("payroll-monthly")` och
+   `gnubok_load_skill("horizontal/swedish-payroll")`: månadens procedur och
+   reglerna för skatteavdrag, arbetsgivaravgifter, förmåner, karensavdrag
+   och semesterlöneskuld.
+3. Lönekörningen kontrolleras: finns den, är den komplett, är månadens
+   engångsposter med? `gnubok_list_employees` visar vilka som är med,
+   `gnubok_create_salary_run` stagar en ny körning,
+   `gnubok_set_run_salary` sätter en rörlig lön (till exempel ägarlön i ett
+   aktiebolag) och `gnubok_register_absence` registrerar frånvaro. Det data
+   inte visar frågar skillen om.
+4. `gnubok_calculate_salary_run`: accounted räknar brutto, skatteavdrag
+   enligt skattetabell, netto, arbetsgivaravgifter och semesterlöneskuld.
+   `gnubok_get_salary_run` visar resultatet per anställd.
+5. `gnubok_book_salary_run` stagar bokföringen, en högriskoperation som
+   kräver ditt uttryckliga godkännande. Verifikatet bokar lönekostnad på
+   7210 (7220 för företagsledare), skatteavdrag på 2710, arbetsgivaravgifter
+   på 7510 mot 2731, semesterlöneskuld på 2920 och 2940 och nettolön mot
+   1930.
+6. `gnubok_generate_agi` stagar AGI-underlaget. Är Skatteverket kopplat
+   stagar `gnubok_agi_submit` inlämningen; efter ditt godkännande signerar
+   du med BankID, och `gnubok_agi_status` visar status och kvittensnummer.
+7. Rapporten: bokfört, AGI-status, deadline ur produktens data och det som
+   återstår.
 
-## Konto- och AGI-mappning
+Godkännanden sker i chatten, där agenten anropar
+`gnubok_approve_pending_operation` först efter ditt ja, eller i appen under
+Granskning.
 
-Lönerundan i accounted använder standardvärdena från BAS 2026:
+## Manuell inlämning
 
-| Lönepost | AGI-fält (typiskt) | Konto-debet | Konto-kredit |
-|---|---|---|---|
-| Bruttolön | Ersättning | 7210 | 2710 |
-| Bilförmån | Bilförmån | 7385 | 2710 |
-| Bostadsförmån | Bostadsförmån | 7384 | 2710 |
-| Kostförmån | Kostförmån | 7382 | 2710 |
-| Traktamente över schablon | Skattepliktig del | 7321 | 2710 |
-| Pensionsförsäkringspremie | Pension | 7410 | 2710 |
-| Sjuklön | Ersättning | 7282 | 2710 |
-| Skatteavdrag | Avdragen skatt | 2710 | 2710 |
-| Arbetsgivaravgift 31.42% | (rapporteras separat) | 7510 | 2731 |
-
-Mappningen sker i accounted-backend när lönerundan beräknas, inte i
-skillen. Skillen läser bara journalen och triggar AGI-export.
+Utan Skatteverket-koppling laddar du ner AGI-filen från lönekörningen i
+accounted, lämnar in den i Skatteverkets e-tjänst
+[Lämna arbetsgivardeklaration](https://www.skatteverket.se/foretag/etjansterochblanketter/allaetjanster/tjanster/arbetsgivardeklaration.4.41f1c61d16193087d7fcaeb.html)
+och signerar där.
 
 ## Installera
 
-```bash
-git clone https://github.com/erp-mafia/accounted
-cd gnubok/skills/skatteverket-arbetsgivardeklaration
+```text
+/plugin marketplace add erp-mafia/accounted
+/plugin install accounted@accounted
 ```
 
-I Claude Desktop:
+Kör `/accounted:setup` första gången. Den ansluter
+[accounted MCP-server](/community/registry/gnubok-mcp) med OAuth, så ingen
+API-nyckel behövs. Kör sedan `/accounted:payroll`; månaden kan anges som
+argument.
 
-```
-Cmd-Shift-P → Skills: Add from folder → välj mappen
-```
+Pluginet ansluter med `tool_namespace=accounted`, så i Claude Code heter
+verktygen `accounted_*`. Det är samma verktyg som `gnubok_*` i listan nedan.
 
-Kräver att [accounted MCP](/community/registry/gnubok-mcp) är ansluten med
-scopes `payroll:read`, `payroll:write`.
+## Det här gör skillen inte
 
-## Köra skillen
-
-```
-@skatteverket-arbetsgivardeklaration generera AGI för april 2026
-```
-
-Agenten:
-
-1. Listar antalet anställda i rundan (säg 8).
-2. Visar fördelningen mellan löneslag.
-3. Genererar AGI-XML.
-4. Returnerar download-URL.
-5. Visar sammanfattning per anställd så du kan korsa-checka mot lönespec innan upload.
-
-## Sånt skillen inte gör
-
-* Skillen laddar inte upp filen till Skatteverket. Det sker manuellt i Skatteverkets e-tjänst (BankID eller SUS-certifikat).
-* Skillen räknar inte ut själva lönerundan. Använd `gnubok_calculate_salary_run` först.
-* Skillen hanterar inte F-skatt-anmälan eller momsregistrering. Andra processer.
-* Skillen producerar inte KU-uppgifter (kontrolluppgifter på årsbasis). De är en separat process.
-
-## Om Skatteverket avvisar filen
-
-Vanligaste avslagen och vad de betyder:
-
-* **"Felaktig version på schema"**: AGI-schemat uppdateras med jämna mellanrum. Skillen följer den utgåva som accounted-backend producerar.
-* **"Personnummer matchar inte"**: någon i lönerundan har personnummer i fel format. Kör `gnubok_list_employees` för att fånga det innan AGI-genereringen.
-* **"Negativt belopp"**: betyder att lönerundan har en återbetalning. AGI tillåter inte negativa belopp på vissa fält. Bokför som korrigering i nästa period istället.
+* Räknar inte skatteavdrag, arbetsgivaravgifter eller förmånsvärden själv. Den använder produktens beräkning och kontrollerar den mot de laddade reglerna.
+* Bokför och lämnar inte in något utan godkännande. AGI:n är inlämnad först efter din BankID-signatur.
+* Lägger inte till nya lönerader som övertid eller bonus över MCP. De läggs in i lönekörningen i appen; befintliga rader på en utkastkörning kan ändras med `gnubok_update_payslip_line`.
+* Ger inga råd om ägarlönens nivå, 3:12 eller utdelning. Det lämnas till dig och din rådgivare.
+* Visar enskilda löner bara när du ber om den detaljnivån.

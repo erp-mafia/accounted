@@ -1,5 +1,5 @@
 ---
-title: "swedish-financial-reporting — årsredovisning, Bolagsverket och INK2"
+title: "swedish-financial-reporting: årsredovisning, Bolagsverket och INK2"
 description: "SKILL.md för svensk finansiell rapportering. Årsredovisning enligt K2/K3 (uppställningsform, noter, förvaltningsberättelse, underskrifter), Bolagsverket-inlämning (deadlines, förseningsavgifter, iXBRL, revisionsplikt, tvångslikvidation), INK2-blanketten (INK2R/INK2S-fältmappningar, skattemässiga justeringar)."
 slug: "swedish-financial-reporting"
 kind: "skill"
@@ -8,27 +8,28 @@ status: "live"
 lang: "sv"
 personas: ["finance", "byra", "founder"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-09-17"
-repoUrl: "https://github.com/erp-mafia/swedish-accounting-agents/tree/main/.claude/skills/swedish-financial-reporting"
-externalUrl: "https://github.com/erp-mafia/swedish-accounting-agents"
+updatedAt: "2026-09-27"
+repoUrl: "https://github.com/erp-mafia/accounted-skills/tree/main/.claude/skills/swedish-financial-reporting"
+externalUrl: "https://github.com/erp-mafia/accounted-skills"
 version: "community"
 ogImageEyebrow: "Skill"
 faq:
   - q: "K2 eller K3?"
-    a: "K2 är schablonregelverket för mindre företag (omsättning <80 MSEK, balans <40 MSEK, anställda <50 — gränser i ÅRL 1 kap 3§). K3 är principbaserat och krävs för större bolag och alla noterade. Skillen visar uppställningsform, krav på noter, förvaltningsberättelse och underskrifter per regelverk."
-  - q: "När börjar iXBRL-kravet?"
-    a: "Bolagsverket inför digital årsredovisning i iXBRL för räkenskapsår som börjar efter 2025-12-31. Inlämning under 2027 enligt nuvarande tidplan. Skillen täcker taxonomi-mappning och förbereder datat innan det konverteras."
+    a: "K2 är schablonregelverket för mindre företag. Ett företag är större om det under vart och ett av de två senaste räkenskapsåren överskrider mer än ett av gränsvärdena: fler än 50 anställda i medeltal, balansomslutning över 40 MSEK, nettoomsättning över 80 MSEK (ÅRL 1 kap 3 §). K3 är huvudregelverket och krävs för större företag som inte tillämpar IFRS. Från räkenskapsår som börjar efter 2025-12-31 får bland annat bostadsrättsföreningar inte längre använda K2 (BFNAR 2025:2). Skillen visar uppställningsform, krav på noter, förvaltningsberättelse och underskrifter per regelverk."
+  - q: "Måste årsredovisningen lämnas digitalt i iXBRL?"
+    a: "Inte i dag. Digital inlämning är frivillig och öppen för aktiebolag som följer K2 eller K3, och Bolagsverket tar fortfarande emot årsredovisningar på papper. Ett obligatorium har föreslagits men inte beslutats. Skillen täcker iXBRL-kraven (Inline XBRL 1.1, taxonomierna på taxonomier.se) och hur fastställelseintyget signeras med BankID."
   - q: "Vad är skattemässiga justeringar i INK2?"
-    a: "Skillnaden mellan redovisat och skattepliktigt resultat: avsättningar (periodiseringsfond), ej avdragsgilla kostnader (representation över 90 kr/person, böter, skatt), ej skattepliktiga intäkter, koncernbidrag. INK2R radar upp justeringarna; INK2S summerar dem."
+    a: "Skillnaden mellan redovisat och skattepliktigt resultat: ej avdragsgilla kostnader (bland annat måltidsrepresentation, som inte är avdragsgill sedan 2017, böter, skattetillägg och förseningsavgifter), ej skattepliktiga intäkter, schablonintäkt på periodiseringsfonder, periodiseringsfond och koncernbidrag. INK2R är räkenskapsschemat (balans- och resultaträkning) och INK2S är blanketten där de skattemässiga justeringarna görs."
 ---
 
 ## Vad skillen täcker
 
 * Årsredovisningens struktur per K2 vs K3: uppställningsform, krav på noter, förvaltningsberättelse, underskrifter, kassaflödesanalys (K3-krav).
+* Vilka som får använda K2, och vilka som från räkenskapsår som börjar efter 2025-12-31 måste gå över till K3 (BFNAR 2025:2).
 * Bolagsverket-inlämning: deadlines (7 mån efter räkenskapsårets slut), förseningsavgifter, revisionsplikt-gränser, tvångslikvidation vid förseningsbrister.
-* Digital inlämning: iXBRL-taxonomin, Bolagsverkets Lämna-Årsredovisning-tjänst.
-* INK2-blanketten till Skatteverket: INK2R-radmappningar, INK2S sammanställning, skattemässiga justeringar, periodiseringsfond, överavskrivningar, koncernbidrag.
-* N9-blanketten för fåmansbolagsutdelning.
+* Digital inlämning: iXBRL 1.1, taxonomierna på taxonomier.se, uppladdning från programvara och signering av fastställelseintyget med BankID. Frivillig, papper tas fortfarande emot.
+* INK2-blanketten till Skatteverket: INK2R-radmappningar, INK2S-justeringar, periodiseringsfond, överavskrivningar, koncernbidrag.
+* N9-blanketten för begränsning av ränteavdrag (EBITDA-regeln och förenklingsregeln).
 * BAS-konton mot INK2-fält.
 
 Skillen täcker inte bokslutsmekaniken (vad man bokför sista dagen).
@@ -37,16 +38,16 @@ För det, använd [swedish-year-end-closing](/community/registry/swedish-year-en
 ## Installera
 
 ```bash
-git clone https://github.com/erp-mafia/swedish-accounting-agents.git
-cd swedish-accounting-agents
+git clone https://github.com/erp-mafia/accounted-skills.git
+cd accounted-skills
 claude
 ```
 
 ## Pairs med
 
-* [swedish-year-end-closing](/community/registry/swedish-year-end-closing) — bokslutstransaktioner som föregår årsredovisningen.
-* [swedish-tax-planning](/community/registry/swedish-tax-planning) — skattemässiga justeringarna som hamnar i INK2.
-* [swedish-sru-filing](/community/registry/swedish-sru-filing) — SRU-filer för INK2-inlämning.
+* [swedish-year-end-closing](/community/registry/swedish-year-end-closing): bokslutstransaktioner som föregår årsredovisningen.
+* [swedish-tax-planning](/community/registry/swedish-tax-planning): skattemässiga justeringarna som hamnar i INK2.
+* [swedish-sru-filing](/community/registry/swedish-sru-filing): SRU-filer för INK2-inlämning.
 
 ## Licens
 

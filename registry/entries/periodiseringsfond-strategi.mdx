@@ -1,6 +1,6 @@
 ---
-title: "Periodiseringsfond — strategi och bokning för AB:s årsbokslut"
-description: "SKILL.md som beräknar maximal periodiseringsfond (25% av skattemässigt resultat före avsättning för AB), beräknar skatteeffekt med 20.6% bolagsskatt, och stager gnubok_create_voucher med 8811 mot 2125–2127 (sjuårsserien)."
+title: "Periodiseringsfond i årsbokslutet med /accounted:year-end"
+description: "Year-end-skillen i accounteds officiella plugin för Claude Code kör AB:s årsbokslut med readiness först. Periodiseringsfonden kommer från accounteds eget förslag på bokslutsdispositioner: obligatorisk återföring, avsättning upp till 25 % av skattemässigt överskott och bolagsskatt 20,6 % på den nya basen. Du väljer, varje bokning stageas och godkänns av dig."
 slug: "periodiseringsfond-strategi"
 kind: "skill"
 author: "gnubok"
@@ -8,154 +8,136 @@ status: "live"
 lang: "sv"
 personas: ["founder"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-07-18"
-downloadUrl: "https://github.com/erp-mafia/accounted/releases/download/skills-v1/periodiseringsfond-strategi.zip"
-repoUrl: "https://github.com/erp-mafia/accounted/tree/main/skills/periodiseringsfond-strategi"
+updatedAt: "2026-09-27"
+installCommand: "/plugin marketplace add erp-mafia/accounted\n/plugin install accounted@accounted"
+repoUrl: "https://github.com/erp-mafia/accounted/tree/main/packages/claude-plugin/skills/year-end"
 gnubokTools:
-  - "gnubok_get_income_statement"
+  - "gnubok_get_agent_briefing"
   - "gnubok_year_end_readiness"
+  - "gnubok_load_skill"
+  - "gnubok_propose_dispositioner"
   - "gnubok_create_voucher"
-  - "gnubok_query_journal"
+  - "gnubok_approve_pending_operation"
+  - "gnubok_run_year_end"
 oauthScopes:
+  - "agent:read"
   - "reports:read"
   - "bookkeeping:write"
+  - "pending_operations:approve"
 requiresWriteScope: true
-version: "1.0.0"
+version: "1.2.3"
 ogImageEyebrow: "Skill"
 faq:
-  - q: "Borde jag verkligen göra avsättning om jag förväntar mig lägre vinst nästa år?"
-    a: "Beror på likviditeten. Periodiseringsfonden flyttar skatt 6 år framåt. Om du förväntar dig att ha lägre eller ingen vinst nästa år har avsättningen särskilt värde eftersom återföringen då beskattas lägre (eller noll). Skillen visar break-even-året: vid vilken framtida resultatnivå blir avsättningen lönsam eller olönsam."
-  - q: "Vilken serie kontonummer ska jag använda, 2125, 2126 eller 2127?"
-    a: "BAS 2026 har sjuårsserie 2125–2131, ett konto per avsättningsår. För räkenskapsår 2025 (kalenderår 2025) används 2125. För 2026 blir det 2126. Skillen läser fiskalperiodens slutdatum från accounted och väljer rätt konto automatiskt. Återföring sker mot samma konto, så 2125 från 2025 återförs senast år 2031."
-  - q: "Kan jag återföra periodiseringsfonden frivilligt om jag har förlust?"
-    a: "Ja, alltid. Återföring i förlustår är en av huvudfördelarna: du minskar förlusten och kan kvitta mot framtida vinster med högre marginal. Skillen detekterar 2125-saldon vid årsbokslut och föreslår återföring om årets resultat är negativt. Bokning: 2125 mot 8811 (i samma år, motsatt riktning)."
-  - q: "Vad händer med periodiseringsfonden om bolaget likvideras?"
-    a: "Vid likvidation måste hela kvarvarande periodiseringsfond återföras till beskattning i likvidationsårets resultat. Det är skattepliktigt. Det finns ingen möjlighet att 'rulla över' till ägarna. Sätter du periodiseringsfond bör du ha en plan för hur den ska användas innan likvidation blir aktuell."
-  - q: "Räknas periodiseringsfond mot K10 eller är det enbart bolagsfråga?"
-    a: "Periodiseringsfond ligger på bolaget, inte på ägaren. K10 påverkas indirekt: lägre redovisat resultat ett enskilt år ger lägre lönebaserat utrymme för fåmansbolagsutdelning de kommande åren. En faktor i bedömningen, inte ett knockout-skäl. Skillen visar K10-effekten som sidoinformation om bolaget är fåmansbolag."
+  - q: "Räknar skillen ut beloppet själv?"
+    a: "Nej. Beloppen kommer från `gnubok_propose_dispositioner`, samma beräkning som Bokslut-sidan i appen använder. Skillen visar förslaget, frågar vad du vill göra och stagear det du väljer. Förslaget bygger på det som är bokfört, så kör det när årets bokföring är klar. Mitt i året visar det ett golv för avsättningen."
+  - q: "Hur mycket får ett aktiebolag sätta av?"
+    a: "Högst 25 % av det skattemässiga överskottet före avsättningen (IL 30 kap. 5 §). Enskild firma får sätta av 30 %, men där finns fonden bara i NE-bilagan och bokförs aldrig."
+  - q: "Vilket konto används?"
+    a: "Ett konto per avsättningsår i serien 2120–2129, där sista siffran är årtalets: 2126 för räkenskapsår 2026. Avsättningen bokas debet 8811 Avsättning till periodiseringsfond, kredit 2126. Återföring bokas debet fondkontot, kredit 8819 Återföring från periodiseringsfond."
+  - q: "När måste fonden återföras?"
+    a: "Senast det sjätte beskattningsåret efter avsättningsåret: 2026 års fond senast i bokslutet för 2032, och fonder från 2020 i bokslutet för 2026. Den äldsta fonden återförs alltid först. Vid beslut om likvidation eller konkurs, eller om bolaget upphör med näringsverksamheten, ska fonderna återföras tidigare."
+  - q: "Är periodiseringsfonden en räntefri kredit?"
+    a: "Inte helt. Varje år en fond finns kvar vid beskattningsårets ingång tas en schablonintäkt upp i deklarationen: fondsaldot gånger statslåneräntan vid utgången av november året före det kalenderår då beskattningsåret går ut, lägst 0,5 %. För beskattningsår som går ut 2026 är räntan 2,55 %. Schablonintäkten bokförs inte, den är en justering i INK2S."
+  - q: "Påverkar periodiseringsfonden K10?"
+    a: "Gränsbeloppet påverkas inte: det räknas på grundbelopp, löner och omkostnadsbelopp. Avsättningen sänker däremot årets redovisade resultat och därmed det fria egna kapital som går att dela ut."
 ---
 
-## Sex steg
+## Vad det här är
 
-Periodiseringsfond är AB:s enda återstående tidsförskjutning av
-bolagsskatt. Skillen läser årets resultat, beräknar maximal
-avsättning, jämför skatteeffekt mellan avsättning och icke-avsättning,
-och stager bokningen om du godkänner.
+Posten beskrev tidigare en fristående periodiseringsfond-skill som aldrig
+publicerades. Den fungerande vägen i dag är `/accounted:year-end`, bokslutsflödet
+i accounteds officiella plugin för Claude Code. Där är periodiseringsfonden ett
+av stegen i bokslutet.
 
-1. `gnubok_year_end_readiness(period: "2025")`. Kollar att perioden är klar för bokslut.
-2. `gnubok_get_income_statement(period: "2025")`. Drar årets resultat före skatt.
-3. Beräknar `max_avsattning = resultat_före_skatt × 0.25`.
-4. Beräknar skatteeffekt vid avsättning vs ej: skillnaden är `max_avsattning × 0.206` SEK i likviditet.
-5. Visar break-even-året (vid vilken framtida resultatnivå avsättningen blir olönsam).
-6. Stager `gnubok_create_voucher(date: 2025-12-31, lines: [debet 8811 X kr, kredit 2125 X kr])`.
-
-Inget skrivs utan godkännande. Skillen visar konsekvensen, du
-bestämmer om den ska göras.
-
-## Beräkningen
-
-För räkenskapsår 2025 med resultat före skatt 480 000 SEK:
-
-```
-Max avsättning:       480 000 × 0.25 = 120 000 SEK
-Bolagsskatt utan:     480 000 × 0.206 = 98 880 SEK
-Bolagsskatt med:      360 000 × 0.206 = 74 160 SEK
-Likviditet kvar:      24 720 SEK extra i bolaget
-```
-
-24 720 SEK stannar i bolaget i upp till 6 år. Vid återföring år
-2031 (om inte tidigare) beskattas det med då gällande skattesats.
-Är skattesatsen densamma (20.6%) blir effekten av periodiseringen
-en räntefri kredit på 24 720 SEK i 6 år.
-
-För räntenivå 5% är värdet av 6 års räntefri kredit på 24 720 SEK
-ungefär 6 600 SEK i nuvärde. Även med konstant skatt är
-periodiseringen lönsam, bara mindre dramatisk än "spara 24 720 SEK".
-
-## Sjuårsserien
-
-BAS 2026 har en separat konto per avsättningsår:
-
-| Konto | Avsättningsår | Senaste återföring |
-|---|---|---|
-| 2125 | 2025 | 2031 |
-| 2126 | 2026 | 2032 |
-| 2127 | 2027 | 2033 |
-| 2128 | 2028 | 2034 |
-| 2129 | 2029 | 2035 |
-| 2130 | 2030 | 2036 |
-| 2131 | 2031 | 2037 |
-
-Detta är inte bara kosmetik. Skatteverket kräver att man kan visa
-vilket år en specifik avsättning gjorts, för att kunna räkna
-6-årsfönstret. Använder du fel konto blir det rättelseår.
+Skillen räknar inte själv. Den hämtar accounteds beräkning, förklarar den och
+låter dig bestämma. Inget bokförs utan ditt godkännande.
 
 ## Installera
 
-```bash
-git clone https://github.com/erp-mafia/accounted
-cd gnubok/skills/periodiseringsfond-strategi
-```
-
-I Claude Desktop:
+I Claude Code:
 
 ```
-Cmd-Shift-P → Skills: Add from folder → välj mappen
+/plugin marketplace add erp-mafia/accounted
+/plugin install accounted@accounted
+/accounted:setup
 ```
 
-Kräver `reports:read` (för läsning) och `bookkeeping:write` (för att
-stagas bokningsförslag).
-
-## Köra skillen
+`/accounted:setup` kopplar in accounteds MCP-server via OAuth. Sedan:
 
 ```
-@periodiseringsfond-strategi för 2025
+/accounted:year-end 2026
 ```
 
-Agenten:
+Pluginet ansluter med `?tool_namespace=accounted`, så verktygen nedan heter
+`accounted_*` i Claude Code i stället för `gnubok_*`. Det är samma verktyg.
+
+## Flödet
+
+1. `gnubok_get_agent_briefing`: bolagsformen avgör resten. AB får bokslutsdispositioner och bolagsskatt. För enskild firma finns periodiseringsfond bara i NE-bilagan.
+2. `gnubok_year_end_readiness`: read-only kontroll av året. Blockerare som obokförda transaktioner, utkast, oförklarade luckor i verifikationsnumreringen eller en obalanserad saldobalans åtgärdas först.
+3. `gnubok_load_skill`: laddar produktens bokslutsprocedur, och när du vill optimera även skatteplaneringskunskapen.
+4. `gnubok_propose_dispositioner(fiscal_period_id)`: read-only förslag i fast ordning: obligatorisk återföring av periodiseringsfond, överavskrivningar, avsättning till periodiseringsfond, särskild löneskatt och sist bolagsskatt. Varje förslag har färdiga, balanserade rader.
+5. Varje disposition du godkänner stageas som ett eget verifikat med `gnubok_create_voucher`, daterat på balansdagen. Efter varje godkännande hämtas förslaget igen, eftersom bolagsskatten ska räknas på den nya basen.
+6. `gnubok_run_year_end` stänger året, men först när readiness är grön igen och du uttryckligen har sagt ja i konversationen.
+
+Vill du avsätta ett annat belopp än förslaget, eller återföra en fond
+frivilligt, gör du det på Bokslut-sidan i appen, som bokför från samma förslag.
+
+## Reglerna i förslaget (AB, 2026)
+
+* **Avsättning:** högst 25 % av skattemässigt överskott före avsättningen. Basen är det skattemässiga resultatet, alltså efter ej avdragsgilla kostnader, skattefria intäkter, underskottsavdrag, årets återföringar och schablonintäkt.
+* **Återföring:** senast det sjätte beskattningsåret efter avsättningsåret, äldsta fonden först. En fond som når gränsen i år kommer med `required: true` och är inget val.
+* **Schablonintäkt:** fondernas saldo vid beskattningsårets ingång gånger statslåneräntan vid utgången av november året före, lägst 0,5 %. 2,55 % för beskattningsår som går ut 2026. Läggs till i deklarationen, bokförs aldrig.
+* **Bolagsskatt:** 20,6 %, räknad efter dispositionerna.
+
+## Exempel
+
+Räkenskapsår 2026, skattemässigt överskott före avsättning 480 000 kr, inga
+tidigare fonder:
 
 ```
-Årets resultat:      480 000 SEK
-Max avsättning:      120 000 SEK (25%)
-Likviditetseffekt:   24 720 SEK
-Break-even-vinst:    240 000 SEK år 2031
+Max avsättning:         480 000 × 25 %   = 120 000 kr
+Bolagsskatt utan:       480 000 × 20,6 % =  98 880 kr
+Bolagsskatt med:        360 000 × 20,6 % =  74 160 kr
+Uppskjuten skatt:                           24 720 kr
 
-Föreslagen bokning:
-  Debet  8811 Avsättning periodiseringsfond     120 000
-  Kredit 2125 Periodiseringsfond år 2025        120 000
-  Datum: 2025-12-31
-
-Vill du stagas? (yes / partial / no)
+Bokning 2026-12-31:
+  Debet  8811 Avsättning till periodiseringsfond   120 000
+  Kredit 2126 Periodiseringsfond 2026              120 000
 ```
 
-Skillen tar emot `partial 60000` om du vill avsätta mindre än maxbeloppet.
+Skatten skjuts upp. De 120 000 kr återförs senast i
+bokslutet för 2032 och beskattas då med den skattesats som gäller. Så länge
+fonden står kvar tas en schablonintäkt upp varje år: med dagens 2,55 % blir
+det 3 060 kr i schablonintäkt och cirka 630 kr i skatt per år. Räntan för
+kommande år bestäms av statslåneräntan i november året före.
 
-## Återföringsbeslut
+## Konton
 
-Skillen detekterar gamla 2125-saldon vid varje årsbokslut. Vid
-förlustår föreslår den återföring för att kvitta. Bokning för
-återföring:
+| Avsättningsår | Konto | Återförs senast i bokslutet för |
+|---|---|---|
+| 2020 | 2120 | 2026 |
+| 2021 | 2121 | 2027 |
+| 2022 | 2122 | 2028 |
+| 2023 | 2123 | 2029 |
+| 2024 | 2124 | 2030 |
+| 2025 | 2125 | 2031 |
+| 2026 | 2126 | 2032 |
 
-```
-Debet  2125 Periodiseringsfond år 2025       120 000
-Kredit 8811 Avsättning periodiseringsfond    120 000
-Datum: bokslutsdatum (t.ex. 2027-12-31)
-```
+Varje års avsättning är en egen fond som ska kunna följas till sitt
+återföringsår, därför ett konto per år. Serien 2130–2139 är en andra serie
+(nr 2) för samma årtal. Överavskrivningar ligger på 2150 och är en annan sak.
 
-Återföring är frivillig. Du kan vänta hela 6-årsfönstret. Men i
-år 7 (2031 för 2025-avsättningen) är återföring obligatorisk.
+## Behörigheter
+
+OAuth-granten behöver `reports:read` och `agent:read` för att läsa,
+`bookkeeping:write` för att stagea verifikat och bokslutet, och
+`pending_operations:approve` för att godkänna dem i konversationen. Du kan
+också godkänna i appen.
 
 ## Begränsningar
 
-* Skillen gör ingen skatteplanering över bolagsstrukturer. Den jobbar bara med ett bolags egen kontoplan.
-* Skillen tar inte hänsyn till outnyttjat förlustavdrag. Om bolaget har gamla förluster ska man kanske inte avsätta alls. Det är revisor-bedömning.
-* Skillen är inte K10-skattare. Den noterar K10-effekten på fåmansbolag men beräknar inte själva K10-deklarationen.
-* Skillen avsätter inte automatiskt. Bara förslag, alltid staged, du godkänner.
-
-## Vad du får
-
-En beräkning på 5 minuter som annars hamnar på revisorns bord till
-2 500 kr/timme. Och en bokföring där periodiseringsfondsärenden går
-in i samma audit-spår som allt annat. När revisor nästa år frågar
-"varför hamnade 120 000 på 2125 i december?", svaret finns på rad i
-`gnubok_audit_package`-zippen: vem, när, scope, before/after.
+* Fonder avsatta under beskattningsår som började 2019 eller 2020 räknas upp med 4 % när de återförs. Uppräkningen redovisas i INK2S (punkt 4.6d) och räknas inte in i accounteds förslag på bolagsskatt. Lägg till den själv.
+* Frivillig återföring, till exempel ett förlustår, föreslås inte automatiskt. Skillen kan resonera om den med skatteplaneringskunskapen, bokningen gör du på Bokslut-sidan.
+* Skillen gör ingen skatteplanering över flera bolag och beräknar inte K10.
+* Inget lämnas in automatiskt. INK2 lämnar du själv, till exempel med SRU-filerna från accounted. Resultatet är underlag för dig och din revisor. Det är ingen skatterådgivning.

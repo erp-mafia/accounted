@@ -1,6 +1,6 @@
 ---
 title: "accounted MCP-server"
-description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, ChatGPT, Grok, Claude Desktop, Cursor och Continue."
+description: "MCP-server för svensk dubbel bokföring. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter. OAuth 2.1 med PKCE och dynamisk klientregistrering. Installeras som connector i Claude.ai, Claude Desktop, ChatGPT och Grok, och i Claude Code och Cursor."
 slug: "gnubok-mcp"
 kind: "mcp"
 author: "gnubok"
@@ -8,12 +8,23 @@ status: "live"
 lang: "sv"
 personas: ["developer", "founder", "byra"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-08-26"
+updatedAt: "2026-09-27"
 featured: true
-externalUrl: "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp"
+externalUrl: "https://www.accounted.se/docs/api/anslut-claude"
 repoUrl: "https://github.com/erp-mafia/accounted"
 oauthScopes:
-  - "mcp"
+  - "transactions:read"
+  - "transactions:write"
+  - "invoices:write"
+  - "suppliers:read"
+  - "suppliers:write"
+  - "reports:read"
+  - "bookkeeping:write"
+  - "payroll:read"
+  - "payroll:write"
+  - "skatteverket:write"
+  - "pending_operations:read"
+  - "pending_operations:approve"
 gnubokTools:
   - "gnubok_list_uncategorized_transactions"
   - "gnubok_categorize_transaction"
@@ -23,26 +34,26 @@ gnubokTools:
   - "gnubok_export_sie"
 requiresWriteScope: true
 sieCompatible: true
-version: "1.0.1"
+version: "1.1.0"
 ogImageEyebrow: "MCP-server"
 faq:
   - q: "Vad är accounted MCP-server?"
     a: "En HTTP-baserad MCP-server som ger en AI-agent åtkomst till en svensk huvudbok: verifikat, kunder, fakturor, moms, lön, SIE-export. OAuth 2.1 med PKCE och dynamisk klientregistrering. Över 150 verktyg över bokföring, fakturor, leverantörer, moms, lön och rapporter."
   - q: "Hur funkar OAuth-flödet?"
-    a: "MCP-klienten upptäcker accounteds autentiseringsserver via `.well-known/oauth-protected-resource`. Klienten registrerar sig dynamiskt (RFC 7591) på `/api/mcp-oauth/register`, öppnar `/api/mcp-oauth/authorize` i webbläsaren, du loggar in på accounted och godkänner anslutningen, klienten utbyter authorization code mot en access token via `/api/mcp-oauth/token` med PKCE S256."
+    a: "MCP-klienten upptäcker accounteds autentiseringsserver via `.well-known/oauth-protected-resource`. Klienten registrerar sig dynamiskt (RFC 7591) på `/api/mcp-oauth/register`, öppnar `/api/mcp-oauth/authorize` i webbläsaren, du loggar in på accounted och godkänner anslutningen, klienten utbyter authorization code mot en access token via `/api/mcp-oauth/token` med PKCE S256. Saknar du konto skapar du det i samma inloggning, med BankID eller e-post."
   - q: "Vilka klienter funkar?"
-    a: "Allt som följer MCP-spec 2026-02 och stödjer HTTP-transport med OAuth: Claude.ai (connectors), ChatGPT (Developer mode), Grok (custom connectors), Claude Desktop (HTTP), Cursor, Continue, Codex. För stdio-bara klienter finns en lokal bro: `npx gnubok-mcp` med API-nyckel."
+    a: "Claude.ai och Claude Desktop (connectors), Claude Code, ChatGPT (utvecklarläge), Grok (custom connectors) och Cursor. Deras OAuth-callbacks är godkända i förväg, liksom localhost. En egen klient med publik HTTPS-callback registrerar sin redirect-URI under Inställningar → API och MCP. För klienter som bara kör stdio finns en lokal brygga: `npx -y accounted-mcp` med API-nyckel."
   - q: "Vilka scopes ger jag bort?"
-    a: "OAuth-flödet ger en enskild `mcp`-scope: 'denna agent får använda accounteds MCP'. Inom det är agentens åtkomst begränsad till samma rättigheter som ditt eget accounted-konto har. Du kan när som helst återkalla anslutningen i app.gnubok.se → Inställningar."
+    a: "Samtyckessidan listar behörigheterna per område: transaktioner, fakturor, leverantörer, rapporter, bokföring, löner, Skatteverket, godkännande med flera. För Claude, ChatGPT, Grok och Cursor är alla förvalda, och du kan välja bort dem, till exempel med Endast läs. Din roll i bolaget sätter taket: en läsare kan bara ge läsbehörighet. Anslutningen återkallas under Inställningar → API och MCP i app.accounted.se."
   - q: "Får agenten skriva direkt till huvudboken?"
-    a: "Bara om ditt eget konto har skrivrättigheter. Och även då stagar varje write en `pending_operation` som du godkänner i app.gnubok.se. Poster är immutabla efter posting; rättelser är nya verifikat via `gnubok_correct_entry`. BFL 5 kap 5§ är arkitektoniskt, inte en policy."
-  - q: "Vad händer vid Skatteverkets revision?"
-    a: "Den 1 april 2026 öppnas online-åtkomst för revisorer. `gnubok_audit_package` paketerar SIE-4 + huvudbok + balans- och resultaträkning + audit-logg + voucher-gaps som en zip med 1-timmes signed URL. Det är samma data som UI:t bygger på."
+    a: "Nej. Varje skrivverktyg stagar en `pending_operation` med förhandsvisning, som bokförs först när den godkänts: i appen under Granskning, eller i chatten där agenten anropar `gnubok_approve_pending_operation` efter ditt uttryckliga ja. Det kräver behörigheten `pending_operations:approve`, och högriskoperationer kräver dessutom `confirmed: true`. En nyckel som både kan förbereda och godkänna kräver ett uttryckligt medgivande som loggas. Bokförda verifikat raderas aldrig; rättelser stagas med `gnubok_correct_entry` (storno plus rättad post) eller `gnubok_reverse_journal_entry`."
+  - q: "Hur tar jag fram underlag till en revision?"
+    a: "`gnubok_audit_package` paketerar ett räkenskapsår som en zip: SIE 4-fil, rapporter (saldobalans, resultat- och balansräkning, huvudbok, grundbok, moms), underlagen, behandlingshistoriken och systemdokumentationen. Filen hämtas via en signerad länk som gäller i en timme. Det är samma data som appen bygger på."
 ---
 
 ## Servern i korthet
 
-Bryggan exponerar över 150 verktyg som en MCP-klient kan kalla. De grupperas
+Servern exponerar över 150 verktyg som en MCP-klient kan kalla. De grupperas
 ungefär så här:
 
 | Område | Exempel-verktyg | Server-side scope |
@@ -53,135 +64,137 @@ ungefär så här:
 | Rapporter | `gnubok_get_trial_balance`, `gnubok_get_balance_sheet`, `gnubok_get_income_statement`, `gnubok_get_vat_report`, `gnubok_vat_close_check`, `gnubok_get_kpi_report` | `reports:read` |
 | Bokslut | `gnubok_year_end_readiness` (read), `gnubok_run_year_end`, `gnubok_close_period`, `gnubok_explain_voucher_gap` | `reports:read` / `bookkeeping:write` |
 | Lön | `gnubok_create_salary_run`, `gnubok_calculate_salary_run`, `gnubok_book_salary_run`, `gnubok_generate_agi` | `payroll:read` / `:write` |
+| Skatteverket | `gnubok_vat_declaration_submit`, `gnubok_agi_submit` | `skatteverket:write` |
+| Godkännande | `gnubok_list_pending_operations`, `gnubok_approve_pending_operation` | `pending_operations:read` / `:approve` |
 | Audit | `gnubok_audit_package`, `gnubok_export_sie`, `gnubok_query_journal` | `reports:read` |
 
-Skriv-operationer stagar en `pending_operation` som du godkänner i
-accounted-appen. Inget skrivs till DB innan en människa klickat.
+Skrivverktygen stagar en `pending_operation` med förhandsvisning. Inget
+bokförs förrän den godkänts, i appen under Granskning eller i chatten efter
+ditt uttryckliga ja. Inlämningar till Skatteverket är dessutom klara först
+när du signerat med BankID.
 
-Server-side scopes är knutna till ditt accounted-konto, inte till
-OAuth-grantet. Agenten kan göra allt du själv kan göra inom de
-verktyg den får exponera.
+Behörigheterna sitter på anslutningen: de du lämnar ikryssade på
+samtyckessidan, med din roll i bolaget som tak. Anslutningen når alla bolag
+där din användare är medlem. `gnubok_list_companies` listar dem, och
+`company_id` på ett anrop väljer bolag; utan det gäller anslutningens
+standardbolag.
 
-## Installera i Claude.ai
+Verktygen heter `gnubok_*` som standard. Med `tool_namespace=accounted` i
+adressen heter de `accounted_*`, vilket Claude Code-pluginet och produktens
+egen guide använder. Det är samma verktyg.
 
-1. I Claude → Settings → Connectors → Add custom connector.
-2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` föreslår dialogen "None" som autentisering och inloggningen öppnas aldrig).
-3. Claude öppnar accounted-OAuth i webbläsaren. Logga in. Godkänn anslutningen.
-4. Connectorn dyker upp i listan. Slå på för de chattar där du vill ha den aktiv.
+## Installera i Claude.ai eller Claude Desktop
+
+1. Inställningar → Connectors → Add custom connector.
+2. Ange URL: `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` föreslår dialogen "None" som autentisering och inloggningen öppnas aldrig).
+3. Claude öppnar accounted-inloggningen i webbläsaren. Logga in och godkänn anslutningen.
+4. Connectorn dyker upp i listan. Slå på den i de chattar där du vill ha den aktiv.
+
+## Installera i ChatGPT
+
+1. I ChatGPT på webben: Inställningar → Säkerhet och inloggning → slå på Utvecklarläge.
+2. Gå till Plugins, välj + och skapa en app i utvecklarläge med adressen `https://app.accounted.se/api/extensions/ext/mcp-server/mcp`.
+3. Starta en ny chatt, välj + → Utvecklarläge → appen, och logga in när ChatGPT frågar.
 
 ## Installera i Grok
 
 1. På grok.com: Connectors → New Connector → Custom.
-2. Ange URL: `https://app.gnubok.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` ser Grok servern som öppen och startar aldrig inloggningen).
-3. Grok registrerar sig själv och öppnar accounted-OAuth. Logga in. Godkänn anslutningen.
+2. Ange URL: `https://app.accounted.se/api/extensions/ext/mcp-server/mcp?auth=required` (utan `auth=required` ser Grok servern som öppen och startar aldrig inloggningen).
+3. Grok registrerar sig själv och öppnar accounted-inloggningen. Logga in och godkänn anslutningen.
 4. Starta en ny chatt med connectorn påslagen.
 
-## Installera i Claude Desktop
+## Installera i Claude Code
 
-`claude_desktop_config.json` (`~/Library/Application Support/Claude/` på macOS):
+Det officiella pluginet ger både anslutningen och sju arbetsflöden
+(bokföring, hälsokoll, månadsavslut, moms, lön, bokslut):
 
-```json
-{
-  "mcpServers": {
-    "gnubok": {
-      "url": "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp",
-      "transport": "http"
-    }
-  }
-}
+```text
+/plugin marketplace add erp-mafia/accounted
+/plugin install accounted@accounted
 ```
 
-Starta om Claude Desktop. OAuth-flödet triggas vid första anrop.
+Bara anslutningen:
+
+```bash
+claude mcp add --transport http accounted "https://app.accounted.se/api/extensions/ext/mcp-server/mcp"
+```
+
+Logga sedan in via `/mcp`.
 
 ## Installera i Cursor
 
-`.cursor/mcp.json`:
+`~/.cursor/mcp.json` (globalt) eller `.cursor/mcp.json` (per projekt):
 
 ```json
 {
   "mcpServers": {
-    "gnubok": {
-      "url": "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp",
-      "transport": "http"
+    "accounted": {
+      "url": "https://app.accounted.se/api/extensions/ext/mcp-server/mcp"
     }
   }
 }
 ```
 
-Cmd-Shift-P → MCP: Refresh Servers. OAuth-prompten dyker upp i en
-webbläsarflik.
+Logga in i webbläsaren när Cursor ber om det.
 
-## Installera i Continue
+## Stdio-brygga med API-nyckel
 
-`~/.continue/config.json`:
-
-```json
-{
-  "mcpServers": [
-    {
-      "name": "gnubok",
-      "url": "https://app.gnubok.se/api/extensions/ext/mcp-server/mcp",
-      "transport": "http"
-    }
-  ]
-}
-```
-
-## Stdio-fallback för icke-OAuth-klienter
-
-För klienter som bara stödjer stdio (vissa custom-agentmiljöer,
-CI-pipelines) finns en lokal bro via npm:
+För klienter som bara stödjer stdio (vissa egna agentmiljöer,
+CI-pipelines) finns en lokal brygga via npm. Nya installationer använder
+`accounted-mcp`:
 
 ```json
 {
   "mcpServers": {
-    "gnubok": {
+    "accounted": {
       "command": "npx",
-      "args": ["gnubok-mcp"],
+      "args": ["-y", "accounted-mcp"],
       "env": {
-        "GNUBOK_API_KEY": "gnubok_sk_..."
+        "ACCOUNTED_API_KEY": "gnubok_sk_..."
       }
     }
   }
 }
 ```
 
-API-nyckel skapas i app.gnubok.se → Inställningar → API-nycklar.
-Här väljer du scopes per nyckel: `transactions:read`,
-`transactions:write`, `customers:read`, `customers:write`,
-`invoices:read`, `invoices:write`, `suppliers:read`,
-`suppliers:write`, `reports:read`, `bookkeeping:write`,
-`payroll:read`, `payroll:write`.
+Befintliga konfigurationer med `gnubok-mcp` och `GNUBOK_API_KEY` fungerar
+oförändrade.
 
-API-nyckel-flödet kringgår OAuth-discoveryn men ger samma
-verktygsåtkomst. Lämpligt när maskinen som kör agenten inte kan
-öppna en webbläsare.
+API-nyckeln skapas i app.accounted.se under Inställningar → API och MCP.
+Nyckelvärdet börjar fortfarande med `gnubok_sk_`. Du väljer scopes per
+nyckel och område (transaktioner, kunder, artiklar, fakturor, leverantörer,
+rapporter, bokföring, löner, dokument, avstämning, Skatteverket,
+godkännande med flera), och nyckelns scopes styr vilka verktyg som går att
+anropa. En `gnubok_sk_test_*`-nyckel läser bolagets riktiga data men tvingar
+varje skrivning till dry-run.
+
+Lämpligt när maskinen som kör agenten inte kan öppna en webbläsare.
 
 ## Audit och behandlingshistorik
 
-För Skatteverkets revision och BFL-spårbarhet använder du
-`gnubok_audit_package(period: "...")`. Den producerar en zip med:
+För revision och BFL-spårbarhet använder du
+`gnubok_audit_package({ fiscal_period_id })`. Den producerar en zip för
+räkenskapsåret med:
 
-* SIE-4-fil för perioden
-* Balans- och resultaträkning som PDF
-* Huvudboken (per konto, alla rader)
-* Audit-loggen som CSV: vem rörde vad när, scope, before/after
-* Kvitto-arkivet som referens
-* Voucher-gap-rapport per BFNAR 2013:2
+* SIE 4-fil
+* Rapporter: saldobalans, resultat- och balansräkning, huvudbok, grundbok och moms (JSON och CSV)
+* Underlagen, med ett manifest
+* Behandlingshistoriken
+* Systemdokumentationen för räkenskapsåret
 
-Filen ligger i Supabase Storage med en signed URL på 1 timme.
-Audit-loggen genereras vid varje skriv-operation och kan inte
-stängas av.
+Filen hämtas via en signerad länk som gäller i en timme.
 
-## Sånt bryggan inte gör
+## Sånt servern inte gör
 
-* Bryggan kör ingen tredjepartskod. Egna skills och workflows körs alltid hos den som skickar anropet, inte hos oss.
-* Bryggan stagar alltid skriv-operationer. Ingen agent kan posta ett verifikat utan ett mänskligt godkännande i [app.gnubok.se](https://app.gnubok.se).
-* En OAuth-anslutning är bunden till ett accounted-konto, som i sin tur är bunden till ett företag. För byråer som hanterar flera klienter krävs en anslutning per klient idag. Multi-tenant via `companies:read`-scopen är på roadmap för v1 REST API.
+* Servern kör ingen tredjepartskod. Egna skills och workflows körs alltid hos den som skickar anropet, inte hos oss.
+* Servern stagar alltid skrivoperationer. Ett verifikat bokförs först när någon med rätt behörighet godkänt det, i [app.accounted.se](https://app.accounted.se) eller i chatten.
+* Anslutningen når bara bolag där den inloggade användaren är medlem. Det kontrolleras på servern vid varje anrop.
 
 ## Versionering
 
 OAuth-discoveryn följer RFC 8414 (Authorization Server Metadata),
 RFC 9728 (Protected Resource Metadata) och RFC 7591 (Dynamic Client
-Registration). Stdio-bron är `gnubok-mcp@1.0.1` på npm. Källkod
-under AGPL-3.0 på [github.com/erp-mafia/accounted](https://github.com/erp-mafia/accounted).
+Registration). Stdio-bryggorna på npm är `accounted-mcp@1.0.0` för nya
+installationer och `gnubok-mcp@1.1.0` för befintliga konfigurationer, båda
+under MIT. Servern är källkod under AGPL-3.0 på
+[github.com/erp-mafia/accounted](https://github.com/erp-mafia/accounted).

@@ -1,6 +1,6 @@
 ---
-title: "swedish-project-accounting — projektredovisning och successiv vinstavräkning"
-description: "SKILL.md för svensk projektredovisning. Dimensionstaggning av bokföringsposter med projektkoder, WIP-redovisning (pågående arbeten), intäktsredovisning enligt K2 (färdigställandemetoden) vs K3 (successiv vinstavräkning), entreprenadavtal, BAS 1470/1620/2420/2450/4970, SIE4-dimensioner (#DIM 6, #OBJEKT)."
+title: "swedish-project-accounting: projektredovisning och successiv vinstavräkning"
+description: "SKILL.md för svensk projektredovisning. Dimensionstaggning av bokföringsposter med projektkoder, WIP-redovisning (pågående arbeten), intäktsredovisning för uppdrag till fast pris enligt K2 (huvudregeln eller alternativregeln) och K3 (successiv vinstavräkning), entreprenadavtal, BAS 1470/1620/2420/2450/4970, SIE4-dimensioner (#DIM 6, #OBJEKT)."
 slug: "swedish-project-accounting"
 kind: "skill"
 author: "erp-mafia"
@@ -8,14 +8,14 @@ status: "live"
 lang: "sv"
 personas: ["finance", "byra", "developer"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-09-17"
-repoUrl: "https://github.com/erp-mafia/swedish-accounting-agents/tree/main/.claude/skills/swedish-project-accounting"
-externalUrl: "https://github.com/erp-mafia/swedish-accounting-agents"
+updatedAt: "2026-09-27"
+repoUrl: "https://github.com/erp-mafia/accounted-skills/tree/main/.claude/skills/swedish-project-accounting"
+externalUrl: "https://github.com/erp-mafia/accounted-skills"
 version: "community"
 ogImageEyebrow: "Skill"
 faq:
   - q: "Successiv vinstavräkning eller färdigställandemetoden?"
-    a: "K2 (mindre företag) ska använda färdigställandemetoden: intäkt tas upp först när uppdraget är klart. K3 kapitel 23 tillåter successiv vinstavräkning för uppdrag till fast pris om resultatet kan beräknas tillförlitligt. Skillen visar färdigställandegrad-beräkning, upparbetad ej fakturerad intäkt (BAS 1620) och fakturerad ej upparbetad intäkt (BAS 2450)."
+    a: "Det beror på regelverk och avtalsform. K2 låter företaget välja för uppdrag till fast pris (punkt 6.15): huvudregeln, där intäkten redovisas i takt med färdigställandet, eller alternativregeln, där intäkten redovisas först när uppdraget är väsentligen fullgjort. I K3 kapitel 23 är successiv vinstavräkning huvudregel, men en juridisk person inom bygg-, anläggnings-, hantverks- eller konsultverksamhet får i stället använda färdigställandemetoden (punkt 23.31). Uppdrag på löpande räkning intäktsförs i takt med att arbetet utförs. Skillen visar färdigställandegrad-beräkning, upparbetad ej fakturerad intäkt (BAS 1620) och fakturerad ej upparbetad intäkt (BAS 2450)."
   - q: "Hur taggar man dimensioner i SIE4?"
     a: "Dimension definieras med #DIM (6 = projekt, 1 = kostnadsställe). Objekt per dimension med #OBJEKT. Transaktionsrader får objektlistor i {curly braces} i #TRANS-raden. Skillen visar exakta exempel för projekt+kostnadsställe-kombinationer och hur olika system tolkar dem."
   - q: "Vad är skillnaden mellan projekt och kostnadsställe?"
@@ -25,27 +25,31 @@ faq:
 ## Vad skillen täcker
 
 * Dimensionstaggning av bokföringsposter med projektkoder.
-* WIP-redovisning (pågående arbeten): BAS 1470 (varulager pågående arbeten).
-* Intäktsredovisning under K2 (färdigställandemetoden) och K3 (successiv vinstavräkning, kapitel 23).
-* Entreprenadavtal: fast pris vs löpande räkning, tax-accounting-divergens för löpande räkning.
-* BAS-konton för projektspårning: 1470 (varulager), 1620 (upparbetad ej fakturerad intäkt), 2420 (förskott från kund), 2450 (fakturerad ej upparbetad intäkt), 4970 (förändring lager pågående arbeten).
+* WIP-redovisning (pågående arbeten): BAS 1470 Pågående arbeten.
+* Intäktsredovisning för uppdrag till fast pris under K2 (huvudregeln eller alternativregeln, punkt 6.15) och K3 (successiv vinstavräkning, kapitel 23, med färdigställandemetoden som alternativ för vissa branscher i juridisk person).
+* Entreprenadavtal: fast pris vs löpande räkning, skattemässig avvikelse från redovisningen vid löpande räkning.
+* BAS-konton för projektspårning: 1470 (pågående arbeten), 1620 (upparbetad ej fakturerad intäkt), 2420 (förskott från kunder), 2450 (fakturerad ej upparbetad intäkt), 4970 (förändring av pågående arbeten).
+* Moms och WIP: 1620 är en ren periodisering utan moms, momsen bakom 2450 redovisas vid faktureringen.
 * SIE4-dimensioner: #DIM 6 (projekt), #OBJEKT-deklarationer, #TRANS objektlistor.
 * Projektlönsamhet: intäkt minus direkta kostnader per projekt-kod.
 * Overhead-allokering (fördelningsnycklar): vad som får läggas på projekt.
 * Färdigställandegrad: input-metod (cost-to-cost), output-metod (mätbara milstolpar).
-* Befarad förlust på projekt: avsättning enligt K3.
+* Befarad förlust på projekt: kostnadsförs direkt i både K2 och K3.
+* Bruttoredovisning per projekt: positiva och negativa saldon på olika projekt kvittas i regel inte mot varandra.
+* Skatt och bidrag: pågående arbeten i deklarationen, forskningsavdrag, aktivering av utvecklingsutgifter (inte tillåtet i K2), EU-bidrag.
+* Implementationsmönster: datamodeller, projektets livscykel, WIP-beräkning och vanliga fel.
 
 ## Installera
 
 ```bash
-git clone https://github.com/erp-mafia/swedish-accounting-agents.git
-cd swedish-accounting-agents
+git clone https://github.com/erp-mafia/accounted-skills.git
+cd accounted-skills
 claude
 ```
 
 ## Pairs med
 
-* [swedish-financial-reporting](/community/registry/swedish-financial-reporting) — projektresultatet hamnar i årsredovisningen.
+* [swedish-financial-reporting](/community/registry/swedish-financial-reporting): projektresultatet hamnar i årsredovisningen.
 * accounteds `gnubok_query_journal` accepterar `project` och `cost_center` som filter, så skillen är användbar med eller utan accounted.
 
 ## Licens

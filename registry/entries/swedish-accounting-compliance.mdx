@@ -1,5 +1,5 @@
 ---
-title: "swedish-accounting-compliance — BFL, BFNAR och K2/K3 som SKILL"
+title: "swedish-accounting-compliance: BFL, BFNAR och K2/K3 som SKILL"
 description: "Compliance-orakel för svensk bokföringslagstiftning. Täcker BFL, BFNAR, BAS-kontoplan, K2/K3, momsdeklaration, bokföringsskyldighet, verifikationer, löpande bokföring, årsbokslut. Agentkunskap för utvecklare som bygger bokföringsmjukvara mot Sverige."
 slug: "swedish-accounting-compliance"
 kind: "skill"
@@ -8,27 +8,30 @@ status: "live"
 lang: "sv"
 personas: ["developer", "byra", "finance"]
 publishedAt: "2026-05-12"
-updatedAt: "2026-09-17"
-repoUrl: "https://github.com/erp-mafia/swedish-accounting-agents/tree/main/.claude/skills/swedish-accounting-compliance"
-externalUrl: "https://github.com/erp-mafia/swedish-accounting-agents"
+updatedAt: "2026-09-27"
+repoUrl: "https://github.com/erp-mafia/accounted-skills/tree/main/.claude/skills/swedish-accounting-compliance"
+externalUrl: "https://github.com/erp-mafia/accounted-skills"
 version: "community"
 ogImageEyebrow: "Skill"
 faq:
   - q: "Vad är detta för skill?"
     a: "En SKILL.md som ger en LLM-agent djup kunskap om svensk bokföringslagstiftning. Den triggas automatiskt när agenten ser BFL, BFNAR, BAS, SIE4, K2/K3, momsdeklaration, verifikationer, bokföringsskyldighet eller liknande i prompten. Skillen är ett orakel, inte en slutanvändarguide."
-  - q: "Hur skiljer den sig från accounted-skills?"
-    a: "Accounted-skills (typ månadsbokslut-pa-en-fika) orkestrerar verktyg mot en specifik huvudbok. Den här skillen ger agenten kunskap om regelverket innan den fattar beslut. De kompletterar varandra: kör båda för bästa output."
+  - q: "Hur skiljer den sig från accounteds arbetsflödes-skills?"
+    a: "Arbetsflödes-skills som månadsbokslut-pa-en-fika orkestrerar verktyg mot en specifik huvudbok. Den här skillen ger agenten kunskap om regelverket innan den fattar beslut. De kompletterar varandra: kör båda för bästa output."
   - q: "Använder skillen accounted?"
     a: "Nej. Den är compliance-kunskap, inte produktintegration. Funkar lika bra för en utvecklare som bygger eget bokföringssystem, en agent som granskar bokföring i godtyckligt verktyg, eller en byrå som vill ha agentstöd vid lagrumstolkning."
 ---
 
 ## Vad skillen täcker
 
-* Bokföringslagen (BFL, SFS 1999:1078): bokföringsskyldighet, räkenskapsår, verifikationer, löpande bokföring, arkivering 7 år, SFS 2024:342 (digital arkivering).
+* Bokföringslagen (BFL, SFS 1999:1078): bokföringsskyldighet, löpande bokföring och tidsfrister, verifikationer, rättelser, arkivering i 7 år, SFS 2024:342 (pappersoriginal får förstöras efter digitalisering sedan 1 juli 2024) och villkoren för att förvara räkenskapsinformation utomlands.
 * Bokföringsnämndens allmänna råd (BFNAR): 2013:2 (Bokföring), 2016:10 (K2 Årsredovisning i mindre företag), 2012:1 (K3 Årsredovisning och koncernredovisning).
-* BAS-kontoplanen: klassindelning, standardkonton, branschanpassningar, BAS 2026-uppdateringar.
+* BAS-kontoplanen: klassindelning, standardkonton, momskonton, BAS 2026-omläggningen (bland annat klass 4 och 12xx/78xx).
 * Momsdeklaration: rutornas mappning till BAS 26xx, EU-handel, reverse charge.
 * Verifikationer: vad som krävs per BFL 5 kap, vilka underlag (kvitto/faktura), original vs digital kopia.
+* Skatteverket: arbetsgivaravgifter och AGI, F-skatt, skattekonto, momsregistrering, ROT/RUT.
+* SIE4-formatet och systemdokumentation med behandlingshistorik (BFL 5 kap 11 §, BFNAR 2013:2 kap 9).
+* Regeländringar 2024–2026 med datum: momsregistreringsgränsen 120 000 kr från 2025, livsmedelsmoms 6 % från 1 april 2026 till och med 31 december 2027, 3:12-reformen från inkomstår 2026, K2-ändringarna i BFNAR 2025:2 och tillfälligt sänkta arbetsgivaravgifter för unga.
 
 Skillen är ett orakel som agenten konsulterar vid behov, inte ett
 batterier-inkluderat-flöde. Den paras vanligen med en mer
@@ -38,8 +41,8 @@ som faktiskt utför arbete.
 ## Installera
 
 ```bash
-git clone https://github.com/erp-mafia/swedish-accounting-agents.git
-cd swedish-accounting-agents
+git clone https://github.com/erp-mafia/accounted-skills.git
+cd accounted-skills
 claude
 ```
 
@@ -49,7 +52,7 @@ inne i mappen.
 För att lägga till i ett befintligt projekt:
 
 ```bash
-cp -r path/to/swedish-accounting-agents/.claude/skills/swedish-accounting-compliance \
+cp -r path/to/accounted-skills/.claude/skills/swedish-accounting-compliance \
       ./.claude/skills/
 ```
 
@@ -68,9 +71,9 @@ regelverket istället för sin generella träningsdata.
 
 Hög träffsäkerhet på saker som annars hamnar i hallucinationszonen:
 exakta BFL-paragrafer, BFNAR-rådens scope, BAS-kontonas semantik per
-klass, kraven på verifikationsserie och löpande nummerering.
+klass, kraven på verifikationsserie och löpande numrering.
 
 ## Licens
 
 MIT. Maintainat av erp-mafia-communityn. Pull requests välkomna i
-[swedish-accounting-agents-repot](https://github.com/erp-mafia/swedish-accounting-agents).
+[accounted-skills-repot](https://github.com/erp-mafia/accounted-skills).
