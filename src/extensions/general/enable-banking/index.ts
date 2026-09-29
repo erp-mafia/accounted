@@ -39,6 +39,7 @@ import { triggerConnectionSync } from './lib/trigger-sync'
 import { findReusableSessions } from './lib/session-sharing'
 import { retireBankConnection } from './lib/retire-connection'
 import { hasSelectableAccounts } from './lib/claimed-accounts'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
@@ -1313,6 +1314,22 @@ export const enableBankingExtension: Extension = {
           )
         }
 
+        // A card account that only mirrors the main account is never switched
+        // on, whatever the client sent (lib/bank-sync/mirror-card-account.ts):
+        // syncing it adds an opposite-sign twin of every card purchase that
+        // can be neither booked nor deleted. It stays off and gets no ledger,
+        // and one that was switched on before this rule is turned off here.
+        // The pickers no longer offer it; this is what makes that a rule.
+        const mirrorCardUids = new Set(existing.filter(isMirrorCardAccount).map(a => a.uid))
+        const selectedUids = enabled_uids.filter(uid => !mirrorCardUids.has(uid))
+        if (selectedUids.length === 0) {
+          return NextResponse.json(
+            { error: 'Välj minst ett konto, eller koppla bort banken om inga konton ska synkas.' },
+            { status: 400 }
+          )
+        }
+        mappings = mappings.filter(m => !mirrorCardUids.has(m.uid))
+
         // Verify any provided ledger_account values actually exist in the
         // company's chart of accounts. Prevents users from typing arbitrary
         // numbers via the API and breaking journal entry creation later.
@@ -1339,7 +1356,7 @@ export const enableBankingExtension: Extension = {
           }
         }
 
-        const enabledSet = new Set(enabled_uids)
+        const enabledSet = new Set(selectedUids)
         const mappingsByUid = new Map(mappings.map(m => [m.uid, m]))
         let updatedAccounts: StoredAccount[] = existing.map(a => {
           const mapping = mappingsByUid.get(a.uid)
@@ -1361,7 +1378,6 @@ export const enableBankingExtension: Extension = {
             delete next.claimed_by_company_id
             delete next.claimed_by_company_name
             delete next.deselected_elsewhere
-            delete next.mirror_card_account
           }
           return next
         })
@@ -1596,7 +1612,7 @@ export const enableBankingExtension: Extension = {
         const newStatus = saved.status
         log.info('[enable-banking] Account selection saved', {
           connectionId: connection.id,
-          enabledCount: enabled_uids.length,
+          enabledCount: enabledSet.size,
           totalCount: existing.length,
           previousStatus: connection.status,
           newStatus,
@@ -1613,7 +1629,7 @@ export const enableBankingExtension: Extension = {
               bankName: (connection as { bank_name?: string | null }).bank_name ?? null,
               previousStatus: connection.status,
               newStatus,
-              enabledCount: enabled_uids.length,
+              enabledCount: enabledSet.size,
               totalCount: existing.length,
               userId: user.id,
               companyId,
@@ -1876,7 +1892,7 @@ export const enableBankingExtension: Extension = {
 
         return NextResponse.json({
           success: true,
-          enabled_count: enabled_uids.length,
+          enabled_count: enabledSet.size,
           total_count: existing.length,
           ...(initialSyncSummary ? { initial_sync: initialSyncSummary } : {}),
           ...(initialSyncError ? { initial_sync_error: initialSyncError } : {}),

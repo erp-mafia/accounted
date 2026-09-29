@@ -67,6 +67,26 @@ describe('toPickerAccounts', () => {
     ])
   })
 
+  it('drops the card account that mirrors the main account, and only that one', () => {
+    // Svea lists a debit-card account with no IBAN or BBAN next to the
+    // företagskonto; its purchases already arrive on the main account, so it
+    // is never offered as a pill (issue #2565).
+    const stored: StoredPickerAccount[] = [
+      { uid: 'main', name: 'Företagskonto', iban: 'SE1234', bban: '12345678901', currency: 'SEK' },
+      { uid: 'card', name: 'SVEA_MQ_Debit_B2B', currency: 'SEK', enabled: false },
+      // Same label with its own number is a real account and stays.
+      { uid: 'real', name: 'BOKIO_Debit_Business', bban: '10987654321', currency: 'SEK', enabled: false },
+    ]
+    expect(toPickerAccounts(stored, labels).map((a) => a.uid)).toEqual(['main', 'real'])
+  })
+
+  it('a consent holding only the card account leaves nothing to pick', () => {
+    const stored: StoredPickerAccount[] = [
+      { uid: 'card', name: 'BOKIO_Debit_Business', currency: 'SEK', enabled: false },
+    ]
+    expect(toPickerAccounts(stored, labels)).toEqual([])
+  })
+
   it('reads name, number, currency, ledger and balance the way the pill shows them', () => {
     const stored: StoredPickerAccount[] = [
       { uid: 'a', product: 'Företagskonto', iban: 'SE1234', currency: 'eur', ledger_account: '1932', balance: 12.5 },

@@ -1,3 +1,4 @@
+import { isHiddenMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 
 /**
@@ -38,15 +39,20 @@ export function partitionByClaim<T extends Pick<StoredAccount, 'claimed_by_compa
 /**
  * Whether a consent leaves this company anything to pick: one account in the
  * picker's main list, checked or not. False when every account is booked by
- * another company (a login made for the wrong company) or when the consent
- * carries none. A connection waiting for account selection is only worth
- * resuming while this holds; otherwise the next login must replace it.
+ * another company (a login made for the wrong company), when the consent
+ * carries only a card account that mirrors the main account (never a choice,
+ * lib/bank-sync/mirror-card-account.ts), or when it carries none. A
+ * connection waiting for account selection is only worth resuming while this
+ * holds; otherwise the next login must replace it.
  */
 export function hasSelectableAccounts(
-  accounts: readonly Pick<StoredAccount, 'claimed_by_company_id' | 'enabled'>[] | null | undefined,
+  accounts:
+    | readonly Pick<StoredAccount, 'claimed_by_company_id' | 'enabled' | 'name' | 'iban' | 'bban'>[]
+    | null
+    | undefined,
 ): boolean {
   if (!Array.isArray(accounts)) return false
-  return partitionByClaim(accounts).own.length > 0
+  return partitionByClaim(accounts).own.some((account) => !isHiddenMirrorCardAccount(account))
 }
 
 /**

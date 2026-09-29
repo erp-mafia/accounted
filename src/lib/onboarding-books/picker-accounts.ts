@@ -12,6 +12,8 @@
  * did before, left a user whose whole consent was claimed on a blank page.
  */
 
+import { isHiddenMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+
 /** One entry of bank_connections.accounts_data, as far as the picker reads it. */
 export interface StoredPickerAccount {
   uid: string
@@ -51,15 +53,18 @@ export interface PickerLabels {
 }
 
 /**
- * Map stored accounts to picker rows. Nothing is dropped; accounts another
- * company books sort last so the ones free to pick stay at the top, and the
- * order within each group is the bank's own.
+ * Map stored accounts to picker rows. Accounts another company books sort
+ * last so the ones free to pick stay at the top, and the order within each
+ * group is the bank's own. The one account dropped is a card account that
+ * only mirrors the main account (Svea's SVEA_MQ_Debit_B2B): it is never a
+ * choice, since its purchases already arrive on the main account and the
+ * selection save keeps it off whatever is sent.
  */
 export function toPickerAccounts(
   stored: StoredPickerAccount[],
   labels: PickerLabels,
 ): PickerAccount[] {
-  const rows = stored.map((a) => ({
+  const rows = stored.filter((a) => !isHiddenMirrorCardAccount(a)).map((a) => ({
     uid: a.uid,
     name: a.name || a.product || labels.account,
     nr: a.bban || a.iban || '',

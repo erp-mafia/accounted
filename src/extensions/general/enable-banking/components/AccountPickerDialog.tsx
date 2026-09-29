@@ -37,6 +37,7 @@ import {
   resolveGapFillStart,
 } from '../lib/date-suggestions'
 import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
+import { isHiddenMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -97,10 +98,17 @@ export function AccountPickerDialog({
   // (one SEB consent covers every company the signer represents). They are
   // kept out of the main list so the picker shows THIS company's accounts,
   // and live behind a collapsed disclosure: still reachable, never pre-checked.
-  const { own: ownAccounts, claimedElsewhere } = useMemo(
-    () => partitionByClaim(accounts),
-    [accounts],
-  )
+  // A card account that only mirrors the main account (Svea's
+  // SVEA_MQ_Debit_B2B) is not a choice at all: one muted line says why it is
+  // not imported, and the selection save keeps it off whatever is sent.
+  const { ownAccounts, claimedElsewhere, mirrorCards } = useMemo(() => {
+    const { own, claimedElsewhere } = partitionByClaim(accounts)
+    return {
+      ownAccounts: own.filter((a) => !isHiddenMirrorCardAccount(a)),
+      claimedElsewhere,
+      mirrorCards: own.filter(isHiddenMirrorCardAccount),
+    }
+  }, [accounts])
   const [claimedOpen, setClaimedOpen] = useState(false)
   // Server-side save rejection (validation / ledger conflict). Shown inline in
   // the dialog: a rejected save persisted nothing and started no sync, so the
@@ -189,10 +197,13 @@ export function AccountPickerDialog({
       // yet. The currency default is suggested at most once — two SEK accounts
       // both pre-filled with 1930 would collide on the UNIQUE
       // (company_id, ledger_account) constraint at save; the second account is
-      // left blank so the user picks a distinct slot.
+      // left blank so the user picks a distinct slot. A card account that is
+      // never a choice must not use up the SEK suggestion ahead of the main
+      // account it mirrors.
       const initialLedger: Record<string, string> = {}
       const suggested = new Set<string>()
       for (const a of accounts) {
+        if (isHiddenMirrorCardAccount(a)) continue
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
         const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
@@ -619,16 +630,6 @@ export function AccountPickerDialog({
                 Tidigare bortvald: markera för att synka i detta bolag
               </p>
             )}
-            {/* Known card sub-account that mirrors the main account (Svea's
-                BOKIO_Debit_Business): every purchase already arrives on the
-                main account, so syncing this one only adds an opposite-sign
-                "Okänd transaktion" twin per purchase (issue #2565). Unchecked
-                by default, still selectable. */}
-            {!account.claimed_by_company_id && account.mirror_card_account && (
-              <p className="text-xs text-muted-foreground">
-                Kortkonto som speglar huvudkontot: köpen finns redan där. Hämtas inte om du inte markerar det.
-              </p>
-            )}
           </div>
           {account.balance !== undefined && (
             <p className="text-sm font-medium tabular-nums shrink-0">
@@ -1012,7 +1013,7 @@ export function AccountPickerDialog({
               <p className="text-xs text-muted-foreground">
                 {claimedElsewhere.length > 0
                   ? 'Inga konton att välja: alla konton i den här bankkopplingen synkas redan i andra bolag. Logga in igen och välj det här bolaget hos banken.'
-                  : 'Bankkopplingen innehåller inga konton. Logga in igen och välj konton hos banken.'}
+                  : 'Bankkopplingen innehåller inga konton att synka. Logga in igen och välj konton hos banken.'}
               </p>
               {isInitialSelection && onReauthorize && (
                 <Button type="button" variant="outline" size="sm" onClick={onReauthorize}>
@@ -1022,6 +1023,17 @@ export function AccountPickerDialog({
             </div>
           )}
         </div>
+
+        {/* Card account that only mirrors the main account (Svea's
+            SVEA_MQ_Debit_B2B, issue #2565): every purchase already arrives on
+            the main account, so syncing it would only add an opposite-sign
+            twin per purchase. Never a choice, so one line instead of a row. */}
+        {mirrorCards.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {mirrorCards.length === 1 ? 'Kortkontot' : 'Kortkontona'}{' '}
+            {mirrorCards.map((a) => a.name).join(', ')} hämtas inte: kortköpen finns redan på huvudkontot.
+          </p>
+        )}
 
         {/* Accounts another of the user's companies already books (one SEB
             consent covers every company the signer represents). Collapsed by

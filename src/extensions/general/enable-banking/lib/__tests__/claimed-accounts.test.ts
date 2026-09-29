@@ -74,7 +74,19 @@ describe('hasSelectableAccounts', () => {
   it('is true as soon as one account is this company\'s to pick, checked or not', () => {
     expect(hasSelectableAccounts([claimed, account({ uid: 'a', iban: 'SE1', enabled: false })])).toBe(true)
     expect(hasSelectableAccounts([account({ uid: 'b', enabled: false, deselected_elsewhere: true })])).toBe(true)
-    expect(hasSelectableAccounts([account({ uid: 'd', enabled: false, mirror_card_account: true })])).toBe(true)
+  })
+
+  it('is false when the only account is a card account that mirrors the main account', () => {
+    // Never a choice (lib/bank-sync/mirror-card-account.ts): a consent holding
+    // nothing else has nothing to pick, so the next login replaces it.
+    const card = account({ uid: 'd', name: 'SVEA_MQ_Debit_B2B', enabled: false })
+    expect(hasSelectableAccounts([card])).toBe(false)
+    expect(hasSelectableAccounts([card, claimed])).toBe(false)
+    expect(hasSelectableAccounts([card, account({ uid: 'f', name: 'Företagskonto', iban: 'SE4', enabled: false })])).toBe(true)
+  })
+
+  it('counts a card account that still syncs here as selectable, the same way the picker lists it', () => {
+    expect(hasSelectableAccounts([account({ uid: 'g', name: 'BOKIO_Debit_Business', enabled: true })])).toBe(true)
   })
 
   it('counts a flagged account that syncs here as selectable, the same way the picker lists it', () => {

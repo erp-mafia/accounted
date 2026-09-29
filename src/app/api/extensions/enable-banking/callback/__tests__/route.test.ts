@@ -261,7 +261,9 @@ describe('account identity and standing choices', () => {
     cashRows = [{ id: 'cash', external_uid: 'old-card', ledger_account: '1935', currency: 'SEK', iban: null }]
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'new-card', name: 'BOKIO_Debit_Business', currency: 'SEK' }] })
     await complete()
-    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card', mirror_card_account: true }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    expect(plan()).toMatchObject({ noIbanPairs: { 'new-card': 'old-card' }, accounts: [{ enabled: false, dedup_scope: 'legacy-card' }], mirrors: [{ uid: 'new-card', reuse_cash_account_id: 'cash' }] })
+    // "Is a card account" is derived from name + no IBAN + no BBAN, never stored.
+    expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each(['two-prior', 'two-new', 'prior-iban'])('does not guess a no-IBAN pair with %s', async kind => {
     reconnect([{ uid: 'old', currency: 'SEK', ...(kind === 'prior-iban' ? { iban } : {}) }, ...(kind === 'two-prior' ? [{ uid: 'old-2', currency: 'SEK' }] : [])])
@@ -315,7 +317,7 @@ describe('cross-company and mirror-card defaults', () => {
     await complete(); expect(plan().accounts[0].enabled).toBe(false); expect(plan().mirrors).toEqual([]); expect(mocks.resolve).not.toHaveBeenCalled()
     if (reason === 'claimed') expect(plan().accounts[0]).toMatchObject({ claimed_by_company_id: 'other', claimed_by_company_name: 'Other company' })
     if (reason === 'deselected') expect(plan().accounts[0].deselected_elsewhere).toBe(true)
-    if (reason === 'mirror-card') expect(plan().accounts[0].mirror_card_account).toBe(true)
+    if (reason === 'mirror-card') expect(plan().accounts[0]).not.toHaveProperty('mirror_card_account')
   })
   it.each([true, false])('preserves the standing enabled=%s choice when another company claims the IBAN', async enabled => {
     reconnect([{ uid: 'old', iban, currency: 'SEK', enabled }])
@@ -328,7 +330,10 @@ describe('cross-company and mirror-card defaults', () => {
     reconnect([{ uid: 'a', iban, currency: 'SEK', enabled: false, claimed_by_company_id: 'old-claim' }])
     await complete(); expect(plan().accounts[0]).not.toHaveProperty('claimed_by_company_id'); expect(plan().accounts[0].enabled).toBe(false)
   })
-  it.each([true, false])('preserves the user mirror-card choice enabled=%s', async enabled => {
+  // A card account switched on before the selection save refused it keeps its
+  // state through a renewal (finalize_bank_callback carries the prior row's
+  // flag); the next selection save is what turns it off.
+  it.each([true, false])('carries a card account\'s standing enabled=%s state through a renewal', async enabled => {
     reconnect([{ uid: 'a', currency: 'SEK', enabled }])
     mocks.createSession.mockResolvedValue({ session_id: 'new-session', access: { valid_until: expires }, accounts: [{ uid: 'a', currency: 'SEK', name: 'BOKIO_Debit_Business' }] })
     await complete(); expect(plan().accounts[0].enabled).toBe(enabled)

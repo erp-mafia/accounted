@@ -113,7 +113,6 @@ function buildSupabase(stub: SupabaseStub) {
           const saved = { ...account, enabled: selected.enabled, ledger_account: selected.ledger_account }
           if (!saved.ledger_account) delete saved.ledger_account
           if (saved.enabled) {
-            delete saved.mirror_card_account
             delete saved.claimed_by_company_id
             delete saved.claimed_by_company_name
             delete saved.deselected_elsewhere
@@ -464,44 +463,106 @@ describe('PATCH /accounts (enable-banking)', () => {
     expect(written.find(a => a.uid === 'acc-2')?.name).toBe('Privat')
   })
 
-  it('clears the mirror-card note when the user turns that account on, keeps it when left off', async () => {
-    // Issue #2565: the callback stores Svea's BOKIO_Debit_Business off and
-    // flagged. Enabling it is the user's call; once made, the note is stale.
-    const stub: SupabaseStub = {
-      authUser: { id: 'user-1' },
-      connectionRow: {
-        id: 'conn-1',
-        status: 'active',
-        accounts_data: [
-          { uid: 'acc-main', currency: 'SEK', enabled: true, name: 'Testbrand AB', iban: 'SE1234' },
-          { uid: 'acc-card', currency: 'SEK', enabled: false, name: 'BOKIO_Debit_Business', mirror_card_account: true },
-        ],
-      },
-    }
-    const supabase = buildSupabase(stub)
-    const ctx = makeContext(supabase)
+  describe('card account that mirrors the main account (issue #2565)', () => {
+    // Svea's BOKIO_Debit_Business / SVEA_MQ_Debit_B2B: no IBAN, no BBAN, and
+    // an opposite-sign twin of every card purchase on the main account. The
+    // pickers no longer offer it; the save is what makes that a rule.
+    const main: StoredAccount = { uid: 'acc-main', currency: 'SEK', enabled: true, name: 'Testbrand AB', iban: 'SE1234' }
 
-    const keptOff = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main'] }),
-      ctx
-    )
-    expect(keptOff.status).toBe(200)
-    const keptOffWritten = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
-    expect(keptOffWritten.find(a => a.uid === 'acc-card')).toMatchObject({
-      enabled: false,
-      mirror_card_account: true,
+    it('keeps it off and unmapped even when the request selects it', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [main, { uid: 'acc-card', currency: 'SEK', enabled: false, name: 'BOKIO_Debit_Business' }],
+        },
+      }
+
+      const res = await accountsRoute.handler(
+        makeRequest({
+          connection_id: 'conn-1',
+          enabled_uids: ['acc-main', 'acc-card'],
+          // A ledger for the card is dropped with it, so it cannot fail the
+          // chart check either (no chart rows exist in this stub).
+          account_mappings: [{ uid: 'acc-card', ledger_account: '1935' }],
+        }),
+        makeContext(buildSupabase(stub))
+      )
+
+      expect(res.status).toBe(200)
+      expect(await res.json()).toMatchObject({ enabled_count: 1, total_count: 2 })
+      const selections = stub.selectionCalls?.[0]?.p_selections as Array<{ uid: string; enabled: boolean; ledger_account?: string }>
+      expect(selections.find(s => s.uid === 'acc-card')).toMatchObject({ enabled: false })
+      expect(selections.find(s => s.uid === 'acc-card')?.ledger_account).toBeUndefined()
+      expect(selections.find(s => s.uid === 'acc-main')).toMatchObject({ enabled: true })
     })
 
-    stub.selectionReceipts = []
-    const turnedOn = await accountsRoute.handler(
-      makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main', 'acc-card'] }),
-      ctx
-    )
-    expect(turnedOn.status).toBe(200)
-    const turnedOnWritten = stub.selectionReceipts?.[0]?.accounts_data as StoredAccount[]
-    const card = turnedOnWritten.find(a => a.uid === 'acc-card')
-    expect(card?.enabled).toBe(true)
-    expect(card?.mirror_card_account).toBeUndefined()
+    it('turns one that was switched on before this rule off, keeping its ledger so its cash row flips off', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        cashAccountRows: [
+          { id: 'card-row', external_uid: 'acc-card', bank_connection_id: 'conn-1', ledger_account: '1935', currency: 'SEK', enabled: true },
+        ],
+        connectionRow: {
+          id: 'conn-1',
+          status: 'active',
+          accounts_data: [
+            main,
+            { uid: 'acc-card', currency: 'SEK', enabled: true, name: 'SVEA_MQ_Debit_B2B', ledger_account: '1935' },
+          ],
+        },
+      }
+
+      // The picker pre-checks an account that is on, so it arrives selected.
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-main', 'acc-card'] }),
+        makeContext(buildSupabase(stub))
+      )
+
+      expect(res.status).toBe(200)
+      const selections = stub.selectionCalls?.[0]?.p_selections as Array<{ uid: string; enabled: boolean; ledger_account?: string }>
+      expect(selections.find(s => s.uid === 'acc-card')).toMatchObject({ enabled: false, ledger_account: '1935' })
+    })
+
+    it('returns 400 when it is the only account selected', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [main, { uid: 'acc-card', currency: 'SEK', enabled: false, name: 'SVEA_MQ_Debit_B2B' }],
+        },
+      }
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-card'] }),
+        makeContext(buildSupabase(stub))
+      )
+
+      expect(res.status).toBe(400)
+      expect(stub.selectionCalls).toBeUndefined()
+    })
+
+    it('leaves a real account with the same label alone', async () => {
+      const stub: SupabaseStub = {
+        authUser: { id: 'user-1' },
+        connectionRow: {
+          id: 'conn-1',
+          status: 'pending_selection',
+          accounts_data: [{ uid: 'acc-real', currency: 'SEK', enabled: false, name: 'BOKIO_Debit_Business', bban: '12345678901' }],
+        },
+      }
+
+      const res = await accountsRoute.handler(
+        makeRequest({ connection_id: 'conn-1', enabled_uids: ['acc-real'] }),
+        makeContext(buildSupabase(stub))
+      )
+
+      expect(res.status).toBe(200)
+      const selections = stub.selectionCalls?.[0]?.p_selections as Array<{ uid: string; enabled: boolean }>
+      expect(selections).toEqual([expect.objectContaining({ uid: 'acc-real', enabled: true })])
+    })
   })
 
   it('allows re-selection on an already-active connection', async () => {

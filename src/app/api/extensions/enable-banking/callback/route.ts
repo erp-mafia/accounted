@@ -5,7 +5,7 @@ import { ensureInitialized } from '@/lib/init'
 import { createLogger } from '@/lib/logger'
 import { createSession, extractBban, type AccountInfo } from '@/extensions/general/enable-banking/lib/api-client'
 import type { StoredAccount } from '@/extensions/general/enable-banking/types'
-import { isMirrorCardAccount } from '@/extensions/general/enable-banking/lib/mirror-card-account'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import { resolveAccountCurrency } from '@/extensions/general/enable-banking/lib/account-currency'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -598,10 +598,9 @@ async function persistBankSession(
           claimedCount += 1
         }
       }
-      // Preserve the explanation while it stays disabled. Existing own
-      // mirrors are re-keyed later; an unmirrored card stays unmirrored.
+      // Existing own mirrors are re-keyed later; an unmirrored card stays
+      // unmirrored.
       if (account.enabled === false && isMirrorCardAccount(account)) {
-        account.mirror_card_account = true
         guardDisabledUids.add(account.uid)
       }
       continue
@@ -610,13 +609,12 @@ async function persistBankSession(
     if (isMirrorCardAccount(account)) {
       // Known card sub-account that only mirrors the main account (Svea's
       // BOKIO_Debit_Business, issue #2565): every purchase already arrives on
-      // the main account, and this one adds an opposite-sign, description-
-      // less twin per purchase that can be neither booked nor deleted. Off by
-      // default, flagged so the picker says why; the user can still turn it
-      // on. Checked before the IBAN-keyed guards below, which a no-IBAN
-      // account would fall through anyway.
+      // the main account, and this one adds an opposite-sign twin per
+      // purchase that can be neither booked nor deleted. Always off: the
+      // selection save never switches it on and the pickers show it as a
+      // muted line, not a choice. Checked before the IBAN-keyed guards below,
+      // which a no-IBAN account would fall through anyway.
       account.enabled = false
-      account.mirror_card_account = true
       guardDisabledUids.add(account.uid)
       continue
     }

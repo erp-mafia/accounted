@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest'
 
-import { isMirrorCardAccount, MIRROR_CARD_ACCOUNT_NAMES } from '../mirror-card-account'
+import {
+  isHiddenMirrorCardAccount,
+  isMirrorCardAccount,
+  MIRROR_CARD_ACCOUNT_NAMES,
+} from '../mirror-card-account'
 
 describe('isMirrorCardAccount', () => {
   it('flags the Svea card accounts when they carry no IBAN and no BBAN', () => {
@@ -27,5 +31,23 @@ describe('isMirrorCardAccount', () => {
 
   it('keeps the known-name list explicit', () => {
     expect([...MIRROR_CARD_ACCOUNT_NAMES]).toEqual(['BOKIO_Debit_Business', 'SVEA_MQ_Debit_B2B'])
+  })
+})
+
+describe('isHiddenMirrorCardAccount', () => {
+  it('hides a mirror card account that is off', () => {
+    expect(isHiddenMirrorCardAccount({ name: 'SVEA_MQ_Debit_B2B', enabled: false })).toBe(true)
+  })
+
+  it('keeps a mirror card account that still syncs visible', () => {
+    // Switched on before the selection save refused it: syncing accounts are
+    // never tucked away, and missing `enabled` means on (back-compat).
+    expect(isHiddenMirrorCardAccount({ name: 'SVEA_MQ_Debit_B2B', enabled: true })).toBe(false)
+    expect(isHiddenMirrorCardAccount({ name: 'SVEA_MQ_Debit_B2B' })).toBe(false)
+  })
+
+  it('never hides a real account that is off', () => {
+    expect(isHiddenMirrorCardAccount({ name: 'Företagskonto', iban: 'SE5796600000096603145318', enabled: false })).toBe(false)
+    expect(isHiddenMirrorCardAccount({ name: 'SVEA_MQ_Debit_B2B', bban: '96603145318', enabled: false })).toBe(false)
   })
 })

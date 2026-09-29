@@ -245,14 +245,19 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
       const row = data as { id: string; bank_name: string | null; status: string; accounts_data: StoredPickerAccount[] | null } | null
       // Nothing to choose from is the bank's answer, not a state to sit in:
       // back to the bank list with the reason. An account another company
-      // books is NOT that case: it is listed, named and left to the user.
-      if (!row || !row.accounts_data || row.accounts_data.length === 0) {
+      // books is NOT that case: it is listed, named and left to the user. A
+      // consent holding only a card account that mirrors the main account is:
+      // that account is never a choice.
+      const pickable = row?.accounts_data
+        ? toPickerAccounts(row.accounts_data, { account: t('bank_account'), otherCompany: t('bank_claimed_other_company') })
+        : []
+      if (!row || pickable.length === 0) {
         setAttn(t('bank_no_accounts'))
         dispatch({ type: 'BANK_PICK_FAILED' })
         return
       }
       if (row.bank_name && row.bank_name !== state.bankName) dispatch({ type: 'BANK_AUTHED', name: row.bank_name, connectionId: row.id })
-      setAccts(toPickerAccounts(row.accounts_data, { account: t('bank_account'), otherCompany: t('bank_claimed_other_company') }))
+      setAccts(pickable)
     })()
     return () => { cancelled = true }
   }, [phase, accts, state.bankConnectionId, state.bankName, supabase, dispatch, t])
