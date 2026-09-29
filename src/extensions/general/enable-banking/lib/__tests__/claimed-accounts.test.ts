@@ -85,8 +85,10 @@ describe('hasSelectableAccounts', () => {
     expect(hasSelectableAccounts([card, account({ uid: 'f', name: 'Företagskonto', iban: 'SE4', enabled: false })])).toBe(true)
   })
 
-  it('counts a card account that still syncs here as selectable, the same way the picker lists it', () => {
-    expect(hasSelectableAccounts([account({ uid: 'g', name: 'BOKIO_Debit_Business', enabled: true })])).toBe(true)
+  it('never counts a card account as selectable, even one switched on before the rule', () => {
+    // A renewal carrying only such a card would otherwise resume into a
+    // picker whose save refuses the card and has nothing else to save.
+    expect(hasSelectableAccounts([account({ uid: 'g', name: 'BOKIO_Debit_Business', enabled: true })])).toBe(false)
   })
 
   it('counts a flagged account that syncs here as selectable, the same way the picker lists it', () => {

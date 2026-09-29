@@ -37,7 +37,7 @@ import {
   resolveGapFillStart,
 } from '../lib/date-suggestions'
 import { describeClaimedElsewhere, partitionByClaim } from '../lib/claimed-accounts'
-import { isHiddenMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 import type { StoredAccount } from '../types'
 import {
   BankSyncProgressDialog,
@@ -99,14 +99,15 @@ export function AccountPickerDialog({
   // kept out of the main list so the picker shows THIS company's accounts,
   // and live behind a collapsed disclosure: still reachable, never pre-checked.
   // A card account that only mirrors the main account (Svea's
-  // SVEA_MQ_Debit_B2B) is not a choice at all: one muted line says why it is
-  // not imported, and the selection save keeps it off whatever is sent.
+  // SVEA_MQ_Debit_B2B) is not a choice at all, on or off: one muted line says
+  // why, and the selection save keeps it off whatever is sent (and turns off
+  // one switched on before that rule).
   const { ownAccounts, claimedElsewhere, mirrorCards } = useMemo(() => {
     const { own, claimedElsewhere } = partitionByClaim(accounts)
     return {
-      ownAccounts: own.filter((a) => !isHiddenMirrorCardAccount(a)),
+      ownAccounts: own.filter((a) => !isMirrorCardAccount(a)),
       claimedElsewhere,
-      mirrorCards: own.filter(isHiddenMirrorCardAccount),
+      mirrorCards: own.filter(isMirrorCardAccount),
     }
   }, [accounts])
   const [claimedOpen, setClaimedOpen] = useState(false)
@@ -182,7 +183,7 @@ export function AccountPickerDialog({
   useEffect(() => {
     if (open) {
       const initial = new Set<string>(
-        accounts.filter(a => a.enabled !== false).map(a => a.uid)
+        accounts.filter(a => a.enabled !== false && !isMirrorCardAccount(a)).map(a => a.uid)
       )
       setSelected(initial)
       setSaveError(null)
@@ -203,7 +204,7 @@ export function AccountPickerDialog({
       const initialLedger: Record<string, string> = {}
       const suggested = new Set<string>()
       for (const a of accounts) {
-        if (isHiddenMirrorCardAccount(a)) continue
+        if (isMirrorCardAccount(a)) continue
         const fromStored = a.ledger_account
         const fromDefault = CURRENCY_DEFAULTS[a.currency] ?? ''
         const pick = fromStored ?? (suggested.has(fromDefault) ? '' : fromDefault)
@@ -1027,11 +1028,15 @@ export function AccountPickerDialog({
         {/* Card account that only mirrors the main account (Svea's
             SVEA_MQ_Debit_B2B, issue #2565): every purchase already arrives on
             the main account, so syncing it would only add an opposite-sign
-            twin per purchase. Never a choice, so one line instead of a row. */}
+            twin per purchase. Never a choice, so one line instead of a row.
+            One switched on before the save refused it still syncs until this
+            save turns it off, and the line says so rather than hiding it. */}
         {mirrorCards.length > 0 && (
           <p className="text-xs text-muted-foreground">
             {mirrorCards.length === 1 ? 'Kortkontot' : 'Kortkontona'}{' '}
-            {mirrorCards.map((a) => a.name).join(', ')} hämtas inte: kortköpen finns redan på huvudkontot.
+            {mirrorCards.map((a) => a.name).join(', ')}{' '}
+            {mirrorCards.some((a) => a.enabled !== false) ? 'stängs av när du sparar' : 'hämtas inte'}
+            : kortköpen finns redan på huvudkontot.
           </p>
         )}
 

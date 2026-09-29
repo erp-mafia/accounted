@@ -80,11 +80,15 @@ describe('toPickerAccounts', () => {
     expect(toPickerAccounts(stored, labels).map((a) => a.uid)).toEqual(['main', 'real'])
   })
 
-  it('a consent holding only the card account leaves nothing to pick', () => {
-    const stored: StoredPickerAccount[] = [
-      { uid: 'card', name: 'BOKIO_Debit_Business', currency: 'SEK', enabled: false },
-    ]
-    expect(toPickerAccounts(stored, labels)).toEqual([])
+  it('a consent holding only the card account leaves nothing to pick, on or off', () => {
+    // One switched on before the selection save refused it is no choice
+    // either: the save would drop it and have nothing left to save.
+    for (const enabled of [false, true, undefined]) {
+      const stored: StoredPickerAccount[] = [
+        { uid: 'card', name: 'BOKIO_Debit_Business', currency: 'SEK', enabled },
+      ]
+      expect(toPickerAccounts(stored, labels)).toEqual([])
+    }
   })
 
   it('reads name, number, currency, ledger and balance the way the pill shows them', () => {

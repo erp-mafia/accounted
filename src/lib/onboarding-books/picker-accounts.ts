@@ -12,7 +12,7 @@
  * did before, left a user whose whole consent was claimed on a blank page.
  */
 
-import { isHiddenMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
+import { isMirrorCardAccount } from '@/lib/bank-sync/mirror-card-account'
 
 /** One entry of bank_connections.accounts_data, as far as the picker reads it. */
 export interface StoredPickerAccount {
@@ -64,7 +64,7 @@ export function toPickerAccounts(
   stored: StoredPickerAccount[],
   labels: PickerLabels,
 ): PickerAccount[] {
-  const rows = stored.filter((a) => !isHiddenMirrorCardAccount(a)).map((a) => ({
+  const rows = stored.filter((a) => !isMirrorCardAccount(a)).map((a) => ({
     uid: a.uid,
     name: a.name || a.product || labels.account,
     nr: a.bban || a.iban || '',

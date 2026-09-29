@@ -12,11 +12,11 @@
  * Svea companies, 547 such rows, 543 with an opposite-sign twin on the main
  * account, 0 ever booked (issue #2565).
  *
- * Such an account is never an account of its own: the OAuth callback stores
- * it off and unmirrored, the selection save never switches it on, and both
- * pickers (settings and onboarding) show it as one muted line instead of a
- * choice. An unticked choice was not enough: 6 of 22 connects after #2577
- * ticked it anyway.
+ * Such an account is never an account of its own, whether it is on or off:
+ * the OAuth callback stores it off and unmirrored, the selection save never
+ * switches it on (and turns off one switched on before this rule), and
+ * neither picker (settings, onboarding) offers it as a choice. An unticked
+ * choice was not enough: 6 of 22 connects after #2577 ticked it anyway.
  *
  * The name alone is not enough: a bank could give a real account this label
  * too, so the identifier check is what makes the match safe. A card account
@@ -48,17 +48,4 @@ export function isMirrorCardAccount(account: MirrorCardCandidate): boolean {
   if (account.iban?.trim()) return false
   if (account.bban?.trim()) return false
   return true
-}
-
-/**
- * True when a picker shows the account as the muted "not imported" line
- * instead of a row: a mirror card account that is off here. One still
- * switched on (ticked before the selection save refused it) stays a normal
- * row until a save turns it off, since an account that syncs must never be
- * tucked out of sight.
- */
-export function isHiddenMirrorCardAccount(
-  account: MirrorCardCandidate & { enabled?: boolean | null },
-): boolean {
-  return account.enabled === false && isMirrorCardAccount(account)
 }
