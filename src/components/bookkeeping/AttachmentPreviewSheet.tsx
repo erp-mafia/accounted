@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Skeleton } from '@/components/ui/skeleton'
+import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 
 interface DocumentRecord {
   id: string
@@ -201,8 +202,13 @@ export default function AttachmentPreviewSheet({
 
     setReplacingDocId(docId)
     try {
+      const prepared = await prepareForMultipartUpload(file)
+      if (!prepared.ok) {
+        toast({ title: tj('replace_failed'), description: prepared.message, variant: 'destructive' })
+        return
+      }
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', prepared.file)
       const res = await fetch(`/api/documents/${docId}/versions`, {
         method: 'POST',
         body: fd,

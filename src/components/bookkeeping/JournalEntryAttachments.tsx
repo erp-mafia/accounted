@@ -15,6 +15,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
+import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import {
   FileText,
   ImageIcon,
@@ -265,8 +266,13 @@ export default function JournalEntryAttachments({
 
     setReplacingDocId(docId)
     try {
+      const prepared = await prepareForMultipartUpload(file)
+      if (!prepared.ok) {
+        toast({ title: t('replace_failed'), description: prepared.message, variant: 'destructive' })
+        return
+      }
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', prepared.file)
       const res = await fetch(`/api/documents/${docId}/versions`, {
         method: 'POST',
         body: fd,
