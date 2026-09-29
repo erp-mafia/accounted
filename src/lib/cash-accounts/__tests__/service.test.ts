@@ -17,11 +17,12 @@ import {
   pickKeeper,
   sameCashAccount,
   normalizeIban,
-  defaultLedgerForCurrency,
   getRevokedConnectionIds,
   upsertFromPsd2,
   ensureManualCashAccount,
 } from '../service'
+import { defaultLedgerForCurrency } from '../ledger-slots'
+import { allocateLedgers, ledgerClaims } from '@/lib/onboarding-books/ledger'
 
 type CashRow = {
   ledger_account: string
@@ -411,6 +412,43 @@ describe('findFreeLedgerAccount: chart awareness', () => {
     })
 
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK')).toBe('1931')
+  })
+})
+
+describe('the onboarding preview hands out what the server would', () => {
+  // The preview's choice goes to PATCH /accounts as an explicit mapping, so it
+  // must land where the callback's own allocation (one findFreeLedgerAccount
+  // per account, earlier picks excluded) puts the same accounts.
+  const cases: Array<{ name: string; rows: CashRow[]; chart: string[]; currencies: string[] }> = [
+    {
+      name: 'four SEK accounts on a fresh company',
+      rows: [{ ledger_account: '1930', bank_connection_id: null }],
+      chart: ['1930', '1940'],
+      currencies: ['SEK', 'SEK', 'SEK', 'SEK'],
+    },
+    { name: 'SEK accounts ahead of EUR and USD', rows: [], chart: ['1930'], currencies: ['SEK', 'SEK', 'SEK', 'EUR', 'USD'] },
+    {
+      name: 'another bank on 1930 and a chart-named 1935',
+      rows: [{ ledger_account: '1930', bank_connection_id: 'conn-old' }],
+      chart: ['1930', '1935'],
+      currencies: ['SEK', 'SEK', 'GBP'],
+    },
+  ]
+
+  it.each(cases)('$name', async ({ rows, chart, currencies }) => {
+    const supabase = makeSupabase(rows, { chart })
+    const exclude = new Set<string>()
+    const server: string[] = []
+    for (const currency of currencies) {
+      const ledger = await findFreeLedgerAccount(supabase, 'c1', currency, exclude)
+      if (!ledger) throw new Error('no slot')
+      exclude.add(ledger)
+      server.push(ledger)
+    }
+
+    const { used, connected } = ledgerClaims(rows, 'conn-new')
+    const preview = allocateLedgers(currencies.map((currency, i) => ({ uid: `a${i}`, currency })), used, {}, connected, chart)
+    expect(currencies.map((_, i) => preview[`a${i}`])).toEqual(server)
   })
 })
 

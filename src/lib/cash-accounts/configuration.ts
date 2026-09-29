@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSIEAccountRows } from '@/lib/import/account-sync'
+import { bankLedgerName } from '@/lib/cash-accounts/ledger-slots'
 import { hasErrorEntry } from '@/lib/errors/structured-errors'
 
 export interface BankConfigurationSnapshot {
@@ -82,8 +83,8 @@ export function buildBankChartAccounts(
     const ledger = selection.ledger_account
     if (!ledger) return []
     return [{ sourceAccount: ledger, targetAccount: ledger,
-      sourceName: `Bankkonto ${selection.currency.toUpperCase()}`,
-      targetName: `Bankkonto ${selection.currency.toUpperCase()}`,
+      sourceName: bankLedgerName(selection.currency),
+      targetName: bankLedgerName(selection.currency),
       confidence: 1, matchType: 'exact' as const, isOverride: false }]
   }))
 }

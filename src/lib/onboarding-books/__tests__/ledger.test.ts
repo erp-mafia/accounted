@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { allocateLedgers, freeLedgerSlots, ledgerClaims, ledgerName, ledgerOptions } from '../ledger'
+import { overflowLedgerSlots } from '@/lib/cash-accounts/ledger-slots'
+import { allocateLedgers, ledgerClaims, ledgerName, ledgerOptions } from '../ledger'
 
 describe('allocateLedgers', () => {
   it('first SEK account gets 1930, the next the first free slot, EUR its default', () => {
@@ -16,8 +17,8 @@ describe('allocateLedgers', () => {
 
   it('never reuses a ledger the company already has', () => {
     const out = allocateLedgers([{ uid: 'a', currency: 'SEK' }], ['1930', '1931'])
-    expect(out.a).toBe('1932')
-    expect(freeLedgerSlots(['1930', '1931', '1932', '1933', '1934'])[0]).toBe('1935')
+    expect(out.a).toBe('1935')
+    expect(overflowLedgerSlots(['1930', '1931'])[0]).toBe('1935')
   })
 
   it('a user pick wins when it is free, otherwise the rule applies', () => {
@@ -64,7 +65,7 @@ describe('a manual row on the currency default does not push the bank account of
     )
     expect(
       allocateLedgers([{ uid: 'a', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }], used, {}, connected),
-    ).toEqual({ a: '1930', b: '1932' })
+    ).toEqual({ a: '1930', b: '1935' })
   })
 
   it('another live connection on 1930 still blocks it', () => {
@@ -99,6 +100,52 @@ describe('a manual row on the currency default does not push the bank account of
     expect(opts).toContain('1930')
     expect(opts).not.toContain('1910')
     expect(ledgerOptions('SEK', used, '1931')).not.toContain('1930')
+  })
+})
+
+describe('the preview follows the server rule for overflow slots', () => {
+  // A SEK account ticked in onboarding with 1930 and 1931 taken went to 1932
+  // and its new chart row was named "Bankkonto EUR".
+  it('never gives a SEK account another currency default', () => {
+    const out = allocateLedgers(
+      [{ uid: 'a', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }, { uid: 'c', currency: 'SEK' }],
+      [],
+      { a: '1930' },
+      [],
+    )
+    expect(out).toEqual({ a: '1930', b: '1931', c: '1935' })
+  })
+
+  it('keeps an EUR account on 1932 behind two SEK overflows', () => {
+    const out = allocateLedgers(
+      [{ uid: 'a', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }, { uid: 'c', currency: 'SEK' }, { uid: 'd', currency: 'EUR' }],
+      [],
+      {},
+      [],
+    )
+    expect(out).toEqual({ a: '1930', b: '1931', c: '1935', d: '1932' })
+  })
+
+  it('an account without a preset never takes a later account preset', () => {
+    // The callback already mirrored a on 1930 and b on 1931; d was ticked in
+    // onboarding and sits between them in the bank's order.
+    const out = allocateLedgers(
+      [{ uid: 'a', currency: 'SEK' }, { uid: 'd', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }],
+      [],
+      { a: '1930', b: '1931' },
+      [],
+    )
+    expect(out).toEqual({ a: '1930', d: '1935', b: '1931' })
+  })
+
+  it('prefers a slot the chart does not name yet', () => {
+    const out = allocateLedgers([{ uid: 'a', currency: 'SEK' }, { uid: 'b', currency: 'SEK' }], [], {}, [], ['1930', '1931', '1935'])
+    expect(out).toEqual({ a: '1930', b: '1936' })
+  })
+
+  it('names a new slot after the account currency, not the number', () => {
+    expect(ledgerName('1932', 'SEK')).toBe('Bankkonto SEK')
+    expect(ledgerName('1932', 'EUR')).toBe('Bankkonto EUR')
   })
 })
 

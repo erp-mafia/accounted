@@ -266,11 +266,12 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
     [cashAccounts, state.bankConnectionId],
   )
   const usedLedgers = claims.used
+  const chartNumbers = useMemo(() => chart.map((a) => a.account_number), [chart])
   const ledgerOf = useMemo(() => {
     const preset: Record<string, string> = {}
     for (const a of tickedList) if (a.ledger) preset[a.uid] = a.ledger
-    return allocateLedgers(tickedList, claims.used, { ...preset, ...picks }, claims.connected)
-  }, [tickedList, claims, picks])
+    return allocateLedgers(tickedList, claims.used, { ...preset, ...picks }, claims.connected, chartNumbers)
+  }, [tickedList, claims, picks, chartNumbers])
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
 
   const today = isoToday()
@@ -518,7 +519,7 @@ export function BankStep({ ctx }: { ctx: BooksCtx }) {
               {tickedList.map((a) => {
                 const cur = ledgerOf[a.uid]
                 const others = Object.values(ledgerOf).filter((l) => l !== cur)
-                const opts = ledgerOptions(a.currency, [...usedLedgers, ...others], cur, [...claims.connected, ...others])
+                const opts = ledgerOptions(a.currency, [...usedLedgers, ...others], cur, [...claims.connected, ...others], chartNumbers)
                 return (
                   <OptRow
                     key={a.uid}

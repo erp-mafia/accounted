@@ -36,6 +36,7 @@
  */
 
 import { roundOre } from '@/lib/money'
+import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 
 /** The subset of a form/entry line the slot decision needs. Amounts are SEK. */
 export interface FxSlotLine {
@@ -78,21 +79,15 @@ export type FxSlotResolution =
     }
 
 /**
- * BAS account conventionally denominated in a given currency. Mirrors
- * CURRENCY_LEDGER_DEFAULTS in lib/cash-accounts/service.ts; copied rather than
- * imported because this module is pulled into a client bundle and that one
- * reaches the server logger and the SIE account-sync path.
+ * BAS account conventionally denominated in a given currency: the bank
+ * allocation's own table (lib/cash-accounts/ledger-slots.ts, pure, so this
+ * client-bundled module can import it).
  *
  * Used ONLY to break a tie between two otherwise equal monetary legs (a
  * SEK↔EUR växling hits both legs with the same SEK amount, so the amount alone
  * cannot say which leg is the EUR one).
  */
-export const CONVENTIONAL_FX_LEDGER: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
+export const CONVENTIONAL_FX_LEDGER: Record<string, string> = CURRENCY_LEDGER_DEFAULTS
 
 /**
  * Monetary items in BAS terms (ÅRL 4 kap. 13 §): kassa/bank, fordringar,

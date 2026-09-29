@@ -1,75 +1,65 @@
 /**
- * Ledger preview for the bank accounts the user ticks in onboarding. Mirrors
- * the server rule in lib/cash-accounts/service.ts (findFreeLedgerAccount):
- * the currency default first, then the next free slot in 1931 to 1959. The
- * currency default is only blocked by a row another bank connection syncs
- * onto; a manual row on it (the 1930 every company is seeded with, the bank
- * account an SIE import brought) is promoted in place by the server, so the
- * first bank account lands on the ledger the books already use. Overflow
- * skips every existing row. The PATCH /accounts request sends this choice as
- * an explicit mapping, so the preview must not be stricter than the server.
+ * Ledger preview for the bank accounts the user ticks in onboarding, on the
+ * server's own slot rule (lib/cash-accounts/ledger-slots.ts, which
+ * findFreeLedgerAccount uses too): the currency default first, then the next
+ * overflow slot. The currency default is only blocked by a row another bank
+ * connection syncs onto; a manual row on it (the 1930 every company is seeded
+ * with, the bank account an SIE import brought) is promoted in place by the
+ * server, so the first bank account lands on the ledger the books already use.
+ * Overflow skips every existing row. The PATCH /accounts request sends this
+ * choice as an explicit mapping, so the preview must not be stricter than the
+ * server.
  */
 
-export const LEDGER_DEFAULT: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
+import { CURRENCY_LEDGER_DEFAULTS, bankLedgerName, overflowLedgerSlots } from '@/lib/cash-accounts/ledger-slots'
 
+/** Names for the standard BAS bank accounts when the chart has none. */
 export const LEDGER_NAMES: Record<string, string> = {
   '1930': 'Företagskonto',
-  '1932': 'Bankkonto EUR',
-  '1933': 'Bankkonto USD',
-  '1934': 'Bankkonto GBP',
   '1940': 'Övriga bankkonton',
 }
-
-export const LEDGER_MIN = 1931
-export const LEDGER_MAX = 1959
 
 export interface LedgerPickInput {
   uid: string
   currency: string
 }
 
-/** The 19xx slots a company can still hand out, in order. */
-export function freeLedgerSlots(used: Iterable<string>): string[] {
-  const taken = new Set(used)
-  const out: string[] = []
-  for (let n = LEDGER_MIN; n <= LEDGER_MAX; n++) {
-    const s = String(n)
-    if (!taken.has(s)) out.push(s)
-  }
-  return out
-}
-
 /**
- * Assign a 19xx account to every ticked bank account. A user pick wins when
- * that slot is free; otherwise the currency default, then the next free slot.
+ * Assign a 19xx account to every ticked bank account. Picks are placed first,
+ * the server's presets among them, so an account without one never overflows
+ * onto a slot a later account already holds. A pick wins when that slot is
+ * free; otherwise the currency default, then the next overflow slot.
  * `used` are the company's existing cash-account ledgers (never handed out as
  * overflow). `connected` are the ledgers held by another bank connection: only
  * those block the currency default, see the header. Omitted, every used
- * ledger blocks it.
+ * ledger blocks it. `chart` are the company's chart account numbers, which
+ * overflow reaches last, as on the server.
  */
 export function allocateLedgers(
   ticked: LedgerPickInput[],
   used: Iterable<string>,
   picks: Record<string, string | undefined> = {},
   connected?: Iterable<string>,
+  chart: Iterable<string> = [],
 ): Record<string, string> {
   const taken = new Set(used)
   const blocksDefault = connected === undefined ? new Set(taken) : new Set(connected)
+  const chartNumbers = [...chart]
   const out: Record<string, string> = {}
-  for (const a of ticked) {
-    const pick = picks[a.uid]
-    const d = LEDGER_DEFAULT[a.currency.toUpperCase()]
-    let ledger: string | null = pick && (!taken.has(pick) || (pick === d && !blocksDefault.has(pick))) ? pick : null
-    if (!ledger && d && !blocksDefault.has(d)) ledger = d
-    if (!ledger) ledger = freeLedgerSlots(taken)[0] ?? '1940'
+  const assign = (uid: string, ledger: string) => {
     taken.add(ledger)
     blocksDefault.add(ledger)
-    out[a.uid] = ledger
+    out[uid] = ledger
+  }
+  for (const a of ticked) {
+    const pick = picks[a.uid]
+    const d = CURRENCY_LEDGER_DEFAULTS[a.currency.toUpperCase()]
+    if (pick && (!taken.has(pick) || (pick === d && !blocksDefault.has(pick)))) assign(a.uid, pick)
+  }
+  for (const a of ticked) {
+    if (out[a.uid]) continue
+    const d = CURRENCY_LEDGER_DEFAULTS[a.currency.toUpperCase()]
+    assign(a.uid, d && !blocksDefault.has(d) ? d : overflowLedgerSlots(taken, chartNumbers)[0] ?? '1940')
   }
   return out
 }
@@ -94,16 +84,23 @@ export function ledgerClaims(
 }
 
 /**
- * The pick list for one account's Ändra row: its default first, then the free
- * slots. `connected` works as in {@link allocateLedgers}: when given, only
- * those ledgers keep the currency default off the list.
+ * The pick list for one account's Ändra row: its default first, then the
+ * overflow slots. `connected` works as in {@link allocateLedgers}: when given,
+ * only those ledgers keep the currency default off the list. `chart` orders
+ * the overflow slots as there.
  */
-export function ledgerOptions(currency: string, used: Iterable<string>, current: string, connected?: Iterable<string>): string[] {
+export function ledgerOptions(
+  currency: string,
+  used: Iterable<string>,
+  current: string,
+  connected?: Iterable<string>,
+  chart: Iterable<string> = [],
+): string[] {
   const taken = new Set(used)
   taken.delete(current)
   const blocksDefault = connected === undefined ? taken : new Set(connected)
-  const d = LEDGER_DEFAULT[currency.toUpperCase()] ?? '1940'
-  const list = [d, ...freeLedgerSlots(taken)].filter(
+  const d = CURRENCY_LEDGER_DEFAULTS[currency.toUpperCase()] ?? '1940'
+  const list = [d, ...overflowLedgerSlots(taken, chart)].filter(
     (v, i, arr) => arr.indexOf(v) === i && (v === d ? !blocksDefault.has(v) : !taken.has(v)),
   )
   if (!list.includes(current)) list.unshift(current)
@@ -111,5 +108,5 @@ export function ledgerOptions(currency: string, used: Iterable<string>, current:
 }
 
 export function ledgerName(ledger: string, currency: string, known: Record<string, string> = {}): string {
-  return known[ledger] ?? LEDGER_NAMES[ledger] ?? `Bankkonto ${currency.toUpperCase()}`
+  return known[ledger] ?? LEDGER_NAMES[ledger] ?? bankLedgerName(currency)
 }

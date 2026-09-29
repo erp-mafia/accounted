@@ -1,0 +1,26 @@
+import { describe, expect, it } from 'vitest'
+import { bankLedgerName, overflowLedgerSlots } from '../ledger-slots'
+
+describe('overflowLedgerSlots', () => {
+  it('skips the currency defaults and the taken slots', () => {
+    expect(overflowLedgerSlots(['1931']).slice(0, 3)).toEqual(['1935', '1936', '1937'])
+  })
+
+  it('hands out numbers the chart does not have before the ones it names', () => {
+    const slots = overflowLedgerSlots([], ['1931', '1935'])
+    expect(slots.slice(0, 2)).toEqual(['1936', '1937'])
+    expect(slots.slice(-2)).toEqual(['1931', '1935'])
+  })
+
+  it('is empty when every slot is taken', () => {
+    const all = Array.from({ length: 29 }, (_, i) => String(1931 + i))
+    expect(overflowLedgerSlots(all)).toEqual([])
+  })
+})
+
+describe('bankLedgerName', () => {
+  it('names a new bank account after its currency', () => {
+    expect(bankLedgerName('sek')).toBe('Bankkonto SEK')
+    expect(bankLedgerName('EUR')).toBe('Bankkonto EUR')
+  })
+})

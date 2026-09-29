@@ -24,6 +24,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 import { createClient } from '@/lib/supabase/client'
 import { useCompany } from '@/contexts/CompanyContext'
 import {
@@ -66,16 +67,12 @@ interface ChartAccount {
 type LookbackMode = 'gap-fill' | 'fast' | 'fiscal-year' | 'custom'
 type CustomSubMode = 'date' | 'previous-fiscal-year'
 
-// Suggested BAS account per currency. The mapping engine falls back to 1930
-// when ledger_account is unset, so the SEK case is just an explicit hint.
-// Foreign-currency accounts default to the BAS-recommended numbers; if the
-// company hasn't created them yet, the user must pick or seed them first.
-const CURRENCY_DEFAULTS: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
+// Suggested BAS account per currency, the table the server allocates from.
+// The mapping engine falls back to 1930 when ledger_account is unset, so the
+// SEK case is just an explicit hint. Foreign-currency accounts default to the
+// BAS-recommended numbers; if the company hasn't created them yet, the user
+// must pick or seed them first.
+const CURRENCY_DEFAULTS = CURRENCY_LEDGER_DEFAULTS
 
 export function AccountPickerDialog({
   open,

@@ -6,23 +6,9 @@ import { syncMappedAccounts } from '@/lib/import/account-sync'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
+import { bankLedgerName, defaultLedgerForCurrency, overflowLedgerSlots } from '@/lib/cash-accounts/ledger-slots'
 
 const log = createLogger('cash-accounts')
-
-/**
- * Suggested BAS account per currency. Single source — the enable-banking
- * callback and the AccountPickerDialog both key off these.
- */
-export const CURRENCY_LEDGER_DEFAULTS: Record<string, string> = {
-  SEK: '1930',
-  EUR: '1932',
-  USD: '1933',
-  GBP: '1934',
-}
-
-export function defaultLedgerForCurrency(currency: string): string {
-  return CURRENCY_LEDGER_DEFAULTS[currency.toUpperCase()] ?? '1930'
-}
 
 /**
  * Canonical read/write surface for cash_accounts.
@@ -861,27 +847,17 @@ export async function findFreeLedgerAccount(
 
   if (!exclude.has(preferred) && !connectedTaken.has(preferred)) return preferred
 
-  const reserved = new Set(Object.values(CURRENCY_LEDGER_DEFAULTS))
-  const candidates: string[] = []
-  for (let n = 1931; n <= 1959; n++) {
-    const candidate = String(n)
-    if (reserved.has(candidate)) continue
-    if (exclude.has(candidate) || anyTaken.has(candidate)) continue
-    candidates.push(candidate)
-  }
-
-  // First pass: slots the chart has never heard of, so we can create them
-  // cleanly. Second pass: chart-occupied slots, the pre-fix behavior, only
-  // once nothing unnamed is left.
-  const unnamed = candidates.find(c => !chartTaken.has(c))
-  if (unnamed) return unnamed
-  if (candidates.length > 0) {
-    log.warn('findFreeLedgerAccount fell back to a chart-occupied slot', {
-      companyId,
-      currency,
-      ledger: candidates[0],
-    })
-    return candidates[0]
+  // The onboarding preview hands out the same order (lib/onboarding-books/ledger.ts).
+  const slot = overflowLedgerSlots([...anyTaken, ...exclude], chartTaken)[0]
+  if (slot) {
+    if (chartTaken.has(slot)) {
+      log.warn('findFreeLedgerAccount fell back to a chart-occupied slot', {
+        companyId,
+        currency,
+        ledger: slot,
+      })
+    }
+    return slot
   }
 
   log.warn('findFreeLedgerAccount exhausted 1931–1959', { companyId, currency })
@@ -916,7 +892,7 @@ export async function allocatePsd2LedgerAccount(
   // chart account named after the company (issue #1643 problem 3). The bank's
   // display name still lands on cash_accounts.name via upsertFromPsd2, which
   // is what the pickers show; input.accountName is deliberately ignored here.
-  const name = getBASReference(ledger)?.account_name ?? `Bankkonto ${input.currency.toUpperCase()}`
+  const name = getBASReference(ledger)?.account_name ?? bankLedgerName(input.currency)
   const sync = await syncMappedAccounts(
     supabase,
     companyId,
