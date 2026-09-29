@@ -58,25 +58,18 @@ comment what was tried. Never retry the same failing action in a cycle.
 
 | # | Loop | Skill | Where | Cadence (default) | Per-run cap |
 |---|---|---|---|---|---|
-| 1 | PR + CI triage | `loop-pr-ci-triage` | **Local** (session cron / `/loop`) | ~3x/day while a session is open | ≤5 PRs |
-| 2 | Vercel errors → tickets | `loop-vercel-errors` | **Local** (Vercel MCP) | daily / on-demand | ≤8 issues, ≤2 PRs |
-| 3 | Issue triage + easy-fix | `loop-issue-triage` | **Local** (session cron / `/loop`) | ~2x/day while a session is open | triage all; ≤2 PRs |
-| 4 | UI/UX + design scan | `loop-design-scan` | **Local** (`/loop`) | on-demand | ≤1 area, ≤6 findings |
-| 5 | Docs freshness (docs.accounted.se) | `loop-docs-freshness` | **Local** (`/loop` / ignite-when-due) | weekly | 1 issue, 1 website PR |
-| 6 | Regeluppdat (Swedish regulatory watch) | `loop-regeluppdat` | **Local** (`/loop` / ignite-when-due) | monthly | ≤6 issues, **0 PRs** |
+| 1 | Issue triage + easy-fix | `loop-issue-triage` | **Local** (session cron / `/loop`) | on-demand | triage all; ≤2 PRs |
+| 2 | MCP feedback triage | `loop-feedback-triage` | **Local** (Supabase MCP) | weekly / on-demand | ≤3 PRs, 0 issues |
+| 3 | Community skill review | `loop-skill-review` | **Local** | weekly / on-demand | ≤5 submissions |
 
 **All loops are local.** Cloud routines were retired 2026-07-20: the three claude.ai triggers
 (`trig_01J2nG7eB9gsdAb9YSGBVwa8`, `trig_014CmE3gTJ7ErnvL2trPYymu`, `trig_017hB94ieGVwreJqHpGRDVoM`)
 ran for 19 days as silent no-ops (no `GH_TOKEN` in the cloud env, issue #993) and the founder chose
-to disable them rather than provision. Do not re-enable or re-create them. Loop 2 additionally needs
-the Vercel MCP (local-only; Sentry is not used). Loop 4 needs `npm run dev` + Chrome.
-The `loop-ignite` skill audits and (re)schedules the local cadence each session.
+to disable them rather than provision. Do not re-enable or re-create them.
 
-Loops 5 and 6 self-gate on a due check (a run marker in their tracking issues), so any invocation
-is idempotent: session crons cannot outlive 7 days, which makes weekly/monthly cadences
-unschedulable directly. Instead `loop-ignite` runs them **when due** at the start of a session.
-Loop 6 files tickets only, never PRs: regulatory changes touch money math and compliance logic,
-which the autonomy policy forbids auto-fixing.
+Removed 2026-09-29, unused after their build-time pilot runs: `loop-ignite`, `loop-pr-ci-triage`,
+`loop-vercel-errors`, `loop-design-scan`, `loop-docs-freshness`, `loop-regeluppdat`. The
+`design-scan` workflow (`.claude/workflows/design-scan.js`) stays and runs on its own.
 
 ---
 
@@ -101,9 +94,7 @@ of that deliberately, treat cloud as retired: see issue #993 for the full histor
 ---
 
 ## Operating the loops
-- **Audit / (re)ignite each session:** `/loop-ignite` (audits evidence, schedules session-local crons).
-- **Run on-demand:** `/loop-pr-ci-triage`, `/loop-issue-triage`, `/loop-vercel-errors`,
-  `/loop-design-scan <area>`, `/loop-docs-freshness`, `/loop-regeluppdat`. Wrap in
+- **Run on-demand:** `/loop-issue-triage`, `/loop-feedback-triage`, `/loop-skill-review`. Wrap in
   `/loop <interval>` to repeat locally; `/goal` for a hard exit.
 - **Cost:** route mechanical steps to cheaper models; reserve judgment for the strong model. `/usage`.
   Don't run more often than the watched thing changes.
