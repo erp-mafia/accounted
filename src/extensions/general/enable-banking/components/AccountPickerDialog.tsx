@@ -99,16 +99,13 @@ export function AccountPickerDialog({
   // kept out of the main list so the picker shows THIS company's accounts,
   // and live behind a collapsed disclosure: still reachable, never pre-checked.
   // A card account that only mirrors the main account (Svea's
-  // SVEA_MQ_Debit_B2B) is not a choice at all, on or off: one muted line says
-  // why, and the selection save keeps it off whatever is sent (and turns off
-  // one switched on before that rule).
+  // SVEA_MQ_Debit_B2B) is not a choice at all, on or off, in either list: one
+  // muted line says why, and the selection save keeps it off whatever is sent
+  // (and turns off one switched on before that rule). It is taken out before
+  // the claim split, so no claim flag can put it behind the disclosure.
   const { ownAccounts, claimedElsewhere, mirrorCards } = useMemo(() => {
-    const { own, claimedElsewhere } = partitionByClaim(accounts)
-    return {
-      ownAccounts: own.filter((a) => !isMirrorCardAccount(a)),
-      claimedElsewhere,
-      mirrorCards: own.filter(isMirrorCardAccount),
-    }
+    const { own, claimedElsewhere } = partitionByClaim(accounts.filter((a) => !isMirrorCardAccount(a)))
+    return { ownAccounts: own, claimedElsewhere, mirrorCards: accounts.filter(isMirrorCardAccount) }
   }, [accounts])
   const [claimedOpen, setClaimedOpen] = useState(false)
   // Server-side save rejection (validation / ledger conflict). Shown inline in
