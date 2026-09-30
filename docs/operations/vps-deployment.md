@@ -1,0 +1,19 @@
+# VPS test deployment
+
+Accounted has a separate VPS test instance running the self-hosted Docker Compose image and a local Supabase project. It is distinct from the Vercel-hosted service. Find its current SSH target, service ports, and local configuration in the server-local `README.VPS.md`; do not copy those details or secrets into this repository.
+
+The VPS checkout tracks `https://github.com/erp-mafia/accounted.git`. Its application image is `ghcr.io/erp-mafia/gnubok`. The `gnubok` image name is a compatibility name. Pin the seven-character commit tag published by `.github/workflows/docker-publish.yml`, then compare the image's `org.opencontainers.image.revision` label with the full intended Git SHA. A checkout at the right commit does not prove which image is running.
+
+## Deploy a GitHub revision
+
+1. Read the server-local runbook and inspect the running image, Compose status, current database migration history, service port owner, and checkout status. Preserve untracked VPS configuration and environment files. Stop if the checkout cannot fast-forward cleanly.
+2. Fast-forward the VPS checkout from `origin/main` using a Git HTTP User-Agent of `OpenAI File Downloader, XaiImageApiFetch/1.0`. Confirm the desired commit before switching any service.
+3. Compare pending SQL migrations with the database history. Take a PostgreSQL custom-format backup and verify it with `pg_restore` from the matching database container. Record the backup location and checksum. The host's `pg_restore` can be older than the database container's version.
+4. Follow the current operator's database authorization policy before applying migrations. `DROP`, `TRUNCATE`, database resets, and unbounded `DELETE` require specific approval under the machine-wide instructions. The repo's `AGENTS.md` also restricts local Supabase migrations for sessions run by Emil. Never reset this instance as an upgrade shortcut.
+5. Inspect `npx supabase migration list --local` and reconcile both sides of the history. After approval, `npx supabase migration up --local` applies pending versions to this self-hosted project. A newly added migration with an earlier timestamp requires `--include-all`; inspect that SQL before using the flag. If the current operator policy disallows local migrations, use an approved operator or obtain an explicit override.
+6. Pull the immutable image tag and verify its OCI revision label. Measure its bundled `.next` directory against the VPS Compose tmpfs allowance before replacing the app. A too-small tmpfs fails at startup with `No space left on device`; adjust the VPS-only override and memory limit if needed, then check the effective Compose configuration.
+7. Compare the generated self-hosted crontab with the image's enabled extension preset and the VPS-only schedule. Disabled extension routes may return 503, so keep their jobs out of this instance's schedule unless the extension is enabled. Preserve every other schedule change.
+8. Pin the verified image tag in the VPS environment file without printing other values. Start the app and cron with Compose, building the cron image if its schedule or Dockerfile changed. Keep the previous application image available for rollback analysis.
+9. Verify the running OCI revision label, app health, cron startup and a scheduled tick, database migration count, local HTTP, and public HTTPS. Use the required User-Agent for HTTP probes. The health endpoint's JSON `version` may say `1.0.0`; the OCI label proves the deployed Git commit. Report source, image, database, process, and HTTP results separately.
+
+The general self-hosted setup and update guidance is in [Self-hosting](../SELF-HOSTING.md). A database backup supports recovery, but reversing migrations is a separate, reviewed operation. Replacing the image alone does not roll back the database.

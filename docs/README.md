@@ -28,6 +28,7 @@ Start with the [user and API documentation](https://docs.gnubok.se) for using Ac
 ## Hosting and operations
 
 - [Self-hosting](SELF-HOSTING.md): complete setup and upgrade guide.
+- [Accounted VPS test deployment](operations/vps-deployment.md): Compose upgrade procedure and verification; host details stay in the server-local runbook.
 - [Docker reference](DOCKER.md): image, Compose overlays, and runtime configuration.
 - [Swedish infrastructure](SOVEREIGN.md): hosting and provider choices.
 - [SIE import operations](operations/sie-import-backbone.md): import jobs and recovery.
