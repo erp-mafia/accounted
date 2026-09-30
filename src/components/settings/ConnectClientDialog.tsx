@@ -98,7 +98,16 @@ const MODES: Record<ConnectTarget, Mode[]> = {
   // flag answers its first tokenless request with the 401 challenge that
   // starts the sign-in, as for claude.ai and Grok, rather than a lazy 200 its
   // dialog could read as a server without authentication.
-  gemini: [{ set: 'gemini', steps: 3, snippet: (origin) => mcpServerUrl({ origin, client: 'gemini', eagerAuth: true }) }],
+  gemini: [
+    {
+      set: 'gemini',
+      steps: 3,
+      snippet: (origin) => mcpServerUrl({ origin, client: 'gemini', eagerAuth: true }),
+      // Google's eligibility rules for custom apps, so a user outside them
+      // learns it here rather than from a missing menu in Gemini.
+      snippetLabel: 'gemini_availability_label',
+    },
+  ],
   'claude-code': [
     {
       set: 'code_plugin',
